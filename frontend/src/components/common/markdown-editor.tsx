@@ -1,5 +1,4 @@
 import { useState, useRef } from "react"
-import { Api } from "@/api/Api"
 import { toast } from "sonner"
 import { IconLoader, IconEdit, IconEye } from "@tabler/icons-react"
 import AceEditor from "react-ace"
@@ -9,6 +8,7 @@ import "ace-builds/src-noconflict/theme-github"
 import "ace-builds/src-noconflict/theme-monokai"
 import { Markdown } from "@/components/common/markdown"
 import { useTheme } from "@/components/theme-provider"
+import { createApiClient } from "@/utils/api-client"
 
 interface MarkdownEditorProps {
   disabled?: boolean
@@ -48,7 +48,7 @@ export default function MarkdownEditor({
 
         setUploading(true)
         try {
-          const api = new Api()
+          const api = createApiClient()
           const response = await api.api.v1UploaderCreate({
             usage: 'spec',
             file: file,

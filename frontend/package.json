@@ -9,9 +9,11 @@
     "dev": "vite",
     "dev:online": "vite --mode online",
     "dev:offline": "vite --mode offline",
+    "dev:mobile": "cross-env VITE_APP_PROFILE=mobile vite --mode online",
     "build": "tsc -b && vite build",
     "build:online": "tsc -b && vite build --mode online",
     "build:offline": "tsc -b && vite build --mode offline",
+    "build:mobile": "cross-env VITE_APP_PROFILE=mobile tsc -b && vite build --mode online",
     "lint": "eslint .",
     "preview": "vite preview",
     "api": "sta --path ${SWAGGER} --output src/api"

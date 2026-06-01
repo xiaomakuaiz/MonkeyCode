@@ -53,7 +53,6 @@ import {
 } from "@/components/ui/alert-dialog"
 import { IconPencil, IconTrash } from "@tabler/icons-react"
 import {
-  Api,
   ConstsNotifyChannelKind,
   type ConstsNotifyEventType,
   type ConstsNotifyEventTypeInfo,
@@ -63,6 +62,7 @@ import Icon from "@/components/common/Icon"
 import { toast } from "sonner"
 import { Spinner } from "@/components/ui/spinner"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty"
+import { createApiClient } from "@/utils/api-client"
 
 /** 接收端类型（UI 用，wechat_work 映射到 API 的 wecom） */
 type ReceiverType = "dingtalk" | "feishu" | "wechat_work" | "webhook"
@@ -125,7 +125,7 @@ export default function TeamNotifications() {
   const [formSecret, setFormSecret] = useState("")
   const [formEventTypes, setFormEventTypes] = useState<ConstsNotifyEventType[]>([])
 
-  const api = new Api()
+  const api = createApiClient()
 
   const loadChannels = async () => {
     setLoadingChannels(true)

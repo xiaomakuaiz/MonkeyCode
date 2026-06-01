@@ -46,7 +46,6 @@ import {
 } from "@/components/ui/alert-dialog"
 import { IconPencil, IconTrash } from "@tabler/icons-react"
 import {
-  Api,
   ConstsNotifyChannelKind,
   type ConstsNotifyEventType,
   type ConstsNotifyEventTypeInfo,
@@ -58,6 +57,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty"
 import { WechatMpBindDialog } from "@/components/console/wechat-mp-bind-dialog"
 import { useCommonData } from "@/components/console/data-provider"
+import { createApiClient } from "@/utils/api-client"
 
 /** 接收端类型（UI 用，wechat_work 映射到 API 的 wecom） */
 export type ReceiverType = "dingtalk" | "feishu" | "wechat_work" | "webhook"
@@ -125,7 +125,7 @@ export default function Notifications() {
   const [formSecret, setFormSecret] = useState("")
   const [formEventTypes, setFormEventTypes] = useState<ConstsNotifyEventType[]>([])
 
-  const api = new Api()
+  const api = createApiClient()
 
   const loadChannels = async () => {
     setLoadingChannels(true)

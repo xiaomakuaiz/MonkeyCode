@@ -1,4 +1,4 @@
-import { Api, ConstsPortStatus, type DomainVMPort, type GithubComGoYokoWebResp } from "@/api/Api"
+import { ConstsPortStatus, type DomainVMPort, type GithubComGoYokoWebResp } from "@/api/Api"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,6 +26,7 @@ import { apiRequest } from "@/utils/requestUtils"
 import { IconAccessPoint, IconAlertCircle, IconCopy, IconDotsVertical, IconHandStop, IconReload, IconTrash } from "@tabler/icons-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
+import { createApiClient } from "@/utils/api-client"
 
 interface VmPortForwardDialogProps {
   open: boolean
@@ -61,7 +62,7 @@ export function VmPortForwardDialog({
 
     setPortsLoading(true)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const response = await api.api.v1UsersHostsVmsPortsDetail(
         hostId,
         vmId,

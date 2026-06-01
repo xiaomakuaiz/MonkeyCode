@@ -1,5 +1,6 @@
 import { Api } from '@/api/Api';
 import type { HttpResponse, RequestParams, GithubComGoYokoWebResp } from '@/api/Api';
+import { getApiBaseUrl } from '@/utils/api-base-url';
 import { toast } from 'sonner';
 
 export const apiRequest = async (
@@ -11,7 +12,9 @@ export const apiRequest = async (
   formData: Record<string, any> | null = null
 ): Promise<void> => {
   try {
-    const api = new Api();
+    const api = new Api({
+      baseUrl: getApiBaseUrl(),
+    });
     
     // 检查API方法是否存在
     if (!api.api[apiMethodName]) {

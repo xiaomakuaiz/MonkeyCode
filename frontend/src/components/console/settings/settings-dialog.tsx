@@ -11,6 +11,9 @@ import {
   Settings,
 } from "lucide-react"
 import { IconPasswordFingerprint } from "@tabler/icons-react"
+import { Button } from "@/components/ui/button"
+import { AlertDialogAction, AlertDialogCancel, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogContent, AlertDialog } from "@/components/ui/alert-dialog"
+import { useNavigate } from "react-router-dom"
 
 import {
   Dialog,
@@ -32,15 +35,7 @@ import {
 } from "@/components/ui/sidebar"
 import { useGitHubSetupCallback } from "@/hooks/useGitHubSetupCallback"
 import { useCommonData } from "@/components/console/data-provider"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { IS_MOBILE_PROFILE } from "@/utils/app-profile"
 
 import Images from "./images"
 import Models from "./models"
@@ -50,7 +45,8 @@ import VmsPage from "./vms"
 import Notifications from "./notifications"
 import ToolsAndMcp from "./tools-mcp"
 
-const SETTINGS_NAV = [
+const FULL_SETTINGS_NAV = [
+  { id: "account", name: "账户", icon: Settings },
   { id: "identities", name: "Git 身份", icon: IconPasswordFingerprint },
   { id: "tools-mcp", name: "MCP 与工具", icon: Blocks },
   { id: "models", name: "AI 大模型", icon: Bot },
@@ -60,10 +56,70 @@ const SETTINGS_NAV = [
   { id: "notifications", name: "通知", icon: Bell },
 ] as const
 
+const MOBILE_SETTINGS_NAV = [
+  { id: "account", name: "账户", icon: Settings },
+  { id: "notifications", name: "通知", icon: Bell },
+] as const
+
+const SETTINGS_NAV = IS_MOBILE_PROFILE ? MOBILE_SETTINGS_NAV : FULL_SETTINGS_NAV
+
 type SettingsSectionId = (typeof SETTINGS_NAV)[number]["id"]
+
+function AccountSettings() {
+  const navigate = useNavigate()
+  const { user } = useCommonData()
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
+
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3 rounded-lg border p-4">
+        <div className="text-sm font-medium">账户信息</div>
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <div>昵称：{user?.name || "未设置"}</div>
+          <div>邮箱：{user?.email || "未绑定"}</div>
+          <div>团队：{user?.team?.name || "个人空间"}</div>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-lg border p-4">
+        <div className="text-sm font-medium">账户安全</div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => navigate("/findpassword")}>
+            找回密码
+          </Button>
+          <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteDialogOpen(true)}>
+            删除账户
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          删除账户后，您的账号数据将按平台规则处理。您可以先查看删除说明，再通过官方渠道提交删除申请。
+        </p>
+      </section>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除账户</AlertDialogTitle>
+            <AlertDialogDescription>
+              您可以在 App 内查看隐私政策中的删除说明与联系方式，再通过官方渠道发起删除账户申请。平台会根据账号安全和数据规则处理您的请求。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>关闭</AlertDialogCancel>
+            <AlertDialogAction onClick={() => navigate("/privacy-policy#rights") }>
+              查看删除说明
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
 
 function SettingsContent({ section }: { section: SettingsSectionId }) {
   switch (section) {
+    case "account":
+      return <AccountSettings />
     case "identities":
       return <Identities />
     case "tools-mcp":
@@ -128,7 +184,7 @@ export interface SettingsDialogProps {
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [activeSection, setActiveSection] =
-    React.useState<SettingsSectionId>("identities")
+    React.useState<SettingsSectionId>(IS_MOBILE_PROFILE ? "account" : "identities")
   const { reloadIdentities } = useCommonData()
 
   const { result, dismiss } = useGitHubSetupCallback(() => {

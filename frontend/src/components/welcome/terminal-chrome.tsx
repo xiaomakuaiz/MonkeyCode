@@ -1,4 +1,5 @@
 import { useAuth } from "@/components/auth-provider";
+import { IS_MOBILE_PROFILE } from "@/utils/app-profile";
 import { cn } from "@/lib/utils";
 import { IconArrowRight, IconMenu2, IconPointFilled } from "@tabler/icons-react";
 import React from "react";
@@ -158,7 +159,7 @@ export function TerminalHeader({ homeAnchors = true }: { homeAnchors?: boolean }
         <div className="ml-auto hidden items-center gap-2 md:flex">
           {!isLoggedIn ? (
             <>
-              <HeaderAction href={signUpLink}>注册</HeaderAction>
+              {!IS_MOBILE_PROFILE && <HeaderAction href={signUpLink}>注册</HeaderAction>}
               <HeaderAction to="/login" primary>
                 登录
               </HeaderAction>
@@ -204,7 +205,7 @@ export function TerminalHeader({ homeAnchors = true }: { homeAnchors?: boolean }
             <div className="grid gap-2 sm:grid-cols-2">
               {!isLoggedIn ? (
                 <>
-                  <HeaderAction href={signUpLink}>注册</HeaderAction>
+                  {!IS_MOBILE_PROFILE && <HeaderAction href={signUpLink}>注册</HeaderAction>}
                   <HeaderAction to="/login" primary>
                     登录
                   </HeaderAction>

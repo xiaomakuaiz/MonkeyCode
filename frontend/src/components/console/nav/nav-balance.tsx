@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Spinner } from "@/components/ui/spinner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Api } from "@/api/Api";
 import dayjs from "dayjs";
 import {
   AlertDialog,
@@ -30,6 +29,7 @@ import { getSubscriptionPlanLabel, getSubscriptionPlanShortLabel, isValidEmail }
 import { useNavigate } from "react-router-dom";
 import SubscriptionPlanDialog from "./subscription-plan-dialog";
 import { IS_OFFLINE_EDITION } from "@/utils/edition";
+import { createApiClient } from "@/utils/api-client";
 
 interface NavBalanceProps {
   variant?: "sidebar" | "header";
@@ -196,7 +196,7 @@ export default function NavBalance({
     setUploadingAvatar(true)
 
     try {
-      const api = new Api()
+      const api = createApiClient()
       const uploadResp = await api.api.v1UploaderCreate({
         usage: "avatar",
         file,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Blocks, MoreVertical, Plus, ServerCog } from "lucide-react"
 
-import { Api, type DomainCreateUserMCPUpstreamReq, type DomainMCPTool, type DomainMCPUpstream } from "@/api/Api"
+import { type DomainCreateUserMCPUpstreamReq, type DomainMCPTool, type DomainMCPUpstream } from "@/api/Api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { toast } from "sonner"
 import { IconPencil, IconTrash } from "@tabler/icons-react"
 import AddMcpServerDialog from "./add-mcp-server-dialog"
+import { createApiClient } from "@/utils/api-client"
 
 export default function ToolsAndMcp() {
   const [servers, setServers] = useState<DomainMCPUpstream[]>([])
@@ -57,7 +58,7 @@ export default function ToolsAndMcp() {
       setLoading(true)
     }
     try {
-      const api = new Api()
+      const api = createApiClient()
       const upstreamsResp = await api.api.v1UsersMcpUpstreamsList({ limit: 100 })
 
       if (upstreamsResp.data?.code === 0) {
@@ -83,7 +84,7 @@ export default function ToolsAndMcp() {
   ): Promise<boolean> => {
     setIsCreating(true)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const resp = await api.api.v1UsersMcpUpstreamsCreate(payload)
       if (resp.data?.code === 0) {
         toast.success("MCP 服务器创建成功")
@@ -111,7 +112,7 @@ export default function ToolsAndMcp() {
 
     setIsUpdating(true)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const resp = await api.api.v1UsersMcpUpstreamsUpdate(editingServer.id, payload)
       if (resp.data?.code === 0) {
         toast.success("MCP 服务器修改成功")
@@ -137,7 +138,7 @@ export default function ToolsAndMcp() {
 
     setSyncingServerId(server.id)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const resp = await api.api.v1UsersMcpUpstreamsSyncCreate(server.id)
       if (resp.data?.code === 0) {
         toast.success("MCP 服务器同步成功")
@@ -160,7 +161,7 @@ export default function ToolsAndMcp() {
 
     setDeletingServerId(server.id)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const resp = await api.api.v1UsersMcpUpstreamsDelete(server.id)
       if (resp.data?.code === 0) {
         toast.success("MCP 服务器删除成功")
@@ -183,7 +184,7 @@ export default function ToolsAndMcp() {
 
     setTogglingToolId(tool.id)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const resp = await api.api.v1UsersMcpToolsUpdate(tool.id, { enabled })
       if (resp.data?.code === 0) {
         setServers((current) =>

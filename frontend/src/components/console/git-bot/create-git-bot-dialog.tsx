@@ -17,13 +17,14 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useState, useEffect } from "react"
-import { Api, ConstsGitPlatform, ConstsHostStatus } from "@/api/Api"
+import { ConstsGitPlatform, ConstsHostStatus } from "@/api/Api"
 import { toast } from "sonner"
 import type { DomainGitBot, DomainHost } from "@/api/Api"
 import Icon from "@/components/common/Icon"
 import { Badge } from "@/components/ui/badge"
 import { useCommonData } from "../data-provider"
 import { getHostBadges } from "@/utils/common"
+import { createApiClient } from "@/utils/api-client"
 
 interface CreateGitBotDialogProps {
   open: boolean
@@ -64,7 +65,7 @@ export function CreateGitBotDialog({ open, onOpenChange, onSuccess }: CreateGitB
     
     setLoading(true)
     try {
-      const api = new Api()
+      const api = createApiClient()
       const res = await api.api.v1UsersGitBotsCreate({
         host_id: selectedHostId,
         name: remark || undefined,

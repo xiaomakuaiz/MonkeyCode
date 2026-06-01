@@ -25,6 +25,7 @@ import { Link, useNavigate } from "react-router-dom"
 import { captchaChallenge } from "@/utils/common"
 import { ArrowLeft, Eye, EyeOff } from "lucide-react"
 import { IS_OFFLINE_EDITION } from "@/utils/edition"
+import { IS_MOBILE_PROFILE } from "@/utils/app-profile"
 
 const USER_STORAGE_KEY = 'login_user'
 const MANAGER_STORAGE_KEY = 'login_manager'
@@ -152,7 +153,7 @@ export default function LoginPage({
                   {userLoginView === 'choices' ? (
                     <div className="mt-1 flex flex-col gap-4">
                       <div className="text-sm font-medium">选择登录方式</div>
-                      {!IS_OFFLINE_EDITION && (
+                      {!IS_OFFLINE_EDITION && !IS_MOBILE_PROFILE && (
                         <Button size="lg" className="w-full" asChild>
                           <a
                             href={userLoginHref}
@@ -175,7 +176,7 @@ export default function LoginPage({
                       >
                         账号密码登录
                       </Button>
-                      {!IS_OFFLINE_EDITION && (
+                      {!IS_OFFLINE_EDITION && !IS_MOBILE_PROFILE && (
                         <Button size="lg" variant="secondary" className="w-full" asChild>
                           <a
                             href={userLoginHref}

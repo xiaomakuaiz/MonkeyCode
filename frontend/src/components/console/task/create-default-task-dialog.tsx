@@ -43,6 +43,7 @@ import { cn } from "@/lib/utils"
 import { useSettingsDialog } from "@/pages/console/user/page"
 import { defaultSkills } from "@/utils/config"
 import { IS_OFFLINE_EDITION } from "@/utils/edition"
+import { IS_MOBILE_PROFILE } from "@/utils/app-profile"
 import {
   getGitPlatformIcon,
   getHostBadges,
@@ -481,13 +482,15 @@ export default function CreateDefaultTaskDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".zip,application/zip"
-            className="hidden"
-            onChange={handleZipFileSelect}
-          />
+          {!IS_MOBILE_PROFILE && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="hidden"
+              onChange={handleZipFileSelect}
+            />
+          )}
           <div className="space-y-1">
             <Textarea
               value={content}
@@ -545,10 +548,12 @@ export default function CreateDefaultTaskDialog({
                     清空选择
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
-                  <IconUpload className="size-4" />
-                  ZIP 文件
-                </DropdownMenuItem>
+                {!IS_MOBILE_PROFILE && (
+                  <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
+                    <IconUpload className="size-4" />
+                    ZIP 文件
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="w-full">
                     <IconUser className="size-4" />

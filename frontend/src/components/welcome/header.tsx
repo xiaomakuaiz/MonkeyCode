@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth-provider";
+import { IS_MOBILE_PROFILE } from "@/utils/app-profile";
 import { IconArrowLeft, IconMenu2 } from "@tabler/icons-react";
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -113,7 +114,7 @@ const Header = () => {
                     ) : null}
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {!isLoggedIn && (
+                    {!isLoggedIn && !IS_MOBILE_PROFILE && (
                       <Button
                         variant="ghost"
                         className="h-11 rounded-xl border border-[#243329] bg-[#111814] text-[#c9d6cc] hover:bg-[#162019] hover:text-[#e8efe9]"
@@ -193,7 +194,7 @@ const Header = () => {
           </nav>
 
           <div className="ml-auto hidden items-center gap-3 md:flex">
-            {!isLoggedIn && (
+            {!isLoggedIn && !IS_MOBILE_PROFILE && (
               <Button
                 variant="ghost"
                 className="rounded-full border border-[#243329] bg-[#111814] px-5 text-[#c9d6cc] hover:bg-[#162019] hover:text-[#e8efe9]"
@@ -290,7 +291,7 @@ const Header = () => {
             <Button className={cn(isPixelPage && "pixel-button border-slate-900")} asChild><Link to="/console">控制台</Link></Button>
           ) : (
             <>
-              <Button variant="ghost" className={cn("hidden sm:inline-flex", isPixelPage && "pixel-button border-slate-900 bg-white text-slate-900 hover:bg-amber-50")} asChild><a href={signUpLink}>注册</a></Button>
+              {!IS_MOBILE_PROFILE && <Button variant="ghost" className={cn("hidden sm:inline-flex", isPixelPage && "pixel-button border-slate-900 bg-white text-slate-900 hover:bg-amber-50")} asChild><a href={signUpLink}>注册</a></Button>}
               <Button className={cn(isPixelPage && "pixel-button border-slate-900")} asChild><Link to="/login">立即开始</Link></Button>
             </>
           )}

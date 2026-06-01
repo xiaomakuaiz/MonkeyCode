@@ -27,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
 import { defaultSkills } from "@/utils/config";
 import { IS_OFFLINE_EDITION } from "@/utils/edition";
+import { IS_MOBILE_PROFILE } from "@/utils/app-profile";
 import { readStoredTaskDialogParams, writeStoredTaskDialogParams } from "./task-dialog-params-storage";
 import ModelSelect from "./model-select";
 import { TaskSkillSelector } from "./task-skill-selector";
@@ -445,10 +446,12 @@ export function TaskInput({ repos, onTaskCreated }: TaskInputProps) {
                   <IconXboxX className="size-4" />
                   清空选择
                 </DropdownMenuItem>}
-                <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
-                  <IconUpload className="size-4" />
-                  ZIP 文件
-                </DropdownMenuItem>
+                {!IS_MOBILE_PROFILE && (
+                  <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
+                    <IconUpload className="size-4" />
+                    ZIP 文件
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="w-full">
                     <IconUser className="size-4" />
@@ -795,51 +798,53 @@ export function TaskInput({ repos, onTaskCreated }: TaskInputProps) {
         </DialogContent>
       </Dialog>
 
-      {/* 隐藏的文件选择 input */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        className="hidden"
-        accept=".zip"
-        onChange={handleZipFileSelect}
-      />
+      {!IS_MOBILE_PROFILE && (
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="hidden"
+          accept=".zip"
+          onChange={handleZipFileSelect}
+        />
+      )}
 
-      {/* ZIP 文件上传确认对话框 */}
-      <Dialog open={uploadDialogOpen} onOpenChange={(open) => {
-        if (!uploadingZip) {
-          setUploadDialogOpen(open);
-          if (!open) setSelectedZipFile(null);
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>上传 ZIP 文件</DialogTitle>
-          </DialogHeader>
-          <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/50">
-            <IconUpload className="size-5 text-muted-foreground" />
-            <span className="text-sm truncate">
-              {selectedZipFile?.name || '未选择文件'}
-            </span>
-            {selectedZipFile && (
-              <Badge variant="outline" className="ml-auto">
-                {(selectedZipFile.size / 1024 / 1024).toFixed(2)} MB
-              </Badge>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setUploadDialogOpen(false);
-              setSelectedZipFile(null);
-            }} disabled={uploadingZip}>
-              取消
-            </Button>
-            <Button onClick={handleZipUpload} disabled={uploadingZip || !selectedZipFile}>
-              {uploadingZip && <Spinner />}
-              上传
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {!IS_MOBILE_PROFILE && (
+        <Dialog open={uploadDialogOpen} onOpenChange={(open) => {
+          if (!uploadingZip) {
+            setUploadDialogOpen(open);
+            if (!open) setSelectedZipFile(null);
+          }
+        }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>上传 ZIP 文件</DialogTitle>
+            </DialogHeader>
+            <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/50">
+              <IconUpload className="size-5 text-muted-foreground" />
+              <span className="text-sm truncate">
+                {selectedZipFile?.name || '未选择文件'}
+              </span>
+              {selectedZipFile && (
+                <Badge variant="outline" className="ml-auto">
+                  {(selectedZipFile.size / 1024 / 1024).toFixed(2)} MB
+                </Badge>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => {
+                setUploadDialogOpen(false);
+                setSelectedZipFile(null);
+              }} disabled={uploadingZip}>
+                取消
+              </Button>
+              <Button onClick={handleZipUpload} disabled={uploadingZip || !selectedZipFile}>
+                {uploadingZip && <Spinner />}
+                上传
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
       <TaskConcurrentLimitDialog
         open={limitDialogOpen}
         onOpenChange={setLimitDialogOpen}

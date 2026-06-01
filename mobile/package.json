@@ -6,8 +6,10 @@
   "type": "module",
   "scripts": {
     "build:web": "cross-env ELECTRON=true pnpm --dir ../frontend run build:online",
+    "build:web:mobile": "cross-env ELECTRON=true pnpm --dir ../frontend run build:mobile",
     "cap:sync": "cap sync",
     "sync": "pnpm run build:web && cap sync",
+    "sync:mobile": "pnpm run build:web:mobile && cap sync",
     "open:android": "cap open android",
     "open:ios": "cap open ios"
   },

@@ -5,7 +5,7 @@ import { Field, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import MarkdownEditor from "../components/common/markdown-editor";
 import { Button } from "../components/ui/button";
-import { Api, ConstsTaskStatus, type DomainProjectTask } from "../api/Api";
+import { ConstsTaskStatus, type DomainProjectTask } from "../api/Api";
 import { toast } from "sonner";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
@@ -14,6 +14,7 @@ import { cn } from "../lib/utils";
 import FilePickerDialog from "../components/console/files/file-picker-dialog";
 import JSZip from "jszip";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { createApiClient } from "../utils/api-client";
 
 type PostType = "article" | "task" | "project" | null;
 
@@ -87,7 +88,7 @@ const PostCreate = () => {
 
     setUploading(true);
     try {
-      const api = new Api();
+      const api = createApiClient();
       const response = await api.api.v1UploaderCreate({
         usage: "spec",
         file: file,
@@ -153,7 +154,7 @@ const PostCreate = () => {
     const zipFileName = `files-${Date.now()}.zip`;
     const zipFileObj = new File([zipBlob], zipFileName, { type: "application/zip" });
 
-    const api = new Api();
+    const api = createApiClient();
     const response = await api.api.v1UploaderCreate({
       usage: "spec",
       file: zipFileObj,
