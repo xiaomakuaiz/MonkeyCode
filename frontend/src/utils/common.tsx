@@ -6,6 +6,7 @@ import Cap from "@cap.js/widget"
 import { HoverCardContent } from "@/components/ui/hover-card"
 import { ConstsHostStatus, ConstsInterfaceType, ConstsOwnerType, ConstsProjectIssueStatus, GitInChaitinNetAiMonkeycodeMonkeycodeAiEntTypesConditionType, TaskflowVirtualMachineStatus, type DomainHost, type DomainImage, type DomainModel, type DomainOwner, type DomainProjectTask, type DomainProviderModelListItem, type DomainSubscriptionResp, type DomainUser, type DomainVirtualMachine, type GitInChaitinNetAiMonkeycodeMonkeycodeAiEntTypesCondition } from "@/api/Api"
 import { apiRequest } from "./requestUtils"
+import { getApiBaseUrl } from "./api-base-url"
 import { remark } from "remark"
 import strip from "strip-markdown"
 
@@ -385,8 +386,11 @@ export function isValidEmail(email: string): boolean {
 
 export async function captchaChallenge(): Promise<string | null> {
   try {
+    const apiBaseUrl = getApiBaseUrl()
     const cap = new Cap({
-      apiEndpoint: '/api/v1/public/captcha/'
+      apiEndpoint: apiBaseUrl
+        ? `${apiBaseUrl}/api/v1/public/captcha/`
+        : '/api/v1/public/captcha/'
     })
     const data = await cap.solve()
     if (data.success) {
