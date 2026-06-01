@@ -1,6 +1,7 @@
 import { Api } from '@/api/Api';
 import type { HttpResponse, RequestParams, GithubComGoYokoWebResp } from '@/api/Api';
 import { getApiBaseUrl } from '@/utils/api-base-url';
+import { IS_MOBILE_PROFILE } from '@/utils/app-profile';
 import { toast } from 'sonner';
 
 export const apiRequest = async (
@@ -14,6 +15,9 @@ export const apiRequest = async (
   try {
     const api = new Api({
       baseUrl: getApiBaseUrl(),
+      baseApiParams: {
+        credentials: IS_MOBILE_PROFILE ? 'include' : 'same-origin',
+      },
     });
     
     // 检查API方法是否存在
