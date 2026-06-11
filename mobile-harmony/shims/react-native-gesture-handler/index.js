@@ -5,12 +5,15 @@
  * 这些导出不会被真正调用。如后续需要真手势库，换 @react-native-ohos/react-native-gesture-handler。
  */
 function chainable() {
+  // 调用必须返回 Proxy 本身而非裸函数 f，否则链式调用在第二跳断掉
+  // （如 screens 模块作用域的 Gesture.Fling().enabled(false) → undefined is not a function）
   const f = function () {
-    return f;
+    return p;
   };
-  return new Proxy(f, {
-    get: (_t, p) => (p === Symbol.toPrimitive || p === 'toString' ? () => '' : chainable()),
+  const p = new Proxy(f, {
+    get: (_t, prop) => (prop === Symbol.toPrimitive || prop === 'toString' ? () => '' : chainable()),
   });
+  return p;
 }
 
 const passthrough = ({ children }) => children ?? null;

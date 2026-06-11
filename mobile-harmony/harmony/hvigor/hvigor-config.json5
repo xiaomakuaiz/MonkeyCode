@@ -2,7 +2,7 @@
   "modelVersion": "5.0.0",
   "dependencies": {
     // RNOH hvigor 插件：Sync 时自动执行 codegen-harmony / link-harmony（autolinking）/ hdc rport
-    "@rnoh/hvigor-plugin": "../../node_modules/@react-native-oh/react-native-harmony-cli/harmony/rnoh-hvigor-plugin-0.82.31.tgz",
+    "@rnoh/hvigor-plugin": "../../node_modules/@react-native-oh/react-native-harmony-cli/harmony/rnoh-hvigor-plugin-0.82.18.tgz",
   },
   "execution": {},
   "logging": {},

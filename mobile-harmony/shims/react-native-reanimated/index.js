@@ -5,12 +5,14 @@
  * 需评估 @react-native-oh-tpl/react-native-reanimated 的 0.82 适配。
  */
 function chainable() {
+  // 调用必须返回 Proxy 本身而非裸函数 f，否则链式调用在第二跳断掉（同 gesture-handler shim）
   const f = function () {
-    return f;
+    return p;
   };
-  return new Proxy(f, {
-    get: (_t, p) => (p === Symbol.toPrimitive || p === 'toString' ? () => '' : chainable()),
+  const p = new Proxy(f, {
+    get: (_t, prop) => (prop === Symbol.toPrimitive || prop === 'toString' ? () => '' : chainable()),
   });
+  return p;
 }
 
 const known = {
