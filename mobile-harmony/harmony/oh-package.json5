@@ -1,0 +1,17 @@
+{
+  name: "monkeycode-harmony",
+  description: "MonkeyCode HarmonyOS app (RNOH)",
+  version: "1.0.0",
+  modelVersion: "5.0.0",
+  license: "ISC",
+  dependencies: {
+    "@rnoh/react-native-openharmony": "file:../node_modules/@react-native-oh/react-native-harmony/react_native_openharmony.har",
+  },
+  devDependencies: {
+    "@ohos/hypium": "1.0.6",
+  },
+  // 三方库 har 内部对 RNOH 的依赖统一解析到本工程的 RNOH har
+  overrides: {
+    "@rnoh/react-native-openharmony": "file:../node_modules/@react-native-oh/react-native-harmony/react_native_openharmony.har",
+  },
+}

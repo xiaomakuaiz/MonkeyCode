@@ -1,0 +1,30 @@
+node_modules/
+dist-harmony/
+*.tsbuildinfo
+
+# DevEco / hvigor 构建产物
+harmony/.hvigor/
+harmony/.idea/
+harmony/local.properties
+harmony/oh_modules/
+harmony/**/oh_modules/
+harmony/**/build/
+harmony/**/.cxx/
+harmony/**/.preview/
+harmony/hvigor/hvigor-wrapper.js
+harmony/hvigorw*
+harmony/oh-package-lock.json5
+harmony/**/oh-package-lock.json5
+
+# autolinking / codegen 生成物（DevEco Sync 时生成）
+harmony/entry/src/main/ets/RNOHPackagesFactory.ets
+harmony/entry/src/main/ets/codegen/*
+!harmony/entry/src/main/ets/codegen/.gitignore
+harmony/entry/src/main/cpp/generated/
+harmony/entry/src/main/cpp/RNOHPackagesFactory.h
+harmony/entry/src/main/cpp/autolinking.cmake
+
+# JS bundle 产物（react-native bundle-harmony 输出）
+harmony/entry/src/main/resources/rawfile/bundle.harmony.js
+harmony/entry/src/main/resources/rawfile/hermes_bundle.hbc
+harmony/entry/src/main/resources/rawfile/assets/

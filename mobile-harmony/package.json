@@ -1,0 +1,52 @@
+{
+  "name": "monkeycode-mobile-harmony",
+  "version": "1.0.0",
+  "description": "MonkeyCode 移动端鸿蒙轨（RNOH 0.82，与 ../mobile 共享业务代码）",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "codegen": "react-native codegen-harmony --cpp-output-path ./harmony/entry/src/main/cpp/generated --ets-output-path ./harmony/entry/src/main/ets/codegen",
+    "bundle:harmony": "react-native bundle-harmony --dev=false --minify=true --js-engine=hermes",
+    "bundle:harmony:dev": "react-native bundle-harmony --dev",
+    "ota:export": "node scripts/export-ota.mjs",
+    "typecheck": "tsc --noEmit && node scripts/check-routes.mjs"
+  },
+  "harmony": {
+    "codegenConfig": [
+      {
+        "version": 2,
+        "specPaths": ["./specs"]
+      }
+    ]
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.6.1",
+    "@react-native-oh/react-native-harmony": "0.82.31",
+    "@react-native-ohos/async-storage": "2.3.0-beta.1",
+    "@react-native-ohos/clipboard": "1.17.0-rc.1",
+    "@react-native-ohos/react-native-fs": "2.22.0-beta.3",
+    "@react-native-ohos/react-native-image-picker": "8.3.0-beta.5",
+    "@react-native-ohos/react-native-safe-area-context": "5.6.3",
+    "@react-native-ohos/react-native-screens": "4.9.0-rc.11",
+    "@react-native-ohos/react-native-svg": "15.13.0",
+    "@react-native-ohos/react-native-webview": "13.16.1",
+    "@react-navigation/bottom-tabs": "^7.17.2",
+    "@react-navigation/native": "^7.3.0",
+    "@react-navigation/native-stack": "^7.17.2",
+    "punycode": "^2.3.1",
+    "react": "19.1.1",
+    "react-native": "0.82.1",
+    "react-native-markdown-display": "^7.0.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@react-native-community/cli": "20.0.0",
+    "@react-native-oh/react-native-harmony-cli": "0.82.31",
+    "@react-native/babel-preset": "0.82.1",
+    "@react-native/metro-config": "0.82.1",
+    "@react-native/typescript-config": "0.82.1",
+    "@types/react": "~19.1.0",
+    "babel-plugin-module-resolver": "^5.0.2",
+    "typescript": "^5.8.3"
+  }
+}

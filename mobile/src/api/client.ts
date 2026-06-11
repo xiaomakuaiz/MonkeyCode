@@ -5,6 +5,7 @@
  * （iOS NSURLSession / Android OkHttp）会自动持久化并回传 Cookie，因此登录成功后
  * 后续请求无需手动携带 token。
  */
+import { NativeModules, Platform } from 'react-native';
 import type {
   ApiEnvelope,
   CreateTaskReq,
@@ -29,8 +30,26 @@ let baseUrl = DEFAULT_BASE_URL;
 let basicAuth = ''; // 形如 "user:pass"，用于连接带 HTTP Basic Auth 的测试环境（反向代理层鉴权）
 let onUnauthorized: (() => void) | null = null;
 
+/**
+ * 鸿蒙（RNOH）：fetch/XHR 复用 ArkWeb Cookie 池（credentials:'include' 自动携带），
+ * 但 WebSocket 不会自动带 Cookie（iOS/Android 由原生网络栈注入，鸿蒙不会）。
+ * 这里维护一份 Cookie 缓存：每次 API 请求成功后异步刷新，建 WS 时同步取用
+ * （WS 总是发生在登录/状态请求之后，缓存届时已就绪）。
+ */
+let harmonyCookie = '';
+function refreshHarmonyCookie() {
+  // 注：主轨 RN 类型的 Platform.OS 联合里没有 'harmony'（RNOH 轨运行时才有），故按 string 比较
+  if ((Platform.OS as string) !== 'harmony') return;
+  try {
+    const native = (NativeModules as { MonkeyCodeNative?: { getCookies?: (url: string) => Promise<string> } })
+      .MonkeyCodeNative;
+    void native?.getCookies?.(baseUrl)?.then((v) => { harmonyCookie = v || ''; }).catch(() => {});
+  } catch { /* noop */ }
+}
+
 export function setBaseUrl(url: string) {
   baseUrl = url.replace(/\/+$/, '');
+  refreshHarmonyCookie();
 }
 export function getBaseUrl() {
   return baseUrl;
@@ -62,8 +81,11 @@ export function basicAuthCredential(): { username: string; password: string } | 
  * 没设置 Basic Auth 时 headers 为空对象，无副作用。
  */
 export function openWebSocket(url: string): WebSocket {
+  const headers: Record<string, string> = { ...authHeaders() };
+  // 鸿蒙：手动补会话 Cookie（见 refreshHarmonyCookie 注释）
+  if ((Platform.OS as string) === 'harmony' && harmonyCookie) headers.Cookie = harmonyCookie;
   const WS = WebSocket as unknown as { new (url: string, protocols: undefined, options: { headers: Record<string, string> }): WebSocket };
-  return new WS(url, undefined, { headers: authHeaders() });
+  return new WS(url, undefined, { headers });
 }
 
 /**
@@ -140,6 +162,8 @@ export async function request<T = unknown>(
   } catch (e) {
     throw new ApiError((e as Error)?.message || '网络错误');
   }
+
+  refreshHarmonyCookie(); // 鸿蒙：响应可能带 Set-Cookie，异步刷新 WS 用的 Cookie 缓存
 
   if (res.status === 401) {
     onUnauthorized?.();

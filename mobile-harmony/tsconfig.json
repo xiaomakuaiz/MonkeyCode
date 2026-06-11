@@ -1,0 +1,56 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "types": [],
+    "lib": ["ES2022", "DOM"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../mobile/src/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "expo-router": ["./shims/expo-router/index.tsx"],
+      "expo-status-bar": ["./shims/expo-status-bar/index.tsx"],
+      "expo-constants": ["./shims/expo-constants/index.ts"],
+      "expo-updates": ["./shims/expo-updates/index.ts"],
+      "expo-clipboard": ["./shims/expo-clipboard/index.ts"],
+      "expo-blur": ["./shims/expo-blur/index.tsx"],
+      "expo-file-system": ["./shims/expo-file-system/index.ts"],
+      "expo-file-system/legacy": ["./shims/expo-file-system/legacy.ts"],
+      "expo-sharing": ["./shims/expo-sharing/index.ts"],
+      "expo-image-picker": ["./shims/expo-image-picker/index.ts"],
+      "expo-image-manipulator": ["./shims/expo-image-manipulator/index.ts"],
+      "expo-media-library": ["./shims/expo-media-library/index.ts"],
+      "expo-media-library/legacy": ["./shims/expo-media-library/legacy.ts"],
+      "react-native-keyboard-controller": ["./shims/react-native-keyboard-controller/index.tsx"],
+      "react-native-live-audio-stream": ["./shims/react-native-live-audio-stream/index.ts"],
+      "react-native-quick-crypto": ["./shims/react-native-quick-crypto/index.ts"],
+      "react-native-webview": ["./types/react-native-webview.d.ts"],
+      "react-native-svg": ["./types/react-native-svg.d.ts"],
+      "react-native-fs": ["./node_modules/@react-native-ohos/react-native-fs"],
+      "react-native-image-picker": ["./node_modules/@react-native-ohos/react-native-image-picker"],
+      "@react-native-async-storage/async-storage": ["./node_modules/@react-native-ohos/async-storage"],
+      "@react-native-clipboard/clipboard": ["./node_modules/@react-native-ohos/clipboard"],
+      "*": ["./node_modules/*", "./node_modules/@types/*"]
+    }
+  },
+  "include": [
+    "index.js",
+    "src/**/*",
+    "shims/**/*",
+    "specs/**/*",
+    "types/**/*",
+    "../mobile/src/**/*",
+    "../mobile/app/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "../mobile/node_modules",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "../mobile/**/__tests__/**",
+    "../mobile/**/*.test.ts",
+    "../mobile/**/*.test.tsx"
+  ]
+}

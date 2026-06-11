@@ -87,17 +87,22 @@ export function utf8ToBytes(str: string): Uint8Array {
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
+  // 按 3 字节一组产出 4 字符片段，最后 join 一次：Hermes 字符串不可变，
+  // 大输入（下载的 zip 等几十 MB）用 += 逐段拼接是平方级拷贝，会卡死 JS 线程。
+  const len = bytes.length;
+  const parts: string[] = new Array(Math.ceil(len / 3));
+  let p = 0;
+  for (let i = 0; i < len; i += 3) {
     const b0 = bytes[i];
     const b1 = bytes[i + 1];
     const b2 = bytes[i + 2];
-    out += B64_CHARS[b0 >> 2];
-    out += B64_CHARS[((b0 & 3) << 4) | ((b1 ?? 0) >> 4)];
-    out += i + 1 < bytes.length ? B64_CHARS[((b1 & 15) << 2) | ((b2 ?? 0) >> 6)] : '=';
-    out += i + 2 < bytes.length ? B64_CHARS[b2 & 63] : '=';
+    parts[p++] =
+      B64_CHARS[b0 >> 2] +
+      B64_CHARS[((b0 & 3) << 4) | ((b1 ?? 0) >> 4)] +
+      (i + 1 < len ? B64_CHARS[((b1 & 15) << 2) | ((b2 ?? 0) >> 6)] : '=') +
+      (i + 2 < len ? B64_CHARS[b2 & 63] : '=');
   }
-  return out;
+  return parts.join('');
 }
 
 /** 字符串 -> base64（UTF-8）。 */

@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "MonkeyCode"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "MonkeyCode"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "MonkeyCode"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "用于语音输入，将你的语音实时转写为文字"
+    }
+  ]
+}

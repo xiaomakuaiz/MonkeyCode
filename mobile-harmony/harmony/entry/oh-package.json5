@@ -1,0 +1,10 @@
+{
+  name: "entry",
+  description: "",
+  version: "1.0.0",
+  license: "ISC",
+  // 三方库（@react-native-ohos/*）的 har 依赖由 autolinking（DevEco Sync 时的
+  // link-harmony）自动写入，无需手填
+  dependencies: {},
+  devDependencies: {},
+}

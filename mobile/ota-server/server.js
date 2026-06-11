@@ -25,6 +25,11 @@ const { URL } = require('url');
 
 const PORT = Number(process.env.OTA_PORT || 4747);
 const DIST = path.resolve(process.env.OTA_DIST || path.join(__dirname, '..', 'dist'));
+// 鸿蒙 OTA 产物目录（mobile-harmony 里 npm run ota:export 的输出）：
+// update.json + hermes_bundle.hbc，纯静态文件，挂在 /harmony/ 下（也可直接放 OSS）。
+const HARMONY_DIST = path.resolve(
+  process.env.OTA_HARMONY_DIST || path.join(__dirname, '..', '..', 'mobile-harmony', 'dist-harmony'),
+);
 // 设了 OTA_ASSET_BASE_URL（如 OSS 域名）后，manifest 里的 bundle/资源 URL 直接指向它，
 // server 只负责发 manifest，静态资源交给 OSS/CDN。不设则由本 server 自己发（本地联调）。
 const ASSET_BASE = (process.env.OTA_ASSET_BASE_URL || '').replace(/\/$/, '');
@@ -155,7 +160,7 @@ function sendManifest(req, res, query) {
 // 客户端拿它和已装版本比较：更大就引导去装新包（OTA 推不动原生）。
 // 客户端按 path 取：/app-version/<platform>.json —— 这样也能直接当静态文件放 OSS。
 function sendAppVersion(req, res, u) {
-  const m = u.pathname.match(/\/app-version\/(ios|android)(?:\.json)?$/);
+  const m = u.pathname.match(/\/app-version\/(ios|android|harmony)(?:\.json)?$/);
   const platform = (m && m[1]) || u.searchParams.get('platform') || '';
   let cfg = {};
   try { cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'native-release.json'), 'utf8')); } catch { /* none */ }
@@ -178,10 +183,25 @@ function sendAsset(res, query) {
   console.log(`[asset] ${rel}`);
 }
 
+// 鸿蒙 OTA 静态文件：/harmony/update.json、/harmony/hermes_bundle.hbc（带防目录穿越）
+function sendHarmony(res, pathname) {
+  const rel = pathname.replace(/^\/harmony\/?/, '');
+  if (!rel) { res.writeHead(400).end('missing file'); return; }
+  const abs = path.resolve(HARMONY_DIST, rel);
+  if (!abs.startsWith(HARMONY_DIST + path.sep)) { res.writeHead(403).end('forbidden'); return; }
+  if (!fs.existsSync(abs)) { res.writeHead(404).end('not found'); return; }
+  const ext = path.extname(abs);
+  const cache = ext === '.json' ? 'no-cache' : 'public, max-age=31536000, immutable';
+  res.writeHead(200, { 'content-type': mimeFor(ext || '.hbc'), 'cache-control': cache });
+  fs.createReadStream(abs).pipe(res);
+  console.log(`[harmony] ${rel}`);
+}
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, `http://${req.headers.host}`);
   if (u.pathname === '/manifest') return sendManifest(req, res, u.searchParams);
   if (u.pathname.startsWith('/app-version')) return sendAppVersion(req, res, u);
+  if (u.pathname.startsWith('/harmony/')) return sendHarmony(res, u.pathname);
   if (u.pathname === '/assets') return sendAsset(res, u.searchParams);
   if (u.pathname === '/') {
     let info = '(dist 尚未导出)';

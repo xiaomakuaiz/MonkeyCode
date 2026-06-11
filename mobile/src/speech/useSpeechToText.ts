@@ -20,7 +20,8 @@ let AudioRecord: {
   on: (e: 'data', cb: (b64: string) => void) => { remove: () => void };
 } | null = null;
 try {
-  if (NativeModules.RNLiveAudioStream) {
+  // 鸿蒙：shim（自研 ArkTS TurboModule）在原生不可用时导出 null，可直接判空
+  if (NativeModules.RNLiveAudioStream || (Platform.OS as string) === 'harmony') {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     AudioRecord = require('react-native-live-audio-stream').default;
   }
@@ -61,6 +62,16 @@ async function ensureMicPermission(): Promise<boolean> {
         title: '麦克风权限', message: '语音输入需要使用麦克风', buttonPositive: '允许', buttonNegative: '取消',
       });
       return res === PermissionsAndroid.RESULTS.GRANTED;
+    } catch {
+      return false;
+    }
+  }
+  // 鸿蒙：运行时权限由原生模块申请（shim 暴露 requestPermission；iOS 原版库无此方法，跳过）
+  const requestPermission = (AudioRecord as unknown as { requestPermission?: () => Promise<boolean> } | null)
+    ?.requestPermission;
+  if (requestPermission) {
+    try {
+      return await requestPermission();
     } catch {
       return false;
     }

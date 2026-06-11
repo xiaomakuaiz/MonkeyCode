@@ -1,0 +1,33 @@
+{
+  app: {
+    products: [
+      {
+        name: 'default',
+        signingConfig: 'default',
+        // RNOH 0.82.31 配套：DevEco 6.0.1 / HarmonyOS SDK 6.0.1（API 20）
+        compatibleSdkVersion: '5.0.0(12)',
+        targetSdkVersion: '6.0.0(20)',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          nativeCompiler: 'BiSheng',
+        },
+      },
+    ],
+    buildModeSet: [
+      { name: 'debug' },
+      { name: 'release' },
+    ],
+    // 在 DevEco 里 File → Project Structure → Signing Configs 勾选
+    // Automatically generate signature 后会自动填充
+    signingConfigs: [],
+  },
+  modules: [
+    {
+      name: 'entry',
+      srcPath: './entry',
+      targets: [
+        { name: 'default', applyToProducts: ['default'] },
+      ],
+    },
+  ],
+}
