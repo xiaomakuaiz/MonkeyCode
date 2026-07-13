@@ -9,9 +9,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chaitin/MonkeyCode/agent/internal/config"
+	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/server"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
+	"github.com/chaitin/MonkeyCode/agent/internal/skills"
 )
 
 //go:embed ui.html
@@ -44,6 +46,12 @@ func serveCmd() *cobra.Command {
 				return err
 			}
 
+			// 平台模式:换运行时模型 key + 同步技能/规则
+			platExtras, platRoots, err := applyPlatform(cfg)
+			if err != nil {
+				return err
+			}
+
 			opts := server.Options{
 				Addr:        addr,
 				Token:       token,
@@ -54,6 +62,9 @@ func serveCmd() *cobra.Command {
 						return provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model)
 					}
 					return provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model)
+				},
+				BuildExtras: func(workdir string) (*contextmgr.Extras, []string) {
+					return skills.Assemble(workdir, platExtras, platRoots)
 				},
 			}
 			if !noUI {

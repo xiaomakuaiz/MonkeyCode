@@ -52,7 +52,7 @@ func (t *ReadFile) Execute(_ context.Context, env *Env, input json.RawMessage) (
 	if err := unmarshalInput(input, &in); err != nil {
 		return "", err
 	}
-	p, err := ResolveInWorkspace(env, in.Path)
+	p, err := ResolveForRead(env, in.Path)
 	if err != nil {
 		return "", err
 	}

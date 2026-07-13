@@ -81,5 +81,91 @@
 - [x] MCP 客户端(internal/mcp):stdio + Streamable HTTP 传输,tools 适配为内核工具(命名空间化 mcp__server__tool),全局+项目两级配置,只读注解自动放行/其余审批,单点失败不阻塞;mc-agent mcp list 子命令;CLI 与 serve 均接入;单测 6 例(含真实 stdio server 端到端)+ 真实网关模型实调验证
 - [x] call/call-response 同步查询 + UI 改动面板/diff 视图:internal/repo(file_list/read_file/file_changes/file_diff,工作区边界强制,未跟踪文件构造全新增 diff),serve 分发(不落日志/只回发起方),调试 UI 改动 Tab + 着色 unified diff;repo 单测 3 例 + server call 测试 + 真实 serve 端到端验证
 - [x] 速赢:chat 头部 bug、eval 基线归档、bash env 跨调用保持、权限"此项目永久"持久化、isTerminal 修正
-- [ ] Windows ConPTY 实测(需 Windows 机器)、OAuth 登录后端对接(M2 剩余项)
-- [ ] 平台技能/规则下发(AgentSkill/AgentResources 与 MonkeyCode 平台打通)、LLMProxy 运行时 key 对接
+- [~] 平台对接(OAuth 登录/技能规则下发/LLMProxy key):**内核侧完成**(internal/platform + login/logout +
+      contextmgr 注入,mock 平台端到端已验证);**后端端点暂缓**(用户决定先不动后端,biz/desktop 实现已回滚,
+      端点契约见下方"M2 收尾"节,后端确认后可直接照做)
+- [ ] Windows ConPTY 实测(阻塞:需 Windows 机器)、多模型冒烟分数矩阵(阻塞:需 GLM/Kimi/Qwen key)
+
+## M2 收尾:平台对接实施计划(2026-07-13)
+
+> 设计依据:local-agent-design.md §6 登录流 / §3 上下文 / L180 改动清单。
+> 侦察结论:后端登录全为 session cookie(无 Bearer 面);LLMProxy 已存在
+> (`/v1/messages|chat/completions`,model_api_keys 经 X-Api-Key/Bearer 鉴权,
+> `CreateRuntimeAPIKey` 可复用);技能/规则有 agentresource.Resolver 但只在任务
+> VM 分发,无桌面拉取端点;内核零平台代码。
+
+### 后端 `biz/desktop/`(已回滚,暂缓——保留端点契约备查)
+
+> 2026-07-13 曾完整实现并测试(miniredis 全链路 4 例),按用户决定回滚。内核按以下契约实现并 mock 验证,
+> 后端恢复实施时照此契约即可零改内核:
+>
+> - `GET /api/v1/desktop/authorize?redirect_uri&state`(session):校验 redirect_uri(monkeycode:// 或
+>   loopback http),未登录 302 /login,已登录发一次性 code(建议 Redis TTL 5min)302 回调
+> - `POST /api/v1/desktop/token {code}` → `{access_token(mcd_*), token_type, expires_in, user}`
+> - `POST /api/v1/desktop/runtime-key {model_id?}`(Bearer mcd_*)→ `{api_key, model, protocol}`,
+>   protocol ∈ anthropic|openai_chat|openai_responses;key 复用 model_api_keys,流量走 LLMProxy
+> - `GET /api/v1/desktop/agent-resources`(Bearer)→ `{rules:[{name,content}], skills:[{name,version,description,zip_url}]}`,
+>   规则内联、技能 presigned zip;注意 dispatch 查询语义是 {选中}∪{force_delivery},全量下发需先 listing 转选中集
+
+### 内核 `agent/`
+
+- [x] `internal/config`:新增 platform_url / platform_token / platform_model_id(env `MC_AGENT_PLATFORM_*` +
+      config 文件);Validate 放宽:直连三元组 或 platform 二元组 任一满足
+- [x] `internal/platform`:client(ExchangeCode/FetchRuntimeKey/FetchResources)+ Sync(技能 zip 下载
+      解包到 ~/.cache/mc-agent/platform/<host>/,zip-slip/文件数/大小防护,同版本跳过)+
+      LoadCached 离线兜底 + LoginViaBrowser(loopback 回调 + state 校验)
+- [x] `mc-agent login <url>` / `logout`;config get 显示平台登录态
+- [x] applyPlatform:无直连 key 时换运行时 key,protocol→provider(anthropic→平台源;openai_chat→
+      平台源+/v1;openai_responses 明确报不支持),run/chat/serve 全路径生效
+- [x] `internal/contextmgr`:Build(workdir, extras)——# 平台规则(内联,32KB 截断)+ # 平台技能
+      (名称/描述/入口文档索引,模型按需 read_file)
+- [x] 技能缓存在工作区外:Env.ReadRoots 只读附加根(仅 read_file 放行,写/编辑仍限工作区),
+      loop.Options/server.Options 透传
+- [x] 单测:platform 5 例(httptest 假平台、zip-slip、文件数上限、缓存兜底)、contextmgr 3 例、
+      config 3 例、tools ResolveForRead 1 例
+
+### 验证
+
+- [x] backend:go build ./... + go vet + biz/desktop 单测过
+- [x] agent:gofmt 干净 + go vet + 全部 13 包单测过
+- [x] 真实二进制端到端(假平台进程):`mc-agent login` 浏览器流(authorize 302→loopback 回调→
+      token 写配置)→ `mc-agent run` 换运行时 key→ 技能 zip 落盘缓存 → 系统提示含平台规则与技能索引
+      (假平台侧断言 SYSTEM_HAS_RULE/SKILL=true)→ Anthropic SSE 回复正常渲染
+
+### 偏差(有意取舍)
+
+- 桌面 token 存 Redis 长效(TTL=Session.ExpireDay),keychain 存储属 Tauri 壳(M3);内核配置文件 0600 兜底
+- 运行时 key 复用 model_api_keys(持久 uuid),"短时效轮换"待后端 key 过期机制,不阻塞计量/审计(流量已走 LLMProxy)
+- 未登录 authorize 302 到 /login?redirect=...,前端登录页暂不消费 redirect 参数(登录后需重开授权 URL);前端支持后自动闭环
+
+---
+
+# M2.5:agent/desktop 能力完善(不动后端,2026-07-13)✅
+
+## 内核:本地技能
+
+- [x] `internal/skills`:本地技能发现——项目 `.mc-agent/skills/<name>/SKILL.md` + 全局
+      `<配置目录>/skills/<name>/SKILL.md`,同名项目优先;SKILL.md 可选 frontmatter
+      (name/description),缺省取目录名与正文首个非标题行
+- [x] 装配:skills.Assemble 合并本地与平台技能(本地优先)进 contextmgr.Extras;全局技能目录进
+      ReadRoots(项目技能本在工作区内无需附加);serve 改为 Options.BuildExtras 按会话工作区装配,
+      run/chat/serve 全路径生效
+- [x] `mc-agent skills` 子命令:列项目/全局/平台缓存三来源(不发网络请求)
+- [x] 单测 4 例:发现/frontmatter 解析/项目覆盖全局/本地平台合并与只读根
+- [x] README 增"技能"一节
+
+## 桌面壳:托盘常驻
+
+- [x] 托盘图标 + 菜单(显示窗口/退出 MonkeyCode)+ 左键单击恢复窗口;内核运行且托盘可用时关窗
+      只隐藏,托盘"退出"才真正退出(内核随 stdin 看门狗回收)
+- [x] 降级:托盘创建失败(无 StatusNotifier 宿主)或内核启动失败错误页 → 关窗直接退出,
+      并放行 ExitRequested,避免无窗无托盘僵尸进程
+- [x] cargo build 过;无头冒烟(xvfb+dbus):壳拉起内核就绪 → SIGKILL 壳 → 内核跟随退出无孤儿
+- [x] README:托盘一节 + 路线图勾掉
+
+## 验证
+
+- [x] agent 全部 14 包测试过、gofmt/vet 干净
+- [x] 真实二进制端到端:项目技能 + 全局技能 + 平台缓存技能三来源 `mc-agent skills` 正确列出;
+      run 时系统提示同时含三来源技能索引与平台规则(假平台侧落盘断言 6 关键词全中)
+- [x] mc-desktop 构建 + 无头冒烟过

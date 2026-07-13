@@ -22,6 +22,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/policy"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
+	"github.com/chaitin/MonkeyCode/agent/internal/skills"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
@@ -67,7 +68,7 @@ func main() {
 	pf.BoolVar(&flags.noSession, "no-session", false, "不持久化会话")
 	pf.BoolVar(&flags.worktree, "worktree", false, "在隔离的 git worktree 中执行(结束后用 mc-agent worktree apply/drop 处理改动)")
 
-	root.AddCommand(runCmd(), chatCmd(), sessionsCmd(), configCmd(), serveCmd(), evalCmd(), worktreeCmd(), mcpCmd())
+	root.AddCommand(runCmd(), chatCmd(), sessionsCmd(), configCmd(), serveCmd(), evalCmd(), worktreeCmd(), mcpCmd(), loginCmd(), logoutCmd(), skillsCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
@@ -103,6 +104,12 @@ func buildApp(interactive bool) (*app, error) {
 		cfg.Model = flags.model
 	}
 	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	// 平台模式:换运行时模型 key + 同步技能/规则(填充 cfg 的 LLM 三元组)
+	platExtras, platRoots, err := applyPlatform(cfg)
+	if err != nil {
 		return nil, err
 	}
 
@@ -205,9 +212,11 @@ func buildApp(interactive bool) (*app, error) {
 		}
 	}
 
-	system := contextmgr.Build(workdir)
+	// 本地技能(项目/全局)与平台资源合并注入;workdir 此时已是最终执行目录(含 worktree)
+	extras, readRoots := skills.Assemble(workdir, platExtras, platRoots)
+	system := contextmgr.Build(workdir, extras)
 	engine := loop.New(p, reg, pol, emitters, builder, workdir, system,
-		loop.Options{MaxSteps: flags.maxSteps, ContextBudget: flags.contextBudget})
+		loop.Options{MaxSteps: flags.maxSteps, ContextBudget: flags.contextBudget, ReadRoots: readRoots})
 
 	if sess != nil && flags.resumeID != "" {
 		msgs, err := sess.LoadMessages()
@@ -432,6 +441,13 @@ func configCmd() *cobra.Command {
 			}
 			fmt.Printf("provider: %s\nbase_url: %s\napi_key:  %s\nmodel:    %s\n配置文件: %s\n",
 				cfg.Provider, cfg.BaseURL, key, cfg.Model, config.Path())
+			if cfg.PlatformURL != "" {
+				status := "未登录"
+				if cfg.PlatformToken != "" {
+					status = "已登录"
+				}
+				fmt.Printf("平台:     %s(%s)\n", cfg.PlatformURL, status)
+			}
 			return nil
 		},
 	})

@@ -31,6 +31,34 @@ func TestResolveInWorkspace(t *testing.T) {
 	}
 }
 
+func TestResolveForRead(t *testing.T) {
+	env := testEnv(t)
+	skillDir := t.TempDir()
+	env.ReadRoots = []string{skillDir}
+
+	// 工作区内正常解析
+	if _, err := ResolveForRead(env, "sub/file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	// ReadRoots 内的绝对路径放行
+	doc := filepath.Join(skillDir, "SKILL.md")
+	if p, err := ResolveForRead(env, doc); err != nil || p != doc {
+		t.Fatalf("应放行只读根内路径: %v", err)
+	}
+	// ReadRoots 之外仍拒绝
+	if _, err := ResolveForRead(env, "/etc/passwd"); err == nil {
+		t.Fatal("应拒绝只读根之外的绝对路径")
+	}
+	// 从只读根 .. 逃逸拒绝
+	if _, err := ResolveForRead(env, filepath.Join(skillDir, "..", "escape")); err == nil {
+		t.Fatal("应拒绝从只读根逃逸")
+	}
+	// 写入类解析不受 ReadRoots 影响
+	if _, err := ResolveInWorkspace(env, doc); err == nil {
+		t.Fatal("写路径不应放行只读根")
+	}
+}
+
 func TestEditFile(t *testing.T) {
 	env := testEnv(t)
 	p := filepath.Join(env.Workdir, "a.go")

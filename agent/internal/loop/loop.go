@@ -26,6 +26,8 @@ type Options struct {
 	ContextBudget int
 	// CompactThreshold 触发压缩的输入 token 占预算比例(默认 0.8)。
 	CompactThreshold float64
+	// ReadRoots 工作区外允许只读访问的目录(如平台技能缓存)。
+	ReadRoots []string
 }
 
 // Engine 一次会话的执行引擎。
@@ -60,7 +62,7 @@ func New(p provider.Provider, reg *tools.Registry, pol *policy.Engine,
 	return &Engine{
 		provider: p, registry: reg, policy: pol,
 		emitter: emitter, builder: builder,
-		env: &tools.Env{Workdir: workdir}, system: system, opts: opts,
+		env: &tools.Env{Workdir: workdir, ReadRoots: opts.ReadRoots}, system: system, opts: opts,
 	}
 }
 

@@ -177,7 +177,7 @@ func runEvalTask(cfg *config.Config, tasksDir string, t evalTask) (res evalResul
 	renderer := NewRenderer()
 	renderer.Quiet = true
 	engine := loop.New(p, tools.NewRegistry(), policy.New(policy.ModeYolo, nil),
-		renderer, builder, workdir, contextmgr.Build(workdir), loop.Options{})
+		renderer, builder, workdir, contextmgr.Build(workdir, nil), loop.Options{})
 
 	timeout := time.Duration(t.TimeoutSec) * time.Second
 	if timeout <= 0 {

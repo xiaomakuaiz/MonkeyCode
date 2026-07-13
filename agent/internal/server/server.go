@@ -59,6 +59,9 @@ type Options struct {
 	UI []byte
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
 	AskTimeout time.Duration
+	// BuildExtras 按会话工作区装配系统提示增量(本地/平台技能与规则)
+	// 及工具只读附加根;nil 表示无增量。
+	BuildExtras func(workdir string) (*contextmgr.Extras, []string)
 }
 
 // Server localhost 宿主。
@@ -370,9 +373,14 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 			ls.emit(ls.builder.Plan(fe))
 		}
 	}
-	system := contextmgr.Build(sess.Meta.Workdir)
+	var extras *contextmgr.Extras
+	var readRoots []string
+	if s.opts.BuildExtras != nil {
+		extras, readRoots = s.opts.BuildExtras(sess.Meta.Workdir)
+	}
+	system := contextmgr.Build(sess.Meta.Workdir, extras)
 	ls.engine = loop.New(s.opts.NewProvider(), reg, pol, emitter, ls.builder,
-		sess.Meta.Workdir, system, loop.Options{})
+		sess.Meta.Workdir, system, loop.Options{ReadRoots: readRoots})
 
 	msgs, err := sess.LoadMessages()
 	if err != nil {

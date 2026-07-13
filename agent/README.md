@@ -94,6 +94,32 @@ mc-agent mcp list          # 连接并列出各 server 的工具与连接状态
   `--allow mcp__<server>__<tool>` 可预授权;
 - 单个 server 连接失败只告警跳过,不阻塞启动;连接随会话建立与关闭。
 
+## 技能(Skills)
+
+技能 = 一个含 `SKILL.md` 的目录,注入系统提示作为按需知识索引(agent 相关任务时自行 `read_file` 文档),来源三级、同名按 项目 > 全局 > 平台 覆盖:
+
+```
+<项目>/.mc-agent/skills/<name>/SKILL.md     # 项目技能(随仓库走)
+~/.config/mc-agent/skills/<name>/SKILL.md   # 全局技能(个人积累)
+# 平台技能:mc-agent login 后由 MonkeyCode 平台下发,缓存于 ~/.cache/mc-agent/platform/
+```
+
+`SKILL.md` 支持可选 frontmatter,缺省取目录名与正文首段:
+
+```markdown
+---
+name: deploy
+description: 部署到测试环境的完整流程
+---
+# 正文:步骤、脚本用法、注意事项……
+```
+
+```bash
+mc-agent skills            # 列出当前可用技能与来源
+```
+
+全局/平台技能目录对 `read_file` 只读放行(写与编辑仍严格限定工作区)。
+
 ## serve 模式(WS 宿主 + 浏览器界面)
 
 ```bash

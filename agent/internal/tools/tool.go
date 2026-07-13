@@ -15,6 +15,9 @@ import (
 // Env 工具执行环境。
 type Env struct {
 	Workdir string // 工作区根目录(绝对路径),文件类工具的强制边界
+	// ReadRoots 工作区之外允许只读访问的目录(绝对路径),
+	// 如平台技能缓存;仅 read_file 放行,写/编辑仍限工作区。
+	ReadRoots []string
 }
 
 // Tool 工具接口。
@@ -98,6 +101,25 @@ func ResolveInWorkspace(env *Env, path string) (string, error) {
 		return "", fmt.Errorf("路径 %s 超出工作区 %s,已拒绝", path, env.Workdir)
 	}
 	return p, nil
+}
+
+// ResolveForRead 只读场景的路径解析:工作区优先,越界时再尝试
+// Env.ReadRoots(平台技能缓存等)。
+func ResolveForRead(env *Env, path string) (string, error) {
+	p, err := ResolveInWorkspace(env, path)
+	if err == nil {
+		return p, nil
+	}
+	if filepath.IsAbs(path) {
+		clean := filepath.Clean(path)
+		for _, root := range env.ReadRoots {
+			rel, rerr := filepath.Rel(root, clean)
+			if rerr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return clean, nil
+			}
+		}
+	}
+	return "", err
 }
 
 func unmarshalInput(input json.RawMessage, v any) error {

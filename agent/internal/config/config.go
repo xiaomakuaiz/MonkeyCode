@@ -8,12 +8,19 @@ import (
 	"path/filepath"
 )
 
-// Config 运行配置。
+// Config 运行配置。LLM 接入两种形态:
+//   - 直连:base_url + api_key + model 三元组
+//   - 平台:platform_url + platform_token(mc-agent login 写入),运行时向
+//     MonkeyCode 换短时效模型 key,LLM 流量走平台 LLMProxy
 type Config struct {
 	Provider string `json:"provider"` // anthropic | openai
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
+
+	PlatformURL     string `json:"platform_url,omitempty"`
+	PlatformToken   string `json:"platform_token,omitempty"`
+	PlatformModelID string `json:"platform_model_id,omitempty"` // 缺省用平台默认模型
 }
 
 // Path 配置文件路径。
@@ -52,6 +59,15 @@ func Load() (*Config, error) {
 	if v := os.Getenv("MC_AGENT_MODEL"); v != "" {
 		cfg.Model = v
 	}
+	if v := os.Getenv("MC_AGENT_PLATFORM_URL"); v != "" {
+		cfg.PlatformURL = v
+	}
+	if v := os.Getenv("MC_AGENT_PLATFORM_TOKEN"); v != "" {
+		cfg.PlatformToken = v
+	}
+	if v := os.Getenv("MC_AGENT_PLATFORM_MODEL_ID"); v != "" {
+		cfg.PlatformModelID = v
+	}
 	return cfg, nil
 }
 
@@ -69,10 +85,18 @@ func Save(cfg *Config) error {
 	return os.WriteFile(p, data, 0o600)
 }
 
-// Validate 检查必填项。
+// UsePlatform 是否走 MonkeyCode 平台(登录态)。
+func (c *Config) UsePlatform() bool {
+	return c.PlatformURL != "" && c.PlatformToken != ""
+}
+
+// Validate 检查必填项。平台模式下 LLM 三元组在运行时换取,不要求预先配置。
 func (c *Config) Validate() error {
+	if c.UsePlatform() {
+		return nil
+	}
 	if c.BaseURL == "" {
-		return fmt.Errorf("未配置 base_url:用 --base-url、MC_AGENT_BASE_URL 或 `mc-agent config set` 设置")
+		return fmt.Errorf("未配置 base_url:用 --base-url、MC_AGENT_BASE_URL、`mc-agent config set` 设置,或 `mc-agent login <平台地址>` 接入 MonkeyCode 平台")
 	}
 	if c.APIKey == "" {
 		return fmt.Errorf("未配置 api_key:用 --api-key、MC_AGENT_API_KEY 或 `mc-agent config set` 设置")
