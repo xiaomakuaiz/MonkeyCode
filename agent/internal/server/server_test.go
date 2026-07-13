@@ -354,11 +354,58 @@ func TestWSPermissionApprove(t *testing.T) {
 	}
 	sendFrame(t, conn, frame.TypePermissionResp,
 		map[string]any{"id": req.ID, "approved": true, "remember": false})
-	wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
 
 	data, err := os.ReadFile(filepath.Join(workdir, "ok.txt"))
 	if err != nil || string(data) != "approved" {
 		t.Fatalf("批准后文件未写入: %v %q", err, data)
+	}
+	// 审批终态必须广播且落日志
+	var resolved bool
+	for _, f := range frames {
+		if f.Type == frame.TypePermissionResolved && strings.Contains(string(f.Data), "approved") {
+			resolved = true
+		}
+	}
+	if !resolved {
+		t.Fatalf("缺少 permission-resolved(approved) 帧: %v", summary(frames))
+	}
+}
+
+// TestPermissionTimeoutResolves 审批超时必须广播 timeout 终态且轮次继续。
+func TestPermissionTimeoutResolves(t *testing.T) {
+	stub := &stubProvider{results: []*provider.Result{
+		toolUseResult("write_file", `{"path":"x.txt","content":"x"}`),
+		textResult("好的,已跳过"),
+	}}
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Model:       "stub",
+		NewProvider: func() provider.Provider { return stub },
+		AskTimeout:  150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	id := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, id)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("写文件")})
+
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypeTaskEnded)
+	})
+	var timeoutResolved bool
+	for _, f := range frames {
+		if f.Type == frame.TypePermissionResolved && strings.Contains(string(f.Data), "timeout") {
+			timeoutResolved = true
+		}
+	}
+	if !timeoutResolved {
+		t.Fatalf("缺少 permission-resolved(timeout) 帧: %v", summary(frames))
 	}
 }
 

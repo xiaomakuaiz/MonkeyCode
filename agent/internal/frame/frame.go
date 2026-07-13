@@ -32,6 +32,9 @@ const (
 	// 本地宿主的权限审批透传(云端对应 auto-approve/permission-resp 机制)
 	TypePermissionReq  Type = "permission-req"
 	TypePermissionResp Type = "permission-resp"
+	// PermissionResolved 审批终态广播:answered/timeout/cancelled,
+	// UI 据此关闭卡片;落日志使回放中的历史卡片呈现真实状态。
+	TypePermissionResolved Type = "permission-resolved"
 )
 
 // Kind 帧内容子类型。
@@ -167,6 +170,13 @@ func (b *Builder) UserInput(text string) Frame {
 func (b *Builder) PermissionReq(id, tool, title string) Frame {
 	return b.build(TypePermissionReq, "", map[string]string{
 		"id": id, "tool": tool, "title": title,
+	})
+}
+
+// PermissionResolved 审批终态。outcome: approved | denied | timeout | cancelled。
+func (b *Builder) PermissionResolved(id, outcome string) Frame {
+	return b.build(TypePermissionResolved, "", map[string]string{
+		"id": id, "outcome": outcome,
 	})
 }
 

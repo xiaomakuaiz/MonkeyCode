@@ -135,7 +135,7 @@ function openSession(id) {
   currentId = id; running = false;
   localStorage.setItem('mc.lastSession', id);
   $('log').innerHTML = ''; $('usageText').textContent = '';
-  frameQueue = []; openPerms = []; breakStream();
+  frameQueue = []; openPerms = []; permCards = {}; breakStream();
   setStatus('连接中…');
   refreshSessions();
 
@@ -168,6 +168,7 @@ function scheduleFlush() {
 
 let lastKind = '', lastEl = null; // 流式文本聚合
 let openPerms = []; // 未答复的审批卡片(轮次结束后失效)
+let permCards = {};  // askId -> 卡片元素,用于 permission-resolved 终态回写
 function expirePerms() {
   for (const el of openPerms) {
     const btns = el.querySelector('.btns');
@@ -201,6 +202,7 @@ function render(f) {
     case 'user-input': breakStream();
       block('user').textContent = b64decode(data.content); break;
     case 'permission-req': breakStream(); renderPerm(data); break;
+    case 'permission-resolved': resolvePerm(data); break;
     case 'task-running': if (f.kind === 'acp_event') renderAcp(data?.update); break;
   }
 }
@@ -232,8 +234,19 @@ function renderAcp(u) {
   }
 }
 
+const OUTCOME_LABEL = {approved:'已允许', denied:'已拒绝',
+  timeout:'已超时(按拒绝处理)', cancelled:'已取消'};
+function resolvePerm(d) {
+  const el = permCards[d.id];
+  if (!el) return;
+  const btns = el.querySelector('.btns');
+  if (btns) btns.innerHTML = `<span class="hint">${OUTCOME_LABEL[d.outcome] || d.outcome}</span>`;
+  delete permCards[d.id];
+  openPerms = openPerms.filter(p => p !== el);
+}
 function renderPerm(d) {
   const el = block('perm');
+  permCards[d.id] = el;
   el.innerHTML = `<div class="q">⚠ 请求执行:<b>${esc(d.title)}</b> <span class="hint">(${esc(d.tool)})</span></div>
     <div class="btns">
       <button data-a="allow">允许</button>

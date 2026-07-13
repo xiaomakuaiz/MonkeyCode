@@ -489,11 +489,18 @@ func (ls *liveSession) asker(ctx context.Context, req policy.Request) (bool, boo
 	ls.emit(ls.builder.PermissionReq(id, req.Tool, req.Title))
 	select {
 	case r := <-ch:
+		outcome := "denied"
+		if r.approved {
+			outcome = "approved"
+		}
+		ls.emit(ls.builder.PermissionResolved(id, outcome))
 		return r.approved, r.remember, nil
 	case <-ctx.Done():
+		ls.emit(ls.builder.PermissionResolved(id, "cancelled"))
 		return false, false, ctx.Err()
 	case <-time.After(ls.srv.opts.AskTimeout):
-		return false, false, fmt.Errorf("等待审批超时")
+		ls.emit(ls.builder.PermissionResolved(id, "timeout"))
+		return false, false, fmt.Errorf("等待审批超时(%s),已按拒绝处理", ls.srv.opts.AskTimeout)
 	}
 }
 
