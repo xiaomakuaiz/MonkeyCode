@@ -15,6 +15,7 @@ import (
 
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
+	"github.com/chaitin/MonkeyCode/agent/internal/session"
 )
 
 // stubProvider 按脚本依次返回结果。
@@ -254,6 +255,30 @@ func TestWSReplayOnReconnect(t *testing.T) {
 	})
 	if !hasType(frames, frame.TypeUserInput) {
 		t.Fatalf("回放缺少 user-input: %v", summary(frames))
+	}
+}
+
+// TestWSReplayLargeHistory 回放帧数远超发送缓冲(1024)时必须完整送达,
+// 不得按慢消费者断开(回归:长会话刷新后只渲染出一小段)。
+func TestWSReplayLargeHistory(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, t.TempDir())
+
+	sess, err := session.Load(srv.opts.SessionRoot, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &frame.Builder{}
+	const total = 3000
+	for range total {
+		sess.Emit(b.AgentText("x"))
+	}
+	sess.Close()
+
+	conn := dialWS(t, ts, id)
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool { return len(fs) >= total })
+	if len(frames) < total {
+		t.Fatalf("回放不完整: %d/%d", len(frames), total)
 	}
 }
 

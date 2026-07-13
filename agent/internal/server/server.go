@@ -483,13 +483,26 @@ func newWSClient(conn *websocket.Conn) *wsClient {
 	return c
 }
 
-// send 非阻塞投递;慢消费者(缓冲满)直接断开,由客户端重连回放。
+// send 非阻塞投递(实时广播用);慢消费者(缓冲满)直接断开,由客户端重连回放。
 func (c *wsClient) send(data []byte) {
 	select {
 	case c.out <- data:
 	case <-c.done:
 	default:
 		c.close(websocket.StatusPolicyViolation, "client too slow")
+	}
+}
+
+// sendBlocking 阻塞投递(历史回放用):回放帧数可远超缓冲大小,不能按慢消费者处理。
+func (c *wsClient) sendBlocking(data []byte) error {
+	select {
+	case c.out <- data:
+		return nil
+	case <-c.done:
+		return fmt.Errorf("连接已关闭")
+	case <-time.After(30 * time.Second):
+		c.close(websocket.StatusPolicyViolation, "replay write timeout")
+		return fmt.Errorf("回放写超时")
 	}
 }
 
@@ -525,7 +538,9 @@ func replayEvents(path string, c *wsClient) error {
 		if line == "" {
 			continue
 		}
-		c.send([]byte(line))
+		if err := c.sendBlocking([]byte(line)); err != nil {
+			return err
+		}
 	}
 	return scanner.Err()
 }
