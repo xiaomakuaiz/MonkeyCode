@@ -16,8 +16,11 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/skills"
 )
 
-//go:embed ui.html
-var debugUI []byte
+// 内嵌 UI:agent/ui(React + Vite)构建的单文件产物,构建产物入库,
+// go build 不依赖 node;改 UI 后在 agent/ui 下执行 npm run build 再编译内核。
+//
+//go:embed uidist/index.html
+var embeddedUI []byte
 
 func serveCmd() *cobra.Command {
 	var addr, token string
@@ -68,7 +71,7 @@ func serveCmd() *cobra.Command {
 				},
 			}
 			if !noUI {
-				opts.UI = debugUI
+				opts.UI = embeddedUI
 			}
 			srv, err := server.New(opts)
 			if err != nil {

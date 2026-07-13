@@ -33,6 +33,6 @@ NO_AT_BRIDGE=1 xvfb-run -a dbus-run-session -- ./target/debug/mc-desktop
 
 ## 路线图(v0 之后)
 
-- ~~托盘常驻 + 关窗不退出~~(已交付);自更新(壳与内核独立更新);
-- macOS/Windows 构建与签名(内核作为 sidecar 捆绑进安装包);
-- 独立 React UI 工程替换内嵌调试 UI;OAuth 登录(系统浏览器 + 深链,内核侧 `mc-agent login` 已就绪,待后端端点)。
+- ~~托盘常驻 + 关窗不退出~~(已交付);~~独立 React UI 替换内嵌调试 UI~~(已交付,见 `agent/ui/`);
+- 自更新(壳与内核独立更新);macOS/Windows 构建与签名(内核作为 sidecar 捆绑进安装包);
+- OAuth 登录(系统浏览器 + 深链,内核侧 `mc-agent login` 已就绪,待后端端点)。

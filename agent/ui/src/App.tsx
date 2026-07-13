@@ -1,0 +1,334 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { b64encode, connect, createSession, listSessions, type Conn } from "./client";
+import { DiffView, LogItemView, SessionItem } from "./components";
+import { answerPerm, initialChat, reduceBatch, type ChatState } from "./reduce";
+import type { FileChange, Frame, SessionMeta } from "./types";
+
+type Tab = "chat" | "changes";
+
+export default function App() {
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [chat, setChat] = useState<ChatState>(initialChat);
+  const [status, setStatus] = useState("未连接");
+  const [tab, setTab] = useState<Tab>("chat");
+  const [changes, setChanges] = useState<FileChange[] | null>(null);
+  const [changesErr, setChangesErr] = useState("");
+  const [diff, setDiff] = useState<{ path: string; text: string } | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [input, setInput] = useState("");
+  const [childView, setChildView] = useState<string | null>(null);
+
+  const connRef = useRef<Conn | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
+
+  const refreshSessions = useCallback(async () => {
+    const metas = await listSessions();
+    setSessions(metas);
+    return metas;
+  }, []);
+
+  const refreshChanges = useCallback(async () => {
+    const conn = connRef.current;
+    if (!conn) return;
+    try {
+      const r = await conn.call<{ result?: FileChange[]; error?: string }>("repo_file_changes");
+      if (r.error) {
+        setChangesErr(r.error);
+        setChanges([]);
+      } else {
+        setChangesErr("");
+        setChanges(r.result ?? []);
+      }
+    } catch (e) {
+      setChangesErr(e instanceof Error ? e.message : String(e));
+      setChanges([]);
+    }
+  }, []);
+
+  const openSession = useCallback(
+    (id: string) => {
+      connRef.current?.close();
+      setCurrentId(id);
+      setChat(initialChat);
+      setChanges(null);
+      setChangesErr("");
+      setTab("chat");
+      localStorage.setItem("mc.lastSession", id);
+      connRef.current = connect(id, {
+        onFrames: (batch: Frame[]) => setChat((s) => reduceBatch(s, batch)),
+        onStatus: (text) => setStatus(text),
+      });
+      void refreshSessions();
+    },
+    [refreshSessions],
+  );
+
+  // 启动:恢复上次会话
+  useEffect(() => {
+    refreshSessions()
+      .then((metas) => {
+        const last = localStorage.getItem("mc.lastSession");
+        if (last && metas.some((m) => m.id === last)) openSession(last);
+      })
+      .catch((e) => setStatus("无法连接服务: " + (e instanceof Error ? e.message : e)));
+    return () => connRef.current?.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 本轮结束:刷新改动计数与会话列表
+  useEffect(() => {
+    if (!chat.turnEnded) return;
+    setChat((s) => ({ ...s, turnEnded: false }));
+    void refreshChanges();
+    void refreshSessions();
+  }, [chat.turnEnded, refreshChanges, refreshSessions]);
+
+  // 自动滚动(仅当用户停留在底部)
+  useEffect(() => {
+    const el = logRef.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [chat.items]);
+
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  const send = () => {
+    const text = input.trim();
+    if (!text || chat.running || !connRef.current) return;
+    if (connRef.current.send("user-input", { content: b64encode(text) })) setInput("");
+  };
+
+  const onPermAnswer = (id: string, action: "allow" | "always" | "persist" | "deny") => {
+    const approved = action !== "deny";
+    if (
+      connRef.current?.send("permission-resp", {
+        id,
+        approved,
+        remember: action === "always" || action === "persist",
+        persist: action === "persist",
+      })
+    ) {
+      setChat((s) => answerPerm(s, id, approved));
+    }
+  };
+
+  const showDiff = async (path: string) => {
+    setDiff({ path, text: "加载中…" });
+    try {
+      const r = await connRef.current!.call<{ result?: { diff?: string }; error?: string }>("repo_file_diff", {
+        path,
+      });
+      setDiff({ path, text: r.error ? "✗ " + r.error : r.result?.diff || "(无差异)" });
+    } catch (e) {
+      setDiff({ path, text: "✗ " + (e instanceof Error ? e.message : e) });
+    }
+  };
+
+  return (
+    <div className="app">
+      <aside className="side">
+        <div className="brand">
+          <span className="brand-name">MonkeyCode</span>
+          <span className="hint">本地内核</span>
+        </div>
+        <button className="primary wide" onClick={() => setShowNew(true)}>
+          + 新建会话
+        </button>
+        <div className="sessions">
+          {sessions.map((m) => (
+            <SessionItem key={m.id} meta={m} active={m.id === currentId} onClick={() => openSession(m.id)} />
+          ))}
+          {sessions.length === 0 && <div className="hint pad">暂无会话</div>}
+        </div>
+      </aside>
+
+      <main className="main">
+        <nav className="tabs">
+          <button className={"tab" + (tab === "chat" ? " active" : "")} onClick={() => setTab("chat")}>
+            对话
+          </button>
+          <button
+            className={"tab" + (tab === "changes" ? " active" : "")}
+            onClick={() => {
+              setTab("changes");
+              void refreshChanges();
+            }}
+          >
+            改动{changes && changes.length > 0 ? ` (${changes.length})` : ""}
+          </button>
+        </nav>
+
+        {tab === "chat" ? (
+          <div className="log" ref={logRef} onScroll={onLogScroll}>
+            {currentId === null && <div className="sysline">选择或创建一个会话开始</div>}
+            {chat.items.map((item, i) => (
+              <LogItemView key={i} item={item} onPermAnswer={onPermAnswer} onOpenChild={setChildView} />
+            ))}
+          </div>
+        ) : (
+          <div className="changes">
+            {changes === null && <div className="sysline">加载中…</div>}
+            {changesErr && <div className="sysline err">{changesErr}</div>}
+            {changes && !changesErr && changes.length === 0 && (
+              <div className="sysline">无改动(或非 git 仓库)</div>
+            )}
+            {changes?.map((c) => (
+              <div key={c.path} className="chg" onClick={() => void showDiff(c.path)}>
+                <span className={"chg-st " + c.status}>{c.status}</span>
+                <span>{c.path}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="composer">
+          <textarea
+            value={input}
+            placeholder="输入任务…(Enter 发送,Shift+Enter 换行)"
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <button className="primary" disabled={chat.running || !currentId} onClick={send}>
+            发送
+          </button>
+          <button
+            className="danger"
+            disabled={!chat.running}
+            onClick={() => connRef.current?.send("user-cancel", {})}
+          >
+            停止
+          </button>
+        </div>
+        <footer className="status">
+          <span>{status}</span>
+          <span>{chat.usage ? `上下文 ${chat.usage.used} / ${chat.usage.size} tokens` : ""}</span>
+        </footer>
+      </main>
+
+      {diff && (
+        <div className="modal-backdrop" onClick={() => setDiff(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <b>{diff.path}</b>
+              <button className="ghost" onClick={() => setDiff(null)}>
+                关闭
+              </button>
+            </div>
+            <DiffView text={diff.text} />
+          </div>
+        </div>
+      )}
+
+      {childView && (
+        <div className="modal-backdrop" onClick={() => setChildView(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <b>子代理会话 {childView}</b>
+              <button className="ghost" onClick={() => setChildView(null)}>
+                关闭
+              </button>
+            </div>
+            <SessionViewer id={childView} />
+          </div>
+        </div>
+      )}
+
+      {showNew && (
+        <NewSessionDialog
+          onClose={() => setShowNew(false)}
+          onCreated={(meta) => {
+            setShowNew(false);
+            void refreshSessions().then(() => openSession(meta.id));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 子会话只读回放/跟看:复用同一 WS 协议(服务端对子会话走观察者路径) */
+function SessionViewer({ id }: { id: string }) {
+  const [chat, setChat] = useState<ChatState>(initialChat);
+  const [status, setStatus] = useState("连接中…");
+
+  useEffect(() => {
+    const conn = connect(id, {
+      onFrames: (batch) => setChat((s) => reduceBatch(s, batch)),
+      onStatus: (text) => setStatus(text),
+    });
+    return () => conn.close();
+  }, [id]);
+
+  return (
+    <div className="child-log">
+      <div className="hint">{status}</div>
+      {chat.items.map((item, i) => (
+        <LogItemView key={i} item={item} onPermAnswer={() => {}} />
+      ))}
+    </div>
+  );
+}
+
+function NewSessionDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (meta: SessionMeta) => void;
+}) {
+  const [workdir, setWorkdir] = useState("");
+  const [worktree, setWorktree] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const create = async () => {
+    if (!workdir.trim() || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      onCreated(await createSession(workdir.trim(), worktree));
+    } catch (e) {
+      setErr("创建失败: " + (e instanceof Error ? e.message : e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+        <h3>新建会话</h3>
+        <p className="hint">工作区目录(本机绝对路径)</p>
+        <input
+          type="text"
+          autoFocus
+          value={workdir}
+          placeholder="/home/you/dev/project"
+          onChange={(e) => setWorkdir(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void create()}
+        />
+        <label className="hint check">
+          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
+          在隔离 worktree 中执行(需为 git 仓库)
+        </label>
+        {err && <div className="sysline err">{err}</div>}
+        <div className="modal-actions">
+          <button className="ghost" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary" disabled={busy} onClick={() => void create()}>
+            创建
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
