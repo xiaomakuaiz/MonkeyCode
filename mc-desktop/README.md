@@ -19,6 +19,10 @@ cargo build --release
 - 壳启动 → spawn `mc-agent serve --addr 127.0.0.1:<随机端口> --token <随机> --watch-stdin`,15 秒内等待就绪,失败则打开错误页(不静默退出);
 - 壳持有内核 stdin 管道:**壳以任何方式退出(含被 SIGKILL)都会关闭管道,内核随之退出**,不留孤儿进程;正常退出路径额外主动 kill。
 
+## 托盘常驻
+
+内核正常运行时,**关窗只隐藏窗口**,任务继续在内核执行;托盘左键单击或菜单"显示窗口"恢复,菜单"退出 MonkeyCode"才真正退出(内核随之回收)。降级逻辑:托盘创建失败(无 StatusNotifier 宿主的桌面环境)或内核启动失败的错误页,关窗直接退出,不会出现"藏起来找不回"的僵尸窗口。
+
 ## 无头/CI 环境冒烟
 
 WebKitGTK 初始化依赖 DBus 会话总线,纯 Xvfb 下会阻塞,需:
@@ -29,6 +33,6 @@ NO_AT_BRIDGE=1 xvfb-run -a dbus-run-session -- ./target/debug/mc-desktop
 
 ## 路线图(v0 之后)
 
-- 托盘常驻 + 关窗不退出;自更新(壳与内核独立更新);
+- ~~托盘常驻 + 关窗不退出~~(已交付);自更新(壳与内核独立更新);
 - macOS/Windows 构建与签名(内核作为 sidecar 捆绑进安装包);
-- 独立 React UI 工程替换内嵌调试 UI;OAuth 登录(系统浏览器 + 深链)。
+- 独立 React UI 工程替换内嵌调试 UI;OAuth 登录(系统浏览器 + 深链,内核侧 `mc-agent login` 已就绪,待后端端点)。

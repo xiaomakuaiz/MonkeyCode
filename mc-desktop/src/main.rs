@@ -4,24 +4,34 @@
 // 子进程 → 等待就绪 → 打开窗口加载内核 UI → 退出时回收子进程。
 // 业务全部在 Go 内核;壳与内核经 localhost WS 帧协议解耦,后续可
 // 替换为独立 React UI 而不动内核。
+//
+// 托盘常驻:内核正常运行时关窗只隐藏(任务继续在内核跑),托盘菜单
+// "退出"才真正退出并回收内核;内核启动失败的错误页关窗即退出。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-/// 内核子进程句柄(退出时回收)。
+/// 内核子进程句柄(退出时回收)。子进程存在 ⇔ 关窗隐藏到托盘。
 struct Kernel(Mutex<Option<Child>>);
+
+/// 托盘是否可用;不可用时关窗直接退出(否则窗口藏起来就找不回了)。
+struct TrayReady(AtomicBool);
 
 fn main() {
     eprintln!("[mc-desktop] main 进入");
     tauri::Builder::default()
         .manage(Kernel(Mutex::new(None)))
+        .manage(TrayReady(AtomicBool::new(true)))
         .setup(|app| {
             eprintln!("[mc-desktop] setup 进入,开始启动内核");
             match start_kernel() {
@@ -35,10 +45,15 @@ fn main() {
                         .title("MonkeyCode")
                         .inner_size(1200.0, 800.0)
                         .build()?;
+                    // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞主窗口
+                    if let Err(e) = setup_tray(app.handle()) {
+                        eprintln!("[mc-desktop] 托盘创建失败(关窗将直接退出): {e}");
+                        app.state::<TrayReady>().0.store(false, Ordering::Relaxed);
+                    }
                 }
                 Err(e) => {
                     eprintln!("[mc-desktop] 内核启动失败: {e}");
-                    // 打开占位页展示错误,不静默退出
+                    // 打开占位页展示错误,不静默退出;此时无托盘,关窗即退出
                     let url = format!("index.html#{}", urlencode(&e)).parse()?;
                     WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url))
                         .title("MonkeyCode")
@@ -48,16 +63,77 @@ fn main() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // 内核在跑且托盘可用时,关窗只隐藏(托盘可恢复);
+            // 错误页(无内核)或托盘不可用时正常关闭退出
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let kernel_running = app.state::<Kernel>().0.lock().unwrap().is_some();
+                let tray_ready = app.state::<TrayReady>().0.load(Ordering::Relaxed);
+                if kernel_running && tray_ready {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("启动 Tauri 失败")
-        .run(|app, event| {
-            if let RunEvent::Exit = event {
+        .run(|app, event| match event {
+            // 兜底:托盘可用时窗口全部关闭不结束进程(托盘常驻);
+            // app.exit() 显式退出或托盘不可用时放行
+            RunEvent::ExitRequested { api, code, .. }
+                if code.is_none() && app.state::<TrayReady>().0.load(Ordering::Relaxed) =>
+            {
+                api.prevent_exit();
+            }
+            RunEvent::Exit => {
                 if let Some(mut child) = app.state::<Kernel>().0.lock().unwrap().take() {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
             }
+            _ => {}
         });
+}
+
+/// 创建托盘:菜单(显示窗口/退出)+ 左键单击恢复窗口。
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("MonkeyCode")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
 }
 
 /// 启动内核:返回 (子进程, 端口, 令牌)。
