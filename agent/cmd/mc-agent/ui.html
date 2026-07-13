@@ -111,6 +111,7 @@ async function refreshSessions() {
     el.onclick = () => openSession(m.id);
     box.appendChild(el);
   }
+  return metas;
 }
 function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
 
@@ -130,6 +131,7 @@ $('createBtn').onclick = async () => {
 function openSession(id) {
   if (ws) { ws.onclose = null; ws.close(); }
   currentId = id; running = false;
+  localStorage.setItem('mc.lastSession', id);
   $('log').innerHTML = ''; $('usageText').textContent = '';
   setStatus('连接中…');
   refreshSessions();
@@ -141,6 +143,14 @@ function openSession(id) {
 }
 
 let lastKind = '', lastEl = null; // 流式文本聚合
+let openPerms = []; // 未答复的审批卡片(轮次结束后失效)
+function expirePerms() {
+  for (const el of openPerms) {
+    const btns = el.querySelector('.btns');
+    if (btns) btns.innerHTML = '<span class="hint">(已过期)</span>';
+  }
+  openPerms = [];
+}
 function block(cls) {
   const el = document.createElement('div');
   el.className = 'msg ' + cls;
@@ -161,9 +171,9 @@ function render(f) {
   const data = f.data ? JSON.parse(b64decode(f.data)) : null;
   switch (f.type) {
     case 'task-started': setRunning(true); break;
-    case 'task-ended': breakStream(); setRunning(false);
+    case 'task-ended': breakStream(); setRunning(false); expirePerms();
       block('sysline').textContent = '— 本轮结束 —'; scroll(); break;
-    case 'task-error': breakStream(); setRunning(false);
+    case 'task-error': breakStream(); setRunning(false); expirePerms();
       block('sysline err').textContent = '✗ ' + (data?.error || '未知错误'); scroll(); break;
     case 'user-input': breakStream();
       block('user').textContent = b64decode(data.content); scroll(); break;
@@ -212,7 +222,9 @@ function renderPerm(d) {
     sendFrame('permission-resp', {id: d.id, approved: a !== 'deny', remember: a === 'always'});
     el.querySelector('.btns').innerHTML =
       `<span class="hint">${a==='deny'?'已拒绝':'已允许'}</span>`;
+    openPerms = openPerms.filter(p => p !== el);
   });
+  openPerms.push(el);
   scroll();
 }
 
@@ -233,7 +245,11 @@ $('input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); }
 });
 
-refreshSessions().catch(e => setStatus('无法连接服务: '+e.message));
+// 启动:恢复上次打开的会话(历史由服务端回放)
+refreshSessions().then(metas => {
+  const last = localStorage.getItem('mc.lastSession');
+  if (last && metas.some(m => m.id === last)) openSession(last);
+}).catch(e => setStatus('无法连接服务: '+e.message));
 </script>
 </body>
 </html>
