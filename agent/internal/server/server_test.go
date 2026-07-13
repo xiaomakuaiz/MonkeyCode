@@ -402,6 +402,23 @@ func TestStaleRunningSessionClosedOnLoad(t *testing.T) {
 	}
 }
 
+// TestStalePermissionRespGetsError 对失效审批的响应必须得到明确错误反馈,不再静默忽略。
+func TestStalePermissionRespGetsError(t *testing.T) {
+	_, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, id)
+
+	sendFrame(t, conn, frame.TypePermissionResp,
+		map[string]any{"id": "no-such-ask", "approved": true})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypeTaskError)
+	})
+	last := frames[len(frames)-1]
+	if !strings.Contains(string(last.Data), "失效") {
+		t.Fatalf("应回发失效提示: %s", last.Data)
+	}
+}
+
 func TestNonLoopbackRefused(t *testing.T) {
 	_, err := New(Options{
 		Addr:        "0.0.0.0:7439",

@@ -35,7 +35,7 @@ func TestNew_SaveMeta(t *testing.T) {
 	if s.Meta.Title != "测试会话" {
 		t.Fatalf("Title = %q", s.Meta.Title)
 	}
-	if s.Meta.Status != "running" {
+	if s.Meta.Status != "created" {
 		t.Fatalf("Status = %q", s.Meta.Status)
 	}
 	if s.Meta.CreatedAt.IsZero() || s.Meta.UpdatedAt.IsZero() {

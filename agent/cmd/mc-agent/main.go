@@ -186,6 +186,10 @@ func buildApp(interactive bool) (*app, error) {
 
 // runTurn 执行一轮并处理会话落盘。
 func (a *app) runTurn(ctx context.Context, input string) error {
+	if a.sess != nil {
+		a.sess.Meta.Status = "running"
+		_ = a.sess.SaveMeta()
+	}
 	_, err := a.engine.RunTurn(ctx, input)
 	a.renderer.Flush()
 

@@ -128,18 +128,42 @@ $('createBtn').onclick = async () => {
 };
 
 // ---------- WS 连接与帧渲染 ----------
+let reconnectTimer = null;
 function openSession(id) {
   if (ws) { ws.onclose = null; ws.close(); }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   currentId = id; running = false;
   localStorage.setItem('mc.lastSession', id);
   $('log').innerHTML = ''; $('usageText').textContent = '';
+  frameQueue = []; openPerms = []; breakStream();
   setStatus('连接中…');
   refreshSessions();
 
-  ws = new WebSocket(`ws://${location.host}/ws?session=${id}&token=${token}`);
-  ws.onopen = () => setStatus('已连接 · 会话 '+id);
-  ws.onclose = () => setStatus('连接已断开(点击会话重连)');
-  ws.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch {} };
+  const sock = new WebSocket(`ws://${location.host}/ws?session=${id}&token=${token}`);
+  ws = sock;
+  sock.onopen = () => setStatus('已连接 · 会话 '+id);
+  sock.onclose = () => {
+    if (ws !== sock) return; // 已被新连接取代
+    setRunning(false);
+    setStatus('⚠ 连接断开,2 秒后自动重连…');
+    reconnectTimer = setTimeout(() => { if (currentId === id) openSession(id); }, 2000);
+  };
+  sock.onmessage = ev => { frameQueue.push(ev.data); scheduleFlush(); };
+}
+
+// 帧按渲染帧批量消费:避免高频流式帧逐条触发布局/滚动,
+// 浏览器消费过慢会被服务端按慢消费者断开。
+let frameQueue = [], flushScheduled = false;
+function scheduleFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  requestAnimationFrame(() => {
+    flushScheduled = false;
+    const batch = frameQueue; frameQueue = [];
+    for (const raw of batch) { try { render(JSON.parse(raw)); } catch {} }
+    if (batch.length) scroll();
+    if (frameQueue.length) scheduleFlush();
+  });
 }
 
 let lastKind = '', lastEl = null; // 流式文本聚合
@@ -160,7 +184,6 @@ function block(cls) {
 function appendStream(kind, cls, text) {
   if (lastKind !== kind || !lastEl) { lastEl = block(cls); lastKind = kind; }
   lastEl.textContent += text;
-  scroll();
 }
 function breakStream(){ lastKind = ''; lastEl = null; }
 function scroll(){ const l=$('log'); l.scrollTop = l.scrollHeight; }
@@ -172,11 +195,11 @@ function render(f) {
   switch (f.type) {
     case 'task-started': setRunning(true); break;
     case 'task-ended': breakStream(); setRunning(false); expirePerms();
-      block('sysline').textContent = '— 本轮结束 —'; scroll(); break;
+      block('sysline').textContent = '— 本轮结束 —'; break;
     case 'task-error': breakStream(); setRunning(false); expirePerms();
-      block('sysline err').textContent = '✗ ' + (data?.error || '未知错误'); scroll(); break;
+      block('sysline err').textContent = '✗ ' + (data?.error || '未知错误'); break;
     case 'user-input': breakStream();
-      block('user').textContent = b64decode(data.content); scroll(); break;
+      block('user').textContent = b64decode(data.content); break;
     case 'permission-req': breakStream(); renderPerm(data); break;
     case 'task-running': if (f.kind === 'acp_event') renderAcp(data?.update); break;
   }
@@ -190,7 +213,7 @@ function renderAcp(u) {
     case 'tool_call': { breakStream();
       const el = block('tool'); el.dataset.tc = u.toolCallId;
       el.innerHTML = `⏺ <span class="name">${esc(u.title || u.kind)}</span> <span class="st">…</span>`;
-      scroll(); break; }
+      break; }
     case 'tool_call_update': {
       if (u.status === 'in_progress') break;
       const el = [...document.querySelectorAll('[data-tc]')].findLast(e => e.dataset.tc === u.toolCallId);
@@ -202,9 +225,9 @@ function renderAcp(u) {
     case 'plan': { breakStream();
       const mark = s => ({pending:'[ ]', in_progress:'[~]', completed:'[x]'}[s] || '[ ]');
       block('plan').textContent = (u.entries||[]).map(e => `${mark(e.status)} ${e.content}`).join('\n');
-      scroll(); break; }
+      break; }
     case 'llm_call_retry': breakStream();
-      block('sysline').textContent = `模型调用重试 #${u.attempt}: ${u.message||''}`; scroll(); break;
+      block('sysline').textContent = `模型调用重试 #${u.attempt}: ${u.message||''}`; break;
     case 'usage_update': $('usageText').textContent = `上下文 ${u.used||0} / ${u.size||0} tokens`; break;
   }
 }
@@ -219,19 +242,22 @@ function renderPerm(d) {
     </div>`;
   el.querySelectorAll('button').forEach(btn => btn.onclick = () => {
     const a = btn.dataset.a;
-    sendFrame('permission-resp', {id: d.id, approved: a !== 'deny', remember: a === 'always'});
+    if (!sendFrame('permission-resp', {id: d.id, approved: a !== 'deny', remember: a === 'always'})) return;
     el.querySelector('.btns').innerHTML =
       `<span class="hint">${a==='deny'?'已拒绝':'已允许'}</span>`;
     openPerms = openPerms.filter(p => p !== el);
   });
   openPerms.push(el);
-  scroll();
 }
 
 // ---------- 上行 ----------
 function sendFrame(type, payload) {
-  if (!ws || ws.readyState !== 1) return;
+  if (!ws || ws.readyState !== 1) {
+    setStatus('⚠ 连接已断开,操作未发送;重连后请重试');
+    return false;
+  }
   ws.send(JSON.stringify({type, data: b64encode(JSON.stringify(payload)), timestamp: Date.now()}));
+  return true;
 }
 function sendInput() {
   const text = $('input').value.trim();

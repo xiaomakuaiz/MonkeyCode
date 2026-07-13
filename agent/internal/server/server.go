@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -256,7 +257,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(data, &f) != nil {
 			continue
 		}
-		ls.handleClientFrame(&f)
+		ls.handleClientFrame(client, &f)
 	}
 }
 
@@ -376,8 +377,8 @@ func (ls *liveSession) detach(c *wsClient) {
 	c.close(websocket.StatusNormalClosure, "")
 }
 
-// handleClientFrame 处理上行帧。
-func (ls *liveSession) handleClientFrame(f *frame.Frame) {
+// handleClientFrame 处理上行帧;c 为来源连接(用于回发仅与该客户端相关的错误)。
+func (ls *liveSession) handleClientFrame(c *wsClient, f *frame.Frame) {
 	switch f.Type {
 	case frame.TypeUserInput:
 		var payload struct {
@@ -410,6 +411,12 @@ func (ls *liveSession) handleClientFrame(f *frame.Frame) {
 		ls.mu.Unlock()
 		if ok {
 			ch <- askResp{approved: payload.Approved, remember: payload.Remember}
+		} else {
+			// 审批已失效(超时/重启遗留/重复点击):明确告知该客户端,不落会话日志
+			slog.Warn("收到失效的审批响应", "ask_id", payload.ID, "session", ls.sess.Meta.ID)
+			data, _ := json.Marshal(map[string]string{"error": "该审批请求已失效(可能已超时或服务已重启),请重新发送指令"})
+			raw, _ := json.Marshal(frame.Frame{Type: frame.TypeTaskError, Data: data, Timestamp: time.Now().UnixMilli()})
+			c.send(raw)
 		}
 	}
 }
@@ -426,6 +433,10 @@ func (ls *liveSession) startTurn(input string) {
 	ls.running = true
 	ls.cancelTurn = cancel
 	ls.mu.Unlock()
+
+	// 轮次开始即落 running:进程异常退出时留下可识别的遗留状态
+	ls.sess.Meta.Status = "running"
+	_ = ls.sess.SaveMeta()
 
 	ls.srv.turns.Add(1)
 	go func() {
@@ -496,7 +507,8 @@ type wsClient struct {
 }
 
 func newWSClient(conn *websocket.Conn) *wsClient {
-	c := &wsClient{conn: conn, out: make(chan []byte, 1024), done: make(chan struct{})}
+	// 缓冲需容纳流式输出的突发帧;满仍未消费则按慢消费者断开(见 send)
+	c := &wsClient{conn: conn, out: make(chan []byte, 8192), done: make(chan struct{})}
 	go func() {
 		for {
 			select {
@@ -522,6 +534,7 @@ func (c *wsClient) send(data []byte) {
 	case c.out <- data:
 	case <-c.done:
 	default:
+		slog.Warn("WS 客户端消费过慢,已断开(客户端会自动重连回放)")
 		c.close(websocket.StatusPolicyViolation, "client too slow")
 	}
 }

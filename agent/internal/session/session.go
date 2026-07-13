@@ -16,6 +16,9 @@ import (
 )
 
 // Meta 会话元信息。
+// Status 状态机:created(新建)→ running(轮次执行中)→
+// finished / interrupted / error(轮次终态);running 属于轮次生命周期,
+// 进程异常退出遗留的 running 会被 serve 加载时判定为中断。
 type Meta struct {
 	ID        string         `json:"id"`
 	Title     string         `json:"title"`
@@ -57,7 +60,7 @@ func New(root, workdir, model, title string) (*Session, error) {
 	s := &Session{
 		Meta: Meta{
 			ID: id, Title: title, Workdir: workdir, Model: model,
-			CreatedAt: time.Now(), UpdatedAt: time.Now(), Status: "running",
+			CreatedAt: time.Now(), UpdatedAt: time.Now(), Status: "created",
 		},
 		dir: dir,
 	}
