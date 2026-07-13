@@ -94,7 +94,7 @@ session update),会话事件日志(`events.jsonl`)即帧序列——M2 的
 
 ```
 cmd/mc-agent      CLI(run/chat/sessions/config/eval/serve)
-internal/loop     主循环:LLM ↔ 工具,中断/恢复/步数上限
+internal/loop     主循环:LLM ↔ 工具,中断/恢复/步数上限,上下文压缩(阈值/溢出触发)
 internal/provider anthropic + openai 客户端,SSE 流式,tool-call 归一化与修复,退避重试
 internal/tools    read/write/edit/bash/grep/glob/git/todo,工作区边界强制
 internal/policy   权限规则引擎(工具×路径×命令,allow/deny/ask)

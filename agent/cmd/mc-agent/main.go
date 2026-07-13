@@ -27,16 +27,17 @@ import (
 var version = "0.1.0-dev"
 
 type rootFlags struct {
-	dir       string
-	provider  string
-	baseURL   string
-	apiKey    string
-	model     string
-	yolo      bool
-	allow     []string
-	maxSteps  int
-	resumeID  string
-	noSession bool
+	dir           string
+	provider      string
+	baseURL       string
+	apiKey        string
+	model         string
+	yolo          bool
+	allow         []string
+	maxSteps      int
+	contextBudget int
+	resumeID      string
+	noSession     bool
 }
 
 var flags rootFlags
@@ -58,6 +59,7 @@ func main() {
 	pf.BoolVar(&flags.yolo, "yolo", false, "跳过所有权限审批(谨慎使用)")
 	pf.StringSliceVar(&flags.allow, "allow", nil, "预授权的工具名(可多次指定,如 --allow write_file)")
 	pf.IntVar(&flags.maxSteps, "max-steps", 0, "单轮最大步数(默认 80)")
+	pf.IntVar(&flags.contextBudget, "context-budget", 0, "上下文 token 预算,超 80% 触发压缩(默认 180000)")
 	pf.StringVar(&flags.resumeID, "resume", "", "恢复指定会话继续对话")
 	pf.BoolVar(&flags.noSession, "no-session", false, "不持久化会话")
 
@@ -168,7 +170,7 @@ func buildApp(interactive bool) (*app, error) {
 
 	system := contextmgr.Build(workdir)
 	engine := loop.New(p, reg, pol, emitters, builder, workdir, system,
-		loop.Options{MaxSteps: flags.maxSteps})
+		loop.Options{MaxSteps: flags.maxSteps, ContextBudget: flags.contextBudget})
 
 	if sess != nil && flags.resumeID != "" {
 		msgs, err := sess.LoadMessages()

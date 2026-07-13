@@ -161,6 +161,16 @@ func (r *Renderer) renderUpdate(u *acpUpdate) {
 		r.ensureNewline()
 		fmt.Fprintln(os.Stderr, r.paint(cDim,
 			fmt.Sprintf("模型调用失败,正在重试第 %d 次: %s", up.Attempt, firstLine(up.Message))))
+	case "compact_status":
+		if r.Quiet {
+			return
+		}
+		r.ensureNewline()
+		if up.Status == "started" {
+			fmt.Println(r.paint(cDim, "⟳ 上下文接近上限,正在压缩…"))
+		} else {
+			fmt.Println(r.paint(cDim, "⟳ 上下文压缩完成"))
+		}
 	}
 }
 

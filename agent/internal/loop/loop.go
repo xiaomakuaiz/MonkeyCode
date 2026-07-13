@@ -24,6 +24,8 @@ const (
 type Options struct {
 	MaxSteps      int
 	ContextBudget int
+	// CompactThreshold 触发压缩的输入 token 占预算比例(默认 0.8)。
+	CompactThreshold float64
 }
 
 // Engine 一次会话的执行引擎。
@@ -39,6 +41,8 @@ type Engine struct {
 
 	Messages []provider.Message // 对话历史(resume 时由外部预填)
 	Usage    provider.Usage     // 累计用量
+
+	lastInput int // 最近一次 LLM 请求的输入 token(≈当前上下文大小)
 }
 
 // New 创建引擎。
@@ -49,6 +53,9 @@ func New(p provider.Provider, reg *tools.Registry, pol *policy.Engine,
 	}
 	if opts.ContextBudget <= 0 {
 		opts.ContextBudget = defaultContextBudget
+	}
+	if opts.CompactThreshold <= 0 || opts.CompactThreshold >= 1 {
+		opts.CompactThreshold = 0.8
 	}
 	return &Engine{
 		provider: p, registry: reg, policy: pol,
@@ -69,7 +76,20 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 
 	var finalText string
 	for step := 0; step < e.opts.MaxSteps; step++ {
+		// 阈值触发压缩(压缩失败不中断任务,继续尝试请求)
+		if e.needCompact() {
+			if cerr := e.compact(ctx); cerr != nil && ctx.Err() == nil {
+				e.emitter.Emit(e.builder.TaskError(cerr.Error()))
+			}
+		}
+
 		res, err := e.callLLM(ctx)
+		// 上下文超限:压缩一次后重试本步
+		if err != nil && ctx.Err() == nil && isContextOverflow(err) {
+			if cerr := e.compact(ctx); cerr == nil {
+				res, err = e.callLLM(ctx)
+			}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				e.emitter.Emit(e.builder.TaskError(ErrInterrupted.Error()))
@@ -81,7 +101,8 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 
 		e.Messages = append(e.Messages, res.Message)
 		e.Usage.Add(res.Usage)
-		e.emitter.Emit(e.builder.Usage(e.opts.ContextBudget, e.Usage.InputTokens+e.Usage.OutputTokens))
+		e.lastInput = res.Usage.InputTokens
+		e.emitter.Emit(e.builder.Usage(e.opts.ContextBudget, e.lastInput+res.Usage.OutputTokens))
 
 		if text := joinText(res.Message); text != "" {
 			finalText = text
