@@ -1,0 +1,58 @@
+name: Desktop macOS Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat-local-version]
+    paths: ["mc-desktop/**", "agent/**", ".github/workflows/desktop-macos.yml"]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mc-desktop
+
+      - name: Build kernel (universal)
+        working-directory: agent
+        run: |
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o /tmp/mc-agent-arm64 ./cmd/mc-agent
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /tmp/mc-agent-amd64 ./cmd/mc-agent
+          mkdir -p ../mc-desktop/binaries
+          lipo -create -output ../mc-desktop/binaries/mc-agent-universal-apple-darwin /tmp/mc-agent-arm64 /tmp/mc-agent-amd64
+          ../mc-desktop/binaries/mc-agent-universal-apple-darwin --version
+
+      - name: Generate icons (icns)
+        working-directory: mc-desktop
+        run: npx --yes @tauri-apps/cli@^2 icon icons/icon.png
+
+      - name: Build app bundle (universal, unsigned)
+        working-directory: mc-desktop
+        run: npx --yes @tauri-apps/cli@^2 build --target universal-apple-darwin --config tauri.macos.conf.json
+
+      - name: Zip .app
+        working-directory: mc-desktop/target/universal-apple-darwin/release/bundle
+        run: ditto -c -k --keepParent macos/MonkeyCode.app MonkeyCode-macos-universal.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonkeyCode-macos-universal
+          path: |
+            mc-desktop/target/universal-apple-darwin/release/bundle/MonkeyCode-macos-universal.app.zip
+            mc-desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg
