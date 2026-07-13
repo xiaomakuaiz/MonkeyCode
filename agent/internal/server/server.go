@@ -42,6 +42,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
+	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
 
 // Options 服务配置。
@@ -194,7 +195,8 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Workdir string `json:"workdir"`
+		Workdir  string `json:"workdir"`
+		Worktree bool   `json:"worktree"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体无效"})
@@ -213,6 +215,21 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if req.Worktree {
+		wt, err := workspace.Create(workdir, sess.Meta.ID)
+		if err != nil {
+			sess.Close()
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		sess.Meta.Worktree = wt
+		sess.Meta.Workdir = wt.Path
+		if err := sess.SaveMeta(); err != nil {
+			sess.Close()
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	sess.Close() // liveSession 打开时重新持有
 	writeJSON(w, http.StatusOK, sess.Meta)

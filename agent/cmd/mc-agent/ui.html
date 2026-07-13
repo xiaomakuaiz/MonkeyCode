@@ -79,6 +79,10 @@
   <h3 style="margin-top:0">新建会话</h3>
   <p class="hint">工作区目录(本机绝对路径)</p>
   <input type="text" id="workdirInput" placeholder="/home/you/dev/project">
+  <label class="hint" style="display:flex;gap:6px;align-items:center;margin-top:10px">
+    <input type="checkbox" id="worktreeInput" style="width:auto">
+    在隔离 worktree 中执行(需为 git 仓库;改动经 mc-agent worktree apply 应用)
+  </label>
   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
     <button class="ghost" onclick="newDlg.close()">取消</button>
     <button id="createBtn">创建</button>
@@ -120,7 +124,8 @@ $('createBtn').onclick = async () => {
   const workdir = $('workdirInput').value.trim();
   if (!workdir) return;
   try {
-    const meta = await api('/api/sessions', {method:'POST', body:JSON.stringify({workdir})});
+    const meta = await api('/api/sessions', {method:'POST',
+      body:JSON.stringify({workdir, worktree: $('worktreeInput').checked})});
     $('newDlg').close();
     await refreshSessions();
     openSession(meta.id);

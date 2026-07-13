@@ -13,6 +13,7 @@ import (
 
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
+	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
 
 // Meta 会话元信息。
@@ -27,8 +28,10 @@ type Meta struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	Turns     int            `json:"turns"`
-	Status    string         `json:"status"` // running | finished | interrupted | error
+	Status    string         `json:"status"` // created | running | finished | interrupted | error
 	Usage     provider.Usage `json:"usage"`
+	// Worktree 非空表示会话运行在隔离 worktree(Workdir 即 worktree 路径)。
+	Worktree *workspace.Worktree `json:"worktree,omitempty"`
 }
 
 // Session 单个会话,持有打开的事件日志。

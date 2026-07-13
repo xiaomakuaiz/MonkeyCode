@@ -49,6 +49,13 @@ mc-agent chat
 # 会话管理
 mc-agent sessions                  # 列出历史会话
 mc-agent chat --resume <会话ID>    # 恢复会话继续对话
+
+# worktree 隔离模式(工作区须为 git 仓库)
+mc-agent run --worktree -p "..."   # 改动发生在独立 git worktree,原仓库不动
+mc-agent worktree list             # 列出隔离工作区
+mc-agent worktree diff <会话ID>    # 审查改动
+mc-agent worktree apply <会话ID>   # 应用回原仓库(不产生提交)
+mc-agent worktree drop <会话ID>    # 丢弃全部改动
 ```
 
 ### 权限模型
