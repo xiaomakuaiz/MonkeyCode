@@ -14,7 +14,7 @@ vet:
 
 install: build
 	mkdir -p $(INSTALL_DIR)
-	cp bin/$(BINARY) $(INSTALL_DIR)/$(BINARY)
+	cp bin/$(BINARY) $(INSTALL_DIR)/$(BINARY).tmp && mv $(INSTALL_DIR)/$(BINARY).tmp $(INSTALL_DIR)/$(BINARY)
 	@echo "已安装到 $(INSTALL_DIR)/$(BINARY),请确保该目录在 PATH 中"
 
 cross:
