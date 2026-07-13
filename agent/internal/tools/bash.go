@@ -18,10 +18,11 @@ const (
 	cwdMarker          = "__MC_AGENT_CWD__"
 )
 
-// Bash 执行 shell 命令。每次调用独立进程,但工作目录在调用间保持
-// (通过命令尾部的 pwd 标记跟踪)。
+// Bash 执行 shell 命令。每次调用独立进程,但工作目录与导出的环境变量
+// 在调用间保持(cwd 经输出标记跟踪;env 经 export -p 落盘、下次调用 source)。
 type Bash struct {
-	cwd string // 跨调用保持的当前目录;空表示工作区根
+	cwd     string // 跨调用保持的当前目录;空表示工作区根
+	envFile string // 跨调用保持的 env 快照文件;惰性创建
 }
 
 type bashInput struct {
@@ -79,11 +80,11 @@ func (t *Bash) Execute(ctx context.Context, env *Env, input json.RawMessage) (st
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
+		// Windows 暂不支持 env 跨调用保持
 		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command",
 			in.Command+"; Write-Output ('"+cwdMarker+"' + (Get-Location).Path)")
 	} else {
-		cmd = exec.CommandContext(ctx, "bash", "-c",
-			in.Command+"\nprintf '\\n%s%s' '"+cwdMarker+"' \"$PWD\"")
+		cmd = exec.CommandContext(ctx, "bash", "-c", t.wrapPOSIX(in.Command))
 	}
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "CI=true", "TERM=dumb")
@@ -120,4 +121,34 @@ func (t *Bash) Execute(ctx context.Context, env *Env, input json.RawMessage) (st
 		text = "(无输出)"
 	}
 	return text, nil
+}
+
+// wrapPOSIX 包装用户命令:恢复上次导出的 env → 执行 → 落盘 env 快照 →
+// 输出 cwd 标记,并保持用户命令的退出码。
+func (t *Bash) wrapPOSIX(command string) string {
+	if t.envFile == "" {
+		f, err := os.CreateTemp("", "mc-agent-env-*")
+		if err == nil {
+			t.envFile = f.Name()
+			_ = f.Close()
+		}
+	}
+	if t.envFile == "" {
+		// 拿不到临时文件就退化为无 env 保持
+		return command + "\nprintf '\\n%s%s' '" + cwdMarker + "' \"$PWD\""
+	}
+	return `{ [ -s '` + t.envFile + `' ] && . '` + t.envFile + `'; } 2>/dev/null
+` + command + `
+__mc_rc=$?
+{ export -p | grep -vE '^declare -x (PWD|OLDPWD|SHLVL|_|PS1|BASH[A-Z_]*)=' > '` + t.envFile + `'; } 2>/dev/null
+printf '\n%s%s' '` + cwdMarker + `' "$PWD"
+exit $__mc_rc`
+}
+
+// Close 清理跨调用状态(会话结束时调用)。
+func (t *Bash) Close() {
+	if t.envFile != "" {
+		_ = os.Remove(t.envFile)
+		t.envFile = ""
+	}
 }

@@ -65,7 +65,8 @@ mc-agent worktree drop <会话ID>    # 丢弃全部改动
 - 只读操作(读文件/搜索/git 查询)自动放行;
 - 写文件、编辑、未知 bash 命令 → 终端询问(y/n/a 始终允许/d 始终拒绝);
 - 危险命令(`sudo`、`rm -rf /` 等)直接拒绝;
-- `--allow write_file --allow edit_file` 预授权指定工具;`--yolo` 全部放行(仅限受信环境/eval)。
+- `--allow write_file --allow edit_file` 预授权指定工具;`--yolo` 全部放行(仅限受信环境/eval);
+- 审批时选「此项目永久」会把规则写入 `<项目>/.mc-agent/permissions.json`,后续会话直接生效(可手动编辑该文件的 `allow`/`deny` 列表)。
 
 文件类操作强制限制在工作区目录内(含 bash 的 cd 越界拉回)。
 

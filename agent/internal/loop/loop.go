@@ -67,6 +67,12 @@ func New(p provider.Provider, reg *tools.Registry, pol *policy.Engine,
 // ErrInterrupted 用户中断。
 var ErrInterrupted = errors.New("任务被用户中断")
 
+// ModelName 当前模型标识(展示用)。
+func (e *Engine) ModelName() string { return e.provider.Model() }
+
+// Close 释放引擎持有的资源(工具的跨调用状态等)。
+func (e *Engine) Close() { e.registry.Close() }
+
 // RunTurn 执行一轮:用户输入 → (LLM → 工具)* → 结束。
 // 返回本轮最终的 agent 文本回复。
 func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) {

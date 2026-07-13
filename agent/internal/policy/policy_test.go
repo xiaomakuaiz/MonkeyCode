@@ -54,9 +54,9 @@ func TestBashDenied(t *testing.T) {
 
 func TestAskerRemember(t *testing.T) {
 	calls := 0
-	e := New(ModeDefault, func(ctx context.Context, req Request) (bool, bool, error) {
+	e := New(ModeDefault, func(ctx context.Context, req Request) (Response, error) {
 		calls++
-		return true, true, nil
+		return Response{Approved: true, Remember: true}, nil
 	})
 	for i := 0; i < 3; i++ {
 		if err := e.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err != nil {
@@ -80,5 +80,39 @@ func TestAllowTool(t *testing.T) {
 	e.AllowTool("write_file")
 	if err := e.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPersistProjectRule(t *testing.T) {
+	workdir := t.TempDir()
+
+	// 第一个引擎:审批时选择"此项目永久允许"
+	e1 := New(ModeDefault, func(ctx context.Context, req Request) (Response, error) {
+		return Response{Approved: true, Remember: true, Persist: true}, nil
+	})
+	e1.EnableProjectRules(workdir)
+	if err := e1.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 第二个引擎(模拟新会话):不带 asker,规则应从项目配置加载而放行
+	e2 := New(ModeDefault, nil)
+	e2.EnableProjectRules(workdir)
+	if err := e2.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err != nil {
+		t.Fatalf("持久化规则未生效: %v", err)
+	}
+
+	// bash 命令级 key 同样持久化
+	e3 := New(ModeDefault, func(ctx context.Context, req Request) (Response, error) {
+		return Response{Approved: true, Persist: true}, nil
+	})
+	e3.EnableProjectRules(workdir)
+	if err := e3.Check(context.Background(), bashReq("npm install")); err != nil {
+		t.Fatal(err)
+	}
+	e4 := New(ModeDefault, nil)
+	e4.EnableProjectRules(workdir)
+	if err := e4.Check(context.Background(), bashReq("npm run build")); err != nil {
+		t.Fatalf("bash:npm 规则未持久化: %v", err)
 	}
 }

@@ -150,6 +150,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			if ls.mcp != nil {
 				ls.mcp.Close()
 			}
+			ls.engine.Close()
 		}
 		s.mu.Unlock()
 
@@ -309,7 +310,7 @@ func (s *Server) liveSession(id string) (*liveSession, error) {
 // ==================== 运行态会话 ====================
 
 type askResp struct {
-	approved, remember bool
+	approved, remember, persist bool
 }
 
 type liveSession struct {
@@ -339,6 +340,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 
 	reg := tools.NewRegistry()
 	pol := policy.New(policy.ModeDefault, ls.asker)
+	pol.EnableProjectRules(sess.Meta.Workdir)
 	emitter := frame.EmitterFunc(ls.emit)
 
 	// MCP 工具接入:单点失败仅告警,不阻塞会话
@@ -443,6 +445,7 @@ func (ls *liveSession) handleClientFrame(c *wsClient, f *frame.Frame) {
 			ID       string `json:"id"`
 			Approved bool   `json:"approved"`
 			Remember bool   `json:"remember"`
+			Persist  bool   `json:"persist"`
 		}
 		if err := json.Unmarshal(f.Data, &payload); err != nil {
 			return
@@ -454,7 +457,7 @@ func (ls *liveSession) handleClientFrame(c *wsClient, f *frame.Frame) {
 		}
 		ls.mu.Unlock()
 		if ok {
-			ch <- askResp{approved: payload.Approved, remember: payload.Remember}
+			ch <- askResp{approved: payload.Approved, remember: payload.Remember, persist: payload.Persist}
 		} else {
 			// 审批已失效(超时/重启遗留/重复点击):明确告知该客户端,不落会话日志
 			slog.Warn("收到失效的审批响应", "ask_id", payload.ID, "session", ls.sess.Meta.ID)
@@ -515,7 +518,7 @@ func (ls *liveSession) startTurn(input string) {
 }
 
 // asker 权限审批:下发 permission-req 帧,等待 permission-resp。
-func (ls *liveSession) asker(ctx context.Context, req policy.Request) (bool, bool, error) {
+func (ls *liveSession) asker(ctx context.Context, req policy.Request) (policy.Response, error) {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	id := hex.EncodeToString(b)
@@ -538,13 +541,13 @@ func (ls *liveSession) asker(ctx context.Context, req policy.Request) (bool, boo
 			outcome = "approved"
 		}
 		ls.emit(ls.builder.PermissionResolved(id, outcome))
-		return r.approved, r.remember, nil
+		return policy.Response{Approved: r.approved, Remember: r.remember, Persist: r.persist}, nil
 	case <-ctx.Done():
 		ls.emit(ls.builder.PermissionResolved(id, "cancelled"))
-		return false, false, ctx.Err()
+		return policy.Response{}, ctx.Err()
 	case <-time.After(ls.srv.opts.AskTimeout):
 		ls.emit(ls.builder.PermissionResolved(id, "timeout"))
-		return false, false, fmt.Errorf("等待审批超时(%s),已按拒绝处理", ls.srv.opts.AskTimeout)
+		return policy.Response{}, fmt.Errorf("等待审批超时(%s),已按拒绝处理", ls.srv.opts.AskTimeout)
 	}
 }
 

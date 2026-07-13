@@ -115,6 +115,31 @@ func TestBashCwdPersistence(t *testing.T) {
 	}
 }
 
+func TestBashEnvPersistence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix only")
+	}
+	env := testEnv(t)
+	b := &Bash{}
+	defer b.Close()
+
+	in, _ := json.Marshal(bashInput{Command: "export MC_TEST_VAR=hello42"})
+	if _, err := b.Execute(context.Background(), env, in); err != nil {
+		t.Fatal(err)
+	}
+	in, _ = json.Marshal(bashInput{Command: "echo val=$MC_TEST_VAR"})
+	out, err := b.Execute(context.Background(), env, in)
+	if err != nil || !strings.Contains(out, "val=hello42") {
+		t.Fatalf("env 未跨调用保持: out=%q err=%v", out, err)
+	}
+	// 退出码仍是用户命令的
+	in, _ = json.Marshal(bashInput{Command: "exit 7"})
+	out, err = b.Execute(context.Background(), env, in)
+	if err != nil || !strings.Contains(out, "命令失败") {
+		t.Fatalf("退出码语义被破坏: out=%q err=%v", out, err)
+	}
+}
+
 func TestBashNonZeroExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix only")

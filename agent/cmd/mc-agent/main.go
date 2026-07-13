@@ -139,6 +139,7 @@ func buildApp(interactive bool) (*app, error) {
 		asker = terminalAsker(renderer)
 	}
 	pol := policy.New(mode, asker)
+	pol.EnableProjectRules(workdir)
 	for _, t := range flags.allow {
 		pol.AllowTool(t)
 	}
@@ -275,6 +276,7 @@ func (a *app) close() {
 	if a.mcp != nil {
 		a.mcp.Close()
 	}
+	a.engine.Close()
 }
 
 // signalContext SIGINT/SIGTERM 触发取消。
@@ -338,7 +340,8 @@ func chatCmd() *cobra.Command {
 			}
 			defer a.close()
 
-			fmt.Printf("mc-agent %s | 工作区 %s | 模型 %s\n", version, a.workdir, "输入 /exit 退出\n")
+			fmt.Printf("mc-agent %s | 工作区 %s | 模型 %s\n输入 /exit 退出\n",
+				version, a.workdir, a.engine.ModelName())
 			reader := bufio.NewReader(os.Stdin)
 			for {
 				fmt.Print("\n> ")
@@ -439,22 +442,24 @@ func configCmd() *cobra.Command {
 
 func terminalAsker(r *Renderer) policy.Asker {
 	reader := bufio.NewReader(os.Stdin)
-	return func(ctx context.Context, req policy.Request) (bool, bool, error) {
+	return func(ctx context.Context, req policy.Request) (policy.Response, error) {
 		r.Flush()
-		fmt.Printf("\n%s 需要执行: %s\n允许? [y]是 / [n]否 / [a]本会话始终允许 / [d]本会话始终拒绝: ", "⚠", req.Title)
+		fmt.Printf("\n%s 需要执行: %s\n允许? [y]是 / [n]否 / [a]本会话始终允许 / [p]此项目永久允许 / [d]本会话始终拒绝: ", "⚠", req.Title)
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return false, false, err
+			return policy.Response{}, err
 		}
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "y", "yes":
-			return true, false, nil
+			return policy.Response{Approved: true}, nil
 		case "a", "always":
-			return true, true, nil
+			return policy.Response{Approved: true, Remember: true}, nil
+		case "p":
+			return policy.Response{Approved: true, Remember: true, Persist: true}, nil
 		case "d", "deny":
-			return false, true, nil
+			return policy.Response{Remember: true}, nil
 		default:
-			return false, false, nil
+			return policy.Response{}, nil
 		}
 	}
 }

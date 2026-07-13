@@ -28,8 +28,16 @@ type Request struct {
 	Input json.RawMessage
 }
 
-// Asker 审批回调:返回是否允许,以及是否记住该决定(本会话内)。
-type Asker func(ctx context.Context, req Request) (approved, remember bool, err error)
+// Response 审批结果。Remember 记到会话内;Persist 额外落盘到项目配置
+// (<工作区>/.mc-agent/permissions.json),后续会话直接生效。
+type Response struct {
+	Approved bool
+	Remember bool
+	Persist  bool
+}
+
+// Asker 审批回调。
+type Asker func(ctx context.Context, req Request) (Response, error)
 
 // Engine 规则引擎。
 type Engine struct {
@@ -38,6 +46,8 @@ type Engine struct {
 	ask  Asker
 	// 会话内记住的决定,key 为 remember key(工具名或 bash 命令首词)
 	remembered map[string]Decision
+	// workdir 非空时启用项目级持久化(.mc-agent/permissions.json)
+	workdir string
 }
 
 // Mode 引擎模式。
@@ -51,6 +61,20 @@ const (
 // New 创建引擎。asker 为 nil 时,所有 Ask 决策按拒绝处理。
 func New(mode Mode, ask Asker) *Engine {
 	return &Engine{mode: mode, ask: ask, remembered: map[string]Decision{}}
+}
+
+// EnableProjectRules 加载项目级持久化规则并启用落盘(workdir 为项目根)。
+func (e *Engine) EnableProjectRules(workdir string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.workdir = workdir
+	rules := loadProjectRules(workdir)
+	for _, k := range rules.Allow {
+		e.remembered[k] = Allow
+	}
+	for _, k := range rules.Deny {
+		e.remembered[k] = Deny
+	}
 }
 
 // 只读工具,始终放行(自身已强制工作区边界)。
@@ -101,20 +125,26 @@ func (e *Engine) Check(ctx context.Context, req Request) error {
 	if e.ask == nil {
 		return fmt.Errorf("操作需要用户审批但当前为非交互模式,已拒绝: %s。可用 --yolo 或 --allow 预授权", req.Title)
 	}
-	approved, remember, err := e.ask(ctx, req)
+	resp, err := e.ask(ctx, req)
 	if err != nil {
 		return fmt.Errorf("审批失败: %w", err)
 	}
-	if remember {
-		e.mu.Lock()
-		if approved {
-			e.remembered[rememberKey] = Allow
-		} else {
-			e.remembered[rememberKey] = Deny
+	if resp.Remember || resp.Persist {
+		d := Deny
+		if resp.Approved {
+			d = Allow
 		}
+		e.mu.Lock()
+		e.remembered[rememberKey] = d
+		workdir := e.workdir
 		e.mu.Unlock()
+		if resp.Persist && workdir != "" {
+			if perr := saveProjectRule(workdir, rememberKey, d); perr != nil {
+				return fmt.Errorf("权限规则落盘失败: %w", perr)
+			}
+		}
 	}
-	if !approved {
+	if !resp.Approved {
 		return fmt.Errorf("用户拒绝了该操作: %s", req.Title)
 	}
 	return nil

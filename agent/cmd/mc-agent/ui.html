@@ -255,12 +255,14 @@ function renderPerm(d) {
   el.innerHTML = `<div class="q">⚠ 请求执行:<b>${esc(d.title)}</b> <span class="hint">(${esc(d.tool)})</span></div>
     <div class="btns">
       <button data-a="allow">允许</button>
-      <button data-a="always" class="ghost">本会话始终允许</button>
+      <button data-a="always" class="ghost">本会话始终</button>
+      <button data-a="persist" class="ghost">此项目永久</button>
       <button data-a="deny" class="red">拒绝</button>
     </div>`;
   el.querySelectorAll('button').forEach(btn => btn.onclick = () => {
     const a = btn.dataset.a;
-    if (!sendFrame('permission-resp', {id: d.id, approved: a !== 'deny', remember: a === 'always'})) return;
+    if (!sendFrame('permission-resp', {id: d.id, approved: a !== 'deny',
+        remember: a === 'always' || a === 'persist', persist: a === 'persist'})) return;
     el.querySelector('.btns').innerHTML =
       `<span class="hint">${a==='deny'?'已拒绝':'已允许'}</span>`;
     openPerms = openPerms.filter(p => p !== el);

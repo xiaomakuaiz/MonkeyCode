@@ -1,0 +1,95 @@
+{
+  "model": "feature/coding",
+  "provider": "anthropic",
+  "started_at": "2026-07-13T06:16:33.020834461Z",
+  "results": [
+    {
+      "name": "add-cli-flag",
+      "passed": true,
+      "steps": 5,
+      "input_tokens": 4136,
+      "output_tokens": 978,
+      "duration_sec": 18.224004921
+    },
+    {
+      "name": "cross-file-bug",
+      "passed": true,
+      "steps": 4,
+      "input_tokens": 3652,
+      "output_tokens": 728,
+      "duration_sec": 13.744893131,
+      "check_output": "ok  \tshop\t0.001s\n"
+    },
+    {
+      "name": "fix-json-config",
+      "passed": true,
+      "steps": 4,
+      "input_tokens": 4194,
+      "output_tokens": 634,
+      "duration_sec": 13.13936831
+    },
+    {
+      "name": "fix-off-by-one",
+      "passed": true,
+      "steps": 5,
+      "input_tokens": 4486,
+      "output_tokens": 831,
+      "duration_sec": 17.21676677,
+      "check_output": "ok  \tcalc\t0.002s\n"
+    },
+    {
+      "name": "fix-race",
+      "passed": true,
+      "steps": 4,
+      "input_tokens": 5088,
+      "output_tokens": 1001,
+      "duration_sec": 18.951881814,
+      "check_output": "ok  \tcounter\t(cached)\n"
+    },
+    {
+      "name": "impl-function",
+      "passed": true,
+      "steps": 4,
+      "input_tokens": 5530,
+      "output_tokens": 957,
+      "duration_sec": 17.262112469,
+      "check_output": "ok  \tversion\t0.002s\n"
+    },
+    {
+      "name": "refactor-rename",
+      "passed": true,
+      "steps": 8,
+      "input_tokens": 6490,
+      "output_tokens": 1507,
+      "duration_sec": 24.573913771,
+      "check_output": "?   \tapp\t[no test files]\nok  \tapp/store\t(cached)\n"
+    },
+    {
+      "name": "repo-stats",
+      "passed": true,
+      "steps": 8,
+      "input_tokens": 4070,
+      "output_tokens": 1223,
+      "duration_sec": 30.930644087
+    },
+    {
+      "name": "write-doc",
+      "passed": true,
+      "steps": 6,
+      "input_tokens": 6060,
+      "output_tokens": 1696,
+      "duration_sec": 31.650236028
+    },
+    {
+      "name": "write-tests",
+      "passed": true,
+      "steps": 4,
+      "input_tokens": 7114,
+      "output_tokens": 1895,
+      "duration_sec": 25.052447759,
+      "check_output": "ok  \tstack\t0.003s\n"
+    }
+  ],
+  "passed": 10,
+  "total": 10
+}

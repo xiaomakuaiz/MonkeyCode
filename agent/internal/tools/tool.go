@@ -53,6 +53,15 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
+// Close 释放持有跨调用状态的工具资源(如 bash 的 env 快照文件)。
+func (r *Registry) Close() {
+	for _, t := range r.tools {
+		if c, ok := t.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+}
+
 // Defs 导出为 LLM 工具定义(名称有序,保证请求可复现)。
 func (r *Registry) Defs() []provider.ToolDef {
 	names := make([]string, 0, len(r.tools))

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/term"
+
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 )
 
@@ -34,12 +36,9 @@ func NewRenderer() *Renderer {
 	return &Renderer{color: isTerminal(os.Stdout) && os.Getenv("NO_COLOR") == ""}
 }
 
+// isTerminal 判断是否为真正的 TTY(/dev/null 是字符设备但非 TTY,须排除)。
 func isTerminal(f *os.File) bool {
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func (r *Renderer) paint(code, s string) string {
