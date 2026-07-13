@@ -35,6 +35,19 @@ const (
 	// PermissionResolved 审批终态广播:answered/timeout/cancelled,
 	// UI 据此关闭卡片;落日志使回放中的历史卡片呈现真实状态。
 	TypePermissionResolved Type = "permission-resolved"
+
+	// call/call-response:UI 的同步只读查询(文件树/读文件/变更/diff),
+	// 不进事件日志(与任务流无关,回放时不重放)。
+	TypeCall         Type = "call"
+	TypeCallResponse Type = "call-response"
+)
+
+// call kind:文件浏览与 diff 查询。
+const (
+	KindRepoFileList    = "repo_file_list"
+	KindRepoReadFile    = "repo_read_file"
+	KindRepoFileChanges = "repo_file_changes"
+	KindRepoFileDiff    = "repo_file_diff"
 )
 
 // Kind 帧内容子类型。

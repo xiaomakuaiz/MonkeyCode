@@ -41,6 +41,7 @@ import (
 	mcpclient "github.com/chaitin/MonkeyCode/agent/internal/mcp"
 	"github.com/chaitin/MonkeyCode/agent/internal/policy"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
+	"github.com/chaitin/MonkeyCode/agent/internal/repo"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
@@ -426,6 +427,8 @@ func (ls *liveSession) detach(c *wsClient) {
 // handleClientFrame 处理上行帧;c 为来源连接(用于回发仅与该客户端相关的错误)。
 func (ls *liveSession) handleClientFrame(c *wsClient, f *frame.Frame) {
 	switch f.Type {
+	case frame.TypeCall:
+		ls.handleCall(c, f)
 	case frame.TypeUserInput:
 		var payload struct {
 			Content []byte `json:"content"` // base64 → 原文
@@ -466,6 +469,55 @@ func (ls *liveSession) handleClientFrame(c *wsClient, f *frame.Frame) {
 			c.send(raw)
 		}
 	}
+}
+
+// handleCall 处理只读同步查询,结果仅回发给发起连接(不落日志、不广播)。
+func (ls *liveSession) handleCall(c *wsClient, f *frame.Frame) {
+	browser := repo.New(ls.sess.Meta.Workdir)
+	var result any
+	var callErr error
+
+	switch f.Kind {
+	case frame.KindRepoFileList:
+		var p struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(f.Data, &p)
+		result, callErr = browser.ListFiles(p.Path)
+	case frame.KindRepoReadFile:
+		var p struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(f.Data, &p)
+		var content string
+		content, callErr = browser.ReadFile(p.Path)
+		result = map[string]string{"path": p.Path, "content": content}
+	case frame.KindRepoFileChanges:
+		result, callErr = browser.FileChanges()
+	case frame.KindRepoFileDiff:
+		var p struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(f.Data, &p)
+		var diff string
+		diff, callErr = browser.FileDiff(p.Path)
+		result = map[string]string{"path": p.Path, "diff": diff}
+	default:
+		callErr = fmt.Errorf("未知 call kind: %s", f.Kind)
+	}
+
+	payload := map[string]any{}
+	if callErr != nil {
+		payload["error"] = callErr.Error()
+	} else {
+		payload["result"] = result
+	}
+	data, _ := json.Marshal(payload)
+	raw, _ := json.Marshal(frame.Frame{
+		Type: frame.TypeCallResponse, Kind: f.Kind,
+		Data: data, Timestamp: time.Now().UnixMilli(),
+	})
+	c.send(raw)
 }
 
 // startTurn 启动一轮(同会话同一时刻只允许一轮)。

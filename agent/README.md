@@ -103,10 +103,13 @@ mc-agent serve --token xxx    # 固定 token(桌面壳托管时用)
 
 启动后终端会打印调试界面地址(形如 `http://127.0.0.1:7439/#<token>`),浏览器打开即可:创建会话(选工作区)→ 对话 → 流式输出/工具过程/计划 → **写操作在页面上弹审批卡片**(允许/始终允许/拒绝)。
 
+页面顶部「改动」标签页展示本轮修改的文件(A/M/D),点击查看着色的 unified diff。
+
 协议(桌面客户端/IDE 插件对接同一套):
 
 - `GET /healthz`;`GET/POST /api/sessions`(Bearer token);
 - `WS /ws?session=<id>&token=<t>`:下行为帧序列(先回放历史再实时);上行 `user-input` / `user-cancel` / `permission-resp`;
+- `call`/`call-response`(只读同步查询,不进事件日志):`repo_file_list` / `repo_read_file` / `repo_file_changes` / `repo_file_diff`,供 UI 文件浏览与 diff;
 - 安全:仅绑 loopback、随机 token、WS 同源 Origin 校验、慢消费者断开重连回放。
 
 ## 评测(eval)
@@ -131,6 +134,7 @@ internal/provider anthropic + openai 客户端,SSE 流式,tool-call 归一化与
 internal/tools    read/write/edit/bash/grep/glob/git/todo,工作区边界强制
 internal/mcp      MCP 客户端:stdio/HTTP 传输,工具适配为内核工具(命名空间化)
 internal/workspace git worktree 隔离(create/diff/apply/drop)
+internal/repo     只读文件浏览与 diff 查询(call/call-response 后端)
 internal/policy   权限规则引擎(工具×路径×命令,allow/deny/ask)
 internal/contextmgr 系统提示装配(项目规则 AGENTS.md/CLAUDE.md、仓库树摘要)
 internal/session  JSONL 事件日志 + 消息快照,resume

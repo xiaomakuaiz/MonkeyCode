@@ -466,6 +466,66 @@ func TestStalePermissionRespGetsError(t *testing.T) {
 	}
 }
 
+// TestWSCallFileChanges 通过 WS call 查询变更列表并读文件,验证同步查询链路。
+func TestWSCallFileChanges(t *testing.T) {
+	workdir := t.TempDir()
+	os.WriteFile(filepath.Join(workdir, "hello.txt"), []byte("world"), 0o644)
+
+	_, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, workdir)
+	conn := dialWS(t, ts, id)
+
+	// 读文件
+	sendCall(t, conn, frame.KindRepoReadFile, map[string]string{"path": "hello.txt"})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasCallResponse(fs, frame.KindRepoReadFile)
+	})
+	resp := lastCallResponse(frames, frame.KindRepoReadFile)
+	if !strings.Contains(string(resp.Data), "world") {
+		t.Fatalf("read 结果异常: %s", resp.Data)
+	}
+
+	// 列目录
+	sendCall(t, conn, frame.KindRepoFileList, map[string]string{"path": ""})
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasCallResponse(fs, frame.KindRepoFileList)
+	})
+	if !strings.Contains(string(lastCallResponse(frames, frame.KindRepoFileList).Data), "hello.txt") {
+		t.Fatal("file list 缺文件")
+	}
+
+	// 越界读文件应返回 error 字段
+	sendCall(t, conn, frame.KindRepoReadFile, map[string]string{"path": "../../etc/passwd"})
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool {
+		r := lastCallResponse(fs, frame.KindRepoReadFile)
+		return r != nil && strings.Contains(string(r.Data), "error")
+	})
+	_ = frames
+}
+
+func sendCall(t *testing.T, conn *websocket.Conn, kind string, payload any) {
+	t.Helper()
+	data, _ := json.Marshal(payload)
+	f := frame.Frame{Type: frame.TypeCall, Kind: kind, Data: data, Timestamp: time.Now().UnixMilli()}
+	raw, _ := json.Marshal(f)
+	if err := conn.Write(context.Background(), websocket.MessageText, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasCallResponse(fs []frame.Frame, kind string) bool {
+	return lastCallResponse(fs, kind) != nil
+}
+
+func lastCallResponse(fs []frame.Frame, kind string) *frame.Frame {
+	for i := len(fs) - 1; i >= 0; i-- {
+		if fs[i].Type == frame.TypeCallResponse && fs[i].Kind == kind {
+			return &fs[i]
+		}
+	}
+	return nil
+}
+
 func TestNonLoopbackRefused(t *testing.T) {
 	_, err := New(Options{
 		Addr:        "0.0.0.0:7439",
