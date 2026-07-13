@@ -12,12 +12,35 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 )
 
+// ProgressUpdate 工具执行期的进度上报载荷(经 loop 转成
+// tool_call_update{status:in_progress, progress} 帧,挂在当前工具调用上)。
+type ProgressUpdate struct {
+	Kind   string `json:"kind"`             // subagent_tool | output | child_session
+	ID     string `json:"id,omitempty"`     // 子项标识(如子代理内部的 toolCallId)
+	Title  string `json:"title,omitempty"`  // 子项标题(kind=subagent_tool)
+	Status string `json:"status,omitempty"` // run | ok | fail
+	Line   string `json:"line,omitempty"`   // 最新输出行(kind=output)
+	// ChildSessionID 子代理会话 ID(kind=child_session),
+	// 客户端可据此打开完整子会话回放。
+	ChildSessionID string `json:"childSessionId,omitempty"`
+}
+
 // Env 工具执行环境。
 type Env struct {
 	Workdir string // 工作区根目录(绝对路径),文件类工具的强制边界
 	// ReadRoots 工作区之外允许只读访问的目录(绝对路径),
 	// 如平台技能缓存;仅 read_file 放行,写/编辑仍限工作区。
 	ReadRoots []string
+	// Progress 执行期进度上报通道,由 loop 在每次工具调用前注入
+	// (闭包捕获当前 toolCallId),调用结束后置空。可能为 nil。
+	Progress func(ProgressUpdate)
+}
+
+// EmitProgress nil 安全的进度上报。
+func (e *Env) EmitProgress(p ProgressUpdate) {
+	if e.Progress != nil {
+		e.Progress(p)
+	}
 }
 
 // Tool 工具接口。
@@ -45,6 +68,11 @@ func NewRegistry() *Registry {
 		r.Register(t)
 	}
 	return r
+}
+
+// NewEmptyRegistry 创建不含内置工具的注册表(子代理受限工具集用)。
+func NewEmptyRegistry() *Registry {
+	return &Registry{tools: map[string]Tool{}}
 }
 
 // Register 注册工具。

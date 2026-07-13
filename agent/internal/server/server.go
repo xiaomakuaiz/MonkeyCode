@@ -43,6 +43,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/repo"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
+	"github.com/chaitin/MonkeyCode/agent/internal/subagent"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
@@ -70,6 +71,11 @@ type Server struct {
 	mu    sync.Mutex
 	live  map[string]*liveSession
 	turns sync.WaitGroup // 进行中的轮次(优雅退出时等待落盘)
+
+	// 子会话观察者:childID → (client → 回放水位 seq)。子代理帧落盘后经
+	// publishChild 实时分发,seq 水位避免"回放 + 实时"缝隙处重帧。
+	childMu    sync.Mutex
+	childWatch map[string]map[*wsClient]uint64
 }
 
 // New 创建 Server;token 为空时自动生成。
@@ -100,7 +106,11 @@ func New(opts Options) (*Server, error) {
 	if opts.NewProvider == nil {
 		return nil, fmt.Errorf("NewProvider 未设置")
 	}
-	return &Server{opts: opts, live: map[string]*liveSession{}}, nil
+	return &Server{
+		opts:       opts,
+		live:       map[string]*liveSession{},
+		childWatch: map[string]map[*wsClient]uint64{},
+	}, nil
 }
 
 // Token 实际生效的访问令牌。
@@ -200,6 +210,16 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 子代理的子会话默认隐藏(经 task 卡片的 childSessionId 定位),?all=1 显示
+	if r.URL.Query().Get("all") == "" {
+		filtered := metas[:0]
+		for _, m := range metas {
+			if m.Parent == "" {
+				filtered = append(filtered, m)
+			}
+		}
+		metas = filtered
+	}
 	if metas == nil {
 		metas = []session.Meta{}
 	}
@@ -256,6 +276,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 session 参数"})
 		return
 	}
+	// 子代理的子会话走只读观察者路径:回放 + 实时跟看,不建引擎、不收上行
+	if meta, err := session.ReadMeta(s.opts.SessionRoot, id); err == nil && meta.Parent != "" {
+		s.handleChildWS(w, r, id)
+		return
+	}
 	ls, err := s.liveSession(id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -289,6 +314,96 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		ls.handleClientFrame(client, &f)
 	}
+}
+
+// handleChildWS 子会话只读观察者:回放事件日志后订阅实时帧(publishChild),
+// seq 水位衔接。上行帧一律忽略(子会话不可交互)。
+func (s *Server) handleChildWS(w http.ResponseWriter, r *http.Request, id string) {
+	conn, err := websocket.Accept(w, r, nil) // 默认同源 Origin 校验
+	if err != nil {
+		return
+	}
+	client := newWSClient(conn)
+
+	// 回放与订阅原子化:持锁期间 publishChild 阻塞,水位保证无缝无重
+	s.childMu.Lock()
+	lastSeq, err := replayEventsWatermark(session.EventsPathFor(s.opts.SessionRoot, id), client)
+	if err != nil {
+		s.childMu.Unlock()
+		client.close(websocket.StatusInternalError, "replay failed")
+		return
+	}
+	if s.childWatch[id] == nil {
+		s.childWatch[id] = map[*wsClient]uint64{}
+	}
+	s.childWatch[id][client] = lastSeq
+	s.childMu.Unlock()
+
+	defer func() {
+		s.childMu.Lock()
+		delete(s.childWatch[id], client)
+		if len(s.childWatch[id]) == 0 {
+			delete(s.childWatch, id)
+		}
+		s.childMu.Unlock()
+		client.close(websocket.StatusNormalClosure, "")
+	}()
+
+	// 读循环仅用于感知断开;观察者上行帧忽略
+	ctx := r.Context()
+	for {
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+	}
+}
+
+// publishChild 子会话帧实时分发给观察者(帧已由子会话 emitter 落盘)。
+func (s *Server) publishChild(childID string, f frame.Frame) {
+	s.childMu.Lock()
+	defer s.childMu.Unlock()
+	watchers := s.childWatch[childID]
+	if len(watchers) == 0 {
+		return
+	}
+	data, err := json.Marshal(f)
+	if err != nil {
+		return
+	}
+	for c, watermark := range watchers {
+		if f.Seq > watermark {
+			c.send(data)
+		}
+	}
+}
+
+// replayEventsWatermark 回放事件并返回最后一帧的 seq(观察者衔接水位)。
+func replayEventsWatermark(path string, c *wsClient) (uint64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil // 子会话刚创建尚无事件
+		}
+		return 0, err
+	}
+	defer f.Close()
+	var last uint64
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var fr frame.Frame
+		if json.Unmarshal([]byte(line), &fr) == nil && fr.Seq > last {
+			last = fr.Seq
+		}
+		if err := c.sendBlocking([]byte(line)); err != nil {
+			return last, err
+		}
+	}
+	return last, scanner.Err()
 }
 
 // liveSession 获取(或惰性创建)运行态会话。
@@ -373,14 +488,28 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 			ls.emit(ls.builder.Plan(fe))
 		}
 	}
+	prov := s.opts.NewProvider()
+
+	// 只读探索子代理(task 工具):工具集只读故自动放行;
+	// 子代理过程落盘为子会话,帧经 publishChild 分发给观察者
+	sub := &subagent.Tool{
+		Provider:     prov,
+		SessionRoot:  s.opts.SessionRoot,
+		ParentID:     sess.Meta.ID,
+		OnChildFrame: s.publishChild,
+	}
+	reg.Register(sub)
+	pol.AllowTool(sub.Name())
+
 	var extras *contextmgr.Extras
 	var readRoots []string
 	if s.opts.BuildExtras != nil {
 		extras, readRoots = s.opts.BuildExtras(sess.Meta.Workdir)
 	}
 	system := contextmgr.Build(sess.Meta.Workdir, extras)
-	ls.engine = loop.New(s.opts.NewProvider(), reg, pol, emitter, ls.builder,
+	ls.engine = loop.New(prov, reg, pol, emitter, ls.builder,
 		sess.Meta.Workdir, system, loop.Options{ReadRoots: readRoots})
+	sub.OnUsage = func(u provider.Usage) { ls.engine.Usage.Add(u) }
 
 	msgs, err := sess.LoadMessages()
 	if err != nil {

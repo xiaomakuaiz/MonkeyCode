@@ -75,6 +75,12 @@ type acpUpdate struct {
 		Entries    []frame.PlanEntry `json:"entries"`
 		Attempt    int               `json:"attempt"`
 		Message    string            `json:"message"`
+		Progress   *struct {
+			Kind   string `json:"kind"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+			Line   string `json:"line"`
+		} `json:"progress"`
 	} `json:"update"`
 }
 
@@ -133,7 +139,19 @@ func (r *Renderer) renderUpdate(u *acpUpdate) {
 		}
 		fmt.Println(r.paint(cCyan, "⏺ "+up.Title))
 	case "tool_call_update":
-		if r.Quiet || up.Status == "in_progress" {
+		if r.Quiet {
+			return
+		}
+		if up.Status == "in_progress" {
+			// 执行期进度:子代理探索步骤逐行外显;bash 实时输出不刷屏,跳过
+			if p := up.Progress; p != nil && p.Kind == "subagent_tool" && p.Status != "run" {
+				r.ensureNewline()
+				mark := r.paint(cGreen, "✓")
+				if p.Status == "fail" {
+					mark = r.paint(cRed, "✗")
+				}
+				fmt.Printf("    %s %s %s\n", r.paint(cDim, "↳"), mark, r.paint(cDim, p.Title))
+			}
 			return
 		}
 		r.ensureNewline()

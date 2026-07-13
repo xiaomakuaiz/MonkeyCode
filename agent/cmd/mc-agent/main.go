@@ -23,6 +23,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
 	"github.com/chaitin/MonkeyCode/agent/internal/skills"
+	"github.com/chaitin/MonkeyCode/agent/internal/subagent"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
@@ -212,11 +213,22 @@ func buildApp(interactive bool) (*app, error) {
 		}
 	}
 
+	// 只读探索子代理(task 工具):工具集只读故自动放行;
+	// 会话持久化开启时,子代理过程落盘为子会话(可独立回放)
+	sub := &subagent.Tool{Provider: p}
+	if sess != nil {
+		sub.SessionRoot = session.DefaultRoot()
+		sub.ParentID = sess.Meta.ID
+	}
+	reg.Register(sub)
+	pol.AllowTool(sub.Name())
+
 	// 本地技能(项目/全局)与平台资源合并注入;workdir 此时已是最终执行目录(含 worktree)
 	extras, readRoots := skills.Assemble(workdir, platExtras, platRoots)
 	system := contextmgr.Build(workdir, extras)
 	engine := loop.New(p, reg, pol, emitters, builder, workdir, system,
 		loop.Options{MaxSteps: flags.maxSteps, ContextBudget: flags.contextBudget, ReadRoots: readRoots})
+	sub.OnUsage = func(u provider.Usage) { engine.Usage.Add(u) }
 
 	if sess != nil && flags.resumeID != "" {
 		msgs, err := sess.LoadMessages()
@@ -377,7 +389,8 @@ func chatCmd() *cobra.Command {
 }
 
 func sessionsCmd() *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "sessions",
 		Short: "列出历史会话",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -385,17 +398,27 @@ func sessionsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(metas) == 0 {
-				fmt.Println("暂无会话")
-				return nil
-			}
+			shown := 0
 			for _, m := range metas {
-				fmt.Printf("%s  [%s]  %d 轮  %-40s  %s\n",
-					m.ID, m.Status, m.Turns, truncate(m.Title, 40), m.Workdir)
+				if m.Parent != "" && !all {
+					continue
+				}
+				indent := ""
+				if m.Parent != "" {
+					indent = "  ↳ "
+				}
+				fmt.Printf("%s%s  [%s]  %d 轮  %-40s  %s\n",
+					indent, m.ID, m.Status, m.Turns, truncate(m.Title, 40), m.Workdir)
+				shown++
+			}
+			if shown == 0 {
+				fmt.Println("暂无会话")
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "包含子代理的子会话")
+	return cmd
 }
 
 func configCmd() *cobra.Command {

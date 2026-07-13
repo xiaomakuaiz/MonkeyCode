@@ -535,3 +535,65 @@ func TestNonLoopbackRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestChildSessionObserver(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+
+	// 直接落盘一个"运行中"的子会话(模拟子代理创建)
+	child, err := session.New(srv.opts.SessionRoot, t.TempDir(), "stub", "子探索")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.Meta.Parent = "parent-xyz"
+	child.Meta.Status = "running"
+	if err := child.SaveMeta(); err != nil {
+		t.Fatal(err)
+	}
+	b := &frame.Builder{}
+	f1 := b.TaskStarted()
+	child.Emit(f1)
+
+	// 列表默认隐藏子会话,?all=1 显示
+	_, data := apiReq(t, ts, "GET", "/api/sessions", "test-token", "")
+	if strings.Contains(string(data), child.Meta.ID) {
+		t.Fatal("列表应默认隐藏子会话")
+	}
+	_, data = apiReq(t, ts, "GET", "/api/sessions?all=1", "test-token", "")
+	if !strings.Contains(string(data), child.Meta.ID) {
+		t.Fatal("?all=1 应包含子会话")
+	}
+
+	// 观察者连接:回放已有帧
+	conn := dialWS(t, ts, child.Meta.ID)
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypeTaskStarted)
+	})
+	if frames[0].Seq != f1.Seq {
+		t.Fatalf("回放帧 seq: %d != %d", frames[0].Seq, f1.Seq)
+	}
+
+	// 上行帧被忽略(观察者只读),连接不断开
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("不该生效")})
+
+	// 实时:落盘 + publishChild → 观察者收到且无重帧
+	f2 := b.AgentText("实时增量")
+	child.Emit(f2)
+	srv.publishChild(child.Meta.ID, f2)
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return len(fs) >= 1
+	})
+	if frames[0].Seq != f2.Seq || !strings.Contains(string(frames[0].Data), "实时增量") {
+		t.Fatalf("实时帧错误: %+v", frames[0])
+	}
+
+	// 水位:重发旧帧(seq<=水位)不应到达观察者
+	srv.publishChild(child.Meta.ID, f1)
+	f3 := b.AgentText("第三帧")
+	child.Emit(f3)
+	srv.publishChild(child.Meta.ID, f3)
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool { return len(fs) >= 1 })
+	if frames[0].Seq != f3.Seq {
+		t.Fatalf("水位去重失效,收到 seq=%d", frames[0].Seq)
+	}
+	child.Close()
+}

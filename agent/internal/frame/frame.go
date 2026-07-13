@@ -127,6 +127,8 @@ type PlanEntry struct {
 
 // ToolCallUpdate tool_call / tool_call_update 载荷。
 // Status: pending | in_progress | completed | failed。
+// Progress 为执行期进度(status=in_progress 时携带,见 tools.ProgressUpdate),
+// 未知字段会被旧客户端忽略,协议向后兼容。
 type ToolCallUpdate struct {
 	SessionUpdate string `json:"sessionUpdate"`
 	ToolCallID    string `json:"toolCallId"`
@@ -135,6 +137,7 @@ type ToolCallUpdate struct {
 	Status        string `json:"status,omitempty"`
 	RawInput      any    `json:"rawInput,omitempty"`
 	RawOutput     any    `json:"rawOutput,omitempty"`
+	Progress      any    `json:"progress,omitempty"`
 }
 
 type messageChunk struct {

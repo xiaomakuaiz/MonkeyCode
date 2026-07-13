@@ -92,10 +92,14 @@ func (t *Bash) Execute(ctx context.Context, env *Env, input json.RawMessage) (st
 	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	cmd.WaitDelay = 5 * time.Second
 
-	out, runErr := cmd.CombinedOutput()
+	// 合并输出;执行期经进度通道节流上报最新完整行(长命令可见进展)
+	pw := &progressWriter{env: env}
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	runErr := cmd.Run()
 
 	// 提取并剥离 cwd 标记
-	text := string(out)
+	text := pw.buf.String()
 	if i := strings.LastIndex(text, cwdMarker); i >= 0 {
 		newCwd := strings.TrimSpace(text[i+len(cwdMarker):])
 		text = strings.TrimRight(text[:i], "\n")
@@ -121,6 +125,43 @@ func (t *Bash) Execute(ctx context.Context, env *Env, input json.RawMessage) (st
 		text = "(无输出)"
 	}
 	return text, nil
+}
+
+// progressWriter 收集命令输出,并以 ≥500ms 的间隔把最新完整输出行
+// 经进度通道上报(跳过内部 cwd 标记行)。cmd.Run 的写入是串行的,无需加锁。
+type progressWriter struct {
+	buf      strings.Builder
+	env      *Env
+	lastEmit time.Time
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	w.buf.Write(p)
+	if w.env.Progress == nil || time.Since(w.lastEmit) < 500*time.Millisecond {
+		return len(p), nil
+	}
+	if line := lastCompleteLine(w.buf.String()); line != "" {
+		w.lastEmit = time.Now()
+		w.env.EmitProgress(ProgressUpdate{Kind: "output", Line: truncateStr(line, 160)})
+	}
+	return len(p), nil
+}
+
+// lastCompleteLine 取最近一个非空且非内部标记的完整行。
+func lastCompleteLine(s string) string {
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	} else {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" && !strings.Contains(line, cwdMarker) {
+			return line
+		}
+	}
+	return ""
 }
 
 // wrapPOSIX 包装用户命令:恢复上次导出的 env → 执行 → 落盘 env 快照 →

@@ -194,6 +194,16 @@ func (e *Engine) execToolUse(ctx context.Context, tu provider.ContentBlock) prov
 		return result(err.Error(), true)
 	}
 
+	// 进度通道:工具执行期的中间进度挂在本次调用的 toolCallId 上
+	// (子代理探索步骤、bash 实时输出等);工具串行执行,共享 env 安全
+	e.env.Progress = func(p tools.ProgressUpdate) {
+		e.emitter.Emit(e.builder.ToolCallUpdate(frame.ToolCallUpdate{
+			ToolCallID: tu.ID, Kind: tu.Name,
+			Status: "in_progress", Progress: p,
+		}))
+	}
+	defer func() { e.env.Progress = nil }()
+
 	out, err := tool.Execute(ctx, e.env, tu.Input)
 	if err != nil {
 		if ctx.Err() != nil {

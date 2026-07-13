@@ -32,6 +32,9 @@ type Meta struct {
 	Usage     provider.Usage `json:"usage"`
 	// Worktree 非空表示会话运行在隔离 worktree(Workdir 即 worktree 路径)。
 	Worktree *workspace.Worktree `json:"worktree,omitempty"`
+	// Parent 非空表示这是子代理的子会话(值为主会话 ID);
+	// 列表默认隐藏,可独立回放。
+	Parent string `json:"parent,omitempty"`
 }
 
 // Session 单个会话,持有打开的事件日志。
@@ -86,6 +89,24 @@ func Load(root, id string) (*Session, error) {
 	}
 	s := &Session{Meta: meta, dir: dir}
 	return s, s.openLog()
+}
+
+// ReadMeta 只读取会话元信息(不打开事件日志,供观察者路径用)。
+func ReadMeta(root, id string) (Meta, error) {
+	var meta Meta
+	data, err := os.ReadFile(filepath.Join(root, id, "meta.json"))
+	if err != nil {
+		return meta, fmt.Errorf("会话 %s 不存在: %w", id, err)
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
+}
+
+// EventsPathFor 事件日志路径(不加载会话)。
+func EventsPathFor(root, id string) string {
+	return filepath.Join(root, id, "events.jsonl")
 }
 
 // List 列出全部会话元信息(按更新时间倒序)。

@@ -169,3 +169,68 @@
 - [x] 真实二进制端到端:项目技能 + 全局技能 + 平台缓存技能三来源 `mc-agent skills` 正确列出;
       run 时系统提示同时含三来源技能索引与平台规则(假平台侧落盘断言 6 关键词全中)
 - [x] mc-desktop 构建 + 无头冒烟过
+
+---
+
+# M2.6:sub-agent + 独立 React UI(2026-07-13)✅
+
+## 只读探索子代理(task 工具,M4 提前)
+
+- [x] `internal/subagent`:task 工具(description+prompt)→ 独立 loop.Engine,受限工具集
+      read_file/grep/glob/git(无 bash/写/编辑/todo/task 自身→无递归、整体只读、yolo 无权限旁路)
+- [x] 独立探索型系统提示;步数上限 25;部分结论 + 提前终止时不丢弃(附终止说明返回)
+- [x] 用量经 OnUsage 回灌主引擎;CLI(buildApp)与 serve 双路径接入,task 自动放行
+- [x] 单测 4 例(scripted provider):探索问答/工具集白名单断言/写工具不可用/部分结论容错
+- 偏差:子代理帧静默(主流程只见 task 调用卡片),嵌套帧展示留 M4;eval 未注入(保持基线可比)
+
+## 独立 React UI(替换内嵌调试 UI)
+
+- [x] `agent/ui` 工程:React 18 + TS(strict)+ Vite,vite-plugin-singlefile 打成单 HTML,
+      产物 `cmd/mc-agent/uidist/index.html` 入库 → serve go:embed,内核 Options.UI 零改动,
+      go build 不依赖 node;旧 ui.html 删除
+- [x] 功能对齐并增强:会话列表(状态点)/新建(worktree 选项)、流式对话(**Markdown 渲染**,
+      DOMPurify 净化)、思考/工具行/计划卡(原地更新不追加)、审批卡四按钮与终态回写、
+      改动 Tab + diff 弹层、上下文用量、断线重连、rAF 批量消费、智能吸底滚动
+- [x] 帧归约为纯函数(src/reduce.ts)与连接层(src/client.ts)分离,tsc strict 通过
+- [x] 验证:npm build + go 全量测试过;真实 serve 冒烟(UI 232KB 正确服务);Node 22 内置
+      WebSocket 按 UI 协议路径全链路 e2e(建会话→user-input→帧流→task-ended→call 改动查询
+      检出新增文件)PROTO_ALL_OK
+- [x] 文档:agent README(子代理 + UI 开发流程)、mc-desktop README 路线图更新
+
+---
+
+# M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
+
+## B:工具进度通道(通用原语)
+
+- [x] frame.ToolCallUpdate 增 Progress 字段(tool_call_update{status:in_progress, progress},
+      旧客户端忽略未知字段,协议向后兼容)
+- [x] tools.Env 增 Progress func(ProgressUpdate) + EmitProgress(nil 安全);loop 执行工具前注入
+      (闭包捕获 toolCallId),defer 置空;载荷 kind: subagent_tool | output | child_session
+- [x] subagent:静默 emitter → progressMapper,子代理 tool_call/tool_call_update 压缩为
+      {kind:subagent_tool, id, title, status:run/ok/fail};文本/思考不透传
+- [x] bash:CombinedOutput → progressWriter,≥500ms 节流上报最新完整输出行(kind:output,
+      跳过内部 cwd 标记行),长命令可见"跑到哪了"
+- [x] CLI renderer:`↳ ✓ 读取 auth.go` 缩进渲染子代理步骤(bash output 不刷屏,跳过);
+      UI:task 工具行下嵌套子步骤、bash 显示斜体实时输出行(完成后清除)
+
+## C:子会话一等公民
+
+- [x] session.Meta 增 Parent;subagent 创建真实子会话(meta.Parent=主会话,title=description,
+      events.jsonl 完整帧流,messages/usage/status 落盘);无 SessionRoot(--no-session)优雅降级
+- [x] 进度通道公告 childSessionId(kind:child_session);OnChildFrame 钩子帧落盘后实时外发
+- [x] sessions 列表默认隐藏子会话:CLI `--all` 缩进显示,server `?all=1`
+- [x] server WS 观察者路径:meta.Parent 非空 → 不建引擎不收上行,持锁回放 + seq 水位订阅
+      publishChild(回放/实时无缝无重帧);同进程直发,无需 tail 文件
+- [x] UI:task 卡片"查看子会话"→ 弹层 SessionViewer(复用 connect+reduce 只读渲染,支持
+      运行中实时跟看与事后回放)
+
+## 验证
+
+- [x] 单测:loop 进度注入(挂对 toolCallId、用后置空)、subagent 子会话落盘/进度序列/无根降级、
+      server 观察者(列表过滤、回放 seq、上行忽略、实时分发、水位去重);全部 15 包过,gofmt/vet 干净
+- [x] UI tsc strict + vite build 过
+- [x] 端到端(有状态假平台:主→task→子代理 read_file→子结论→主收尾):WS 收到 child_session 公告
+      与 subagent_tool run/ok 进度帧;子会话观察者回放 8 帧含子代理工具帧与结论;列表过滤与 parent
+      字段正确(BC_ALL_OK);CLI 渲染 `⏺ 子代理探索 → ↳ ✓ 读取 hello.txt → ✓ 子结论`;
+      sessions/--all 缩进显示子会话

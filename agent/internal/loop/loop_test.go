@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -233,5 +234,48 @@ func TestMaxStepsLimit(t *testing.T) {
 	_, err := eng.RunTurn(context.Background(), "无限循环")
 	if err == nil || !strings.Contains(err.Error(), "最大步数") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// progressTool 执行期上报两条进度的桩工具。
+type progressTool struct{}
+
+func (p *progressTool) Name() string                   { return "progress_stub" }
+func (p *progressTool) Description() string            { return "stub" }
+func (p *progressTool) InputSchema() map[string]any    { return map[string]any{"type": "object"} }
+func (p *progressTool) Title(_ json.RawMessage) string { return "进度桩" }
+func (p *progressTool) Execute(_ context.Context, env *tools.Env, _ json.RawMessage) (string, error) {
+	env.EmitProgress(tools.ProgressUpdate{Kind: "output", Line: "step-1"})
+	env.EmitProgress(tools.ProgressUpdate{Kind: "subagent_tool", ID: "s1", Title: "读取 a.go", Status: "run"})
+	return "done", nil
+}
+
+func TestRunTurn_ToolProgressChannel(t *testing.T) {
+	sp := &scriptedProvider{script: []func(provider.Request) (*provider.Result, error){
+		toolCall("progress_stub", `{}`),
+		text("好了"),
+	}}
+	eng, sink := newTestEngine(t, sp, Options{})
+	eng.registry.Register(&progressTool{})
+
+	if _, err := eng.RunTurn(context.Background(), "跑"); err != nil {
+		t.Fatal(err)
+	}
+	// 进度帧:tool_call_update{in_progress} 携带 progress 载荷,挂在 t1 上
+	if sink.count(frame.TypeTaskRunning, `"line":"step-1"`) != 1 {
+		t.Fatal("缺少 output 进度帧")
+	}
+	if sink.count(frame.TypeTaskRunning, `"title":"读取 a.go"`) != 1 {
+		t.Fatal("缺少 subagent_tool 进度帧")
+	}
+	for _, fr := range sink.frames {
+		if strings.Contains(string(fr.Data), `"progress"`) &&
+			!strings.Contains(string(fr.Data), `"toolCallId":"t1"`) {
+			t.Fatalf("进度帧未挂在调用方 toolCallId: %s", fr.Data)
+		}
+	}
+	// 工具结束后通道置空
+	if eng.env.Progress != nil {
+		t.Fatal("Progress 未在调用后置空")
 	}
 }
