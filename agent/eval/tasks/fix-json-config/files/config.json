@@ -1,0 +1,6 @@
+{
+  "port": 8080,
+  "debug": true,
+  // 工作协程数
+  "workers": 4,
+}

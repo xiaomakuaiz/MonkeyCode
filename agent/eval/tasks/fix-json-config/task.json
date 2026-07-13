@@ -1,0 +1,5 @@
+{
+  "description": "修复损坏的 JSON 配置文件使程序可加载",
+  "prompt": "程序启动时报配置文件解析失败。请修复 config.json 的语法问题(不要改变其中的配置含义与取值),用 go run . 验证能正常打印配置。",
+  "check": "go run . | grep -q 'port=8080 debug=true workers=4'"
+}

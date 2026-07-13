@@ -1,0 +1,5 @@
+{
+  "description": "统计仓库信息并生成 STATS.md",
+  "prompt": "请统计这个仓库:.go 文件的数量和总行数,写入 STATS.md,格式为两行:`go_files: <数量>` 和 `go_lines: <总行数>`。",
+  "check": "grep -q 'go_files: 3' STATS.md && grep -qE 'go_lines: *9' STATS.md"
+}

@@ -1,0 +1,16 @@
+[package]
+name = "mc-desktop"
+version = "0.1.0"
+description = "MonkeyCode 本地桌面客户端(Tauri 薄壳:拉起 mc-agent 内核并承载其 UI)"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+getrandom = "0.2"
+
+[profile.release]
+strip = true
+lto = true

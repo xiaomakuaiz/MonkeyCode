@@ -1,0 +1,5 @@
+{
+  "description": "阅读代码生成使用文档",
+  "prompt": "阅读 limiter.go 的实现,编写 README.md:包含「简介」「快速开始」(含可运行的示例代码)「注意事项」三个章节,内容必须与实际实现一致(比如零值/负数参数的行为)。",
+  "check": "grep -q '简介' README.md && grep -q '快速开始' README.md && grep -q '注意事项' README.md && grep -q 'NewLimiter' README.md"
+}

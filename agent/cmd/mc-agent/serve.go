@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -18,7 +19,7 @@ var debugUI []byte
 
 func serveCmd() *cobra.Command {
 	var addr, token string
-	var noUI bool
+	var noUI, watchStdin bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "启动 localhost WS 宿主(桌面/浏览器 UI 通过帧协议直连)",
@@ -73,11 +74,21 @@ func serveCmd() *cobra.Command {
 
 			ctx, cancel := signalContext()
 			defer cancel()
+			if watchStdin {
+				// 宿主(桌面壳)持有本进程 stdin 管道;宿主任何方式退出
+				// 都会关闭管道,内核随之退出,避免孤儿进程
+				go func() {
+					_, _ = io.Copy(io.Discard, os.Stdin)
+					fmt.Fprintln(os.Stderr, "宿主已退出(stdin 关闭),内核随之退出")
+					cancel()
+				}()
+			}
 			return srv.ListenAndServe(ctx)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:7439", "监听地址(仅允许 loopback)")
 	cmd.Flags().StringVar(&token, "token", "", "访问令牌(默认每次启动随机生成)")
 	cmd.Flags().BoolVar(&noUI, "no-ui", false, "不挂载内嵌调试界面")
+	cmd.Flags().BoolVar(&watchStdin, "watch-stdin", false, "stdin 关闭时退出(供桌面壳托管)")
 	return cmd
 }

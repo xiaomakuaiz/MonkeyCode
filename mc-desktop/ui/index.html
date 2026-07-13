@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!-- 占位页:仅在内核启动失败时展示错误;正常流程直接打开内核 UI。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MonkeyCode</title>
+<style>
+  body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0f1115; color:#e6e6e6;
+         font:15px/1.8 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  .box { max-width:520px; padding:32px; text-align:center; }
+  .err { color:#f85149; word-break:break-all; }
+  .hint { color:#8b93a3; font-size:13px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h2>⚠ 内核启动失败</h2>
+  <p class="err" id="msg">未知错误</p>
+  <p class="hint">请确认 mc-agent 已安装(agent 目录下 make install),
+     或设置环境变量 MC_AGENT_BIN 指向二进制路径,然后重启应用。</p>
+</div>
+<script>
+  const m = decodeURIComponent(location.hash.slice(1) || '');
+  if (m) document.getElementById('msg').textContent = m;
+</script>
+</body>
+</html>
