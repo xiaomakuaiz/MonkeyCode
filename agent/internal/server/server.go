@@ -59,9 +59,10 @@ type Options struct {
 
 // Server localhost 宿主。
 type Server struct {
-	opts Options
-	mu   sync.Mutex
-	live map[string]*liveSession
+	opts  Options
+	mu    sync.Mutex
+	live  map[string]*liveSession
+	turns sync.WaitGroup // 进行中的轮次(优雅退出时等待落盘)
 }
 
 // New 创建 Server;token 为空时自动生成。
@@ -130,12 +131,33 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go func() { errCh <- srv.ListenAndServe() }()
 	select {
 	case <-ctx.Done():
+		// 先取消进行中的轮次并等待其保存中断状态,再关 HTTP
+		s.mu.Lock()
+		for _, ls := range s.live {
+			ls.mu.Lock()
+			if ls.cancelTurn != nil {
+				ls.cancelTurn()
+			}
+			ls.mu.Unlock()
+		}
+		s.mu.Unlock()
+		waitTimeout(&s.turns, 3*time.Second)
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 		return nil
 	case err := <-errCh:
 		return err
+	}
+}
+
+func waitTimeout(wg *sync.WaitGroup, d time.Duration) {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
 	}
 }
 
@@ -310,6 +332,15 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	}
 	ls.engine.Messages = msgs
 	ls.engine.Usage = sess.Meta.Usage
+
+	// 上一进程遗留的未完轮次(如重启时正在执行/等待审批):
+	// 该轮的执行流已不存在,补一帧终态让回放有明确结尾,避免客户端
+	// 对着已死的审批请求等待。
+	if sess.Meta.Status == "running" {
+		sess.Meta.Status = "interrupted"
+		_ = sess.SaveMeta()
+		sess.Emit(ls.builder.TaskError("服务已重启,上一轮执行已中断;历史已保留,请重新发送指令继续"))
+	}
 	return ls, nil
 }
 
@@ -396,6 +427,7 @@ func (ls *liveSession) startTurn(input string) {
 	ls.cancelTurn = cancel
 	ls.mu.Unlock()
 
+	ls.srv.turns.Add(1)
 	go func() {
 		defer func() {
 			cancel()
@@ -403,6 +435,7 @@ func (ls *liveSession) startTurn(input string) {
 			ls.running = false
 			ls.cancelTurn = nil
 			ls.mu.Unlock()
+			ls.srv.turns.Done()
 		}()
 		_, err := ls.engine.RunTurn(ctx, input)
 

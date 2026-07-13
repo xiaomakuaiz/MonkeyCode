@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -326,6 +328,77 @@ func TestWSPermissionFlow(t *testing.T) {
 	}
 	if !toolFailed {
 		t.Fatalf("拒绝后工具应标记 failed: %v", summary(frames))
+	}
+}
+
+// TestWSPermissionApprove 批准后工具真实执行,轮次继续到结束。
+func TestWSPermissionApprove(t *testing.T) {
+	workdir := t.TempDir()
+	stub := &stubProvider{results: []*provider.Result{
+		toolUseResult("write_file", `{"path":"ok.txt","content":"approved"}`),
+		textResult("已写入"),
+	}}
+	_, ts := newTestServer(t, stub)
+	id := createSession(t, ts, workdir)
+	conn := dialWS(t, ts, id)
+
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("写文件")})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypePermissionReq)
+	})
+	var req struct{ ID string }
+	for _, f := range frames {
+		if f.Type == frame.TypePermissionReq {
+			_ = json.Unmarshal(f.Data, &req)
+		}
+	}
+	sendFrame(t, conn, frame.TypePermissionResp,
+		map[string]any{"id": req.ID, "approved": true, "remember": false})
+	wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+
+	data, err := os.ReadFile(filepath.Join(workdir, "ok.txt"))
+	if err != nil || string(data) != "approved" {
+		t.Fatalf("批准后文件未写入: %v %q", err, data)
+	}
+}
+
+// TestStaleRunningSessionClosedOnLoad 服务重启后,遗留 running 状态的会话
+// 必须在回放尾部出现明确终态(task-error),避免客户端对着已死的审批等待。
+func TestStaleRunningSessionClosedOnLoad(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, t.TempDir())
+
+	// 模拟旧进程遗留:running 状态 + 未答复的审批请求
+	sess, err := session.Load(srv.opts.SessionRoot, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &frame.Builder{}
+	sess.Emit(b.TaskStarted())
+	sess.Emit(b.PermissionReq("dead-ask", "write_file", "写入 x"))
+	sess.Meta.Status = "running"
+	if err := sess.SaveMeta(); err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+
+	conn := dialWS(t, ts, id)
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypeTaskError)
+	})
+	if !hasType(frames, frame.TypePermissionReq) {
+		t.Fatalf("回放缺少历史审批帧: %v", summary(frames))
+	}
+	last := frames[len(frames)-1]
+	if last.Type != frame.TypeTaskError || !strings.Contains(string(last.Data), "中断") {
+		t.Fatalf("回放末尾缺少中断终态: %v", summary(frames))
+	}
+
+	metas, _ := session.List(srv.opts.SessionRoot)
+	for _, m := range metas {
+		if m.ID == id && m.Status != "interrupted" {
+			t.Fatalf("meta 状态应为 interrupted,实际 %s", m.Status)
+		}
 	}
 }
 
