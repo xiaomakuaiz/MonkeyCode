@@ -28,6 +28,10 @@ const (
 	TypeTaskError   Type = "task-error"
 	TypeUserInput   Type = "user-input"
 	TypeUserCancel  Type = "user-cancel"
+
+	// 本地宿主的权限审批透传(云端对应 auto-approve/permission-resp 机制)
+	TypePermissionReq  Type = "permission-req"
+	TypePermissionResp Type = "permission-resp"
 )
 
 // Kind 帧内容子类型。
@@ -68,6 +72,9 @@ func (m MultiEmitter) Emit(fr Frame) {
 type Builder struct {
 	seq atomic.Uint64
 }
+
+// SetSeq 设置起始序号(恢复历史会话时衔接既有事件日志)。
+func (b *Builder) SetSeq(n uint64) { b.seq.Store(n) }
 
 func (b *Builder) build(t Type, kind string, payload any) Frame {
 	var data []byte
@@ -154,6 +161,13 @@ func (b *Builder) TaskError(msg string) Frame {
 func (b *Builder) UserInput(text string) Frame {
 	payload := map[string]any{"content": []byte(text)}
 	return b.build(TypeUserInput, "", payload)
+}
+
+// PermissionReq 权限审批请求(等待客户端回 permission-resp)。
+func (b *Builder) PermissionReq(id, tool, title string) Frame {
+	return b.build(TypePermissionReq, "", map[string]string{
+		"id": id, "tool": tool, "title": title,
+	})
 }
 
 func (b *Builder) acp(update any) Frame {

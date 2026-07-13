@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<!-- mc-agent 内嵌调试界面:开发/验证用,正式 UI 随桌面客户端交付。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mc-agent</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --border:#2a2f3a; --fg:#e6e6e6; --dim:#8b93a3;
+          --accent:#4f8cff; --green:#3fb950; --red:#f85149; --amber:#d29922; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  #app { display:flex; height:100vh; }
+  #side { width:280px; border-right:1px solid var(--border); padding:12px; display:flex;
+          flex-direction:column; gap:8px; }
+  #side h1 { font-size:15px; margin:0 0 4px; }
+  #side .hint { color:var(--dim); font-size:12px; }
+  #sessions { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+  .sess { padding:8px; border:1px solid var(--border); border-radius:8px; cursor:pointer;
+          background:var(--panel); }
+  .sess:hover, .sess.active { border-color:var(--accent); }
+  .sess .t { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sess .m { color:var(--dim); font-size:11px; }
+  #main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #log { flex:1; overflow-y:auto; padding:16px 20px; }
+  #composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border); }
+  textarea { flex:1; background:var(--panel); color:var(--fg); border:1px solid var(--border);
+             border-radius:8px; padding:10px; resize:none; font:inherit; min-height:44px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:8px 14px;
+           cursor:pointer; font:inherit; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
+  button.red { background:var(--red); }
+  button:disabled { opacity:.4; cursor:default; }
+  input[type=text] { background:var(--panel); color:var(--fg); border:1px solid var(--border);
+                     border-radius:8px; padding:8px; width:100%; font:inherit; }
+  .msg { margin:10px 0; max-width:92%; white-space:pre-wrap; word-break:break-word; }
+  .user { margin-left:auto; background:#1d3a6e; border-radius:12px 12px 2px 12px; padding:10px 12px; }
+  .agent { }
+  .thought { color:var(--dim); font-size:13px; border-left:2px solid var(--border); padding-left:10px; }
+  .tool { color:var(--dim); font-size:13px; margin:4px 0; }
+  .tool .name { color:#79b8ff; }
+  .tool .ok { color:var(--green); } .tool .fail { color:var(--red); }
+  .sysline { color:var(--dim); font-size:12px; text-align:center; margin:8px 0; }
+  .err { color:var(--red); }
+  .perm { border:1px solid var(--amber); border-radius:10px; padding:12px; margin:10px 0;
+          background:#2b2413; }
+  .perm .q { margin-bottom:8px; }
+  .perm .btns { display:flex; gap:8px; }
+  .plan { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin:10px 0;
+          background:var(--panel); font-size:13px; }
+  #status { padding:6px 16px; font-size:12px; color:var(--dim); border-top:1px solid var(--border);
+            display:flex; justify-content:space-between; }
+  dialog { background:var(--panel); color:var(--fg); border:1px solid var(--border);
+           border-radius:12px; padding:20px; width:420px; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1>mc-agent <span class="hint">调试界面</span></h1>
+    <button id="newBtn">+ 新建会话</button>
+    <div id="sessions"></div>
+    <div class="hint" id="connInfo"></div>
+  </div>
+  <div id="main">
+    <div id="log"><div class="sysline">选择或创建一个会话开始</div></div>
+    <div id="composer">
+      <textarea id="input" placeholder="输入任务…(Enter 发送,Shift+Enter 换行)"></textarea>
+      <button id="sendBtn">发送</button>
+      <button id="cancelBtn" class="red" disabled>停止</button>
+    </div>
+    <div id="status"><span id="statusText">未连接</span><span id="usageText"></span></div>
+  </div>
+</div>
+
+<dialog id="newDlg">
+  <h3 style="margin-top:0">新建会话</h3>
+  <p class="hint">工作区目录(本机绝对路径)</p>
+  <input type="text" id="workdirInput" placeholder="/home/you/dev/project">
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+    <button class="ghost" onclick="newDlg.close()">取消</button>
+    <button id="createBtn">创建</button>
+  </div>
+</dialog>
+
+<script>
+'use strict';
+const token = location.hash.slice(1) || prompt('访问令牌(serve 启动时打印)');
+const api = (path, opts={}) => fetch(path, {...opts,
+  headers: {'Authorization':'Bearer '+token, 'Content-Type':'application/json', ...(opts.headers||{})}
+}).then(r => { if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+
+// base64 <-> UTF-8
+const b64decode = s => new TextDecoder().decode(Uint8Array.from(atob(s), c => c.charCodeAt(0)));
+const b64encode = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+
+const $ = id => document.getElementById(id);
+let ws = null, currentId = null, running = false;
+
+// ---------- 会话列表 ----------
+async function refreshSessions() {
+  const metas = await api('/api/sessions');
+  const box = $('sessions'); box.innerHTML = '';
+  for (const m of metas) {
+    const el = document.createElement('div');
+    el.className = 'sess' + (m.id === currentId ? ' active' : '');
+    el.innerHTML = `<div class="t">${esc(m.title || '(未命名)')}</div>
+                    <div class="m">${esc(m.workdir)} · ${m.turns}轮 · ${esc(m.status)}</div>`;
+    el.onclick = () => openSession(m.id);
+    box.appendChild(el);
+  }
+}
+function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
+
+$('newBtn').onclick = () => $('newDlg').showModal();
+$('createBtn').onclick = async () => {
+  const workdir = $('workdirInput').value.trim();
+  if (!workdir) return;
+  try {
+    const meta = await api('/api/sessions', {method:'POST', body:JSON.stringify({workdir})});
+    $('newDlg').close();
+    await refreshSessions();
+    openSession(meta.id);
+  } catch (e) { alert('创建失败: '+e.message); }
+};
+
+// ---------- WS 连接与帧渲染 ----------
+function openSession(id) {
+  if (ws) { ws.onclose = null; ws.close(); }
+  currentId = id; running = false;
+  $('log').innerHTML = ''; $('usageText').textContent = '';
+  setStatus('连接中…');
+  refreshSessions();
+
+  ws = new WebSocket(`ws://${location.host}/ws?session=${id}&token=${token}`);
+  ws.onopen = () => setStatus('已连接 · 会话 '+id);
+  ws.onclose = () => setStatus('连接已断开(点击会话重连)');
+  ws.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch {} };
+}
+
+let lastKind = '', lastEl = null; // 流式文本聚合
+function block(cls) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + cls;
+  $('log').appendChild(el);
+  return el;
+}
+function appendStream(kind, cls, text) {
+  if (lastKind !== kind || !lastEl) { lastEl = block(cls); lastKind = kind; }
+  lastEl.textContent += text;
+  scroll();
+}
+function breakStream(){ lastKind = ''; lastEl = null; }
+function scroll(){ const l=$('log'); l.scrollTop = l.scrollHeight; }
+function setStatus(s){ $('statusText').textContent = s; }
+function setRunning(r){ running=r; $('cancelBtn').disabled=!r; $('sendBtn').disabled=r; }
+
+function render(f) {
+  const data = f.data ? JSON.parse(b64decode(f.data)) : null;
+  switch (f.type) {
+    case 'task-started': setRunning(true); break;
+    case 'task-ended': breakStream(); setRunning(false);
+      block('sysline').textContent = '— 本轮结束 —'; scroll(); break;
+    case 'task-error': breakStream(); setRunning(false);
+      block('sysline err').textContent = '✗ ' + (data?.error || '未知错误'); scroll(); break;
+    case 'user-input': breakStream();
+      block('user').textContent = b64decode(data.content); scroll(); break;
+    case 'permission-req': breakStream(); renderPerm(data); break;
+    case 'task-running': if (f.kind === 'acp_event') renderAcp(data?.update); break;
+  }
+}
+
+function renderAcp(u) {
+  if (!u) return;
+  switch (u.sessionUpdate) {
+    case 'agent_message_chunk': appendStream('text', 'agent', u.content?.text || ''); break;
+    case 'agent_thought_chunk': appendStream('thought', 'thought', u.content?.text || ''); break;
+    case 'tool_call': { breakStream();
+      const el = block('tool'); el.dataset.tc = u.toolCallId;
+      el.innerHTML = `⏺ <span class="name">${esc(u.title || u.kind)}</span> <span class="st">…</span>`;
+      scroll(); break; }
+    case 'tool_call_update': {
+      if (u.status === 'in_progress') break;
+      const el = [...document.querySelectorAll('[data-tc]')].findLast(e => e.dataset.tc === u.toolCallId);
+      const ok = u.status === 'completed';
+      const out = typeof u.rawOutput === 'string' ? u.rawOutput.split('\n')[0].slice(0,120) : '';
+      if (el) el.querySelector('.st').innerHTML =
+        `<span class="${ok?'ok':'fail'}">${ok?'✓':'✗'}</span> <span>${esc(out)}</span>`;
+      break; }
+    case 'plan': { breakStream();
+      const mark = s => ({pending:'[ ]', in_progress:'[~]', completed:'[x]'}[s] || '[ ]');
+      block('plan').textContent = (u.entries||[]).map(e => `${mark(e.status)} ${e.content}`).join('\n');
+      scroll(); break; }
+    case 'llm_call_retry': breakStream();
+      block('sysline').textContent = `模型调用重试 #${u.attempt}: ${u.message||''}`; scroll(); break;
+    case 'usage_update': $('usageText').textContent = `上下文 ${u.used||0} / ${u.size||0} tokens`; break;
+  }
+}
+
+function renderPerm(d) {
+  const el = block('perm');
+  el.innerHTML = `<div class="q">⚠ 请求执行:<b>${esc(d.title)}</b> <span class="hint">(${esc(d.tool)})</span></div>
+    <div class="btns">
+      <button data-a="allow">允许</button>
+      <button data-a="always" class="ghost">本会话始终允许</button>
+      <button data-a="deny" class="red">拒绝</button>
+    </div>`;
+  el.querySelectorAll('button').forEach(btn => btn.onclick = () => {
+    const a = btn.dataset.a;
+    sendFrame('permission-resp', {id: d.id, approved: a !== 'deny', remember: a === 'always'});
+    el.querySelector('.btns').innerHTML =
+      `<span class="hint">${a==='deny'?'已拒绝':'已允许'}</span>`;
+  });
+  scroll();
+}
+
+// ---------- 上行 ----------
+function sendFrame(type, payload) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({type, data: b64encode(JSON.stringify(payload)), timestamp: Date.now()}));
+}
+function sendInput() {
+  const text = $('input').value.trim();
+  if (!text || !ws || ws.readyState !== 1 || running) return;
+  sendFrame('user-input', {content: b64encode(text)});
+  $('input').value = '';
+}
+$('sendBtn').onclick = sendInput;
+$('cancelBtn').onclick = () => sendFrame('user-cancel', {});
+$('input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); }
+});
+
+refreshSessions().catch(e => setStatus('无法连接服务: '+e.message));
+</script>
+</body>
+</html>

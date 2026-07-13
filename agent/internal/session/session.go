@@ -109,6 +109,11 @@ func List(root string) ([]Meta, error) {
 	return metas, nil
 }
 
+// EventsPath 事件日志文件路径。
+func (s *Session) EventsPath() string {
+	return filepath.Join(s.dir, "events.jsonl")
+}
+
 func (s *Session) openLog() error {
 	f, err := os.OpenFile(filepath.Join(s.dir, "events.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

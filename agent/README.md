@@ -1,6 +1,6 @@
 # mc-agent — MonkeyCode 本地 Agent 内核
 
-自研编码 agent 内核(M1,headless CLI 形态)。直接在本机工作区执行编码任务:自主读代码、改文件、跑命令、验证结果,全程流式输出,支持会话恢复。
+自研编码 agent 内核(M1 headless CLI + M2 localhost WS 宿主)。直接在本机工作区执行编码任务:自主读代码、改文件、跑命令、验证结果,全程流式输出,支持会话恢复。
 
 设计文档:`docs/superpowers/specs/2026-07-12-local-agent-design.md`
 
@@ -61,6 +61,21 @@ mc-agent chat --resume <会话ID>    # 恢复会话继续对话
 - `--allow write_file --allow edit_file` 预授权指定工具;`--yolo` 全部放行(仅限受信环境/eval)。
 
 文件类操作强制限制在工作区目录内(含 bash 的 cd 越界拉回)。
+
+## serve 模式(WS 宿主 + 浏览器界面)
+
+```bash
+mc-agent serve                # 默认 127.0.0.1:7439,每次启动随机 token
+mc-agent serve --token xxx    # 固定 token(桌面壳托管时用)
+```
+
+启动后终端会打印调试界面地址(形如 `http://127.0.0.1:7439/#<token>`),浏览器打开即可:创建会话(选工作区)→ 对话 → 流式输出/工具过程/计划 → **写操作在页面上弹审批卡片**(允许/始终允许/拒绝)。
+
+协议(桌面客户端/IDE 插件对接同一套):
+
+- `GET /healthz`;`GET/POST /api/sessions`(Bearer token);
+- `WS /ws?session=<id>&token=<t>`:下行为帧序列(先回放历史再实时);上行 `user-input` / `user-cancel` / `permission-resp`;
+- 安全:仅绑 loopback、随机 token、WS 同源 Origin 校验、慢消费者断开重连回放。
 
 ## 评测(eval)
 

@@ -1,0 +1,560 @@
+// Package server localhost WS 宿主:桌面/浏览器 UI 通过帧协议直连内核。
+//
+// 安全模型:仅绑定 loopback + 每次启动的随机 token(REST 用 Bearer,WS 用
+// ?token= 查询参数);WS 握手校验同源 Origin(coder/websocket 默认行为)防 CSRF。
+//
+// 协议:
+//
+//	REST  GET  /healthz                     健康检查(无鉴权)
+//	REST  GET  /api/sessions                会话列表
+//	REST  POST /api/sessions {workdir}      创建会话
+//	WS    GET  /ws?session=<id>&token=<t>   帧双向流
+//
+// WS 下行:回放 events.jsonl 后实时推送全部帧(含 permission-req)。
+// WS 上行:user-input(data.content 为 base64 文本)、user-cancel、
+// permission-resp(data: {id, approved, remember})。
+package server
+
+import (
+	"bufio"
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
+	"github.com/chaitin/MonkeyCode/agent/internal/frame"
+	"github.com/chaitin/MonkeyCode/agent/internal/loop"
+	"github.com/chaitin/MonkeyCode/agent/internal/policy"
+	"github.com/chaitin/MonkeyCode/agent/internal/provider"
+	"github.com/chaitin/MonkeyCode/agent/internal/session"
+	"github.com/chaitin/MonkeyCode/agent/internal/tools"
+)
+
+// Options 服务配置。
+type Options struct {
+	Addr        string // 监听地址,必须是 loopback
+	Token       string // 访问令牌,空则自动生成
+	SessionRoot string // 会话存储根目录
+	Model       string // 展示用模型标识
+	// NewProvider 创建 LLM 客户端(注入以便测试)。
+	NewProvider func() provider.Provider
+	// UI 内嵌调试页面(nil 则不挂载)。
+	UI []byte
+	// AskTimeout 权限审批等待上限(默认 10 分钟)。
+	AskTimeout time.Duration
+}
+
+// Server localhost 宿主。
+type Server struct {
+	opts Options
+	mu   sync.Mutex
+	live map[string]*liveSession
+}
+
+// New 创建 Server;token 为空时自动生成。
+func New(opts Options) (*Server, error) {
+	if opts.Addr == "" {
+		opts.Addr = "127.0.0.1:7439"
+	}
+	host, _, err := net.SplitHostPort(opts.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("监听地址无效: %w", err)
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return nil, fmt.Errorf("serve 仅允许绑定 loopback 地址(当前: %s)", opts.Addr)
+	}
+	if opts.Token == "" {
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err != nil {
+			return nil, err
+		}
+		opts.Token = hex.EncodeToString(b)
+	}
+	if opts.SessionRoot == "" {
+		opts.SessionRoot = session.DefaultRoot()
+	}
+	if opts.AskTimeout <= 0 {
+		opts.AskTimeout = 10 * time.Minute
+	}
+	if opts.NewProvider == nil {
+		return nil, fmt.Errorf("NewProvider 未设置")
+	}
+	return &Server{opts: opts, live: map[string]*liveSession{}}, nil
+}
+
+// Token 实际生效的访问令牌。
+func (s *Server) Token() string { return s.opts.Token }
+
+// Addr 监听地址。
+func (s *Server) Addr() string { return s.opts.Addr }
+
+// Handler 组装 HTTP 路由。
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "model": s.opts.Model})
+	})
+	mux.HandleFunc("GET /api/sessions", s.auth(s.handleListSessions))
+	mux.HandleFunc("POST /api/sessions", s.auth(s.handleCreateSession))
+	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
+	if s.opts.UI != nil {
+		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("content-type", "text/html; charset=utf-8")
+			_, _ = w.Write(s.opts.UI)
+		})
+	}
+	return mux
+}
+
+// ListenAndServe 启动服务(阻塞),ctx 取消时优雅关闭。
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	srv := &http.Server{Addr: s.opts.Addr, Handler: s.Handler()}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		return nil
+	case err := <-errCh:
+		return err
+	}
+}
+
+// ==================== 鉴权 ====================
+
+func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.opts.Token)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// ==================== REST ====================
+
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	metas, err := session.List(s.opts.SessionRoot)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if metas == nil {
+		metas = []session.Meta{}
+	}
+	writeJSON(w, http.StatusOK, metas)
+}
+
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Workdir string `json:"workdir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体无效"})
+		return
+	}
+	workdir, err := filepath.Abs(req.Workdir)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if st, err := os.Stat(workdir); err != nil || !st.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "工作区目录不存在: " + workdir})
+		return
+	}
+	sess, err := session.New(s.opts.SessionRoot, workdir, s.opts.Model, "")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	sess.Close() // liveSession 打开时重新持有
+	writeJSON(w, http.StatusOK, sess.Meta)
+}
+
+// ==================== WS ====================
+
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("session")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 session 参数"})
+		return
+	}
+	ls, err := s.liveSession(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	conn, err := websocket.Accept(w, r, nil) // 默认同源 Origin 校验
+	if err != nil {
+		return
+	}
+	client := newWSClient(conn)
+	if err := ls.attach(client); err != nil {
+		client.close(websocket.StatusInternalError, "attach failed")
+		return
+	}
+	defer ls.detach(client)
+
+	// 读循环(写由 client 的发送协程负责)
+	ctx := r.Context()
+	for {
+		typ, data, err := conn.Read(ctx)
+		if err != nil {
+			return
+		}
+		if typ != websocket.MessageText {
+			continue
+		}
+		var f frame.Frame
+		if json.Unmarshal(data, &f) != nil {
+			continue
+		}
+		ls.handleClientFrame(&f)
+	}
+}
+
+// liveSession 获取(或惰性创建)运行态会话。
+func (s *Server) liveSession(id string) (*liveSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ls, ok := s.live[id]; ok {
+		return ls, nil
+	}
+	sess, err := session.Load(s.opts.SessionRoot, id)
+	if err != nil {
+		return nil, err
+	}
+	ls, err := newLiveSession(s, sess)
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+	s.live[id] = ls
+	return ls, nil
+}
+
+// ==================== 运行态会话 ====================
+
+type askResp struct {
+	approved, remember bool
+}
+
+type liveSession struct {
+	srv     *Server
+	sess    *session.Session
+	engine  *loop.Engine
+	builder *frame.Builder
+
+	emitMu  sync.Mutex // 保证回放与实时推送无缝衔接
+	clients map[*wsClient]struct{}
+
+	mu         sync.Mutex
+	running    bool
+	cancelTurn context.CancelFunc
+	asks       map[string]chan askResp
+}
+
+func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
+	ls := &liveSession{
+		srv: s, sess: sess,
+		clients: map[*wsClient]struct{}{},
+		asks:    map[string]chan askResp{},
+	}
+	ls.builder = &frame.Builder{}
+	ls.builder.SetSeq(countEvents(sess.EventsPath()))
+
+	reg := tools.NewRegistry()
+	pol := policy.New(policy.ModeDefault, ls.asker)
+	emitter := frame.EmitterFunc(ls.emit)
+	if t, ok := reg.Get("todo"); ok {
+		t.(*tools.Todo).OnUpdate = func(entries []tools.TodoEntry) {
+			fe := make([]frame.PlanEntry, len(entries))
+			for i, e := range entries {
+				fe[i] = frame.PlanEntry{Content: e.Content, Status: e.Status}
+			}
+			ls.emit(ls.builder.Plan(fe))
+		}
+	}
+	system := contextmgr.Build(sess.Meta.Workdir)
+	ls.engine = loop.New(s.opts.NewProvider(), reg, pol, emitter, ls.builder,
+		sess.Meta.Workdir, system, loop.Options{})
+
+	msgs, err := sess.LoadMessages()
+	if err != nil {
+		return nil, err
+	}
+	ls.engine.Messages = msgs
+	ls.engine.Usage = sess.Meta.Usage
+	return ls, nil
+}
+
+// emit 帧落日志并广播(与 attach 回放互斥,保证不丢帧不重帧)。
+func (ls *liveSession) emit(f frame.Frame) {
+	ls.emitMu.Lock()
+	defer ls.emitMu.Unlock()
+	ls.sess.Emit(f)
+	data, err := json.Marshal(f)
+	if err != nil {
+		return
+	}
+	for c := range ls.clients {
+		c.send(data)
+	}
+}
+
+// attach 回放历史事件后加入广播列表。
+func (ls *liveSession) attach(c *wsClient) error {
+	ls.emitMu.Lock()
+	defer ls.emitMu.Unlock()
+	if err := replayEvents(ls.sess.EventsPath(), c); err != nil {
+		return err
+	}
+	ls.clients[c] = struct{}{}
+	return nil
+}
+
+func (ls *liveSession) detach(c *wsClient) {
+	ls.emitMu.Lock()
+	delete(ls.clients, c)
+	ls.emitMu.Unlock()
+	c.close(websocket.StatusNormalClosure, "")
+}
+
+// handleClientFrame 处理上行帧。
+func (ls *liveSession) handleClientFrame(f *frame.Frame) {
+	switch f.Type {
+	case frame.TypeUserInput:
+		var payload struct {
+			Content []byte `json:"content"` // base64 → 原文
+		}
+		if err := json.Unmarshal(f.Data, &payload); err != nil || len(payload.Content) == 0 {
+			return
+		}
+		ls.startTurn(string(payload.Content))
+	case frame.TypeUserCancel:
+		ls.mu.Lock()
+		if ls.cancelTurn != nil {
+			ls.cancelTurn()
+		}
+		ls.mu.Unlock()
+	case frame.TypePermissionResp:
+		var payload struct {
+			ID       string `json:"id"`
+			Approved bool   `json:"approved"`
+			Remember bool   `json:"remember"`
+		}
+		if err := json.Unmarshal(f.Data, &payload); err != nil {
+			return
+		}
+		ls.mu.Lock()
+		ch, ok := ls.asks[payload.ID]
+		if ok {
+			delete(ls.asks, payload.ID)
+		}
+		ls.mu.Unlock()
+		if ok {
+			ch <- askResp{approved: payload.Approved, remember: payload.Remember}
+		}
+	}
+}
+
+// startTurn 启动一轮(同会话同一时刻只允许一轮)。
+func (ls *liveSession) startTurn(input string) {
+	ls.mu.Lock()
+	if ls.running {
+		ls.mu.Unlock()
+		ls.emit(ls.builder.TaskError("当前会话已有任务在执行,请等待完成或先取消"))
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ls.running = true
+	ls.cancelTurn = cancel
+	ls.mu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			ls.mu.Lock()
+			ls.running = false
+			ls.cancelTurn = nil
+			ls.mu.Unlock()
+		}()
+		_, err := ls.engine.RunTurn(ctx, input)
+
+		ls.sess.Meta.Turns++
+		ls.sess.Meta.Usage = ls.engine.Usage
+		switch {
+		case errors.Is(err, loop.ErrInterrupted):
+			ls.sess.Meta.Status = "interrupted"
+		case err != nil:
+			ls.sess.Meta.Status = "error"
+		default:
+			ls.sess.Meta.Status = "finished"
+		}
+		if ls.sess.Meta.Title == "" {
+			ls.sess.Meta.Title = firstLine(input)
+		}
+		if err := ls.sess.SaveMessages(ls.engine.Messages); err != nil {
+			ls.emit(ls.builder.TaskError("会话保存失败: " + err.Error()))
+		}
+		_ = ls.sess.SaveMeta()
+	}()
+}
+
+// asker 权限审批:下发 permission-req 帧,等待 permission-resp。
+func (ls *liveSession) asker(ctx context.Context, req policy.Request) (bool, bool, error) {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	id := hex.EncodeToString(b)
+	ch := make(chan askResp, 1)
+
+	ls.mu.Lock()
+	ls.asks[id] = ch
+	ls.mu.Unlock()
+	defer func() {
+		ls.mu.Lock()
+		delete(ls.asks, id)
+		ls.mu.Unlock()
+	}()
+
+	ls.emit(ls.builder.PermissionReq(id, req.Tool, req.Title))
+	select {
+	case r := <-ch:
+		return r.approved, r.remember, nil
+	case <-ctx.Done():
+		return false, false, ctx.Err()
+	case <-time.After(ls.srv.opts.AskTimeout):
+		return false, false, fmt.Errorf("等待审批超时")
+	}
+}
+
+// ==================== WS 客户端(串行发送) ====================
+
+type wsClient struct {
+	conn *websocket.Conn
+	out  chan []byte
+	once sync.Once
+	done chan struct{}
+}
+
+func newWSClient(conn *websocket.Conn) *wsClient {
+	c := &wsClient{conn: conn, out: make(chan []byte, 1024), done: make(chan struct{})}
+	go func() {
+		for {
+			select {
+			case data := <-c.out:
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err := conn.Write(ctx, websocket.MessageText, data)
+				cancel()
+				if err != nil {
+					c.close(websocket.StatusAbnormalClosure, "write failed")
+					return
+				}
+			case <-c.done:
+				return
+			}
+		}
+	}()
+	return c
+}
+
+// send 非阻塞投递;慢消费者(缓冲满)直接断开,由客户端重连回放。
+func (c *wsClient) send(data []byte) {
+	select {
+	case c.out <- data:
+	case <-c.done:
+	default:
+		c.close(websocket.StatusPolicyViolation, "client too slow")
+	}
+}
+
+func (c *wsClient) close(code websocket.StatusCode, reason string) {
+	c.once.Do(func() {
+		close(c.done)
+		_ = c.conn.Close(code, reason)
+	})
+}
+
+// ==================== 辅助 ====================
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// replayEvents 把历史事件逐行发给新连接。
+func replayEvents(path string, c *wsClient) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		c.send([]byte(line))
+	}
+	return scanner.Err()
+}
+
+func countEvents(path string) uint64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	var n uint64
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	r := []rune(s)
+	if len(r) > 60 {
+		s = string(r[:60]) + "..."
+	}
+	return s
+}

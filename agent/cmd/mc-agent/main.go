@@ -369,17 +369,6 @@ func configCmd() *cobra.Command {
 	return cmd
 }
 
-func serveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "serve",
-		Short:  "启动 localhost WS 宿主(桌面端 UI 使用,M2 实现)",
-		Hidden: false,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("serve 模式将在 M2 与桌面客户端一起交付,当前请使用 run/chat")
-		},
-	}
-}
-
 // ==================== 终端审批 ====================
 
 func terminalAsker(r *Renderer) policy.Asker {
