@@ -18,6 +18,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/loop"
+	"github.com/chaitin/MonkeyCode/agent/internal/mcp"
 	"github.com/chaitin/MonkeyCode/agent/internal/policy"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
@@ -66,7 +67,7 @@ func main() {
 	pf.BoolVar(&flags.noSession, "no-session", false, "不持久化会话")
 	pf.BoolVar(&flags.worktree, "worktree", false, "在隔离的 git worktree 中执行(结束后用 mc-agent worktree apply/drop 处理改动)")
 
-	root.AddCommand(runCmd(), chatCmd(), sessionsCmd(), configCmd(), serveCmd(), evalCmd(), worktreeCmd())
+	root.AddCommand(runCmd(), chatCmd(), sessionsCmd(), configCmd(), serveCmd(), evalCmd(), worktreeCmd(), mcpCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
@@ -81,6 +82,7 @@ type app struct {
 	sess     *session.Session
 	renderer *Renderer
 	workdir  string
+	mcp      *mcp.Manager
 }
 
 func buildApp(interactive bool) (*app, error) {
@@ -143,6 +145,14 @@ func buildApp(interactive bool) (*app, error) {
 
 	reg := tools.NewRegistry()
 	builder := &frame.Builder{}
+
+	// MCP server 工具接入(配置缺失/单点失败均不阻塞启动)
+	mcpMgr, err := mcp.Connect(context.Background(), workdir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "警告: MCP 配置加载失败:", err)
+	} else {
+		registerMCPTools(mcpMgr, reg, pol)
+	}
 
 	emitters := frame.MultiEmitter{renderer}
 	var sess *session.Session
@@ -207,7 +217,22 @@ func buildApp(interactive bool) (*app, error) {
 		engine.Usage = sess.Meta.Usage
 	}
 
-	return &app{engine: engine, sess: sess, renderer: renderer, workdir: workdir}, nil
+	return &app{engine: engine, sess: sess, renderer: renderer, workdir: workdir, mcp: mcpMgr}, nil
+}
+
+// registerMCPTools 注册 MCP 工具:只读注解的自动放行,其余走审批。
+func registerMCPTools(mgr *mcp.Manager, reg *tools.Registry, pol *policy.Engine) {
+	for _, s := range mgr.Servers {
+		if s.Err != nil {
+			fmt.Fprintf(os.Stderr, "警告: MCP server %s 不可用: %v\n", s.Name, s.Err)
+		}
+	}
+	for _, t := range mgr.AgentTools() {
+		reg.Register(t)
+		if rt, ok := t.(interface{ ReadOnly() bool }); ok && rt.ReadOnly() {
+			pol.AllowTool(t.Name())
+		}
+	}
 }
 
 // runTurn 执行一轮并处理会话落盘。
@@ -246,6 +271,9 @@ func (a *app) runTurn(ctx context.Context, input string) error {
 func (a *app) close() {
 	if a.sess != nil {
 		a.sess.Close()
+	}
+	if a.mcp != nil {
+		a.mcp.Close()
 	}
 }
 

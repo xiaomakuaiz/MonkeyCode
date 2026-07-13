@@ -69,6 +69,30 @@ mc-agent worktree drop <会话ID>    # 丢弃全部改动
 
 文件类操作强制限制在工作区目录内(含 bash 的 cd 越界拉回)。
 
+## MCP(扩展工具)
+
+配置 MCP server(格式与 Claude Code/opencode 同构),其工具会自动注入 agent:
+
+```jsonc
+// ~/.config/mc-agent/mcp.json(全局)或 <项目>/.mc-agent/mcp.json(项目级,覆盖全局)
+{
+  "mcpServers": {
+    "context7":   { "url": "https://mcp.context7.com/mcp", "headers": {"Authorization": "Bearer xxx"} },
+    "playwright": { "command": "npx", "args": ["@playwright/mcp"], "env": {} }
+  }
+}
+```
+
+```bash
+mc-agent mcp list          # 连接并列出各 server 的工具与连接状态
+```
+
+- 工具名命名空间化为 `mcp__<server>__<tool>`,避免冲突;
+- 传输支持 stdio(`command`)与 Streamable HTTP(`url`);
+- 权限:MCP 工具默认走审批,仅 server 声明 `readOnlyHint` 的工具自动放行;
+  `--allow mcp__<server>__<tool>` 可预授权;
+- 单个 server 连接失败只告警跳过,不阻塞启动;连接随会话建立与关闭。
+
 ## serve 模式(WS 宿主 + 浏览器界面)
 
 ```bash
@@ -104,6 +128,8 @@ cmd/mc-agent      CLI(run/chat/sessions/config/eval/serve)
 internal/loop     主循环:LLM ↔ 工具,中断/恢复/步数上限,上下文压缩(阈值/溢出触发)
 internal/provider anthropic + openai 客户端,SSE 流式,tool-call 归一化与修复,退避重试
 internal/tools    read/write/edit/bash/grep/glob/git/todo,工作区边界强制
+internal/mcp      MCP 客户端:stdio/HTTP 传输,工具适配为内核工具(命名空间化)
+internal/workspace git worktree 隔离(create/diff/apply/drop)
 internal/policy   权限规则引擎(工具×路径×命令,allow/deny/ask)
 internal/contextmgr 系统提示装配(项目规则 AGENTS.md/CLAUDE.md、仓库树摘要)
 internal/session  JSONL 事件日志 + 消息快照,resume

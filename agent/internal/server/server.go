@@ -38,6 +38,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/loop"
+	mcpclient "github.com/chaitin/MonkeyCode/agent/internal/mcp"
 	"github.com/chaitin/MonkeyCode/agent/internal/policy"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
@@ -144,6 +145,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		s.mu.Unlock()
 		waitTimeout(&s.turns, 3*time.Second)
+		s.mu.Lock()
+		for _, ls := range s.live {
+			if ls.mcp != nil {
+				ls.mcp.Close()
+			}
+		}
+		s.mu.Unlock()
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -309,6 +317,7 @@ type liveSession struct {
 	sess    *session.Session
 	engine  *loop.Engine
 	builder *frame.Builder
+	mcp     *mcpclient.Manager
 
 	emitMu  sync.Mutex // 保证回放与实时推送无缝衔接
 	clients map[*wsClient]struct{}
@@ -331,6 +340,24 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	reg := tools.NewRegistry()
 	pol := policy.New(policy.ModeDefault, ls.asker)
 	emitter := frame.EmitterFunc(ls.emit)
+
+	// MCP 工具接入:单点失败仅告警,不阻塞会话
+	if mgr, err := mcpclient.Connect(context.Background(), sess.Meta.Workdir); err != nil {
+		slog.Warn("MCP 配置加载失败", "error", err)
+	} else {
+		ls.mcp = mgr
+		for _, ms := range mgr.Servers {
+			if ms.Err != nil {
+				slog.Warn("MCP server 不可用", "server", ms.Name, "error", ms.Err)
+			}
+		}
+		for _, t := range mgr.AgentTools() {
+			reg.Register(t)
+			if rt, ok := t.(interface{ ReadOnly() bool }); ok && rt.ReadOnly() {
+				pol.AllowTool(t.Name())
+			}
+		}
+	}
 	if t, ok := reg.Get("todo"); ok {
 		t.(*tools.Todo).OnUpdate = func(entries []tools.TodoEntry) {
 			fe := make([]frame.PlanEntry, len(entries))
