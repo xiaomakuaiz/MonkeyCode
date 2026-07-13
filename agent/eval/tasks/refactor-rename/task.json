@@ -1,0 +1,5 @@
+{
+  "description": "把 Fetch 重命名为 Get 并更新所有调用点",
+  "prompt": "把这个项目里的函数 Fetch 重命名为 Get,更新所有调用点和相关注释,保证编译和测试都通过。",
+  "check": "go build ./... && go test ./... && ! grep -rn 'Fetch' --include='*.go' . "
+}
