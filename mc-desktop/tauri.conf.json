@@ -39,7 +39,8 @@
           },
           "permissions": [
             "core:default",
-            "allow-open-settings-window"
+            "allow-open-settings-window",
+            "dialog:allow-open"
           ]
         }
       ]

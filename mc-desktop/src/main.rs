@@ -262,6 +262,7 @@ fn open_error_page(app: &AppHandle, msg: &str) {
 fn main() {
     eprintln!("[mc-desktop] main 进入");
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(KernelUrl(Mutex::new(None)))
