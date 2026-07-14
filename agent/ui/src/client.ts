@@ -1,5 +1,5 @@
 // 内核连接层:REST(会话管理)+ WS(帧双向流,含 call/call-response 同步查询)。
-import type { Frame, SessionMeta } from "./types";
+import type { Frame, ModelInfo, SessionMeta } from "./types";
 
 export const token: string =
   location.hash.slice(1) || window.prompt("访问令牌(serve 启动时打印)") || "";
@@ -39,11 +39,32 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const listSessions = () => api<SessionMeta[]>("/api/sessions");
 
-export const createSession = (workdir: string, worktree: boolean) =>
+export const listModels = () => api<ModelInfo[]>("/api/models");
+
+export const createSession = (workdir: string, worktree: boolean, model: string) =>
   api<SessionMeta>("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ workdir, worktree }),
+    body: JSON.stringify({ workdir, worktree, model }),
   });
+
+// ==================== 宿主(桌面壳)集成 ====================
+
+interface TauriGlobal {
+  core?: { invoke?: (cmd: string) => Promise<unknown> };
+}
+
+/** 是否运行在桌面壳内(壳注入 __TAURI__ 全局)。 */
+export function inDesktopShell(): boolean {
+  return !!(window as { __TAURI__?: TauriGlobal }).__TAURI__?.core?.invoke;
+}
+
+/** 唤起壳的设置窗口(模型等配置归壳管理);非壳环境返回 false。 */
+export function openHostSettings(): boolean {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return false;
+  void tauri.core.invoke("open_settings_window").catch(() => {});
+  return true;
+}
 
 export interface Conn {
   send(type: string, payload: unknown): boolean;

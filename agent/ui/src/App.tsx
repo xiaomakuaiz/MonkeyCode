@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { b64encode, connect, createSession, listSessions, type Conn } from "./client";
+import {
+  b64encode,
+  connect,
+  createSession,
+  listModels,
+  listSessions,
+  openHostSettings,
+  type Conn,
+} from "./client";
 import { DiffView, LogItemView, SessionItem } from "./components";
 import { answerPerm, initialChat, reduceBatch, type ChatState } from "./reduce";
-import type { FileChange, Frame, SessionMeta } from "./types";
+import type { FileChange, Frame, ModelInfo, SessionMeta } from "./types";
 
 type Tab = "chat" | "changes";
 
@@ -18,6 +26,8 @@ export default function App() {
   const [showNew, setShowNew] = useState(false);
   const [input, setInput] = useState("");
   const [childView, setChildView] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [sessionModel, setSessionModel] = useState("");
 
   const connRef = useRef<Conn | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -48,13 +58,14 @@ export default function App() {
   }, []);
 
   const openSession = useCallback(
-    (id: string) => {
+    (id: string, model?: string) => {
       connRef.current?.close();
       setCurrentId(id);
       setChat(initialChat);
       setChanges(null);
       setChangesErr("");
       setTab("chat");
+      setSessionModel(model ?? "");
       localStorage.setItem("mc.lastSession", id);
       connRef.current = connect(id, {
         onFrames: (batch: Frame[]) => setChat((s) => reduceBatch(s, batch)),
@@ -65,17 +76,26 @@ export default function App() {
     [refreshSessions],
   );
 
-  // 启动:恢复上次会话
+  // 启动:拉模型清单 + 恢复上次会话
   useEffect(() => {
+    listModels()
+      .then(setModels)
+      .catch(() => {});
     refreshSessions()
       .then((metas) => {
         const last = localStorage.getItem("mc.lastSession");
-        if (last && metas.some((m) => m.id === last)) openSession(last);
+        const meta = metas.find((m) => m.id === last);
+        if (meta) openSession(meta.id, meta.model);
       })
       .catch((e) => setStatus("无法连接服务: " + (e instanceof Error ? e.message : e)));
     return () => connRef.current?.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // model_update 帧回写当前模型显示
+  useEffect(() => {
+    if (chat.model) setSessionModel(chat.model);
+  }, [chat.model]);
 
   // 本轮结束:刷新改动计数与会话列表
   useEffect(() => {
@@ -116,6 +136,24 @@ export default function App() {
     }
   };
 
+  const switchModel = async (name: string) => {
+    if (!connRef.current || !name || name === sessionModel) return;
+    try {
+      const r = await connRef.current.call<{ result?: { model: string }; error?: string }>(
+        "session_set_model",
+        { model: name },
+      );
+      if (r.error) {
+        setStatus("⚠ 切换模型失败: " + r.error);
+        return;
+      }
+      setSessionModel(name); // model_update 帧也会到达并渲染系统行
+      void refreshSessions();
+    } catch (e) {
+      setStatus("⚠ 切换模型失败: " + (e instanceof Error ? e.message : e));
+    }
+  };
+
   const showDiff = async (path: string) => {
     setDiff({ path, text: "加载中…" });
     try {
@@ -140,10 +178,25 @@ export default function App() {
         </button>
         <div className="sessions">
           {sessions.map((m) => (
-            <SessionItem key={m.id} meta={m} active={m.id === currentId} onClick={() => openSession(m.id)} />
+            <SessionItem
+              key={m.id}
+              meta={m}
+              active={m.id === currentId}
+              onClick={() => openSession(m.id, m.model)}
+            />
           ))}
           {sessions.length === 0 && <div className="hint pad">暂无会话</div>}
         </div>
+        <button
+          className="ghost wide settings-btn"
+          onClick={() => {
+            if (!openHostSettings()) {
+              setStatus("⚠ 浏览器模式下请在桌面应用中修改配置(或经宿主环境变量下发)");
+            }
+          }}
+        >
+          ⚙ 设置
+        </button>
       </aside>
 
       <main className="main">
@@ -210,7 +263,27 @@ export default function App() {
         </div>
         <footer className="status">
           <span>{status}</span>
-          <span>{chat.usage ? `上下文 ${chat.usage.used} / ${chat.usage.size} tokens` : ""}</span>
+          <span className="status-right">
+            {currentId && models.length > 0 && (
+              <select
+                className="model-select"
+                value={sessionModel || models.find((m) => m.default)?.name || ""}
+                disabled={chat.running}
+                title={chat.running ? "轮次执行中,结束后可切换" : "切换本会话模型(下一轮生效)"}
+                onChange={(e) => void switchModel(e.target.value)}
+              >
+                {models.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+                {sessionModel && !models.some((m) => m.name === sessionModel) && (
+                  <option value={sessionModel}>{sessionModel}</option>
+                )}
+              </select>
+            )}
+            {chat.usage ? `上下文 ${chat.usage.used} / ${chat.usage.size} tokens` : ""}
+          </span>
         </footer>
       </main>
 
@@ -244,10 +317,11 @@ export default function App() {
 
       {showNew && (
         <NewSessionDialog
+          models={models}
           onClose={() => setShowNew(false)}
           onCreated={(meta) => {
             setShowNew(false);
-            void refreshSessions().then(() => openSession(meta.id));
+            void refreshSessions().then(() => openSession(meta.id, meta.model));
           }}
         />
       )}
@@ -279,14 +353,17 @@ function SessionViewer({ id }: { id: string }) {
 }
 
 function NewSessionDialog({
+  models,
   onClose,
   onCreated,
 }: {
+  models: ModelInfo[];
   onClose: () => void;
   onCreated: (meta: SessionMeta) => void;
 }) {
   const [workdir, setWorkdir] = useState("");
   const [worktree, setWorktree] = useState(false);
+  const [model, setModel] = useState(models.find((m) => m.default)?.name ?? "");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -295,7 +372,7 @@ function NewSessionDialog({
     setBusy(true);
     setErr("");
     try {
-      onCreated(await createSession(workdir.trim(), worktree));
+      onCreated(await createSession(workdir.trim(), worktree, model));
     } catch (e) {
       setErr("创建失败: " + (e instanceof Error ? e.message : e));
       setBusy(false);
@@ -315,6 +392,21 @@ function NewSessionDialog({
           onChange={(e) => setWorkdir(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void create()}
         />
+        {models.length > 1 && (
+          <>
+            <p className="hint" style={{ marginTop: 12 }}>
+              模型
+            </p>
+            <select className="model-select wide" value={model} onChange={(e) => setModel(e.target.value)}>
+              {models.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name}
+                  {m.default ? "(默认)" : ""}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <label className="hint check">
           <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
           在隔离 worktree 中执行(需为 git 仓库)

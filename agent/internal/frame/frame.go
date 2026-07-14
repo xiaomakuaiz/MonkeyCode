@@ -42,12 +42,15 @@ const (
 	TypeCallResponse Type = "call-response"
 )
 
-// call kind:文件浏览与 diff 查询。
+// call kind:文件浏览与 diff 查询,以及会话级操作。
 const (
 	KindRepoFileList    = "repo_file_list"
 	KindRepoReadFile    = "repo_read_file"
 	KindRepoFileChanges = "repo_file_changes"
 	KindRepoFileDiff    = "repo_file_diff"
+	// KindSessionSetModel 切换会话模型(轮次间生效;执行中拒绝)。
+	// 成功后另发 model_update 帧进事件日志,回放可见。
+	KindSessionSetModel = "session_set_model"
 )
 
 // Kind 帧内容子类型。
@@ -246,4 +249,14 @@ func (b *Builder) LLMRetry(attempt int, msg string) Frame {
 // CompactStatus 上下文压缩状态。status: started | ended。
 func (b *Builder) CompactStatus(status string) Frame {
 	return b.acp(compactStatus{SessionUpdate: "compact_status", Status: status})
+}
+
+type modelUpdate struct {
+	SessionUpdate string `json:"sessionUpdate"`
+	Model         string `json:"model"`
+}
+
+// ModelUpdate 会话模型切换(model 为展示名)。
+func (b *Builder) ModelUpdate(model string) Frame {
+	return b.acp(modelUpdate{SessionUpdate: "model_update", Model: model})
 }

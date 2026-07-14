@@ -45,30 +45,63 @@ func serveCmd() *cobra.Command {
 			if flags.model != "" {
 				cfg.Model = flags.model
 			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-
-			// 平台模式:换运行时模型 key + 同步技能/规则
-			platExtras, platRoots, err := applyPlatform(cfg)
-			if err != nil {
-				return err
-			}
-
 			opts := server.Options{
 				Addr:        addr,
 				Token:       token,
-				Model:       cfg.Model,
 				SessionRoot: session.DefaultRoot(),
-				NewProvider: func() provider.Provider {
-					if cfg.Provider == "openai" {
-						return provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model)
+			}
+
+			// 宿主(桌面壳)下发模型清单时走多模型路径:每会话可绑定/切换
+			// 不同模型;否则退回单配置(CLI 直连或平台登录)。
+			profiles, err := config.LoadModels()
+			if err != nil {
+				return err
+			}
+			if len(profiles) > 0 {
+				opts.Model = config.FindModel(profiles, "").Name
+				opts.NewProvider = func(name string) (provider.Provider, error) {
+					p := config.FindModel(profiles, name)
+					if p == nil {
+						return nil, fmt.Errorf("未知模型 %q", name)
 					}
-					return provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model)
-				},
-				BuildExtras: func(workdir string) (*contextmgr.Extras, []string) {
+					if p.Provider == "openai" {
+						return provider.NewOpenAI(p.BaseURL, p.APIKey, p.Model), nil
+					}
+					return provider.NewAnthropic(p.BaseURL, p.APIKey, p.Model), nil
+				}
+				opts.ListModels = func() []server.ModelInfo {
+					out := make([]server.ModelInfo, len(profiles))
+					for i, p := range profiles {
+						out[i] = server.ModelInfo{Name: p.Name, Default: p.Default}
+					}
+					return out
+				}
+				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
+					platExtras, platRoots := platformExtras(cfg)
 					return skills.Assemble(workdir, platExtras, platRoots)
-				},
+				}
+			} else {
+				if err := cfg.Validate(); err != nil {
+					return err
+				}
+				// 平台模式:换运行时模型 key + 同步技能/规则
+				platExtras, platRoots, err := applyPlatform(cfg)
+				if err != nil {
+					return err
+				}
+				opts.Model = cfg.Model
+				opts.NewProvider = func(name string) (provider.Provider, error) {
+					if name != "" && name != cfg.Model {
+						return nil, fmt.Errorf("未知模型 %q(当前仅配置了 %q)", name, cfg.Model)
+					}
+					if cfg.Provider == "openai" {
+						return provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
+					}
+					return provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
+				}
+				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
+					return skills.Assemble(workdir, platExtras, platRoots)
+				}
 			}
 			if !noUI {
 				opts.UI = embeddedUI

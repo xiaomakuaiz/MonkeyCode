@@ -69,6 +69,10 @@ func New(p provider.Provider, reg *tools.Registry, pol *policy.Engine,
 // ErrInterrupted 用户中断。
 var ErrInterrupted = errors.New("任务被用户中断")
 
+// SetProvider 切换 LLM 客户端(轮次之间调用;消息历史为归一化格式,
+// 跨 provider 续聊安全)。调用方负责保证当前没有进行中的轮次。
+func (e *Engine) SetProvider(p provider.Provider) { e.provider = p }
+
 // ModelName 当前模型标识(展示用)。
 func (e *Engine) ModelName() string { return e.provider.Model() }
 

@@ -12,6 +12,8 @@ export interface ChatState {
   streamKind: string;
   /** 本轮结束时需要刷新改动计数 */
   turnEnded: boolean;
+  /** 会话当前模型(model_update 帧回写;空 = 以会话 meta 为准) */
+  model: string;
 }
 
 export const initialChat: ChatState = {
@@ -20,6 +22,7 @@ export const initialChat: ChatState = {
   usage: null,
   streamKind: "",
   turnEnded: false,
+  model: "",
 };
 
 const PERM_OUTCOME: Record<PermOutcome, string> = {
@@ -139,6 +142,10 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       return push(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
     case "usage_update":
       return { ...s, usage: { used: u.used ?? 0, size: u.size ?? 0 } };
+    case "model_update": {
+      const name = u.model ?? "";
+      return { ...push(s, { kind: "sys", text: `模型已切换为 ${name}` }), model: name };
+    }
     default:
       return s;
   }

@@ -67,6 +67,40 @@ func applyPlatform(cfg *config.Config) (*contextmgr.Extras, []string, error) {
 	return extras, roots, nil
 }
 
+// platformExtras 平台技能/规则(不换运行时 key,失败降级本地缓存,
+// 再失败返回空):多模型清单路径下 LLM 不走平台,但登录后的技能/规则仍生效。
+func platformExtras(cfg *config.Config) (*contextmgr.Extras, []string) {
+	if !cfg.UsePlatform() {
+		return nil, nil
+	}
+	client := platform.New(cfg.PlatformURL, cfg.PlatformToken)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	mat, err := client.Sync(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "警告: 平台技能/规则同步失败,尝试本地缓存:", err)
+		if mat, err = platform.LoadCached(cfg.PlatformURL); err != nil {
+			return nil, nil
+		}
+	}
+	extras := &contextmgr.Extras{}
+	var roots []string
+	for _, r := range mat.Rules {
+		extras.Rules = append(extras.Rules, contextmgr.PlatformRule{Name: r.Name, Content: r.Content})
+	}
+	for _, s := range mat.Skills {
+		extras.Skills = append(extras.Skills, contextmgr.PlatformSkill{
+			Name: s.Name, Description: s.Description, Doc: s.Doc, Dir: s.Dir,
+		})
+		roots = append(roots, s.Dir)
+	}
+	if len(extras.Rules) == 0 && len(extras.Skills) == 0 {
+		return nil, nil
+	}
+	return extras, roots
+}
+
 func loginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login [平台地址]",

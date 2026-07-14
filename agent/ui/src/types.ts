@@ -1,5 +1,11 @@
 // 与内核帧协议(internal/frame)对齐的类型定义。
 
+/** GET /api/models 返回的可选模型 */
+export interface ModelInfo {
+  name: string;
+  default: boolean;
+}
+
 /** GET /api/sessions 返回的会话元信息 */
 export interface SessionMeta {
   id: string;
@@ -35,6 +41,7 @@ export interface AcpUpdate {
   used?: number;
   size?: number;
   progress?: ToolProgress;
+  model?: string;
 }
 
 /** tool_call_update{status:in_progress} 的执行期进度载荷 */

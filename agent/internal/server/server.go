@@ -53,9 +53,12 @@ type Options struct {
 	Addr        string // 监听地址,必须是 loopback
 	Token       string // 访问令牌,空则自动生成
 	SessionRoot string // 会话存储根目录
-	Model       string // 展示用模型标识
-	// NewProvider 创建 LLM 客户端(注入以便测试)。
-	NewProvider func() provider.Provider
+	Model       string // 默认模型展示名(新会话缺省绑定它)
+	// NewProvider 按模型名创建 LLM 客户端(空名 = 默认模型)。
+	// 每会话创建/切换模型时调用;未知名应返回错误。
+	NewProvider func(model string) (provider.Provider, error)
+	// ListModels 可选模型清单(展示名 + 默认标记);nil 表示单模型。
+	ListModels func() []ModelInfo
 	// UI 内嵌调试页面(nil 则不挂载)。
 	UI []byte
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
@@ -127,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/sessions", s.auth(s.handleListSessions))
 	mux.HandleFunc("POST /api/sessions", s.auth(s.handleCreateSession))
+	mux.HandleFunc("GET /api/models", s.auth(s.handleListModels))
 	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
 	if s.opts.UI != nil {
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -226,13 +230,36 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, metas)
 }
 
+// ModelInfo 对外暴露的可选模型(名称即会话绑定的标识)。
+type ModelInfo struct {
+	Name    string `json:"name"`
+	Default bool   `json:"default"`
+}
+
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	var models []ModelInfo
+	if s.opts.ListModels != nil {
+		models = s.opts.ListModels()
+	}
+	if models == nil {
+		models = []ModelInfo{{Name: s.opts.Model, Default: true}}
+	}
+	writeJSON(w, http.StatusOK, models)
+}
+
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Workdir  string `json:"workdir"`
 		Worktree bool   `json:"worktree"`
+		Model    string `json:"model"` // 空 = 默认模型
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体无效"})
+		return
+	}
+	// 模型名先行校验,避免建出无法解析 provider 的会话
+	if _, err := s.opts.NewProvider(req.Model); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	workdir, err := filepath.Abs(req.Workdir)
@@ -244,7 +271,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "工作区目录不存在: " + workdir})
 		return
 	}
-	sess, err := session.New(s.opts.SessionRoot, workdir, s.opts.Model, "")
+	sess, err := session.New(s.opts.SessionRoot, workdir, s.modelNameOrDefault(req.Model), "")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -438,12 +465,14 @@ type liveSession struct {
 	engine  *loop.Engine
 	builder *frame.Builder
 	mcp     *mcpclient.Manager
+	sub     *subagent.Tool // 切换模型时同步子代理的 provider
 
 	emitMu  sync.Mutex // 保证回放与实时推送无缝衔接
 	clients map[*wsClient]struct{}
 
 	mu         sync.Mutex
 	running    bool
+	turnSeq    uint64 // 轮次代号:防旧轮次的延迟收尾清掉新轮次的 running
 	cancelTurn context.CancelFunc
 	asks       map[string]chan askResp
 }
@@ -488,7 +517,16 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 			ls.emit(ls.builder.Plan(fe))
 		}
 	}
-	prov := s.opts.NewProvider()
+	// 按会话绑定的模型解析 provider;模型已下线时降级默认并回写 meta
+	prov, err := s.opts.NewProvider(sess.Meta.Model)
+	if err != nil {
+		prov, err = s.opts.NewProvider("")
+		if err != nil {
+			return nil, fmt.Errorf("会话模型 %q 不可用: %w", sess.Meta.Model, err)
+		}
+		sess.Meta.Model = s.modelNameOrDefault("")
+		_ = sess.SaveMeta()
+	}
 
 	// 只读探索子代理(task 工具):工具集只读故自动放行;
 	// 子代理过程落盘为子会话,帧经 publishChild 分发给观察者
@@ -498,6 +536,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 		ParentID:     sess.Meta.ID,
 		OnChildFrame: s.publishChild,
 	}
+	ls.sub = sub
 	reg.Register(sub)
 	pol.AllowTool(sub.Name())
 
@@ -531,6 +570,14 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 
 // emit 帧落日志并广播(与 attach 回放互斥,保证不丢帧不重帧)。
 func (ls *liveSession) emit(f frame.Frame) {
+	// task-ended 是轮次终态契约:客户端看到它即可发起轮次间操作(如切模型),
+	// 所以 running 必须先于帧可见复位。task-error 可能非终态(压缩失败续跑),
+	// 不在此复位,由 startTurn 的 defer 收尾。
+	if f.Type == frame.TypeTaskEnded {
+		ls.mu.Lock()
+		ls.running = false
+		ls.mu.Unlock()
+	}
 	ls.emitMu.Lock()
 	defer ls.emitMu.Unlock()
 	ls.sess.Emit(f)
@@ -559,6 +606,56 @@ func (ls *liveSession) detach(c *wsClient) {
 	delete(ls.clients, c)
 	ls.emitMu.Unlock()
 	c.close(websocket.StatusNormalClosure, "")
+}
+
+// setModel 切换会话模型:轮次间生效,执行中拒绝;成功后 provider 原地替换
+// (消息历史为归一化格式,跨 provider 续聊安全),meta 落盘并广播 model_update 帧。
+func (ls *liveSession) setModel(name string) (any, error) {
+	if name == "" {
+		return nil, fmt.Errorf("缺少 model")
+	}
+	// task-error 终态与 running 复位之间有极短窗口,轻等兜底;
+	// 真正执行中的轮次等不到复位,仍拒绝
+	deadline := time.Now().Add(time.Second)
+	ls.mu.Lock()
+	for ls.running {
+		ls.mu.Unlock()
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("当前轮次执行中,结束后再切换模型")
+		}
+		time.Sleep(20 * time.Millisecond)
+		ls.mu.Lock()
+	}
+	prov, err := ls.srv.opts.NewProvider(name)
+	if err != nil {
+		ls.mu.Unlock()
+		return nil, err
+	}
+	ls.engine.SetProvider(prov)
+	if ls.sub != nil {
+		ls.sub.Provider = prov
+	}
+	ls.sess.Meta.Model = name
+	_ = ls.sess.SaveMeta()
+	ls.mu.Unlock()
+
+	ls.emit(ls.builder.ModelUpdate(name))
+	return map[string]string{"model": name}, nil
+}
+
+// modelNameOrDefault 空名时返回默认模型展示名。
+func (s *Server) modelNameOrDefault(name string) string {
+	if name != "" {
+		return name
+	}
+	if s.opts.ListModels != nil {
+		for _, m := range s.opts.ListModels() {
+			if m.Default {
+				return m.Name
+			}
+		}
+	}
+	return s.opts.Model
 }
 
 // handleClientFrame 处理上行帧;c 为来源连接(用于回发仅与该客户端相关的错误)。
@@ -639,6 +736,12 @@ func (ls *liveSession) handleCall(c *wsClient, f *frame.Frame) {
 		var diff string
 		diff, callErr = browser.FileDiff(p.Path)
 		result = map[string]string{"path": p.Path, "diff": diff}
+	case frame.KindSessionSetModel:
+		var p struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(f.Data, &p)
+		result, callErr = ls.setModel(p.Model)
 	default:
 		callErr = fmt.Errorf("未知 call kind: %s", f.Kind)
 	}
@@ -667,6 +770,8 @@ func (ls *liveSession) startTurn(input string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ls.running = true
+	ls.turnSeq++
+	seq := ls.turnSeq
 	ls.cancelTurn = cancel
 	ls.mu.Unlock()
 
@@ -679,8 +784,12 @@ func (ls *liveSession) startTurn(input string) {
 		defer func() {
 			cancel()
 			ls.mu.Lock()
-			ls.running = false
-			ls.cancelTurn = nil
+			// task-ended 经 emit 已提前复位 running;此处仅在仍是本轮时收尾,
+			// 避免延迟的 defer 清掉紧接着启动的新轮次状态
+			if ls.turnSeq == seq {
+				ls.running = false
+				ls.cancelTurn = nil
+			}
 			ls.mu.Unlock()
 			ls.srv.turns.Done()
 		}()

@@ -136,6 +136,8 @@ mc-agent serve                # 默认 127.0.0.1:7439,每次启动随机 token
 mc-agent serve --token xxx    # 固定 token(桌面壳托管时用)
 ```
 
+多模型:宿主(桌面壳)可经 `MC_AGENT_MODELS=<清单.json>` 下发模型列表(`[{name, provider, base_url, api_key, model, default}]`),内核只消费不管理。每个会话创建时可选模型,会话中可随时切换(`session_set_model`,轮次间生效;消息历史为归一化格式,跨 provider 续聊安全)。无清单时退回单配置。
+
 启动后终端会打印界面地址(形如 `http://127.0.0.1:7439/#<token>`),浏览器打开即可:创建会话(选工作区,可选 worktree 隔离)→ 对话(Markdown 渲染)→ 流式输出/工具过程/计划 → **写操作在页面上弹审批卡片**(允许/本会话始终/此项目永久/拒绝)。
 
 页面顶部「改动」标签页展示本轮修改的文件(A/M/D),点击查看着色的 unified diff。

@@ -65,7 +65,7 @@ func newTestServer(t *testing.T, stub *stubProvider) (*Server, *httptest.Server)
 		Token:       "test-token",
 		SessionRoot: t.TempDir(),
 		Model:       "stub",
-		NewProvider: func() provider.Provider { return stub },
+		NewProvider: func(string) (provider.Provider, error) { return stub, nil },
 		AskTimeout:  5 * time.Second,
 	})
 	if err != nil {
@@ -382,7 +382,7 @@ func TestPermissionTimeoutResolves(t *testing.T) {
 		Token:       "test-token",
 		SessionRoot: t.TempDir(),
 		Model:       "stub",
-		NewProvider: func() provider.Provider { return stub },
+		NewProvider: func(string) (provider.Provider, error) { return stub, nil },
 		AskTimeout:  150 * time.Millisecond,
 	})
 	if err != nil {
@@ -529,7 +529,7 @@ func lastCallResponse(fs []frame.Frame, kind string) *frame.Frame {
 func TestNonLoopbackRefused(t *testing.T) {
 	_, err := New(Options{
 		Addr:        "0.0.0.0:7439",
-		NewProvider: func() provider.Provider { return &stubProvider{} },
+		NewProvider: func(string) (provider.Provider, error) { return &stubProvider{}, nil },
 	})
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("err = %v", err)
@@ -596,4 +596,119 @@ func TestChildSessionObserver(t *testing.T) {
 		t.Fatalf("水位去重失效,收到 seq=%d", frames[0].Seq)
 	}
 	child.Close()
+}
+
+// namedStub 带名字的脚本 provider(多模型测试用)。
+type namedStub struct {
+	stubProvider
+	name string
+}
+
+func (n *namedStub) Model() string { return n.name }
+
+func TestPerSessionModelAndSwitch(t *testing.T) {
+	stubs := map[string]*namedStub{
+		"a": {name: "a", stubProvider: stubProvider{results: []*provider.Result{textResult("来自A")}}},
+		"b": {name: "b", stubProvider: stubProvider{results: []*provider.Result{textResult("来自B")}}},
+	}
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Model:       "a",
+		NewProvider: func(name string) (provider.Provider, error) {
+			if name == "" {
+				name = "a"
+			}
+			s, ok := stubs[name]
+			if !ok {
+				return nil, fmt.Errorf("未知模型 %q", name)
+			}
+			return s, nil
+		},
+		ListModels: func() []ModelInfo {
+			return []ModelInfo{{Name: "a", Default: true}, {Name: "b"}}
+		},
+		AskTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// 模型清单端点
+	resp, data := apiReq(t, ts, "GET", "/api/models", "test-token", "")
+	if resp.StatusCode != 200 || !strings.Contains(string(data), `"a"`) || !strings.Contains(string(data), `"b"`) {
+		t.Fatalf("models: %s", data)
+	}
+
+	// 未知模型建会话应 400
+	resp, _ = apiReq(t, ts, "POST", "/api/sessions", "test-token",
+		fmt.Sprintf(`{"workdir":%q,"model":"nope"}`, t.TempDir()))
+	if resp.StatusCode != 400 {
+		t.Fatalf("未知模型应 400,得 %d", resp.StatusCode)
+	}
+
+	// 指定模型 b 建会话,首轮走 B
+	resp, data = apiReq(t, ts, "POST", "/api/sessions", "test-token",
+		fmt.Sprintf(`{"workdir":%q,"model":"b"}`, t.TempDir()))
+	if resp.StatusCode != 200 {
+		t.Fatalf("create: %d %s", resp.StatusCode, data)
+	}
+	var meta session.Meta
+	_ = json.Unmarshal(data, &meta)
+	if meta.Model != "b" {
+		t.Fatalf("meta.Model = %q", meta.Model)
+	}
+
+	conn := dialWS(t, ts, meta.ID)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("hi")})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	if !framesContain(frames, "来自B") {
+		t.Fatalf("首轮应走模型 b: %v", summary(frames))
+	}
+
+	// 切到 a:call 返回 ok + model_update 帧 + meta 落盘
+	sendCall(t, conn, frame.KindSessionSetModel, map[string]string{"model": "a"})
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypeCallResponse) && framesContain(fs, "model_update")
+	})
+	if !framesContain(frames, `"model":"a"`) {
+		t.Fatalf("set_model 响应: %v", summary(frames))
+	}
+	if m, err := session.ReadMeta(srv.opts.SessionRoot, meta.ID); err != nil || m.Model != "a" {
+		t.Fatalf("meta 未更新: %+v err=%v", m, err)
+	}
+
+	// 下一轮走 A
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("again")})
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	if !framesContain(frames, "来自A") {
+		t.Fatalf("切换后应走模型 a: %v", summary(frames))
+	}
+
+	// 执行中拒绝切换(直接驱动内部状态)
+	ls, err := srv.liveSession(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls.mu.Lock()
+	ls.running = true
+	ls.turnSeq++ // 模拟真实新轮次(防旧轮次延迟收尾干扰)
+	ls.mu.Unlock()
+	if _, err := ls.setModel("b"); err == nil {
+		t.Fatal("执行中应拒绝切换")
+	}
+	ls.mu.Lock()
+	ls.running = false
+	ls.mu.Unlock()
+}
+
+func framesContain(fs []frame.Frame, substr string) bool {
+	for _, f := range fs {
+		if strings.Contains(string(f.Data), substr) {
+			return true
+		}
+	}
+	return false
 }
