@@ -224,3 +224,79 @@ func TestExtraHeaders(t *testing.T) {
 		t.Fatalf("openai 缺附加头: %v", gotOpenAI)
 	}
 }
+
+// TestParseResponsesSSE 覆盖 Responses 流:文本增量、function_call
+// (增量参数 + done 兜底)、usage 快照、停止原因。
+func TestParseResponsesSSE(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"你好"}`,
+		`data: {"type":"response.output_text.delta","delta":"世界"}`,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"c1","name":"read_file","arguments":""}}`,
+		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"path\":"}`,
+		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"\"a.go\"}"}`,
+		`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"c1","name":"read_file","arguments":"{\"path\":\"a.go\"}"}}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1200,"output_tokens":45}}}`,
+	}, "\n\n")
+
+	var texts []string
+	var tools []string
+	h := &StreamHandler{
+		OnText:    func(d string) { texts = append(texts, d) },
+		OnToolUse: func(id, name string) { tools = append(tools, id+":"+name) },
+	}
+	res, err := parseResponsesSSE(strings.NewReader(stream), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StopReason != StopToolUse {
+		t.Fatalf("stop: %v", res.StopReason)
+	}
+	if res.Usage.InputTokens != 1200 || res.Usage.OutputTokens != 45 {
+		t.Fatalf("usage: %+v", res.Usage)
+	}
+	if strings.Join(texts, "") != "你好世界" {
+		t.Fatalf("texts: %v", texts)
+	}
+	if len(tools) != 1 || tools[0] != "c1:read_file" {
+		t.Fatalf("tools: %v", tools)
+	}
+	var gotText, gotTool bool
+	for _, b := range res.Message.Content {
+		switch b.Type {
+		case BlockText:
+			gotText = b.Text == "你好世界"
+		case BlockToolUse:
+			gotTool = b.ID == "c1" && b.Name == "read_file" && strings.Contains(string(b.Input), "a.go")
+		}
+	}
+	if !gotText || !gotTool {
+		t.Fatalf("message: %+v", res.Message.Content)
+	}
+}
+
+// TestConvertResponsesInput 消息模型 → Responses input 序列(含 call_id 往返)。
+func TestConvertResponsesInput(t *testing.T) {
+	msgs := []Message{
+		TextMessage(RoleUser, "查一下"),
+		{Role: RoleAssistant, Content: []ContentBlock{
+			{Type: BlockText, Text: "我看看"},
+			{Type: BlockToolUse, ID: "c1", Name: "read_file", Input: []byte(`{"path":"a.go"}`)},
+		}},
+		{Role: RoleUser, Content: []ContentBlock{
+			{Type: BlockToolResult, ToolUseID: "c1", Content: "package a"},
+		}},
+	}
+	items := convertResponsesInput(msgs)
+	want := []string{"message/user", "message/assistant", "function_call/", "function_call_output/"}
+	if len(items) != len(want) {
+		t.Fatalf("items: %+v", items)
+	}
+	for i, it := range items {
+		if it.Type+"/"+it.Role != want[i] {
+			t.Fatalf("第 %d 项 %s/%s != %s", i, it.Type, it.Role, want[i])
+		}
+	}
+	if items[2].CallID != "c1" || items[3].CallID != "c1" || items[3].Output != "package a" {
+		t.Fatalf("call_id 往返: %+v", items[2:])
+	}
+}

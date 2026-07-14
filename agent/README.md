@@ -32,7 +32,7 @@ mc-agent config get   # 查看(key 打码)
 
 环境变量:`MC_AGENT_PROVIDER` / `MC_AGENT_BASE_URL` / `MC_AGENT_API_KEY` / `MC_AGENT_MODEL`,数据目录 `MC_AGENT_DATA_DIR`(默认 `~/.local/share/mc-agent`)。
 
-`provider` 支持 `anthropic`(Anthropic Messages 协议)和 `openai`(Chat Completions 协议,兼容多数国产模型网关)。
+`provider` 支持 `anthropic`(Anthropic Messages 协议)、`openai`(Chat Completions 协议,兼容多数国产模型网关)和 `openai_responses`(OpenAI Responses 协议,网关前缀缓存更友好)。
 
 ## 使用
 
