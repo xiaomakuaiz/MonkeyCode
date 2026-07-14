@@ -36,8 +36,10 @@ func applyPlatform(cfg *config.Config) (*contextmgr.Extras, []string, error) {
 			cfg.Provider, cfg.BaseURL = "anthropic", base
 		case "openai_chat":
 			cfg.Provider, cfg.BaseURL = "openai", base+"/v1"
+		case "openai_responses":
+			cfg.Provider, cfg.BaseURL = "openai_responses", base+"/v1"
 		default:
-			return nil, nil, fmt.Errorf("平台模型协议 %q 内核暂不支持(支持 anthropic/openai_chat)", rk.Protocol)
+			return nil, nil, fmt.Errorf("平台模型协议 %q 内核暂不支持", rk.Protocol)
 		}
 		cfg.APIKey, cfg.Model = rk.APIKey, rk.Model
 	}

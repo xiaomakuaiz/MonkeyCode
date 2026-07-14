@@ -57,7 +57,7 @@ func main() {
 	}
 	pf := root.PersistentFlags()
 	pf.StringVarP(&flags.dir, "dir", "d", "", "工作区目录(默认当前目录)")
-	pf.StringVar(&flags.provider, "provider", "", "LLM 协议: anthropic | openai")
+	pf.StringVar(&flags.provider, "provider", "", "LLM 协议: anthropic | openai | openai_responses")
 	pf.StringVar(&flags.baseURL, "base-url", "", "LLM base URL")
 	pf.StringVar(&flags.apiKey, "api-key", "", "LLM API key")
 	pf.StringVar(&flags.model, "model", "", "模型标识")
@@ -74,6 +74,20 @@ func main() {
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
 		os.Exit(1)
+	}
+}
+
+// newProviderByName 按协议名构造 LLM 客户端。
+func newProviderByName(name, baseURL, apiKey, model string) (provider.Provider, error) {
+	switch name {
+	case "", "anthropic":
+		return provider.NewAnthropic(baseURL, apiKey, model), nil
+	case "openai":
+		return provider.NewOpenAI(baseURL, apiKey, model), nil
+	case "openai_responses":
+		return provider.NewOpenAIResponses(baseURL, apiKey, model), nil
+	default:
+		return nil, fmt.Errorf("未知 provider %q(支持 anthropic/openai/openai_responses)", name)
 	}
 }
 
@@ -126,14 +140,9 @@ func buildApp(interactive bool) (*app, error) {
 		return nil, fmt.Errorf("工作区目录不存在: %s", workdir)
 	}
 
-	var p provider.Provider
-	switch cfg.Provider {
-	case "", "anthropic":
-		p = provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model)
-	case "openai":
-		p = provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model)
-	default:
-		return nil, fmt.Errorf("未知 provider %q(支持 anthropic/openai)", cfg.Provider)
+	p, err := newProviderByName(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model)
+	if err != nil {
+		return nil, err
 	}
 
 	renderer := NewRenderer()

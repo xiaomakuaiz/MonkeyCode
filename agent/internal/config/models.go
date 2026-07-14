@@ -48,9 +48,9 @@ func LoadModels() ([]ModelProfile, error) {
 			return nil, fmt.Errorf("模型清单第 %d 项字段不全(需 name/base_url/api_key/model)", i+1)
 		}
 		switch p.Provider {
-		case "", "anthropic", "openai":
+		case "", "anthropic", "openai", "openai_responses":
 		default:
-			return nil, fmt.Errorf("模型 %q 的 provider %q 不支持(anthropic/openai)", p.Name, p.Provider)
+			return nil, fmt.Errorf("模型 %q 的 provider %q 不支持(anthropic/openai/openai_responses)", p.Name, p.Provider)
 		}
 		if seen[p.Name] {
 			return nil, fmt.Errorf("模型清单名称重复: %q", p.Name)

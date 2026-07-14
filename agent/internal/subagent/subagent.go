@@ -32,8 +32,9 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 )
 
-// defaultMaxSteps 子代理步数上限(探索任务应远小于主任务)。
-const defaultMaxSteps = 25
+// defaultMaxSteps 子代理步数上限(探索任务小于主任务的 80,但需容纳
+// 大仓库的深入调研;步数耗尽时部分结论仍会返回,见 Execute)。
+const defaultMaxSteps = 50
 
 // Tool 实现 tools.Tool,把探索任务委托给独立子代理执行。
 type Tool struct {
@@ -60,11 +61,16 @@ type taskInput struct {
 
 func (t *Tool) Name() string { return "task" }
 
+// Parallelizable 子代理只读且实例无跨调用可变状态,同一批多个 task
+// 调用可并发执行(每次 Execute 自建注册表/引擎/子会话,互不共享)。
+func (t *Tool) Parallelizable() bool { return true }
+
 func (t *Tool) Description() string {
 	return "把开放式的探索/检索任务委托给只读子代理,返回结论文本。适用:跨多文件的搜索与理解" +
 		"(如\"X 功能在哪实现、如何工作\")、需要翻阅大量文件但只需要结论的调研。" +
 		"不适用:已知具体文件的直接读取(直接用 read_file)、任何修改操作(子代理无写能力)。" +
-		"prompt 要自包含:子代理看不到当前对话,须写清要找什么、返回什么。"
+		"prompt 要自包含:子代理看不到当前对话,须写清要找什么、返回什么。" +
+		"多个互不依赖的探索任务应在同一次回复中一起发起(多个 task 调用会并行执行)。"
 }
 
 func (t *Tool) InputSchema() map[string]any {

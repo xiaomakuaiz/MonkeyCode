@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/policy"
@@ -45,6 +46,12 @@ type Engine struct {
 	Usage    provider.Usage     // 累计用量
 
 	lastInput int // 最近一次 LLM 请求的输入 token(≈当前上下文大小)
+
+	// emitMu 串行化帧下发:可并行工具(子代理)并发执行时,进度帧可能从
+	// 多个 goroutine 同时到达,下游 emitter(终端渲染、会话日志)不必自带锁。
+	emitMu sync.Mutex
+	// usageMu 保护 Usage 的并发累加(并行子代理经 AddUsage 回灌用量)。
+	usageMu sync.Mutex
 }
 
 // New 创建引擎。
@@ -69,6 +76,20 @@ func New(p provider.Provider, reg *tools.Registry, pol *policy.Engine,
 // ErrInterrupted 用户中断。
 var ErrInterrupted = errors.New("任务被用户中断")
 
+// emit 帧下发的唯一出口(加锁,见 emitMu)。
+func (e *Engine) emit(f frame.Frame) {
+	e.emitMu.Lock()
+	defer e.emitMu.Unlock()
+	e.emitter.Emit(f)
+}
+
+// AddUsage 并发安全的用量累加(子代理用量回灌等外部路径用)。
+func (e *Engine) AddUsage(u provider.Usage) {
+	e.usageMu.Lock()
+	defer e.usageMu.Unlock()
+	e.Usage.Add(u)
+}
+
 // SetProvider 切换 LLM 客户端(轮次之间调用;消息历史为归一化格式,
 // 跨 provider 续聊安全)。调用方负责保证当前没有进行中的轮次。
 func (e *Engine) SetProvider(p provider.Provider) { e.provider = p }
@@ -82,8 +103,8 @@ func (e *Engine) Close() { e.registry.Close() }
 // RunTurn 执行一轮:用户输入 → (LLM → 工具)* → 结束。
 // 返回本轮最终的 agent 文本回复。
 func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) {
-	e.emitter.Emit(e.builder.TaskStarted())
-	e.emitter.Emit(e.builder.UserInput(userInput))
+	e.emit(e.builder.TaskStarted())
+	e.emit(e.builder.UserInput(userInput))
 	e.Messages = append(e.Messages, provider.TextMessage(provider.RoleUser, userInput))
 
 	var finalText string
@@ -91,7 +112,7 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 		// 阈值触发压缩(压缩失败不中断任务,继续尝试请求)
 		if e.needCompact() {
 			if cerr := e.compact(ctx); cerr != nil && ctx.Err() == nil {
-				e.emitter.Emit(e.builder.TaskError(cerr.Error()))
+				e.emit(e.builder.TaskError(cerr.Error()))
 			}
 		}
 
@@ -104,17 +125,17 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				e.emitter.Emit(e.builder.TaskError(ErrInterrupted.Error()))
+				e.emit(e.builder.TaskError(ErrInterrupted.Error()))
 				return finalText, ErrInterrupted
 			}
-			e.emitter.Emit(e.builder.TaskError(err.Error()))
+			e.emit(e.builder.TaskError(err.Error()))
 			return finalText, err
 		}
 
 		e.Messages = append(e.Messages, res.Message)
-		e.Usage.Add(res.Usage)
+		e.AddUsage(res.Usage)
 		e.lastInput = res.Usage.InputTokens
-		e.emitter.Emit(e.builder.Usage(e.opts.ContextBudget, e.lastInput+res.Usage.OutputTokens))
+		e.emit(e.builder.Usage(e.opts.ContextBudget, e.lastInput+res.Usage.OutputTokens))
 
 		if text := joinText(res.Message); text != "" {
 			finalText = text
@@ -123,26 +144,23 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 		toolUses := res.ToolUses()
 		if len(toolUses) == 0 {
 			if res.StopReason == provider.StopMaxTokens {
-				e.emitter.Emit(e.builder.TaskError("模型输出达到 max_tokens 上限,回复可能不完整"))
+				e.emit(e.builder.TaskError("模型输出达到 max_tokens 上限,回复可能不完整"))
 			}
-			e.emitter.Emit(e.builder.TaskEnded())
+			e.emit(e.builder.TaskEnded())
 			return finalText, nil
 		}
 
 		// 执行全部工具调用,结果作为下一次请求的 user 消息
-		var results []provider.ContentBlock
-		for _, tu := range toolUses {
-			if ctx.Err() != nil {
-				e.emitter.Emit(e.builder.TaskError(ErrInterrupted.Error()))
-				return finalText, ErrInterrupted
-			}
-			results = append(results, e.execToolUse(ctx, tu))
+		results, err := e.execBatch(ctx, toolUses)
+		if err != nil {
+			e.emit(e.builder.TaskError(err.Error()))
+			return finalText, err
 		}
 		e.Messages = append(e.Messages, provider.Message{Role: provider.RoleUser, Content: results})
 	}
 
 	err := fmt.Errorf("达到单轮最大步数 %d,任务未完成", e.opts.MaxSteps)
-	e.emitter.Emit(e.builder.TaskError(err.Error()))
+	e.emit(e.builder.TaskError(err.Error()))
 	return finalText, err
 }
 
@@ -153,14 +171,60 @@ func (e *Engine) callLLM(ctx context.Context) (*provider.Result, error) {
 		Tools:    e.registry.Defs(),
 	}
 	handler := &provider.StreamHandler{
-		OnText:     func(d string) { e.emitter.Emit(e.builder.AgentText(d)) },
-		OnThinking: func(d string) { e.emitter.Emit(e.builder.AgentThought(d)) },
+		OnText:     func(d string) { e.emit(e.builder.AgentText(d)) },
+		OnThinking: func(d string) { e.emit(e.builder.AgentThought(d)) },
 	}
 	cfg := provider.DefaultRetry()
 	cfg.OnRetry = func(attempt int, err error) {
-		e.emitter.Emit(e.builder.LLMRetry(attempt, err.Error()))
+		e.emit(e.builder.LLMRetry(attempt, err.Error()))
 	}
 	return provider.StreamWithRetry(ctx, e.provider, req, handler, cfg)
+}
+
+// execBatch 执行一批工具调用,结果按 tool_use 原顺序返回。
+// 可并行工具(tools.Parallelizable,如只读子代理)先并发执行——多个探索任务
+// 不再互相排队;其余工具(bash/写/编辑等)在并行组结束后按序串行,保证有副作用
+// 的工具之间、以及与并行组的只读执行之间互不交叠。
+// 用户中断时返回 ErrInterrupted(与旧串行语义一致:本批结果不进消息历史)。
+func (e *Engine) execBatch(ctx context.Context, toolUses []provider.ContentBlock) ([]provider.ContentBlock, error) {
+	results := make([]provider.ContentBlock, len(toolUses))
+
+	var wg sync.WaitGroup
+	for i, tu := range toolUses {
+		if !e.parallelizable(tu.Name) {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, tu provider.ContentBlock) {
+			defer wg.Done()
+			results[i] = e.execToolUse(ctx, tu)
+		}(i, tu)
+	}
+	wg.Wait()
+
+	for i, tu := range toolUses {
+		if e.parallelizable(tu.Name) {
+			continue
+		}
+		if ctx.Err() != nil {
+			return nil, ErrInterrupted
+		}
+		results[i] = e.execToolUse(ctx, tu)
+	}
+	if ctx.Err() != nil {
+		return nil, ErrInterrupted
+	}
+	return results, nil
+}
+
+// parallelizable 工具是否声明了可并行执行(未注册的工具走串行路径报错)。
+func (e *Engine) parallelizable(name string) bool {
+	t, ok := e.registry.Get(name)
+	if !ok {
+		return false
+	}
+	p, ok := t.(tools.Parallelizable)
+	return ok && p.Parallelizable()
 }
 
 // execToolUse 执行单个工具调用并生成 tool_result 块(错误也以结果形式返回给模型)。
@@ -180,13 +244,13 @@ func (e *Engine) execToolUse(ctx context.Context, tu provider.ContentBlock) prov
 	var rawInput any
 	_ = json.Unmarshal(tu.Input, &rawInput)
 	title := tool.Title(tu.Input)
-	e.emitter.Emit(e.builder.ToolCall(frame.ToolCallUpdate{
+	e.emit(e.builder.ToolCall(frame.ToolCallUpdate{
 		ToolCallID: tu.ID, Title: title, Kind: tu.Name,
 		Status: "in_progress", RawInput: rawInput,
 	}))
 
 	finish := func(status, output string) {
-		e.emitter.Emit(e.builder.ToolCallUpdate(frame.ToolCallUpdate{
+		e.emit(e.builder.ToolCallUpdate(frame.ToolCallUpdate{
 			ToolCallID: tu.ID, Title: title, Kind: tu.Name,
 			Status: status, RawOutput: truncateForUI(output),
 		}))
@@ -198,17 +262,20 @@ func (e *Engine) execToolUse(ctx context.Context, tu provider.ContentBlock) prov
 		return result(err.Error(), true)
 	}
 
-	// 进度通道:工具执行期的中间进度挂在本次调用的 toolCallId 上
-	// (子代理探索步骤、bash 实时输出等);工具串行执行,共享 env 安全
-	e.env.Progress = func(p tools.ProgressUpdate) {
-		e.emitter.Emit(e.builder.ToolCallUpdate(frame.ToolCallUpdate{
-			ToolCallID: tu.ID, Kind: tu.Name,
-			Status: "in_progress", Progress: p,
-		}))
+	// 每次调用独立 env:进度通道闭包捕获本次 toolCallId,可并行工具并发执行时
+	// 各自的进度互不串扰(子代理探索步骤、bash 实时输出等)
+	env := &tools.Env{
+		Workdir:   e.env.Workdir,
+		ReadRoots: e.env.ReadRoots,
+		Progress: func(p tools.ProgressUpdate) {
+			e.emit(e.builder.ToolCallUpdate(frame.ToolCallUpdate{
+				ToolCallID: tu.ID, Kind: tu.Name,
+				Status: "in_progress", Progress: p,
+			}))
+		},
 	}
-	defer func() { e.env.Progress = nil }()
 
-	out, err := tool.Execute(ctx, e.env, tu.Input)
+	out, err := tool.Execute(ctx, env, tu.Input)
 	if err != nil {
 		if ctx.Err() != nil {
 			finish("failed", "已中断")

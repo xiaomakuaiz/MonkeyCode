@@ -54,6 +54,13 @@ type Tool interface {
 	Execute(ctx context.Context, env *Env, input json.RawMessage) (string, error)
 }
 
+// Parallelizable 可选接口:实现且返回 true 的工具,同一批 tool_use 中
+// 允许与其他可并行工具并发执行(前提:只读、实例无跨调用可变状态)。
+// 未实现或返回 false 的工具保持串行。
+type Parallelizable interface {
+	Parallelizable() bool
+}
+
 // Registry 工具注册表。
 type Registry struct {
 	tools map[string]Tool

@@ -64,10 +64,7 @@ func serveCmd() *cobra.Command {
 					if p == nil {
 						return nil, fmt.Errorf("未知模型 %q", name)
 					}
-					if p.Provider == "openai" {
-						return provider.NewOpenAI(p.BaseURL, p.APIKey, p.Model), nil
-					}
-					return provider.NewAnthropic(p.BaseURL, p.APIKey, p.Model), nil
+					return newProviderByName(p.Provider, p.BaseURL, p.APIKey, p.Model)
 				}
 				opts.ListModels = func() []server.ModelInfo {
 					out := make([]server.ModelInfo, len(profiles))
@@ -94,10 +91,7 @@ func serveCmd() *cobra.Command {
 					if name != "" && name != cfg.Model {
 						return nil, fmt.Errorf("未知模型 %q(当前仅配置了 %q)", name, cfg.Model)
 					}
-					if cfg.Provider == "openai" {
-						return provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
-					}
-					return provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
+					return newProviderByName(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model)
 				}
 				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
 					return skills.Assemble(workdir, platExtras, platRoots)

@@ -33,7 +33,7 @@ func (e *Engine) needCompact() bool {
 
 // compact 把当前全部对话历史压缩为一条摘要消息。
 func (e *Engine) compact(ctx context.Context) error {
-	e.emitter.Emit(e.builder.CompactStatus("started"))
+	e.emit(e.builder.CompactStatus("started"))
 
 	req := provider.Request{
 		System: compactSystem,
@@ -43,12 +43,12 @@ func (e *Engine) compact(ctx context.Context) error {
 	}
 	res, err := provider.StreamWithRetry(ctx, e.provider, req, nil, provider.DefaultRetry())
 	if err != nil {
-		e.emitter.Emit(e.builder.CompactStatus("ended"))
+		e.emit(e.builder.CompactStatus("ended"))
 		return fmt.Errorf("上下文压缩失败: %w", err)
 	}
 	summary := strings.TrimSpace(joinText(res.Message))
 	if summary == "" {
-		e.emitter.Emit(e.builder.CompactStatus("ended"))
+		e.emit(e.builder.CompactStatus("ended"))
 		return errors.New("上下文压缩失败: 摘要为空")
 	}
 
@@ -57,7 +57,7 @@ func (e *Engine) compact(ctx context.Context) error {
 			"\n\n请基于以上摘要继续完成当前任务;若任务已完成,直接给出最终总结。")}
 	e.Usage.Add(res.Usage)
 	e.lastInput = 0
-	e.emitter.Emit(e.builder.CompactStatus("ended"))
+	e.emit(e.builder.CompactStatus("ended"))
 	return nil
 }
 
