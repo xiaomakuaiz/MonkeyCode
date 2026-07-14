@@ -21,9 +21,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 // ==================== 应用配置(壳持有) ====================
 
@@ -123,6 +124,25 @@ struct TrayReady(AtomicBool);
 /// 当前内核 UI 地址(设置页"返回"时导航回来)。
 struct KernelUrl(Mutex<Option<String>>);
 
+/// 托盘句柄(系统明暗主题切换时换图标)。
+struct Tray(Mutex<Option<TrayIcon>>);
+
+/// 按系统主题选托盘图标(暗色主题用 icon-dark)。
+fn tray_icon_for(theme: Theme) -> Image<'static> {
+    let bytes: &[u8] = match theme {
+        Theme::Dark => include_bytes!("../icons/icon-dark.png"),
+        _ => include_bytes!("../icons/icon.png"),
+    };
+    Image::from_bytes(bytes).expect("托盘图标解码失败")
+}
+
+/// 主题变化时更新托盘图标。
+fn sync_tray_theme(app: &AppHandle, theme: Theme) {
+    if let Some(tray) = app.state::<Tray>().0.lock().unwrap().as_ref() {
+        let _ = tray.set_icon(Some(tray_icon_for(theme)));
+    }
+}
+
 // ==================== Tauri 命令(设置页调用) ====================
 
 #[tauri::command]
@@ -212,6 +232,11 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         }
         let _ = builder.build();
     }
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(theme) = win.theme() {
+            sync_tray_theme(app, theme);
+        }
+    }
     if let Some(sw) = app.get_webview_window("settings") {
         let _ = sw.close();
     }
@@ -266,6 +291,7 @@ fn main() {
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(KernelUrl(Mutex::new(None)))
+        .manage(Tray(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
@@ -300,6 +326,9 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let WindowEvent::ThemeChanged(theme) = event {
+                sync_tray_theme(window.app_handle(), *theme);
+            }
             // 主窗口:内核在跑且托盘可用时关窗只隐藏;设置/错误页正常关闭
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
@@ -341,7 +370,8 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
 
-    let mut tray = TrayIconBuilder::with_id("main")
+    let tray = TrayIconBuilder::with_id("main")
+        .icon(tray_icon_for(Theme::Light))
         .tooltip("MonkeyCode")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -361,10 +391,8 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_any_window(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
-    }
-    tray.build(app)?;
+    let handle = tray.build(app)?;
+    app.state::<Tray>().0.lock().unwrap().replace(handle);
     Ok(())
 }
 
