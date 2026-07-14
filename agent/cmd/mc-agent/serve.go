@@ -46,9 +46,10 @@ func serveCmd() *cobra.Command {
 				cfg.Model = flags.model
 			}
 			opts := server.Options{
-				Addr:        addr,
-				Token:       token,
-				SessionRoot: session.DefaultRoot(),
+				Addr:             addr,
+				Token:            token,
+				SessionRoot:      session.DefaultRoot(),
+				SubagentMaxSteps: flags.subagentSteps,
 			}
 
 			// 宿主(桌面壳)下发模型清单时走多模型路径:每会话可绑定/切换

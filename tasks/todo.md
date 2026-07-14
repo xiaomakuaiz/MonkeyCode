@@ -286,6 +286,27 @@
 
 ---
 
+# M2.11:子代理步数可配 + 并行执行(2026-07-14,用户反馈)✅
+
+> 反馈:子代理 25 步上限写死不合理;同批多个 task 调用串行排队,没有真并行。
+
+- [x] 步数上限:subagent defaultMaxSteps 25→50;`--subagent-max-steps` 持久 flag
+      贯通 run/chat/serve(server.Options.SubagentMaxSteps → sub.MaxSteps)
+- [x] 并行执行:tools.Parallelizable 可选接口(只读、无跨调用状态的工具声明可并行),
+      loop.execBatch——同批可并行工具并发执行(goroutine + 按 tool_use 原序回填),
+      其余工具(bash/写/编辑)在并行组结束后保持串行;task 工具声明可并行,
+      工具描述提示模型"互不依赖的探索任务一次发起"
+- [x] 并发安全:Engine.emit 加锁(下游渲染器/会话日志免锁)、每次调用独立 tools.Env
+      (进度闭包捕获各自 toolCallId,不串扰)、AddUsage 锁保护(子代理用量回灌,
+      CLI/serve 两处 OnUsage 改走它);frame.Builder seq 本为 atomic、policy/publishChild
+      已有锁、session newID 带随机后缀,均无需改动
+- [x] 展示:帧协议不变;React UI reduce 本就按 toolCallId 挂子步骤,并行天然分组;
+      CLI 渲染并行时子步骤行交错(可接受,结构化端不受影响)
+- [x] 验证:新增 loop 并行单测(屏障工具断言真并发 + 结果顺序 + 进度帧归属),
+      全部 16 包 -race 通过,gofmt/vet 干净,--help 现新 flag
+
+---
+
 # M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
 
 ## B:工具进度通道(通用原语)

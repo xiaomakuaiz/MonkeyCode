@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/policy"
@@ -274,8 +276,82 @@ func TestRunTurn_ToolProgressChannel(t *testing.T) {
 			t.Fatalf("进度帧未挂在调用方 toolCallId: %s", fr.Data)
 		}
 	}
-	// 工具结束后通道置空
+	// 进度通道注入在每次调用的独立 env 上(支持并行),模板 env 保持干净
 	if eng.env.Progress != nil {
-		t.Fatal("Progress 未在调用后置空")
+		t.Fatal("模板 env 不应持有进度通道")
+	}
+}
+
+// barrierTool 可并行桩工具:两次调用互相等待对方进入执行,
+// 串行执行时会超时报错——以此断言引擎确实并发执行了同批调用。
+type barrierTool struct {
+	entered *sync.WaitGroup // 预置 Add(2)
+}
+
+func (b *barrierTool) Name() string                   { return "ptool" }
+func (b *barrierTool) Description() string            { return "stub" }
+func (b *barrierTool) InputSchema() map[string]any    { return map[string]any{"type": "object"} }
+func (b *barrierTool) Title(_ json.RawMessage) string { return "并行桩" }
+func (b *barrierTool) Parallelizable() bool           { return true }
+func (b *barrierTool) Execute(_ context.Context, env *tools.Env, input json.RawMessage) (string, error) {
+	var in struct {
+		Tag string `json:"tag"`
+	}
+	_ = json.Unmarshal(input, &in)
+	env.EmitProgress(tools.ProgressUpdate{Kind: "output", Line: "from-" + in.Tag})
+	b.entered.Done()
+	done := make(chan struct{})
+	go func() { b.entered.Wait(); close(done) }()
+	select {
+	case <-done:
+		return "ok-" + in.Tag, nil
+	case <-time.After(3 * time.Second):
+		return "", fmt.Errorf("同批调用未并发执行")
+	}
+}
+
+func TestRunTurn_ParallelizableToolsRunConcurrently(t *testing.T) {
+	sp := &scriptedProvider{script: []func(provider.Request) (*provider.Result, error){
+		func(provider.Request) (*provider.Result, error) {
+			return &provider.Result{
+				Message: provider.Message{Role: provider.RoleAssistant, Content: []provider.ContentBlock{
+					{Type: provider.BlockToolUse, ID: "t1", Name: "ptool", Input: []byte(`{"tag":"a"}`)},
+					{Type: provider.BlockToolUse, ID: "t2", Name: "ptool", Input: []byte(`{"tag":"b"}`)},
+				}},
+				StopReason: provider.StopToolUse,
+				Usage:      provider.Usage{InputTokens: 100, OutputTokens: 20},
+			}, nil
+		},
+		text("并行完成"),
+	}}
+	eng, sink := newTestEngine(t, sp, Options{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	eng.registry.Register(&barrierTool{entered: &wg})
+
+	out, err := eng.RunTurn(context.Background(), "并行探索")
+	if err != nil || out != "并行完成" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+
+	// tool_result 按 tool_use 原顺序回填,且各自结果正确
+	last := eng.Messages[len(eng.Messages)-2] // [-1] 是最终助手回复,[-2] 是工具结果
+	if last.Role != provider.RoleUser || len(last.Content) != 2 {
+		t.Fatalf("工具结果消息异常: %+v", last)
+	}
+	if last.Content[0].ToolUseID != "t1" || last.Content[0].Content != "ok-a" ||
+		last.Content[1].ToolUseID != "t2" || last.Content[1].Content != "ok-b" {
+		t.Fatalf("结果顺序或内容错误: %+v", last.Content)
+	}
+
+	// 并发执行时的进度帧各自挂在自己的 toolCallId 上,不串扰
+	for _, fr := range sink.frames {
+		s := string(fr.Data)
+		if strings.Contains(s, `"line":"from-a"`) && !strings.Contains(s, `"toolCallId":"t1"`) {
+			t.Fatalf("a 的进度挂错调用: %s", s)
+		}
+		if strings.Contains(s, `"line":"from-b"`) && !strings.Contains(s, `"toolCallId":"t2"`) {
+			t.Fatalf("b 的进度挂错调用: %s", s)
+		}
 	}
 }

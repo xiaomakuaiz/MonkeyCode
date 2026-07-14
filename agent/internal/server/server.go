@@ -63,6 +63,8 @@ type Options struct {
 	UI []byte
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
 	AskTimeout time.Duration
+	// SubagentMaxSteps 子代理单任务步数上限,<=0 用子代理默认值。
+	SubagentMaxSteps int
 	// BuildExtras 按会话工作区装配系统提示增量(本地/平台技能与规则)
 	// 及工具只读附加根;nil 表示无增量。
 	BuildExtras func(workdir string) (*contextmgr.Extras, []string)
@@ -525,6 +527,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	// 子代理过程落盘为子会话,帧经 publishChild 分发给观察者
 	sub := &subagent.Tool{
 		Provider:     prov,
+		MaxSteps:     s.opts.SubagentMaxSteps,
 		SessionRoot:  s.opts.SessionRoot,
 		ParentID:     sess.Meta.ID,
 		OnChildFrame: s.publishChild,
@@ -541,7 +544,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	system := contextmgr.Build(sess.Meta.Workdir, extras)
 	ls.engine = loop.New(prov, reg, pol, emitter, ls.builder,
 		sess.Meta.Workdir, system, loop.Options{ReadRoots: readRoots})
-	sub.OnUsage = func(u provider.Usage) { ls.engine.Usage.Add(u) }
+	sub.OnUsage = ls.engine.AddUsage
 
 	msgs, err := sess.LoadMessages()
 	if err != nil {

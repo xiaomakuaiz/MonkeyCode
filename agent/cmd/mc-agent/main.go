@@ -39,6 +39,7 @@ type rootFlags struct {
 	yolo          bool
 	allow         []string
 	maxSteps      int
+	subagentSteps int
 	contextBudget int
 	resumeID      string
 	noSession     bool
@@ -64,6 +65,7 @@ func main() {
 	pf.BoolVar(&flags.yolo, "yolo", false, "跳过所有权限审批(谨慎使用)")
 	pf.StringSliceVar(&flags.allow, "allow", nil, "预授权的工具名(可多次指定,如 --allow write_file)")
 	pf.IntVar(&flags.maxSteps, "max-steps", 0, "单轮最大步数(默认 80)")
+	pf.IntVar(&flags.subagentSteps, "subagent-max-steps", 0, "子代理单任务最大步数(默认 50)")
 	pf.IntVar(&flags.contextBudget, "context-budget", 0, "上下文 token 预算,超 80% 触发压缩(默认 180000)")
 	pf.StringVar(&flags.resumeID, "resume", "", "恢复指定会话继续对话")
 	pf.BoolVar(&flags.noSession, "no-session", false, "不持久化会话")
@@ -232,7 +234,7 @@ func buildApp(interactive bool) (*app, error) {
 
 	// 只读探索子代理(task 工具):工具集只读故自动放行;
 	// 会话持久化开启时,子代理过程落盘为子会话(可独立回放)
-	sub := &subagent.Tool{Provider: p}
+	sub := &subagent.Tool{Provider: p, MaxSteps: flags.subagentSteps}
 	if sess != nil {
 		sub.SessionRoot = session.DefaultRoot()
 		sub.ParentID = sess.Meta.ID
@@ -245,7 +247,7 @@ func buildApp(interactive bool) (*app, error) {
 	system := contextmgr.Build(workdir, extras)
 	engine := loop.New(p, reg, pol, emitters, builder, workdir, system,
 		loop.Options{MaxSteps: flags.maxSteps, ContextBudget: flags.contextBudget, ReadRoots: readRoots})
-	sub.OnUsage = func(u provider.Usage) { engine.Usage.Add(u) }
+	sub.OnUsage = engine.AddUsage
 
 	if sess != nil && flags.resumeID != "" {
 		msgs, err := sess.LoadMessages()
