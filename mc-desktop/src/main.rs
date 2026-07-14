@@ -110,9 +110,10 @@ fn get_config(app: AppHandle) -> DesktopConfig {
     load_config(&app)
 }
 
-/// 错误页"打开设置"按钮调用。
+/// 错误页与内核 UI 的"设置"按钮调用。
 #[tauri::command]
 fn open_settings_window(app: AppHandle) {
+    eprintln!("[mc-desktop] IPC: open_settings_window");
     open_settings(&app);
 }
 
@@ -155,10 +156,24 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         let _ = win.show();
         let _ = win.set_focus();
     } else {
-        let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
+        let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
             .title("MonkeyCode")
-            .inner_size(1200.0, 800.0)
-            .build();
+            .inner_size(1200.0, 800.0);
+        // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→设置窗 链路,
+        // 结果写进 document.title(无头环境唯一可靠的回读通道)
+        if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
+            builder = builder.initialization_script(
+                "const report = (m) => fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
+                 report('script-injected'); \
+                 setTimeout(() => { \
+                   if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
+                   window.__TAURI__.core.invoke('open_settings_window') \
+                     .then(() => report('invoke-ok')) \
+                     .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
+                 }, 3000);",
+            );
+        }
+        let _ = builder.build();
     }
     if let Some(sw) = app.get_webview_window("settings") {
         let _ = sw.close();

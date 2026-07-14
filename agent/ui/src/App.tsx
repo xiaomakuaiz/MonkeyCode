@@ -189,11 +189,7 @@ export default function App() {
         </div>
         <button
           className="ghost wide settings-btn"
-          onClick={() => {
-            if (!openHostSettings()) {
-              setStatus("⚠ 浏览器模式下请在桌面应用中修改配置(或经宿主环境变量下发)");
-            }
-          }}
+          onClick={() => openHostSettings((msg) => setStatus("⚠ " + msg))}
         >
           ⚙ 设置
         </button>

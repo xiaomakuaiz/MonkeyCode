@@ -19,7 +19,10 @@
             "settings"
           ],
           "permissions": [
-            "core:default"
+            "core:default",
+            "allow-get-config",
+            "allow-save-config",
+            "allow-open-settings-window"
           ]
         },
         {
@@ -34,7 +37,8 @@
             ]
           },
           "permissions": [
-            "core:default"
+            "core:default",
+            "allow-open-settings-window"
           ]
         }
       ]
