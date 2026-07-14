@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-14 IME 回车误发送(macOS 壳)
+
+- **WebKit 的 IME 确认键顺序与 Chromium 相反,`isComposing` 单独不够**:Chromium 上确认候选的
+  Enter keydown 带 `isComposing=true`;WebKit(WKWebView,即 macOS 壳)则先发 `compositionend`
+  再发 keydown,此时 `isComposing` 已复位,导致选字回车被当成提交。修法:额外记录
+  `compositionend` 时刻,紧随其后(<100ms,同一次按键)的 Enter 一律视为选字确认。
+  凡是"Enter 提交"的输入框在 Tauri/WKWebView 里都要用这套双保险。
+
 ## 2026-07-14 配置归属之争
 
 - **用户重申过的架构立场就是决策,不要用"我论证过了"当继续原方案的依据**:用户两次说"配置和设置归壳、agent 只是壳拉起的进程",我论证了一轮内核方案自认为达成共识,实际对方没接受,结果写了半天被叫停回滚。方向有分歧时,把双方案差异列清楚后**等对方明确选择**再动手;对方复述自己原立场 = 选择已做出。

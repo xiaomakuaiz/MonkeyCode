@@ -16,6 +16,17 @@ import type { FileChange, Frame, ModelInfo, SessionMeta } from "./types";
 
 type Tab = "chat" | "changes";
 
+// 输入法(IME)组合态的 Enter 只是确认候选词,不能当作提交。Chromium 上该 keydown
+// 的 isComposing 为 true 即可拦截;但 WebKit(macOS 壳的 WKWebView)顺序相反:
+// compositionend 先于 keydown 触发且 isComposing 已复位。故再记录组合结束时刻,
+// 紧随其后的 Enter(同一次按键,时间差远小于人手连按)一律视为选字确认。
+let imeEndedAt = -Infinity;
+const markImeEnd = (e: { timeStamp: number }) => {
+  imeEndedAt = e.timeStamp;
+};
+const isImeEnter = (e: { timeStamp: number; nativeEvent: { isComposing: boolean } }) =>
+  e.nativeEvent.isComposing || e.timeStamp - imeEndedAt < 100;
+
 interface ProjectGroup {
   dir: string;
   name: string;
@@ -307,9 +318,10 @@ export default function App() {
             value={input}
             placeholder="输入任务…(Enter 发送,Shift+Enter 换行)"
             onChange={(e) => setInput(e.target.value)}
+            onCompositionEnd={markImeEnd}
             onKeyDown={(e) => {
               // 输入法组合态(选字/确认候选)的 Enter 不发送
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
                 e.preventDefault();
                 send();
               }
@@ -471,7 +483,8 @@ function NewSessionDialog({
             value={workdir}
             placeholder="/home/you/dev/project"
             onChange={(e) => setWorkdir(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void create()}
+            onCompositionEnd={markImeEnd}
+            onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && void create()}
           />
           {inDesktopShell() && (
             <button className="ghost" onClick={() => void browse()}>
