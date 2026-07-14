@@ -25,7 +25,7 @@ run: dev
 
 # ---------- macOS 打包(universal .app/.dmg,内核 sidecar)----------
 
-macos: check-macos kernel-universal icons
+macos: check-macos kernel-universal icons/icon.icns
 	$(TAURI) build --target universal-apple-darwin --config tauri.macos.conf.json
 	@echo ""
 	@echo "打包完成,分发产物:"
@@ -51,8 +51,14 @@ kernel-universal:
 	lipo -create -output $(SIDECAR_UNI) $(SIDECAR_ARM) $(SIDECAR_X64)
 	$(SIDECAR_UNI) --version
 
-icons:
-	$(TAURI) icon icons/icon.png
+# 图标产物已入库,仅源图(icons/source.png,1024²)更新时重新生成。
+# 注意:tauri icon 无平台过滤参数,会连带产出 ios/android(生成后清理);
+# 且其输出包含 icon.png 本身——源图必须与输出分离,否则会被覆盖。
+icons/icon.icns: icons/source.png
+	$(TAURI) icon icons/source.png
+	rm -rf icons/android icons/ios
+
+icons: icons/icon.icns
 
 clean:
 	rm -rf $(BIN_DIR) target
