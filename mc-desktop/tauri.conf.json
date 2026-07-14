@@ -22,7 +22,8 @@
             "core:default",
             "allow-get-config",
             "allow-save-config",
-            "allow-open-settings-window"
+            "allow-open-settings-window",
+            "allow-close-settings"
           ]
         },
         {

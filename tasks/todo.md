@@ -250,6 +250,21 @@
 
 ---
 
+# M2.9:设置增强——MCP 配置 + 单窗口设置页(2026-07-14)✅
+
+- [x] MCP 进设置:壳存 mcp_servers(与内核 mcpServers 同构,壳不解释原样写盘),
+      设置页增删改(HTTP url+headers / stdio command+args+env,K=V 行编辑);
+      spawn 注入 MC_AGENT_MCP_CONFIG(内核 env 覆盖点已存在,零改动);
+      项目级 .mc-agent/mcp.json 不变(同名覆盖全局)
+- [x] 设置改单窗口:主窗口存在时窗口内导航到设置页(tauri://localhost origin),
+      保存/返回导航回内核 UI(KernelUrl 状态);首启无主窗口才独立开窗;
+      新增 close_settings 命令(build.rs + capability 同步授权)
+- [x] 验证:cargo build(ACL 编译期校验);无头冒烟——内核环境含
+      MC_AGENT_MODELS 与 MC_AGENT_MCP_CONFIG、mcp.json 落盘、IPC 链路 OK;
+      探针加 origin 守卫防设置页循环触发
+
+---
+
 # M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
 
 ## B:工具进度通道(通用原语)

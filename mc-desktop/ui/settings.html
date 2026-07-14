@@ -27,6 +27,8 @@
   button:disabled { opacity:.4; cursor:default; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.danger { background:transparent; border-color:var(--red); color:var(--red); }
+  button.ghost { background:transparent; }
+  code { background:var(--panel); border-radius:4px; padding:1px 5px; font-size:12px; }
   .model-head { display:flex; justify-content:space-between; align-items:center; }
   .model-head .default-tag { color:var(--green); font-size:12px; }
   .actions { display:flex; gap:8px; margin-top:14px; align-items:center; }
@@ -38,8 +40,15 @@
 <h2>模型配置</h2>
 <p class="hint">每个会话可选择不同模型,也可在会话中随时切换。保存后应用立即生效(重启内核,历史会话保留)。</p>
 <div id="models"></div>
+<button id="addBtn">+ 添加模型</button>
+
+<h2 style="margin-top:22px">MCP 服务器<span class="hint" style="font-weight:normal">(可选,扩展工具)</span></h2>
+<p class="hint">支持 Streamable HTTP(URL)与 stdio(本地命令)两种;项目级配置仍可放在 <code>&lt;项目&gt;/.mc-agent/mcp.json</code>(同名覆盖全局)。</p>
+<div id="mcps"></div>
+<button id="addMcpBtn">+ 添加 MCP 服务器</button>
+
 <div class="actions">
-  <button id="addBtn">+ 添加模型</button>
+  <button id="backBtn" class="ghost">返回</button>
   <span style="flex:1"></span>
   <span id="msg"></span>
   <button id="saveBtn" class="primary">保存并启动</button>
@@ -49,6 +58,7 @@
 'use strict';
 const invoke = window.__TAURI__.core.invoke;
 let models = [];
+let mcps = []; // [{name, type:'http'|'stdio', url, command, args, kv}] kv=每行 K=V(http→headers,stdio→env)
 
 function render() {
   const box = document.getElementById('models');
@@ -94,6 +104,93 @@ function setMsg(text, cls) {
   el.textContent = text; el.className = cls || '';
 }
 
+function renderMcps() {
+  const box = document.getElementById('mcps');
+  box.innerHTML = '';
+  mcps.forEach((m, i) => {
+    const el = document.createElement('div');
+    el.className = 'model';
+    el.innerHTML = `
+      <div class="model-head">
+        <div class="row" style="flex:1">
+          <label>名称</label>
+          <input type="text" data-k="name" placeholder="如: context7">
+        </div>
+        <button data-a="del" class="danger" style="margin-left:8px">删除</button>
+      </div>
+      <div class="row"><label>类型</label>
+        <select data-k="type">
+          <option value="http">HTTP(URL)</option>
+          <option value="stdio">stdio(本地命令)</option>
+        </select></div>
+      <div class="row mcp-http"><label>URL</label><input type="text" data-k="url" placeholder="https://mcp.example.com/mcp"></div>
+      <div class="row mcp-stdio"><label>命令</label><input type="text" data-k="command" placeholder="npx"></div>
+      <div class="row mcp-stdio"><label>参数</label><input type="text" data-k="args" placeholder="空格分隔,如: @playwright/mcp"></div>
+      <div class="row"><label id="kvLabel">附加项</label>
+        <textarea data-k="kv" rows="2" placeholder="每行一条 KEY=VALUE"
+          style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:7px;padding:7px 9px;font:inherit;resize:vertical"></textarea></div>`;
+    const sync = () => {
+      const isHttp = m.type !== 'stdio';
+      el.querySelectorAll('.mcp-http').forEach(r => r.style.display = isHttp ? '' : 'none');
+      el.querySelectorAll('.mcp-stdio').forEach(r => r.style.display = isHttp ? 'none' : '');
+      el.querySelector('#kvLabel').textContent = isHttp ? 'Headers' : '环境变量';
+    };
+    el.querySelectorAll('[data-k]').forEach(inp => {
+      inp.value = m[inp.dataset.k] || (inp.dataset.k === 'type' ? 'http' : '');
+      inp.oninput = () => { m[inp.dataset.k] = inp.value; if (inp.dataset.k === 'type') sync(); };
+      inp.onchange = inp.oninput;
+    });
+    el.querySelector('[data-a=del]').onclick = () => { mcps.splice(i, 1); renderMcps(); };
+    sync();
+    box.appendChild(el);
+  });
+  if (!mcps.length) box.innerHTML = '<p class="hint">未配置 MCP 服务器。</p>';
+}
+
+const parseKV = (text) => {
+  const out = {};
+  for (const line of (text || '').split('\n')) {
+    const i = line.indexOf('=');
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+const stringifyKV = (obj) => Object.entries(obj || {}).map(([k, v]) => k + '=' + v).join('\n');
+
+function mcpsToServers() {
+  const servers = {};
+  for (const m of mcps) {
+    if (!m.name) continue;
+    if (m.type === 'stdio') {
+      if (!m.command) continue;
+      servers[m.name] = { command: m.command };
+      const args = (m.args || '').trim();
+      if (args) servers[m.name].args = args.split(/\s+/);
+      const env = parseKV(m.kv);
+      if (env) servers[m.name].env = env;
+    } else {
+      if (!m.url) continue;
+      servers[m.name] = { url: m.url };
+      const headers = parseKV(m.kv);
+      if (headers) servers[m.name].headers = headers;
+    }
+  }
+  return servers;
+}
+
+function serversToMcps(servers) {
+  return Object.entries(servers || {}).map(([name, c]) => c.command
+    ? { name, type: 'stdio', command: c.command, args: (c.args || []).join(' '), kv: stringifyKV(c.env) }
+    : { name, type: 'http', url: c.url || '', kv: stringifyKV(c.headers) });
+}
+
+document.getElementById('addMcpBtn').onclick = () => {
+  mcps.push({ name:'', type:'http', url:'', command:'', args:'', kv:'' });
+  renderMcps();
+};
+
+document.getElementById('backBtn').onclick = () => invoke('close_settings').catch(() => {});
+
 document.getElementById('addBtn').onclick = () => {
   models.push({ name:'', provider:'anthropic', base_url:'', api_key:'', model:'', default: models.length === 0 });
   render();
@@ -104,7 +201,7 @@ document.getElementById('saveBtn').onclick = async () => {
   btn.disabled = true;
   setMsg('保存并启动中…');
   try {
-    await invoke('save_config', { config: { models } });
+    await invoke('save_config', { config: { models, mcp_servers: mcpsToServers() } });
     setMsg('已生效', 'ok'); // 成功后本窗口会被壳关闭
   } catch (e) {
     setMsg(String(e), 'err');
@@ -115,8 +212,10 @@ document.getElementById('saveBtn').onclick = async () => {
 
 invoke('get_config').then(cfg => {
   models = (cfg.models || []);
+  mcps = serversToMcps(cfg.mcp_servers);
   if (!models.length) document.getElementById('addBtn').click();
   else render();
+  renderMcps();
 }).catch(e => setMsg('读取配置失败: ' + e, 'err'));
 </script>
 </body>

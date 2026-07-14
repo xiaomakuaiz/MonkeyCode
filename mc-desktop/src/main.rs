@@ -44,6 +44,10 @@ struct ModelEntry {
 struct DesktopConfig {
     #[serde(default)]
     models: Vec<ModelEntry>,
+    /// MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构;
+    /// 壳不解释内容,原样写盘由内核校验)
+    #[serde(default)]
+    mcp_servers: serde_json::Map<String, serde_json::Value>,
 }
 
 impl DesktopConfig {
@@ -71,8 +75,14 @@ fn load_config(app: &AppHandle) -> DesktopConfig {
         .unwrap_or_default()
 }
 
-/// 写应用配置 + 内核模型清单(均 0600,含 api_key)。
-fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<PathBuf, String> {
+/// 内核消费的配置文件路径集合。
+struct KernelFiles {
+    models: PathBuf,
+    mcp: PathBuf,
+}
+
+/// 写应用配置 + 内核清单(模型 + MCP,均 0600,含密钥)。
+fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<KernelFiles, String> {
     let dir = config_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
 
@@ -89,10 +99,17 @@ fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<PathBuf, St
     let cfg_data = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
     write(&dir.join("config.json"), cfg_data)?;
 
-    let models_path = dir.join("models.json");
+    let files = KernelFiles {
+        models: dir.join("models.json"),
+        mcp: dir.join("mcp.json"),
+    };
     let models_data = serde_json::to_vec_pretty(&cfg.models).map_err(|e| e.to_string())?;
-    write(&models_path, models_data)?;
-    Ok(models_path)
+    write(&files.models, models_data)?;
+
+    let mcp_data = serde_json::to_vec_pretty(&serde_json::json!({ "mcpServers": cfg.mcp_servers }))
+        .map_err(|e| e.to_string())?;
+    write(&files.mcp, mcp_data)?;
+    Ok(files)
 }
 
 // ==================== 状态 ====================
@@ -102,6 +119,9 @@ struct Kernel(Mutex<Option<Child>>);
 
 /// 托盘是否可用;不可用时关窗直接退出(否则窗口藏起来就找不回了)。
 struct TrayReady(AtomicBool);
+
+/// 当前内核 UI 地址(设置页"返回"时导航回来)。
+struct KernelUrl(Mutex<Option<String>>);
 
 // ==================== Tauri 命令(设置页调用) ====================
 
@@ -117,16 +137,31 @@ fn open_settings_window(app: AppHandle) {
     open_settings(&app);
 }
 
+/// 设置页"返回"(不保存):主窗口导航回内核 UI;首启独立设置窗则直接关闭。
+#[tauri::command]
+fn close_settings(app: AppHandle) {
+    let kernel_url = app.state::<KernelUrl>().0.lock().unwrap().clone();
+    if let (Some(url), Some(win)) = (kernel_url, app.get_webview_window("main")) {
+        if let Ok(parsed) = url.parse::<Url>() {
+            let _ = win.navigate(parsed);
+            return;
+        }
+    }
+    if let Some(sw) = app.get_webview_window("settings") {
+        let _ = sw.close();
+    }
+}
+
 /// 保存配置并(重)启内核,主窗口切到内核 UI。设置页保存按钮调用。
 #[tauri::command]
 fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     if !config.valid() {
         return Err("至少需要一个完整的模型配置(名称/接口地址/API Key/模型标识)".into());
     }
-    let models_path = save_config_files(&app, &config)?;
+    let files = save_config_files(&app, &config)?;
 
     // 重启内核(阻塞等就绪,最多 15 秒);窗口操作回主线程
-    let (child, port, token) = start_kernel(&models_path)?;
+    let (child, port, token) = start_kernel(&files)?;
     if let Some(mut old) = app.state::<Kernel>().0.lock().unwrap().replace(child) {
         let _ = old.kill();
         let _ = old.wait();
@@ -144,6 +179,7 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
 
 /// 主窗口显示内核 UI(已存在则导航复用,否则创建)。顺手关掉设置窗口。
 fn show_kernel_ui(app: &AppHandle, url: &str) {
+    app.state::<KernelUrl>().0.lock().unwrap().replace(url.to_string());
     let parsed: Url = match url.parse() {
         Ok(u) => u,
         Err(e) => {
@@ -166,6 +202,7 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
                 "const report = (m) => fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
                  report('script-injected'); \
                  setTimeout(() => { \
+                   if (location.protocol !== 'http:') return; /* 仅在内核 UI 页触发,避免设置页循环 */ \
                    if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
                    window.__TAURI__.core.invoke('open_settings_window') \
                      .then(() => report('invoke-ok')) \
@@ -180,8 +217,18 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
     }
 }
 
-/// 打开(或聚焦)设置窗口。
+/// 打开设置:主窗口存在时在窗口内切到设置页(单窗口体验);
+/// 首启(无主窗口)时才单独开设置窗。
 fn open_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(url) = app_page_url("settings.html").parse::<Url>() {
+            let _ = win.navigate(url);
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+            return;
+        }
+    }
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
         let _ = win.unminimize();
@@ -190,8 +237,17 @@ fn open_settings(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("MonkeyCode 设置")
-        .inner_size(640.0, 640.0)
+        .inner_size(640.0, 680.0)
         .build();
+}
+
+/// 应用自带页面的完整 URL(与 Tauri 打包页面的 origin 约定一致)。
+fn app_page_url(page: &str) -> String {
+    if cfg!(windows) {
+        format!("http://tauri.localhost/{page}")
+    } else {
+        format!("tauri://localhost/{page}")
+    }
 }
 
 /// 打开错误页(内核启动故障等宿主级错误)。
@@ -208,7 +264,13 @@ fn main() {
     tauri::Builder::default()
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
-        .invoke_handler(tauri::generate_handler![get_config, save_config, open_settings_window])
+        .manage(KernelUrl(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            open_settings_window,
+            close_settings
+        ])
         .setup(|app| {
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle()) {
@@ -222,8 +284,8 @@ fn main() {
                 open_settings(app.handle());
                 return Ok(());
             }
-            let models_path = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
-            match start_kernel(&models_path) {
+            let files = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
+            match start_kernel(&files) {
                 Ok((child, port, token)) => {
                     eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
                     app.state::<Kernel>().0.lock().unwrap().replace(child);
@@ -320,7 +382,7 @@ fn show_any_window(app: &AppHandle) {
 
 /// 启动内核:配置经环境变量注入(不走 argv,避免泄漏进 ps)。
 /// 返回 (子进程, 端口, 令牌)。
-fn start_kernel(models_path: &PathBuf) -> Result<(Child, u16, String), String> {
+fn start_kernel(files: &KernelFiles) -> Result<(Child, u16, String), String> {
     let bin = find_agent().ok_or_else(|| {
         "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
     })?;
@@ -339,7 +401,8 @@ fn start_kernel(models_path: &PathBuf) -> Result<(Child, u16, String), String> {
             // 管道关闭,内核随之退出,不留孤儿进程
             "--watch-stdin",
         ])
-        .env("MC_AGENT_MODELS", models_path)
+        .env("MC_AGENT_MODELS", &files.models)
+        .env("MC_AGENT_MCP_CONFIG", &files.mcp)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

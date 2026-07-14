@@ -8,6 +8,7 @@ fn main() {
                 "get_config",
                 "save_config",
                 "open_settings_window",
+                "close_settings",
             ]),
         ),
     )
