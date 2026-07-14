@@ -307,6 +307,30 @@
 
 ---
 
+# M2.12:mc-desktop 自动更新(2026-07-14)✅
+
+> OSS 静态清单 + tauri-plugin-updater,壳整包更新(内核 sidecar 随包);
+> 版本号 YYMMDDNN(日期序号占 semver 主版本位),不一致即提示,用户确认后更新重启。
+> 发布:CI 出签名产物(Actions Artifacts),人工上传 OSS public/desktop/。
+
+- [x] 签名密钥:minisign 密钥对(~/.tauri/monkeycode-desktop.key,公钥入 tauri.conf.json;
+      私钥待配 GitHub secret `TAURI_SIGNING_PRIVATE_KEY`)
+- [x] 配置:tauri.conf.json 版本 26071401.0.0 + plugins.updater(pubkey/endpoints);
+      tauri.release.conf.json(createUpdaterArtifacts,仅发布构建叠加,本地打包不需私钥)
+- [x] 壳(main.rs):check_update(version_comparator 远端≠本地即更新、MC_UPDATE_MANIFEST
+      测试覆盖、短版本号展示)→ dialog 询问 → download_and_install → restart(内核经
+      RunEvent::Exit 回收);启动 5 秒自检(debug 默认跳过);托盘"检查更新"菜单项
+- [x] 发布链:Makefile macos-release(校验私钥 + 叠加 release 配置 + gen-latest-json.py
+      汇集 updater/ 产物);CI secret 就绪走发布构建否则回退,Artifacts 加 updater/*
+- [x] 验证:cargo build 过;Linux 无头端到端两场景(清单 99999999 → "发现新版本"日志、
+      清单同版本 → "当前已是最新版本(26071401)",短版本号正确);gen-latest-json.py
+      假产物跑通(双 darwin key 同 URL、多行签名正确转义);macOS 完整链路待真机(README 有步骤)
+- [ ] 待办:GitHub 配置 `TAURI_SIGNING_PRIVATE_KEY` secret(cat ~/.tauri/monkeycode-desktop.key);
+      OSS 确认 release.monkeycode-ai.com/public/desktop/ 可公网匿名读
+- v2 留:内核独立热更新(清单 kernel 段 + find_agent 覆盖位 + 复用重启内核路径)
+
+---
+
 # M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
 
 ## B:工具进度通道(通用原语)

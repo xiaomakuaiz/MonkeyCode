@@ -13,7 +13,7 @@ SIDECAR_UNI := $(BIN_DIR)/mc-agent-universal-apple-darwin
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 
-.PHONY: dev run macos check-macos kernel-universal icons clean
+.PHONY: dev run macos macos-release check-signing check-macos kernel-universal icons clean
 
 # ---------- 开发 ----------
 
@@ -26,13 +26,24 @@ run: dev
 # ---------- macOS 打包(universal .app/.dmg,内核 sidecar)----------
 
 macos: check-macos kernel-universal icons/icon.icns
-	$(TAURI) build --target universal-apple-darwin --config tauri.macos.conf.json
+	$(TAURI) build --target universal-apple-darwin --config tauri.macos.conf.json $(EXTRA_TAURI_CONFIG)
 	@echo ""
 	@echo "打包完成,分发产物:"
 	@ls -lh target/universal-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null || true
 	@echo "(.app 在 target/universal-apple-darwin/release/bundle/macos/)"
 	@echo "提示: 包未签名,同事首次打开需 右键→打开;提示已损坏时执行"
 	@echo "      xattr -cr /Applications/MonkeyCode.app"
+
+# 发布构建:在 macos 基础上叠加 createUpdaterArtifacts(需 TAURI_SIGNING_PRIVATE_KEY
+# 签名),并汇集 updater 产物(带版本文件名的 .app.tar.gz + latest.json)到
+# bundle/updater/,供人工上传 OSS。
+macos-release: EXTRA_TAURI_CONFIG := --config tauri.release.conf.json
+macos-release: check-signing macos
+	python3 scripts/gen-latest-json.py
+
+check-signing:
+	@[ -n "$$TAURI_SIGNING_PRIVATE_KEY" ] || \
+		{ echo "错误: 发布构建需要 TAURI_SIGNING_PRIVATE_KEY(updater 产物签名私钥)"; exit 1; }
 
 check-macos:
 	@[ "$$(uname -s)" = "Darwin" ] || { echo "错误: macOS 打包需在 Mac 上执行"; exit 1; }

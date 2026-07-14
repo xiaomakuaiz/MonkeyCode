@@ -192,6 +192,103 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     Ok(())
 }
 
+// ==================== 自动更新 ====================
+//
+// OSS 静态清单(latest.json)+ tauri-plugin-updater:版本号与本地**不一致**
+// 即提示(YYMMDDNN 日期序号占 semver 主版本位,"!=" 同时覆盖前进与回滚);
+// 用户确认后下载安装并重启,minisign 签名校验完整性。
+
+/// 展示用短版本号:去掉内部 semver 的 ".0.0" 后缀(26071401.0.0 → 26071401)。
+fn display_version(v: &str) -> String {
+    v.strip_suffix(".0.0").unwrap_or(v).to_string()
+}
+
+/// 更新流程中的提示(manual=托盘手动检查;自动检查失败只打日志不打扰)。
+fn update_notice(app: &AppHandle, manual: bool, error: bool, msg: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    eprintln!("[mc-desktop] 更新: {msg}");
+    if manual {
+        let kind = if error { MessageDialogKind::Error } else { MessageDialogKind::Info };
+        app.dialog().message(msg).title("检查更新").kind(kind).show(|_| {});
+    }
+}
+
+/// 检查更新并在有新版时询问用户;确认则下载安装 + 重启(内核经 RunEvent::Exit 回收)。
+async fn check_update(app: AppHandle, manual: bool) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    use tauri_plugin_updater::UpdaterExt;
+
+    let mut builder = app
+        .updater_builder()
+        .timeout(Duration::from_secs(30))
+        // 与 latest.json 的版本号不一致即视为有更新
+        .version_comparator(|current, update| update.version != current);
+    // 本机测试覆盖清单地址(release 构建强制 https,http 清单只在 debug 下可用)
+    if let Ok(url) = std::env::var("MC_UPDATE_MANIFEST") {
+        match url.parse() {
+            Ok(u) => match builder.endpoints(vec![u]) {
+                Ok(b) => builder = b,
+                Err(e) => return update_notice(&app, manual, true, &format!("更新地址无效: {e}")),
+            },
+            Err(e) => return update_notice(&app, manual, true, &format!("MC_UPDATE_MANIFEST 无效: {e}")),
+        }
+    }
+    let updater = match builder.build() {
+        Ok(u) => u,
+        Err(e) => return update_notice(&app, manual, true, &format!("初始化更新器失败: {e}")),
+    };
+
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            let cur = display_version(&app.package_info().version.to_string());
+            return update_notice(&app, manual, false, &format!("当前已是最新版本({cur})"));
+        }
+        Err(e) => return update_notice(&app, manual, true, &format!("检查更新失败: {e}")),
+    };
+
+    let msg = format!(
+        "发现新版本 {}(当前 {}),是否立即更新?\n更新完成后应用将自动重启。",
+        display_version(&update.version),
+        display_version(&update.current_version),
+    );
+    eprintln!("[mc-desktop] 更新: 发现新版本 {}(当前 {})", update.version, update.current_version);
+    app.dialog()
+        .message(msg)
+        .title("发现新版本")
+        .buttons(MessageDialogButtons::OkCancelCustom("立即更新".into(), "以后再说".into()))
+        .show({
+            let app = app.clone();
+            move |confirmed| {
+                if !confirmed {
+                    return;
+                }
+                tauri::async_runtime::spawn(async move {
+                    let mut announced = false;
+                    let result = update
+                        .download_and_install(
+                            move |_chunk, total| {
+                                if !announced {
+                                    eprintln!("[mc-desktop] 更新: 开始下载({total:?} 字节)");
+                                    announced = true;
+                                }
+                            },
+                            || eprintln!("[mc-desktop] 更新: 下载完成,安装中"),
+                        )
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            eprintln!("[mc-desktop] 更新: 安装完成,重启应用");
+                            app.restart();
+                        }
+                        // 用户已确认过更新,失败必须外显
+                        Err(e) => update_notice(&app, true, true, &format!("更新失败: {e}")),
+                    }
+                });
+            }
+        });
+}
+
 // ==================== 窗口 ====================
 
 /// 主窗口显示内核 UI(已存在则导航复用,否则创建)。顺手关掉设置窗口。
@@ -285,6 +382,7 @@ fn main() {
     eprintln!("[mc-desktop] main 进入");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(KernelUrl(Mutex::new(None)))
@@ -300,6 +398,16 @@ fn main() {
             if let Err(e) = setup_tray(app.handle()) {
                 eprintln!("[mc-desktop] 托盘创建失败(关窗将直接退出): {e}");
                 app.state::<TrayReady>().0.store(false, Ordering::Relaxed);
+            }
+
+            // 启动后延迟自检一次更新。debug 构建默认跳过(开发噪音),
+            // 设置 MC_UPDATE_MANIFEST 时强制启用(本机 http 清单联调)。
+            if !cfg!(debug_assertions) || std::env::var("MC_UPDATE_MANIFEST").is_ok() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(5));
+                    tauri::async_runtime::block_on(check_update(handle, false));
+                });
             }
 
             let cfg = load_config(app.handle());
@@ -364,8 +472,9 @@ fn main() {
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &update, &quit])?;
 
     let tray = TrayIconBuilder::with_id("main")
         .icon(tray_icon_for(Theme::Light))
@@ -375,6 +484,10 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_any_window(app),
             "settings" => open_settings(app),
+            "check-update" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move { check_update(app, true).await });
+            }
             "quit" => app.exit(0),
             _ => {}
         })

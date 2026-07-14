@@ -31,7 +31,17 @@ jobs:
 
       - name: Build app bundle (universal, unsigned)
         working-directory: mc-desktop
-        run: make macos   # 与本地打包同一入口(内核 universal sidecar + icons + bundle)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        # secret 就绪时走发布构建(额外产出签名的 updater tar.gz + latest.json),
+        # 否则回退普通打包,CI 不红
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            make macos-release
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY 未配置,跳过 updater 产物"
+            make macos
+          fi
 
       - name: Zip .app
         working-directory: mc-desktop/target/universal-apple-darwin/release/bundle
@@ -43,3 +53,4 @@ jobs:
           path: |
             mc-desktop/target/universal-apple-darwin/release/bundle/MonkeyCode-macos-universal.app.zip
             mc-desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            mc-desktop/target/universal-apple-darwin/release/bundle/updater/*
