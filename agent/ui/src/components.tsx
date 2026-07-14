@@ -51,6 +51,9 @@ function statusMark(status: "run" | "ok" | "fail") {
   return status === "run" ? "◌" : status === "ok" ? "✓" : "✗";
 }
 
+/** 子步骤滚动窗口:只展示最后几条,更早的折叠为计数行(完整过程走"查看子会话")。 */
+const MAX_SUB_ITEMS = 5;
+
 function ToolLine({
   item,
   onOpenChild,
@@ -58,6 +61,8 @@ function ToolLine({
   item: Extract<LogItem, { kind: "tool" }>;
   onOpenChild?: (id: string) => void;
 }) {
+  const subs = item.subItems ?? [];
+  const hidden = subs.length - MAX_SUB_ITEMS;
   return (
     <div className="tool-block">
       <div className="tool">
@@ -70,7 +75,13 @@ function ToolLine({
           </button>
         )}
       </div>
-      {item.subItems?.map((s) => (
+      {hidden > 0 && (
+        <div className="tool sub">
+          <span className="sub-arrow">↳</span>
+          <span className="hint">… 已省略前 {hidden} 步</span>
+        </div>
+      )}
+      {subs.slice(-MAX_SUB_ITEMS).map((s) => (
         <div key={s.id} className="tool sub">
           <span className="sub-arrow">↳</span>
           <span className={"tool-dot " + s.status}>{statusMark(s.status)}</span>
