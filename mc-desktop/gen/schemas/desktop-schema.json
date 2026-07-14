@@ -177,22 +177,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Enables the close_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-close-settings",
-          "markdownDescription": "Enables the close_settings command without any pre-configured scope."
-        },
-        {
           "description": "Enables the get_config command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-config",
           "markdownDescription": "Enables the get_config command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the open_settings_window command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-open-settings-window",
-          "markdownDescription": "Enables the open_settings_window command without any pre-configured scope."
         },
         {
           "description": "Enables the save_config command without any pre-configured scope.",
@@ -201,22 +189,10 @@
           "markdownDescription": "Enables the save_config command without any pre-configured scope."
         },
         {
-          "description": "Denies the close_settings command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-close-settings",
-          "markdownDescription": "Denies the close_settings command without any pre-configured scope."
-        },
-        {
           "description": "Denies the get_config command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-config",
           "markdownDescription": "Denies the get_config command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the open_settings_window command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-open-settings-window",
-          "markdownDescription": "Denies the open_settings_window command without any pre-configured scope."
         },
         {
           "description": "Denies the save_config command without any pre-configured scope.",

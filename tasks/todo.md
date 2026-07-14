@@ -331,6 +331,43 @@
 
 ---
 
+# M2.13:设置 UI 统一进内核 React UI,壳退纯宿主(2026-07-14)✅
+
+> 动机:产品界面分裂在两套栈(聊天=agent/ui React,设置/错误页=壳 vanilla HTML),
+> 已造成"重构桌面客户端只改了壳页面"的返工。收敛:设置渲染进内核 UI,
+> 配置所有权仍在壳;支点=内核零模型可启动,解开"没配置→内核起不来→没设置页"死锁。
+
+## 内核(agent/)
+- [x] LoadModels:空清单 `[]` 合法(返回非 nil 空切片,区分"未设置清单"=nil);
+- [x] serve 三分支:多模型 / **零模型**(清单空:ListModels=[]、NewProvider 报"尚未配置模型")/ 单配置(CLI 不变);
+      **清单内容错误不致死**(stderr 警告 + 降级零模型,防坏配置持久化后死锁)
+- [x] 版本外显:server.Options.Version → /healthz 带 version(v2 内核热更新握手的接缝)
+- [x] 测试:TestLoadModelsEmptyManifest、TestZeroModelServe(models=[]、建会话 400 引导文案、healthz 版本)
+
+## React UI(agent/ui/)
+- [x] src/settings.tsx:设置视图(模型 CRUD+设默认+provider 三值;MCP http/stdio+KV 文本域;
+      parseKV/mcpsToServers 从 settings.html 移植为 TS);保存→壳写盘重启内核→整页导航重载
+- [x] client.ts:getHostConfig/saveHostConfig(照 pickDirectory 的 invoke 模式)、onHostEvent(托盘事件);
+      openHostSettings 删除;types.ts 加 HostConfig/HostModel
+- [x] App.tsx:view 加 "settings";⚙ 按钮/Esc/托盘 open-settings 事件进出;
+      桌面壳内模型为空启动直接进设置向导
+
+## 壳(mc-desktop/)
+- [x] 无条件拉内核(无配置写空清单);删 open_settings_window/close_settings/open_settings/
+      app_page_url/KernelUrl/ModelEntry/valid();DesktopConfig 改 opaque JSON 透传(schema 双定义消除)
+- [x] 托盘"设置"→show_any_window + emit_to("main","open-settings");无头探针改验 get_config
+- [x] build.rs commands 缩为 get_config/save_config;capabilities:kernel-ui 放行 get/save-config,
+      shell-pages 缩为错误页 core:default;删 ui/settings.html,错误页去"打开设置"按钮
+
+## 验证
+- [x] agent 全量测试/gofmt/vet 过;UI tsc+build 过;壳 cargo build(ACL 编译期校验)过
+- [x] 无头端到端 5 场景:A 无配置首启零模型(/api/models=[]、healthz 带 version)、
+      B 写配置重启生效(models.json 落盘+API 返回)、C 坏配置容错(重复名→零模型+警告不死)、
+      D IPC 探针(remote origin invoke get_config OK)、E SIGKILL 壳内核跟随退出
+- [ ] Mac 真机人工:首启进设置向导→配模型→聊天;托盘"设置";保存后会话列表不丢
+
+---
+
 # M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
 
 ## B:工具进度通道(通用原语)

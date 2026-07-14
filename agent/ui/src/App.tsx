@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+// 布局与交互对照「MonkeyCode 原型(离线版)」实现:侧栏(搜索 + 扁平会话列表)、
+// 新建任务视图、会话视图(思考/工具/审批/运行条/排队/改动条)、改动抽屉。
+// 样式值取自原型内联样式;协议层(client/reduce)不变。
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   b64encode,
   connect,
@@ -6,15 +9,14 @@ import {
   inDesktopShell,
   listModels,
   listSessions,
-  openHostSettings,
+  onHostEvent,
   pickDirectory,
   type Conn,
 } from "./client";
-import { DiffView, LogItemView, SessionItem } from "./components";
+import { DiffPanel, LogList, MONO, SessionRow } from "./components";
+import { SettingsView } from "./settings";
 import { answerPerm, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { FileChange, Frame, ModelInfo, SessionMeta } from "./types";
-
-type Tab = "chat" | "changes";
 
 // 输入法(IME)组合态的 Enter 只是确认候选词,不能当作提交。Chromium 上该 keydown
 // 的 isComposing 为 true 即可拦截;但 WebKit(macOS 壳的 WKWebView)顺序相反:
@@ -27,70 +29,49 @@ const markImeEnd = (e: { timeStamp: number }) => {
 const isImeEnter = (e: { timeStamp: number; nativeEvent: { isComposing: boolean } }) =>
   e.nativeEvent.isComposing || e.timeStamp - imeEndedAt < 100;
 
-interface ProjectGroup {
-  dir: string;
-  name: string;
-  latest: string;
-  items: SessionMeta[];
-}
+const fmtK = (n: number) => (n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n));
 
-/** 会话按项目(工作区目录)分组;worktree 会话归属原仓库目录 */
-function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
-  const map = new Map<string, SessionMeta[]>();
-  for (const m of sessions) {
-    const dir = m.worktree?.repo || m.workdir;
-    const list = map.get(dir);
-    if (list) list.push(m);
-    else map.set(dir, [m]);
-  }
-  const groups = [...map.entries()].map(([dir, items]) => {
-    items.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
-    return {
-      dir,
-      name: dir.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || dir,
-      latest: items[0]?.updated_at ?? "",
-      items,
-    };
-  });
-  groups.sort((a, b) => b.latest.localeCompare(a.latest));
-  return groups;
-}
+const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
+
+/** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
+const DEFAULT_DIR = "~/MonkeyCode";
+
+/** 720px 居中列(对话流 / 改动条 / 输入框共用的宽度约定) */
+const COL: CSSProperties = { width: 720, maxWidth: "100%" };
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [view, setView] = useState<"new" | "session" | "settings">("new");
   const [chat, setChat] = useState<ChatState>(initialChat);
   const [status, setStatus] = useState("未连接");
-  const [tab, setTab] = useState<Tab>("chat");
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [changesErr, setChangesErr] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [diff, setDiff] = useState<{ path: string; text: string } | null>(null);
-  const [showNew, setShowNew] = useState<{ dir: string } | null>(null);
   const [input, setInput] = useState("");
+  const [queued, setQueued] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [childView, setChildView] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [sessionModel, setSessionModel] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem("mc.collapsedGroups") || "[]") as string[]);
-    } catch {
-      return new Set();
-    }
-  });
-
-  const toggleGroup = (dir: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(dir)) next.delete(dir);
-      else next.add(dir);
-      localStorage.setItem("mc.collapsedGroups", JSON.stringify([...next]));
-      return next;
-    });
-  };
+  const [menuOpen, setMenuOpen] = useState(false);
+  // 新建任务视图
+  const [newDir, setNewDir] = useState(DEFAULT_DIR);
+  const [editDir, setEditDir] = useState(false);
+  const [newModel, setNewModel] = useState("");
+  const [newText, setNewText] = useState("");
+  const [newErr, setNewErr] = useState("");
+  const [offerCreate, setOfferCreate] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const connRef = useRef<Conn | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
+  const pendingMsgRef = useRef<string | null>(null); // 新建会话时输入的首个任务,连上后发出
+  const dirTouchedRef = useRef(false); // 用户改过工作目录后不再跟随默认值
 
   const refreshSessions = useCallback(async () => {
     const metas = await listSessions();
@@ -98,21 +79,24 @@ export default function App() {
     return metas;
   }, []);
 
-  const refreshChanges = useCallback(async () => {
+  const refreshChanges = useCallback(async (): Promise<FileChange[]> => {
     const conn = connRef.current;
-    if (!conn) return;
+    if (!conn) return [];
     try {
       const r = await conn.call<{ result?: FileChange[]; error?: string }>("repo_file_changes");
       if (r.error) {
         setChangesErr(r.error);
         setChanges([]);
-      } else {
-        setChangesErr("");
-        setChanges(r.result ?? []);
+        return [];
       }
+      setChangesErr("");
+      const list = r.result ?? [];
+      setChanges(list);
+      return list;
     } catch (e) {
       setChangesErr(e instanceof Error ? e.message : String(e));
       setChanges([]);
+      return [];
     }
   }, []);
 
@@ -120,10 +104,14 @@ export default function App() {
     (id: string, model?: string) => {
       connRef.current?.close();
       setCurrentId(id);
+      setView("session");
       setChat(initialChat);
       setChanges(null);
       setChangesErr("");
-      setTab("chat");
+      setDrawerOpen(false);
+      setDiff(null);
+      setMenuOpen(false);
+      setQueued(null);
       setSessionModel(model ?? "");
       localStorage.setItem("mc.lastSession", id);
       connRef.current = connect(id, {
@@ -135,19 +123,24 @@ export default function App() {
     [refreshSessions],
   );
 
-  // 启动:拉模型清单 + 恢复上次会话
+  // 启动:拉模型清单 + 恢复上次会话;桌面壳内无模型(首启/被清空)直接进设置向导。
+  // 另订阅壳的托盘"设置"事件。
   useEffect(() => {
-    listModels()
-      .then(setModels)
-      .catch(() => {});
-    refreshSessions()
-      .then((metas) => {
+    const offSettings = onHostEvent("open-settings", () => setView("settings"));
+    Promise.all([listModels().catch(() => [] as ModelInfo[]), refreshSessions()])
+      .then(([ms, metas]) => {
+        setModels(ms);
+        setNewModel(ms.find((m) => m.default)?.name ?? "");
         const last = localStorage.getItem("mc.lastSession");
         const meta = metas.find((m) => m.id === last);
         if (meta) openSession(meta.id, meta.model);
+        if (ms.length === 0 && inDesktopShell()) setView("settings");
       })
       .catch((e) => setStatus("无法连接服务: " + (e instanceof Error ? e.message : e)));
-    return () => connRef.current?.close();
+    return () => {
+      offSettings();
+      connRef.current?.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -155,6 +148,25 @@ export default function App() {
   useEffect(() => {
     if (chat.model) setSessionModel(chat.model);
   }, [chat.model]);
+
+  // 新任务默认工作目录:沿用最近会话的目录,没有会话则用 ~/MonkeyCode(用户改过则不再跟随)
+  const lastDir =
+    [...sessions].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0]?.workdir ?? "";
+  useEffect(() => {
+    if (dirTouchedRef.current) return;
+    setNewDir(lastDir || DEFAULT_DIR);
+  }, [lastDir]);
+
+  // 连接就绪:拉改动计数;若新建会话时带了首个任务,此刻发出
+  const connected = status.startsWith("已连接");
+  useEffect(() => {
+    if (!connected) return;
+    void refreshChanges();
+    const pending = pendingMsgRef.current;
+    if (pending && connRef.current?.send("user-input", { content: b64encode(pending) })) {
+      pendingMsgRef.current = null;
+    }
+  }, [connected, refreshChanges]);
 
   // 本轮结束:刷新改动计数与会话列表
   useEffect(() => {
@@ -164,11 +176,25 @@ export default function App() {
     void refreshSessions();
   }, [chat.turnEnded, refreshChanges, refreshSessions]);
 
+  // 排队的输入:运行结束后自动发送(原型 queued 交互)
+  useEffect(() => {
+    if (chat.running || !queued) return;
+    if (connRef.current?.send("user-input", { content: b64encode(queued) })) setQueued(null);
+  }, [chat.running, queued]);
+
   // 自动滚动(仅当用户停留在底部)
   useEffect(() => {
     const el = logRef.current;
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [chat.items]);
+  }, [chat.items, chat.running]);
+
+  // 输入框随内容自适应高度
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  }, [input]);
 
   const onLogScroll = () => {
     const el = logRef.current;
@@ -177,7 +203,13 @@ export default function App() {
 
   const send = () => {
     const text = input.trim();
-    if (!text || chat.running || !connRef.current) return;
+    if (!text || !connRef.current) return;
+    if (chat.running) {
+      // 运行中先排队,本轮结束自动发送(可点 ✕ 取消)
+      setQueued(text);
+      setInput("");
+      return;
+    }
     if (connRef.current.send("user-input", { content: b64encode(text) })) setInput("");
   };
 
@@ -196,6 +228,7 @@ export default function App() {
   };
 
   const switchModel = async (name: string) => {
+    setMenuOpen(false);
     if (!connRef.current || !name || name === sessionModel) return;
     try {
       const r = await connRef.current.call<{ result?: { model: string }; error?: string }>(
@@ -225,183 +258,914 @@ export default function App() {
     }
   };
 
-  return (
-    <div className="app">
-      <aside className="side">
-        <div className="brand">
-          <span className="brand-name">MonkeyCode</span>
-          <span className="hint">本地内核</span>
-        </div>
-        <button className="primary wide" onClick={() => setShowNew({ dir: "" })}>
-          + 新建会话
-        </button>
-        <div className="sessions">
-          {groupByProject(sessions).map((g) => (
-            <div key={g.dir} className="group">
-              <div className="group-head" title={g.dir} onClick={() => toggleGroup(g.dir)}>
-                <span className="chev">{collapsed.has(g.dir) ? "▸" : "▾"}</span>
-                <span className="group-name">{g.name}</span>
-                <span className="hint">{g.items.length}</span>
-                <button
-                  className="group-plus"
-                  title={"在 " + g.dir + " 新建会话"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowNew({ dir: g.dir });
-                  }}
-                >
-                  +
-                </button>
-              </div>
-              {!collapsed.has(g.dir) &&
-                g.items.map((m) => (
-                  <SessionItem
-                    key={m.id}
-                    meta={m}
-                    active={m.id === currentId}
-                    onClick={() => openSession(m.id, m.model)}
-                  />
-                ))}
-            </div>
-          ))}
-          {sessions.length === 0 && <div className="hint pad">暂无会话</div>}
-        </div>
-        <button
-          className="ghost wide settings-btn"
-          onClick={() => openHostSettings((msg) => setStatus("⚠ " + msg))}
-        >
-          ⚙ 设置
-        </button>
-      </aside>
+  const openDrawer = () => {
+    setDrawerOpen(true);
+    void refreshChanges().then((list) => {
+      if (list.length) void showDiff(list[0].path);
+      else setDiff(null);
+    });
+  };
 
-      <main className="main">
-        <nav className="tabs">
-          <button className={"tab" + (tab === "chat" ? " active" : "")} onClick={() => setTab("chat")}>
-            对话
-          </button>
-          <button
-            className={"tab" + (tab === "changes" ? " active" : "")}
-            onClick={() => {
-              setTab("changes");
-              void refreshChanges();
+  const createTask = async (createDir = false) => {
+    const dir = newDir.trim();
+    if (!dir || busy) return;
+    setBusy(true);
+    setNewErr("");
+    setOfferCreate(false);
+    try {
+      // 自有默认目录静默创建;用户自填的目录不存在仍走确认流程
+      const meta = await createSession(dir, newModel, createDir || dir === DEFAULT_DIR);
+      const first = newText.trim();
+      if (first) pendingMsgRef.current = first;
+      setNewText("");
+      await refreshSessions();
+      openSession(meta.id, meta.model);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setNewErr("创建失败: " + msg);
+      if (msg.includes("目录不存在")) setOfferCreate(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const browse = async () => {
+    const dir = await pickDirectory();
+    if (dir) {
+      dirTouchedRef.current = true;
+      setNewDir(dir);
+      setNewErr("");
+      setOfferCreate(false);
+    }
+  };
+
+  // ===== 派生状态 =====
+  const currentMeta = sessions.find((m) => m.id === currentId);
+  const currentModel = sessionModel || models.find((m) => m.default)?.name || "";
+  const menuModels: ModelInfo[] =
+    sessionModel && !models.some((m) => m.name === sessionModel)
+      ? [...models, { name: sessionModel, default: false }]
+      : models;
+  const usage = chat.usage;
+  const openPerm = [...chat.items].reverse().find((it) => it.kind === "perm" && it.state === "open") as
+    | Extract<(typeof chat.items)[number], { kind: "perm" }>
+    | undefined;
+  const anyToolRunning = chat.items.some((it) => it.kind === "tool" && it.status === "run");
+  const runningLabel = openPerm ? "等待权限确认" : anyToolRunning ? "执行中" : "思考中";
+  const roundNo = Math.max(1, chat.items.filter((it) => it.kind === "user").length);
+
+  const q = query.trim().toLowerCase();
+  const list = (
+    q
+      ? sessions.filter(
+          (m) => (m.title || "").toLowerCase().includes(q) || m.workdir.toLowerCase().includes(q),
+        )
+      : sessions
+  )
+    .slice()
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+
+  const isNewView = view === "new" || currentId === null;
+
+  // ===== 全局快捷键:⌘K 搜索、⏎/esc 应答审批、esc 关闭浮层 =====
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (menuOpen) return setMenuOpen(false);
+        if (childView) return setChildView(null);
+        if (drawerOpen) return setDrawerOpen(false);
+        if (view === "settings") return setView(currentId ? "session" : "new");
+        if (openPerm) onPermAnswer(openPerm.id, "deny");
+        return;
+      }
+      if (e.key === "Enter" && !e.isComposing && openPerm && !isNewView) {
+        const t = e.target as HTMLElement | null;
+        const typing = t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT");
+        if (typing && input.trim()) return; // 正在输入内容,不当作审批
+        e.preventDefault();
+        onPermAnswer(openPerm.id, "allow");
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  });
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100vw",
+        height: "100vh",
+        background: "var(--bg)",
+        color: "var(--t2)",
+        fontSize: 13.5,
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      {/* ============ 侧栏 ============ */}
+      <div
+        style={{
+          width: 292,
+          flex: "none",
+          display: "flex",
+          flexDirection: "column",
+          background: "var(--side)",
+          borderRight: "1px solid var(--line)",
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 18px 14px" }}>
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 9,
+              background: "linear-gradient(135deg,#34d399,#059669)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              font: "800 14px system-ui",
+              boxShadow: "0 2px 8px rgba(16,185,129,.25)",
             }}
           >
-            改动{changes && changes.length > 0 ? ` (${changes.length})` : ""}
-          </button>
-        </nav>
+            🐒
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 14.5, color: "var(--t1)", letterSpacing: "-.01em" }}>
+            MonkeyCode
+          </div>
+          <div
+            className="hv-cardh"
+            title="新建任务"
+            onClick={() => {
+              setView("new");
+              setMenuOpen(false);
+            }}
+            style={{
+              marginLeft: "auto",
+              width: 28,
+              height: 28,
+              borderRadius: 8,
+              background: "var(--card2)",
+              color: "var(--t2)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 600,
+              fontSize: 16,
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            +
+          </div>
+        </div>
+        <div style={{ padding: "0 14px 12px" }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--card)", borderRadius: 9, padding: "0 11px" }}
+          >
+            <span style={{ color: "var(--t4)", fontSize: 12 }}>⌕</span>
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索会话"
+              style={{
+                flex: 1,
+                background: "none",
+                border: "none",
+                outline: "none",
+                color: "var(--t1)",
+                fontSize: 12.5,
+                padding: "8px 0",
+                minWidth: 0,
+              }}
+            />
+            <span style={{ font: "10px " + MONO, color: "var(--t5)" }}>⌘K</span>
+          </div>
+        </div>
 
-        {tab === "chat" ? (
-          <div className="log" ref={logRef} onScroll={onLogScroll}>
-            {currentId === null && <div className="sysline">选择或创建一个会话开始</div>}
-            {chat.items.map((item, i) => (
-              <LogItemView key={i} item={item} onPermAnswer={onPermAnswer} onOpenChild={setChildView} />
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 14px" }}>
+          <div style={{ display: "flex", padding: "0 4px 8px", whiteSpace: "nowrap" }}>
+            <span style={{ font: "600 10.5px system-ui", color: "var(--t4)", letterSpacing: ".1em" }}>本地会话</span>
+            <span style={{ marginLeft: 6, font: "400 10.5px system-ui", color: "var(--t5)" }}>这台电脑</span>
+          </div>
+          {sessions.length === 0 && (
+            <div
+              style={{
+                border: "1px dashed var(--line)",
+                borderRadius: 11,
+                padding: "14px 13px",
+                fontSize: 11.5,
+                color: "var(--t5)",
+                lineHeight: 1.7,
+              }}
+            >
+              还没有会话。在右侧输入第一个任务开始。
+            </div>
+          )}
+          {sessions.length > 0 && list.length === 0 && (
+            <div style={{ padding: "2px 4px", fontSize: 11.5, color: "var(--t5)", lineHeight: 1.7 }}>
+              没有匹配「{query.trim()}」的会话。
+            </div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {list.map((m) => (
+              <SessionRow
+                key={m.id}
+                meta={m}
+                active={m.id === currentId && view === "session"}
+                onClick={() => openSession(m.id, m.model)}
+              />
             ))}
           </div>
-        ) : (
-          <div className="changes">
-            {changes === null && <div className="sysline">加载中…</div>}
-            {changesErr && <div className="sysline err">{changesErr}</div>}
-            {changes && !changesErr && changes.length === 0 && (
-              <div className="sysline">无改动(或非 git 仓库)</div>
-            )}
-            {changes?.map((c) => (
-              <div key={c.path} className="chg" onClick={() => void showDiff(c.path)}>
-                <span className={"chg-st " + c.status}>{c.status}</span>
-                <span>{c.path}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        </div>
 
-        <div className="composer">
-          <textarea
-            value={input}
-            placeholder="输入任务…(Enter 发送,Shift+Enter 换行)"
-            onChange={(e) => setInput(e.target.value)}
-            onCompositionEnd={markImeEnd}
-            onKeyDown={(e) => {
-              // 输入法组合态(选字/确认候选)的 Enter 不发送
-              if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
-                e.preventDefault();
-                send();
-              }
+        <div
+          style={{
+            padding: "14px 18px",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 12,
+            color: "var(--t4)",
+            borderTop: "1px solid var(--line)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: connected ? "var(--ok)" : "var(--t5)",
+              flex: "none",
             }}
           />
-          <button className="primary" disabled={chat.running || !currentId} onClick={send}>
-            发送
-          </button>
-          <button
-            className="danger"
-            disabled={!chat.running}
-            onClick={() => connRef.current?.send("user-cancel", {})}
-          >
-            停止
-          </button>
-        </div>
-        <footer className="status">
-          <span>{status}</span>
-          <span className="status-right">
-            {currentId && models.length > 0 && (
-              <select
-                className="model-select"
-                value={sessionModel || models.find((m) => m.default)?.name || ""}
-                disabled={chat.running}
-                title={chat.running ? "轮次执行中,结束后可切换" : "切换本会话模型(下一轮生效)"}
-                onChange={(e) => void switchModel(e.target.value)}
-              >
-                {models.map((m) => (
-                  <option key={m.name} value={m.name}>
-                    {m.name}
-                  </option>
-                ))}
-                {sessionModel && !models.some((m) => m.name === sessionModel) && (
-                  <option value={sessionModel}>{sessionModel}</option>
-                )}
-              </select>
-            )}
-            {chat.usage ? `上下文 ${chat.usage.used} / ${chat.usage.size} tokens` : ""}
+          <span title={status} style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+            {status}
           </span>
-        </footer>
-      </main>
-
-      {diff && (
-        <div className="modal-backdrop" onClick={() => setDiff(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <b>{diff.path}</b>
-              <button className="ghost" onClick={() => setDiff(null)}>
-                关闭
-              </button>
-            </div>
-            <DiffView text={diff.text} />
-          </div>
+          <span
+            className="hv-t1"
+            title="设置"
+            onClick={() => {
+              setMenuOpen(false);
+              setView("settings");
+            }}
+            style={{ marginLeft: "auto", cursor: "pointer", fontSize: 15 }}
+          >
+            ⚙
+          </span>
         </div>
+      </div>
+
+      {/* ============ 主区 ============ */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {view === "settings" ? (
+          <SettingsView onClose={() => setView(currentId ? "session" : "new")} />
+        ) : isNewView ? (
+          /* ==== 新建任务视图 ==== */
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 22,
+              animation: "mcin .25s ease",
+              padding: "0 24px",
+            }}
+          >
+            {sessions.length === 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 2 }}>
+                <div
+                  style={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: 16,
+                    background: "linear-gradient(135deg,#34d399,#059669)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    font: "800 26px system-ui",
+                    boxShadow: "0 6px 20px rgba(16,185,129,.3)",
+                  }}
+                >
+                  🐒
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: "var(--t1)", letterSpacing: "-.01em" }}>
+                  把第一个任务交给 MonkeyCode
+                </div>
+                <div style={{ fontSize: 13, color: "var(--t4)", maxWidth: 460, textAlign: "center", lineHeight: 1.7 }}>
+                  描述你想做的事。工作目录{" "}
+                  <span style={{ font: "12px " + MONO, color: "var(--t3)" }}>{newDir || DEFAULT_DIR}</span>{" "}
+                  已自动准备好,也可以换成你的项目目录。
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--t1)", letterSpacing: "-.01em" }}>
+                开始一个新任务
+              </div>
+            )}
+
+            <div
+              style={{
+                ...COL,
+                width: 588,
+                border: "1px solid var(--amberBd)",
+                borderRadius: 16,
+                background: "var(--amberBg)",
+                padding: 20,
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14, fontWeight: 700, color: "var(--amberT)", whiteSpace: "nowrap" }}
+              >
+                ⌂ 本地
+                <span
+                  style={{ marginLeft: "auto", fontSize: 10, background: "var(--amberBg)", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}
+                >
+                  默认 ⏎
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.7, marginTop: 10 }}>
+                Agent 跑在这台电脑上,直接读写本地文件;每步权限逐一确认。
+              </div>
+              {editDir ? (
+                <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+                  <input
+                    value={newDir}
+                    autoFocus
+                    onChange={(e) => {
+                      dirTouchedRef.current = true;
+                      setNewDir(e.target.value);
+                      setNewErr("");
+                      setOfferCreate(false);
+                    }}
+                    onCompositionEnd={markImeEnd}
+                    onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && setEditDir(false)}
+                    placeholder="/home/you/dev/project(工作区目录)"
+                    style={{
+                      flex: 1,
+                      background: "var(--codeBg)",
+                      border: "1px solid var(--line)",
+                      borderRadius: 9,
+                      padding: "8px 11px",
+                      font: "11.5px " + MONO,
+                      color: "var(--t1)",
+                      outline: "none",
+                      minWidth: 0,
+                    }}
+                  />
+                  {inDesktopShell() && (
+                    <div
+                      className="hv-cardh"
+                      onClick={() => void browse()}
+                      style={{
+                        padding: "8px 14px",
+                        background: "var(--card2)",
+                        borderRadius: 9,
+                        cursor: "pointer",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: "var(--t2)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      浏览…
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    marginTop: 12,
+                    font: "11px " + MONO,
+                    color: "var(--t5)",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}
+                >
+                  <span style={{ color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis" }}>{newDir}</span>
+                  {newDir === DEFAULT_DIR && <span style={{ flex: "none" }}>· 将自动创建</span>}
+                  <span
+                    className="hv-t1"
+                    onClick={() => setEditDir(true)}
+                    style={{ marginLeft: "auto", cursor: "pointer", flex: "none", font: "12px system-ui" }}
+                  >
+                    更改
+                  </span>
+                  {inDesktopShell() && (
+                    <span
+                      className="hv-t1"
+                      onClick={() => void browse()}
+                      style={{ cursor: "pointer", flex: "none", font: "12px system-ui" }}
+                    >
+                      浏览…
+                    </span>
+                  )}
+                </div>
+              )}
+              {newErr && (
+                <div style={{ marginTop: 10, fontSize: 12, color: "var(--err)" }}>
+                  {newErr}
+                  {offerCreate && (
+                    <span
+                      className="hv-op"
+                      onClick={() => void createTask(true)}
+                      style={{ cursor: "pointer", color: "var(--amberT)", marginLeft: 8 }}
+                    >
+                      创建该目录并继续 →
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{ ...COL, width: 588, background: "var(--card)", border: "1px solid var(--line)", borderRadius: 16, padding: "13px 16px" }}
+            >
+              <input
+                value={newText}
+                autoFocus
+                onChange={(e) => setNewText(e.target.value)}
+                onCompositionEnd={markImeEnd}
+                onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && void createTask()}
+                placeholder="描述任务…(可留空,先建会话)"
+                style={{
+                  width: "100%",
+                  background: "none",
+                  border: "none",
+                  outline: "none",
+                  color: "var(--t1)",
+                  fontSize: 13.5,
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12, fontSize: 12, color: "var(--t5)" }}>
+                {models.length > 1 ? (
+                  <select
+                    value={newModel}
+                    onChange={(e) => setNewModel(e.target.value)}
+                    style={{ background: "transparent", border: "none", outline: "none", color: "var(--t4)", fontSize: 12, cursor: "pointer" }}
+                  >
+                    {models.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name}
+                        {m.default ? "(默认)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span>{models[0]?.name ?? ""}</span>
+                )}
+                <div
+                  className="hv-op"
+                  onClick={() => void createTask()}
+                  style={{
+                    marginLeft: "auto",
+                    width: 30,
+                    height: 30,
+                    borderRadius: 9,
+                    background: "var(--amber)",
+                    color: "var(--onAmber)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    opacity: busy ? 0.5 : 1,
+                  }}
+                >
+                  ↑
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ==== 会话视图 ==== */
+          <>
+            {/* header */}
+            <div style={{ display: "flex", alignItems: "center", padding: "0 24px", height: 56, flex: "none" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                  color: "var(--t1)",
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {currentMeta?.title || "(未命名)"}
+                </span>
+                <span style={{ font: "400 11px " + MONO, color: "var(--t5)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  ⌂ {currentMeta?.workdir ?? ""}
+                </span>
+              </div>
+
+              <div style={{ marginLeft: "auto", position: "relative", flex: "none" }}>
+                <div
+                  className={chat.running ? undefined : "hv-card"}
+                  title={chat.running ? "轮次执行中,结束后可切换" : "切换本会话模型(下一轮生效)"}
+                  onClick={() => !chat.running && setMenuOpen(!menuOpen)}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 8,
+                    cursor: chat.running ? "default" : "pointer",
+                    whiteSpace: "nowrap",
+                    fontSize: 12,
+                    color: chat.running ? "var(--t5)" : "var(--t3)",
+                    userSelect: "none",
+                  }}
+                >
+                  {currentModel || "模型"} ▾
+                </div>
+                {menuOpen && (
+                  <>
+                    <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setMenuOpen(false)} />
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 36,
+                        right: 0,
+                        width: 220,
+                        background: "var(--pop)",
+                        border: "1px solid var(--line)",
+                        borderRadius: 12,
+                        boxShadow: "var(--shadow)",
+                        padding: 6,
+                        zIndex: 30,
+                        animation: "mcin .15s ease",
+                      }}
+                    >
+                      {menuModels.map((m) => (
+                        <div
+                          key={m.name}
+                          className="hv-card"
+                          onClick={() => void switchModel(m.name)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "8px 11px",
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            fontSize: 12.5,
+                            color: m.name === currentModel ? "var(--amberT)" : "var(--t2)",
+                            fontWeight: m.name === currentModel ? 600 : 400,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {m.name}
+                          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>
+                            {m.default ? "默认" : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            <div style={{ height: 1, background: "var(--line)", margin: "0 24px", flex: "none" }} />
+
+            {/* chat */}
+            <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", display: "flex", justifyContent: "center" }}>
+              <div
+                style={{
+                  ...COL,
+                  maxWidth: "calc(100% - 48px)",
+                  padding: "28px 0 16px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 18,
+                  lineHeight: 1.8,
+                  height: "fit-content",
+                }}
+              >
+                <LogList items={chat.items} onPermAnswer={onPermAnswer} onOpenChild={setChildView} />
+
+                {/* running bar */}
+                {chat.running && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--t3)", padding: "2px 0" }}>
+                    <span
+                      style={{
+                        width: 12,
+                        height: 12,
+                        border: "2px solid var(--amber)",
+                        borderTopColor: "transparent",
+                        borderRadius: "50%",
+                        animation: "mcspin .8s linear infinite",
+                        flex: "none",
+                      }}
+                    />
+                    {runningLabel}
+                    <span style={{ color: "var(--t5)" }}>
+                      · 第 {roundNo} 轮{usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}
+                    </span>
+                    <span
+                      className="hv-cardh"
+                      onClick={() => connRef.current?.send("user-cancel", {})}
+                      style={{
+                        marginLeft: "auto",
+                        padding: "5px 13px",
+                        background: "var(--card2)",
+                        borderRadius: 8,
+                        color: "var(--err)",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      ■ 停止
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* changes strip */}
+            {changes && changes.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "center", padding: "0 24px 8px", flex: "none" }}>
+                <div
+                  className="hv-card2"
+                  onClick={openDrawer}
+                  style={{
+                    ...COL,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    fontSize: 12,
+                    color: "var(--t3)",
+                    background: "var(--card)",
+                    border: "1px solid var(--line)",
+                    borderRadius: 10,
+                    padding: "8px 13px",
+                    cursor: "pointer",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <span style={{ color: "var(--amberT)" }}>⇄</span>本轮改动 · {changes.length} 个文件
+                  <span style={{ marginLeft: "auto", color: "var(--t4)", whiteSpace: "nowrap" }}>查看 diff →</span>
+                </div>
+              </div>
+            )}
+
+            {/* queued chip */}
+            {queued && (
+              <div style={{ display: "flex", justifyContent: "center", padding: "0 24px 8px", flex: "none" }}>
+                <div
+                  style={{
+                    ...COL,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: "var(--t4)",
+                    background: "var(--card)",
+                    borderRadius: 10,
+                    padding: "7px 13px",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <span style={{ animation: "mcpulse 1.2s infinite" }}>⏳</span>已排队:
+                  <span style={{ color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {queued}
+                  </span>
+                  <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>运行结束后自动发送</span>
+                  <span className="hv-err" onClick={() => setQueued(null)} style={{ cursor: "pointer", color: "var(--t5)" }}>
+                    ✕
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* composer */}
+            <div style={{ display: "flex", justifyContent: "center", padding: "0 24px 20px", flex: "none" }}>
+              <div style={{ ...COL, background: "var(--card)", border: "1px solid var(--line)", borderRadius: 16, padding: "13px 16px" }}>
+                <textarea
+                  ref={taRef}
+                  rows={1}
+                  value={input}
+                  placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…"}
+                  onChange={(e) => setInput(e.target.value)}
+                  onCompositionEnd={markImeEnd}
+                  onKeyDown={(e) => {
+                    // 输入法组合态(选字/确认候选)的 Enter 不发送
+                    if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  style={{
+                    width: "100%",
+                    background: "none",
+                    border: "none",
+                    outline: "none",
+                    resize: "none",
+                    color: "var(--t1)",
+                    fontSize: 13.5,
+                    lineHeight: 1.6,
+                    maxHeight: 160,
+                    padding: 0,
+                    display: "block",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12, fontSize: 12, color: "var(--t5)" }}>
+                  <span>⏎ 发送 · ⇧⏎ 换行</span>
+                  <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>
+                    {usage ? `${fmtK(usage.used)} / ${fmtK(usage.size)}` : ""}
+                  </span>
+                  <div
+                    className="hv-op"
+                    onClick={send}
+                    title="发送"
+                    style={{
+                      width: 30,
+                      height: 30,
+                      borderRadius: 9,
+                      background: "var(--amber)",
+                      color: "var(--onAmber)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontWeight: 800,
+                      cursor: "pointer",
+                      opacity: input.trim() ? 1 : 0.4,
+                    }}
+                  >
+                    ↑
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ============ 改动抽屉 ============ */}
+      {drawerOpen && (
+        <>
+          <div onClick={() => setDrawerOpen(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.3)", zIndex: 35 }} />
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 600,
+              maxWidth: "80vw",
+              background: "var(--pop)",
+              borderLeft: "1px solid var(--line)",
+              boxShadow: "var(--shadow)",
+              zIndex: 36,
+              display: "flex",
+              flexDirection: "column",
+              animation: "mcslide .22s ease",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px 12px", flex: "none", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--t1)" }}>
+                改动{changes && changes.length > 0 ? ` · ${changes.length} 个文件` : ""}
+              </span>
+              <span
+                className="hv-t1"
+                onClick={() => setDrawerOpen(false)}
+                style={{ marginLeft: "auto", color: "var(--t4)", cursor: "pointer", fontSize: 14 }}
+              >
+                ✕
+              </span>
+            </div>
+            {changesErr && (
+              <div style={{ padding: "10px 20px", fontSize: 12, color: "var(--err)" }}>{changesErr}</div>
+            )}
+            {changes && changes.length === 0 && !changesErr && (
+              <div style={{ padding: "10px 20px", fontSize: 12, color: "var(--t5)" }}>无改动(或非 git 仓库)</div>
+            )}
+            {changes && changes.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "0 20px 12px", flex: "none" }}>
+                {changes.map((c) => {
+                  const active = diff?.path === c.path;
+                  return (
+                    <div
+                      key={c.path}
+                      className="hv-cardh"
+                      onClick={() => void showDiff(c.path)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 7,
+                        background: active ? "var(--card2)" : "transparent",
+                        border: "1px solid var(--line)",
+                        borderRadius: 9,
+                        padding: "6px 11px",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <span
+                        style={{
+                          font: "700 11px " + MONO,
+                          color: c.status === "A" ? "var(--ok)" : c.status === "D" ? "var(--err)" : "var(--amberT)",
+                        }}
+                      >
+                        {c.status}
+                      </span>
+                      <span style={{ font: "11.5px " + MONO, color: active ? "var(--t1)" : "var(--t3)" }}>
+                        {basename(c.path)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {diff && (
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 20px",
+                    borderTop: "1px solid var(--line)",
+                    flex: "none",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                  }}
+                >
+                  <span style={{ font: "12.5px " + MONO, color: "var(--t1)" }}>{basename(diff.path)}</span>
+                  <span style={{ fontSize: 11, color: "var(--t5)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {diff.path}
+                  </span>
+                </div>
+                <div style={{ flex: 1, overflowY: "auto", padding: "4px 0 20px" }}>
+                  <DiffPanel text={diff.text} />
+                </div>
+              </>
+            )}
+          </div>
+        </>
       )}
 
+      {/* ============ 子代理会话回放 ============ */}
       {childView && (
-        <div className="modal-backdrop" onClick={() => setChildView(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <b>子代理会话 {childView}</b>
-              <button className="ghost" onClick={() => setChildView(null)}>
-                关闭
-              </button>
+        <div
+          onClick={() => setChildView(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,.45)",
+            zIndex: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(860px, 92vw)",
+              maxHeight: "84vh",
+              background: "var(--pop)",
+              border: "1px solid var(--line)",
+              borderRadius: 20,
+              boxShadow: "var(--shadow)",
+              padding: "22px 24px",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              animation: "mcin .2s ease",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 12, whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                子代理会话 {childView}
+              </span>
+              <span
+                className="hv-t1"
+                onClick={() => setChildView(null)}
+                style={{ marginLeft: "auto", color: "var(--t4)", cursor: "pointer", fontSize: 14 }}
+              >
+                ✕
+              </span>
             </div>
             <SessionViewer id={childView} />
           </div>
         </div>
-      )}
-
-      {showNew && (
-        <NewSessionDialog
-          models={models}
-          initialDir={showNew.dir}
-          onClose={() => setShowNew(null)}
-          onCreated={(meta) => {
-            setShowNew(null);
-            void refreshSessions().then(() => openSession(meta.id, meta.model));
-          }}
-        />
       )}
     </div>
   );
@@ -421,109 +1185,19 @@ function SessionViewer({ id }: { id: string }) {
   }, [id]);
 
   return (
-    <div className="child-log">
-      <div className="hint">{status}</div>
-      {chat.items.map((item, i) => (
-        <LogItemView key={i} item={item} onPermAnswer={() => {}} />
-      ))}
-    </div>
-  );
-}
-
-function NewSessionDialog({
-  models,
-  initialDir,
-  onClose,
-  onCreated,
-}: {
-  models: ModelInfo[];
-  initialDir: string;
-  onClose: () => void;
-  onCreated: (meta: SessionMeta) => void;
-}) {
-  const [workdir, setWorkdir] = useState(initialDir);
-  const [model, setModel] = useState(models.find((m) => m.default)?.name ?? "");
-  const [err, setErr] = useState("");
-  const [offerCreate, setOfferCreate] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const create = async (createDir = false) => {
-    if (!workdir.trim() || busy) return;
-    setBusy(true);
-    setErr("");
-    setOfferCreate(false);
-    try {
-      onCreated(await createSession(workdir.trim(), model, createDir));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setErr("创建失败: " + msg);
-      if (msg.includes("目录不存在")) setOfferCreate(true);
-      setBusy(false);
-    }
-  };
-
-  const browse = async () => {
-    const dir = await pickDirectory();
-    if (dir) {
-      setWorkdir(dir);
-      setErr("");
-      setOfferCreate(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
-        <h3>新建会话</h3>
-        <p className="hint">工作区目录</p>
-        <div className="dir-row">
-          <input
-            type="text"
-            autoFocus
-            value={workdir}
-            placeholder="/home/you/dev/project"
-            onChange={(e) => setWorkdir(e.target.value)}
-            onCompositionEnd={markImeEnd}
-            onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && void create()}
-          />
-          {inDesktopShell() && (
-            <button className="ghost" onClick={() => void browse()}>
-              浏览…
-            </button>
-          )}
-        </div>
-        {models.length > 1 && (
-          <>
-            <p className="hint" style={{ marginTop: 12 }}>
-              模型
-            </p>
-            <select className="model-select wide" value={model} onChange={(e) => setModel(e.target.value)}>
-              {models.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name}
-                  {m.default ? "(默认)" : ""}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
-        {err && <div className="sysline err">{err}</div>}
-        {offerCreate && (
-          <div className="sysline">
-            <button className="ghost" disabled={busy} onClick={() => void create(true)}>
-              创建该目录并继续
-            </button>
-          </div>
-        )}
-        <div className="modal-actions">
-          <button className="ghost" onClick={onClose}>
-            取消
-          </button>
-          <button className="primary" disabled={busy} onClick={() => void create()}>
-            创建
-          </button>
-        </div>
-      </div>
+    <div
+      style={{
+        overflowY: "auto",
+        flex: 1,
+        paddingRight: 6,
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        lineHeight: 1.8,
+      }}
+    >
+      <div style={{ color: "var(--t4)", fontSize: 12 }}>{status}</div>
+      <LogList items={chat.items} onPermAnswer={() => {}} />
     </div>
   );
 }

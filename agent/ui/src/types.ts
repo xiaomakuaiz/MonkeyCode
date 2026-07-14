@@ -6,6 +6,23 @@ export interface ModelInfo {
   default: boolean;
 }
 
+/** 壳持有的应用配置里的一个模型条目(设置视图编辑,壳原样写盘、内核消费)。 */
+export interface HostModel {
+  name: string;
+  provider: string; // anthropic | openai | openai_responses
+  base_url: string;
+  api_key: string;
+  model: string;
+  default?: boolean;
+}
+
+/** 壳持有的应用配置(经 Tauri IPC get_config/save_config 读写)。 */
+export interface HostConfig {
+  models: HostModel[];
+  /** MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构) */
+  mcp_servers: Record<string, unknown>;
+}
+
 /** GET /api/sessions 返回的会话元信息 */
 export interface SessionMeta {
   id: string;

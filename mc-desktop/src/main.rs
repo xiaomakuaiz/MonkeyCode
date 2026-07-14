@@ -24,39 +24,32 @@ use serde::{Deserialize, Serialize};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 // ==================== 应用配置(壳持有) ====================
 
-/// 一个模型配置项(与内核 MC_AGENT_MODELS 清单同构)。
-#[derive(Clone, Serialize, Deserialize, Default)]
-struct ModelEntry {
-    name: String,
-    #[serde(default)]
-    provider: String, // anthropic | openai
-    base_url: String,
-    api_key: String,
-    model: String,
-    #[serde(default)]
-    default: bool,
+fn json_array() -> serde_json::Value {
+    serde_json::Value::Array(vec![])
+}
+fn json_object() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+/// 应用配置。壳只认顶层两个 key,内容**原样透传**不做业务校验——
+/// schema 的唯一来源是内核(config.LoadModels)与设置视图表单(agent/ui),
+/// 壳零字段知识;非法内容由内核以零模型模式容忍并经 UI 引导修复。
+#[derive(Clone, Serialize, Deserialize)]
 struct DesktopConfig {
-    #[serde(default)]
-    models: Vec<ModelEntry>,
-    /// MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构;
-    /// 壳不解释内容,原样写盘由内核校验)
-    #[serde(default)]
-    mcp_servers: serde_json::Map<String, serde_json::Value>,
+    #[serde(default = "json_array")]
+    models: serde_json::Value,
+    /// MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构)
+    #[serde(default = "json_object")]
+    mcp_servers: serde_json::Value,
 }
 
-impl DesktopConfig {
-    fn valid(&self) -> bool {
-        !self.models.is_empty()
-            && self.models.iter().all(|m| {
-                !m.name.is_empty() && !m.base_url.is_empty() && !m.api_key.is_empty() && !m.model.is_empty()
-            })
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self { models: json_array(), mcp_servers: json_object() }
     }
 }
 
@@ -121,9 +114,6 @@ struct Kernel(Mutex<Option<Child>>);
 /// 托盘是否可用;不可用时关窗直接退出(否则窗口藏起来就找不回了)。
 struct TrayReady(AtomicBool);
 
-/// 当前内核 UI 地址(设置页"返回"时导航回来)。
-struct KernelUrl(Mutex<Option<String>>);
-
 /// 托盘句柄(系统明暗主题切换时换图标)。
 struct Tray(Mutex<Option<TrayIcon>>);
 
@@ -140,41 +130,17 @@ fn sync_tray_theme(app: &AppHandle, theme: Theme) {
     }
 }
 
-// ==================== Tauri 命令(设置页调用) ====================
+// ==================== Tauri 命令(内核 UI 的设置视图调用) ====================
 
 #[tauri::command]
 fn get_config(app: AppHandle) -> DesktopConfig {
     load_config(&app)
 }
 
-/// 错误页与内核 UI 的"设置"按钮调用。
-#[tauri::command]
-fn open_settings_window(app: AppHandle) {
-    eprintln!("[mc-desktop] IPC: open_settings_window");
-    open_settings(&app);
-}
-
-/// 设置页"返回"(不保存):主窗口导航回内核 UI;首启独立设置窗则直接关闭。
-#[tauri::command]
-fn close_settings(app: AppHandle) {
-    let kernel_url = app.state::<KernelUrl>().0.lock().unwrap().clone();
-    if let (Some(url), Some(win)) = (kernel_url, app.get_webview_window("main")) {
-        if let Ok(parsed) = url.parse::<Url>() {
-            let _ = win.navigate(parsed);
-            return;
-        }
-    }
-    if let Some(sw) = app.get_webview_window("settings") {
-        let _ = sw.close();
-    }
-}
-
-/// 保存配置并(重)启内核,主窗口切到内核 UI。设置页保存按钮调用。
+/// 保存配置并(重)启内核,主窗口导航到新内核 URL(整页重载)。
+/// 内容不做业务校验(壳零字段知识):表单校验在设置视图,权威校验在内核。
 #[tauri::command]
 fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
-    if !config.valid() {
-        return Err("至少需要一个完整的模型配置(名称/接口地址/API Key/模型标识)".into());
-    }
     let files = save_config_files(&app, &config)?;
 
     // 重启内核(阻塞等就绪,最多 15 秒);窗口操作回主线程
@@ -291,9 +257,8 @@ async fn check_update(app: AppHandle, manual: bool) {
 
 // ==================== 窗口 ====================
 
-/// 主窗口显示内核 UI(已存在则导航复用,否则创建)。顺手关掉设置窗口。
+/// 主窗口显示内核 UI(已存在则导航复用,否则创建)。
 fn show_kernel_ui(app: &AppHandle, url: &str) {
-    app.state::<KernelUrl>().0.lock().unwrap().replace(url.to_string());
     let parsed: Url = match url.parse() {
         Ok(u) => u,
         Err(e) => {
@@ -309,16 +274,16 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
             .title("MonkeyCode")
             .inner_size(1200.0, 800.0);
-        // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→设置窗 链路,
-        // 结果写进 document.title(无头环境唯一可靠的回读通道)
+        // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→壳配置 链路,
+        // 结果经本地回环上报(无头环境唯一可靠的回读通道)
         if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
             builder = builder.initialization_script(
                 "const report = (m) => fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
                  report('script-injected'); \
                  setTimeout(() => { \
-                   if (location.protocol !== 'http:') return; /* 仅在内核 UI 页触发,避免设置页循环 */ \
+                   if (location.protocol !== 'http:') return; /* 仅在内核 UI 页触发 */ \
                    if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
-                   window.__TAURI__.core.invoke('open_settings_window') \
+                   window.__TAURI__.core.invoke('get_config') \
                      .then(() => report('invoke-ok')) \
                      .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
                  }, 3000);",
@@ -330,42 +295,6 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         if let Ok(theme) = win.theme() {
             sync_tray_theme(app, theme);
         }
-    }
-    if let Some(sw) = app.get_webview_window("settings") {
-        let _ = sw.close();
-    }
-}
-
-/// 打开设置:主窗口存在时在窗口内切到设置页(单窗口体验);
-/// 首启(无主窗口)时才单独开设置窗。
-fn open_settings(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        if let Ok(url) = app_page_url("settings.html").parse::<Url>() {
-            let _ = win.navigate(url);
-            let _ = win.show();
-            let _ = win.unminimize();
-            let _ = win.set_focus();
-            return;
-        }
-    }
-    if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-        return;
-    }
-    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("MonkeyCode 设置")
-        .inner_size(640.0, 680.0)
-        .build();
-}
-
-/// 应用自带页面的完整 URL(与 Tauri 打包页面的 origin 约定一致)。
-fn app_page_url(page: &str) -> String {
-    if cfg!(windows) {
-        format!("http://tauri.localhost/{page}")
-    } else {
-        format!("tauri://localhost/{page}")
     }
 }
 
@@ -385,14 +314,8 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
-        .manage(KernelUrl(Mutex::new(None)))
         .manage(Tray(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![
-            get_config,
-            save_config,
-            open_settings_window,
-            close_settings
-        ])
+        .invoke_handler(tauri::generate_handler![get_config, save_config])
         .setup(|app| {
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle()) {
@@ -410,12 +333,9 @@ fn main() {
                 });
             }
 
+            // 无条件拉起内核:无配置时写出空清单,内核以零模型模式启动,
+            // 首启向导由内核 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
-            if !cfg.valid() {
-                eprintln!("[mc-desktop] 尚未配置模型,打开设置");
-                open_settings(app.handle());
-                return Ok(());
-            }
             let files = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
             match start_kernel(&files) {
                 Ok((child, port, token)) => {
@@ -483,7 +403,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_any_window(app),
-            "settings" => open_settings(app),
+            // 设置视图在内核 UI 里:恢复窗口后发事件让 React 切到设置视图
+            "settings" => {
+                show_any_window(app);
+                let _ = app.emit_to("main", "open-settings", ());
+            }
             "check-update" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move { check_update(app, true).await });
@@ -506,14 +430,12 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 恢复主窗口;没有主窗口(如首启未配置)则打开设置。
+/// 恢复主窗口(无条件拉内核后,主窗口=内核 UI 或错误页,总是存在)。
 fn show_any_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
-    } else {
-        open_settings(app);
     }
 }
 

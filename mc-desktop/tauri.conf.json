@@ -13,22 +13,17 @@
       "capabilities": [
         {
           "identifier": "shell-pages",
-          "description": "壳自带页面(设置/错误页)可调用壳的配置命令",
+          "description": "壳自带的错误页(无 command 调用,仅 core 基础能力)",
           "windows": [
-            "main",
-            "settings"
+            "main"
           ],
           "permissions": [
-            "core:default",
-            "allow-get-config",
-            "allow-save-config",
-            "allow-open-settings-window",
-            "allow-close-settings"
+            "core:default"
           ]
         },
         {
           "identifier": "kernel-ui",
-          "description": "主窗口加载的内核 UI(127.0.0.1 remote)可唤起壳的设置窗口",
+          "description": "主窗口加载的内核 UI(127.0.0.1 remote):读写壳持有的配置、原生目录选择",
           "windows": [
             "main"
           ],
@@ -39,7 +34,8 @@
           },
           "permissions": [
             "core:default",
-            "allow-open-settings-window",
+            "allow-get-config",
+            "allow-save-config",
             "dialog:allow-open"
           ]
         }

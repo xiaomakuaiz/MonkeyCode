@@ -1,11 +1,14 @@
-// 展示型组件:消息、工具行、计划卡、审批卡、diff 着色等。
+// 展示型组件:消息、思考、工具卡片、计划卡、审批卡、diff 等。
+// 样式值取自「MonkeyCode 原型(离线版)」的内联样式,逐一对应,不另行发挥。
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useMemo } from "react";
+import { useMemo, useState, type ReactElement } from "react";
 import { permStateLabel } from "./reduce";
 import type { LogItem, PlanEntry, SessionMeta } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
+
+export const MONO = "ui-monospace,Menlo,monospace";
 
 /** agent 正文按 Markdown 渲染(净化后注入);流式期间随批次重渲染 */
 export function Markdown({ text }: { text: string }) {
@@ -13,7 +16,21 @@ export function Markdown({ text }: { text: string }) {
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function SessionItem({
+/** 相对时间(会话列表右侧 meta,对应原型的「昨天 / 3 天前」) */
+function fmtAgo(iso?: string): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const d = Date.now() - t;
+  if (d < 60_000) return "刚刚";
+  if (d < 3_600_000) return Math.floor(d / 60_000) + " 分钟前";
+  if (d < 86_400_000) return Math.floor(d / 3_600_000) + " 小时前";
+  if (d < 172_800_000) return "昨天";
+  return Math.floor(d / 86_400_000) + " 天前";
+}
+
+/** 侧栏会话行:名称 + 右侧状态/时间,下行等宽目录(原型 local list) */
+export function SessionRow({
   meta,
   active,
   onClick,
@@ -22,14 +39,110 @@ export function SessionItem({
   active: boolean;
   onClick: () => void;
 }) {
+  const m =
+    meta.status === "running"
+      ? { text: "运行中", color: "var(--amberT)" }
+      : meta.status === "error"
+        ? { text: "出错", color: "var(--err)" }
+        : meta.status === "interrupted"
+          ? { text: "已中断", color: "var(--t5)" }
+          : { text: fmtAgo(meta.updated_at), color: "var(--t5)" };
   return (
-    <div className={"sess" + (active ? " active" : "")} onClick={onClick}>
-      <div className="sess-title">{meta.title || "(未命名)"}</div>
-      <div className="sess-meta">
-        <span className={"dot st-" + meta.status} title={meta.status} />
-        <span>{meta.turns} 轮</span>
-        {meta.worktree && <span title="隔离 worktree 会话">· 隔离</span>}
+    <div
+      className="hv-cardh"
+      onClick={onClick}
+      style={{
+        background: active ? "var(--card2)" : "transparent",
+        borderRadius: 10,
+        padding: "10px 13px",
+        cursor: "pointer",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 13,
+          fontWeight: active ? 600 : 400,
+          color: active ? "var(--t1)" : "var(--t3)",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{meta.title || "(未命名)"}</span>
+        {meta.worktree && (
+          <span
+            title="隔离 worktree 会话"
+            style={{
+              flex: "none",
+              fontSize: 10,
+              fontWeight: 600,
+              color: "var(--amberT)",
+              background: "var(--amberBg)",
+              borderRadius: 5,
+              padding: "1px 6px",
+            }}
+          >
+            隔离
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: m.color }}>{m.text}</span>
       </div>
+      <div
+        style={{
+          font: "10.5px " + MONO,
+          color: "var(--t5)",
+          marginTop: 4,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {meta.workdir}
+      </div>
+    </div>
+  );
+}
+
+/** 思考块:默认折叠为「✦ 思考 — 摘要 ▸」一行,点击展开(原型 thinking) */
+function ThoughtView({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const summary = text.trim().split("\n")[0] || "…";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div
+        className="hv-t3"
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          fontSize: 12,
+          color: "var(--t4)",
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+          minWidth: 0,
+        }}
+      >
+        <span style={{ flex: "none" }}>✦ 思考</span>
+        <span style={{ color: "var(--t5)", overflow: "hidden", textOverflow: "ellipsis" }}>— {summary}</span>
+        <span style={{ color: "var(--t5)", flex: "none" }}>{open ? "▾" : "▸"}</span>
+      </div>
+      {open && (
+        <div
+          style={{
+            borderLeft: "2px solid var(--line)",
+            padding: "2px 0 2px 14px",
+            fontSize: 12.5,
+            color: "var(--t4)",
+            lineHeight: 1.8,
+            whiteSpace: "pre-wrap",
+            animation: "mcin .2s ease",
+          }}
+        >
+          {text}
+        </div>
+      )}
     </div>
   );
 }
@@ -37,10 +150,28 @@ export function SessionItem({
 function PlanCard({ entries }: { entries: PlanEntry[] }) {
   const mark = (s: string) => (s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐");
   return (
-    <div className="plan">
+    <div
+      style={{
+        border: "1px solid var(--line)",
+        borderRadius: 14,
+        background: "var(--card)",
+        padding: "13px 16px",
+        fontSize: 12.5,
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        animation: "mcin .25s ease",
+      }}
+    >
       {entries.map((e, i) => (
-        <div key={i} className={"plan-item " + e.status}>
-          <span className="plan-mark">{mark(e.status)}</span> {e.content}
+        <div
+          key={i}
+          style={{
+            color: e.status === "completed" ? "var(--t5)" : e.status === "in_progress" ? "var(--amberT)" : "var(--t3)",
+            textDecoration: e.status === "completed" ? "line-through" : "none",
+          }}
+        >
+          <span style={{ display: "inline-block", width: 18 }}>{mark(e.status)}</span> {e.content}
         </div>
       ))}
     </div>
@@ -54,48 +185,137 @@ function statusMark(status: "run" | "ok" | "fail") {
 /** 子步骤滚动窗口:只展示最后几条,更早的折叠为计数行(完整过程走"查看子会话")。 */
 const MAX_SUB_ITEMS = 5;
 
-function ToolLine({
+function ToolCard({
   item,
+  radius,
   onOpenChild,
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
+  radius: string;
   onOpenChild?: (id: string) => void;
 }) {
   const subs = item.subItems ?? [];
   const hidden = subs.length - MAX_SUB_ITEMS;
+  // 标题按「动词 目标」拆开:动词弱化(t3)、目标等宽突出(t1),对应原型 verb/target
+  const sp = item.title.indexOf(" ");
+  const verb = sp > 0 ? item.title.slice(0, sp) : "";
+  const target = sp > 0 ? item.title.slice(sp + 1) : item.title;
+  const subStyle = {
+    display: "flex",
+    gap: 8,
+    alignItems: "baseline",
+    padding: "0 14px 7px 35px",
+    font: "11.5px/1.7 " + MONO,
+    color: "var(--t4)",
+    whiteSpace: "nowrap",
+    minWidth: 0,
+  } as const;
   return (
-    <div className="tool-block">
-      <div className="tool">
-        <span className={"tool-dot " + item.status}>{statusMark(item.status)}</span>
-        <span className="tool-name">{item.title}</span>
-        {item.out && <span className="tool-out">{item.out}</span>}
+    <div style={{ background: "var(--card)", borderRadius: radius, overflow: "hidden" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "9px 14px",
+          fontSize: 12.5,
+          whiteSpace: "nowrap",
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            color: item.status === "run" ? "var(--t4)" : item.status === "ok" ? "var(--ok)" : "var(--err)",
+            fontSize: 11,
+            flex: "none",
+            display: "inline-block",
+            animation: item.status === "run" ? "mcspin 1s linear infinite" : "none",
+          }}
+        >
+          {statusMark(item.status)}
+        </span>
+        {verb && <span style={{ color: "var(--t3)", flex: "none" }}>{verb}</span>}
+        <span style={{ font: "12px " + MONO, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {target}
+        </span>
         {item.childSessionId && onOpenChild && (
-          <button className="link" onClick={() => onOpenChild(item.childSessionId!)}>
+          <span
+            className="hv-t1"
+            onClick={() => onOpenChild(item.childSessionId!)}
+            style={{ font: "11.5px " + MONO, color: "var(--amberT)", cursor: "pointer", flex: "none" }}
+          >
             查看子会话
-          </button>
+          </span>
+        )}
+        {item.out && (
+          <span
+            style={{
+              marginLeft: "auto",
+              color: "var(--t5)",
+              fontSize: 11,
+              flex: "none",
+              maxWidth: "45%",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {item.out}
+          </span>
         )}
       </div>
       {hidden > 0 && (
-        <div className="tool sub">
-          <span className="sub-arrow">↳</span>
-          <span className="hint">… 已省略前 {hidden} 步</span>
+        <div style={{ ...subStyle, color: "var(--t5)" }}>
+          <span style={{ flex: "none" }}>↳</span>… 已省略前 {hidden} 步
         </div>
       )}
       {subs.slice(-MAX_SUB_ITEMS).map((s) => (
-        <div key={s.id} className="tool sub">
-          <span className="sub-arrow">↳</span>
-          <span className={"tool-dot " + s.status}>{statusMark(s.status)}</span>
-          <span className="tool-out">{s.title}</span>
+        <div key={s.id} style={subStyle}>
+          <span style={{ color: "var(--t5)", flex: "none" }}>↳</span>
+          <span
+            style={{
+              color: s.status === "run" ? "var(--t4)" : s.status === "ok" ? "var(--ok)" : "var(--err)",
+              fontSize: 10,
+              flex: "none",
+            }}
+          >
+            {statusMark(s.status)}
+          </span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{s.title}</span>
         </div>
       ))}
       {item.status === "run" && item.lastLine && (
-        <div className="tool sub">
-          <span className="sub-arrow">↳</span>
-          <span className="tool-out live">{item.lastLine}</span>
+        <div
+          style={{
+            ...subStyle,
+            display: "block",
+            color: "var(--t5)",
+            fontStyle: "italic",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            animation: "mcpulse 1.2s infinite",
+          }}
+        >
+          ↳ {item.lastLine}
         </div>
       )}
     </div>
   );
+}
+
+/** 审批卡终态文案(原型 resolvedText 风格) */
+function permResolved(state: string): { text: string; color: string } {
+  switch (state) {
+    case "allowed":
+    case "approved":
+      return { text: "✓ 已允许", color: "var(--ok)" };
+    case "rejected":
+    case "denied":
+      return { text: "✕ 已拒绝", color: "var(--err)" };
+    case "timeout":
+      return { text: "✕ " + permStateLabel(state), color: "var(--err)" };
+    default:
+      return { text: permStateLabel(state), color: "var(--t5)" };
+  }
 }
 
 function PermCard({
@@ -105,81 +325,242 @@ function PermCard({
   item: Extract<LogItem, { kind: "perm" }>;
   onAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
 }) {
+  const btn = {
+    padding: "7px 18px",
+    background: "var(--card2)",
+    color: "var(--t2)",
+    borderRadius: 9,
+    cursor: "pointer",
+  } as const;
   return (
-    <div className="perm">
-      <div className="perm-q">
-        ⚠ 请求执行:<b>{item.title}</b> <span className="hint">({item.tool})</span>
+    <div
+      style={{
+        border: "1px solid var(--amberBd)",
+        borderRadius: 14,
+        background: "var(--amberBg)",
+        padding: "15px 17px",
+        maxWidth: 540,
+        animation: "mcin .25s ease",
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--amberT)", whiteSpace: "nowrap" }}>
+        需要确认 · {item.tool || "执行操作"}
+      </div>
+      <div
+        style={{
+          margin: "10px 0 12px",
+          padding: "9px 13px",
+          background: "var(--codeBg)",
+          borderRadius: 9,
+          font: "12.5px " + MONO,
+          color: "var(--t1)",
+          wordBreak: "break-all",
+        }}
+      >
+        {item.title}
       </div>
       {item.state === "open" ? (
-        <div className="perm-btns">
-          <button onClick={() => onAnswer(item.id, "allow")}>允许</button>
-          <button className="ghost" onClick={() => onAnswer(item.id, "always")}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, fontWeight: 600, flexWrap: "wrap" }}>
+          <div
+            className="hv-op"
+            onClick={() => onAnswer(item.id, "allow")}
+            style={{ ...btn, background: "var(--amber)", color: "var(--onAmber)" }}
+          >
+            允许
+          </div>
+          <div className="hv-cardh" onClick={() => onAnswer(item.id, "always")} style={btn}>
             本会话始终
-          </button>
-          <button className="ghost" onClick={() => onAnswer(item.id, "persist")}>
+          </div>
+          <div className="hv-cardh" onClick={() => onAnswer(item.id, "persist")} style={btn}>
             此项目永久
-          </button>
-          <button className="danger" onClick={() => onAnswer(item.id, "deny")}>
+          </div>
+          <div
+            className="hv-err"
+            onClick={() => onAnswer(item.id, "deny")}
+            style={{ padding: "7px 14px", color: "var(--t4)", borderRadius: 9, cursor: "pointer" }}
+          >
             拒绝
-          </button>
+          </div>
+          <span style={{ marginLeft: "auto", fontWeight: 400, fontSize: 11, color: "var(--t5)" }}>
+            ⏎ 允许 · esc 拒绝
+          </span>
         </div>
       ) : (
-        <div className="hint">{permStateLabel(item.state)}</div>
+        <div style={{ fontSize: 12, color: permResolved(item.state).color }}>{permResolved(item.state).text}</div>
       )}
     </div>
   );
 }
 
-export function LogItemView({
+function ItemView({
   item,
   onPermAnswer,
-  onOpenChild,
 }: {
-  item: LogItem;
+  item: Exclude<LogItem, { kind: "tool" }>;
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
-  onOpenChild?: (id: string) => void;
 }) {
   switch (item.kind) {
     case "user":
-      return <div className="msg user">{item.text}</div>;
+      return (
+        <div
+          style={{
+            alignSelf: "flex-end",
+            maxWidth: "70%",
+            background: "var(--card2)",
+            borderRadius: "16px 16px 5px 16px",
+            padding: "10px 16px",
+            color: "var(--t1)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            animation: "mcin .25s ease",
+          }}
+        >
+          {item.text}
+        </div>
+      );
     case "agent":
       return (
-        <div className="msg agent">
+        <div style={{ maxWidth: "90%", color: "var(--t2)", wordBreak: "break-word", animation: "mcin .25s ease" }}>
           <Markdown text={item.text} />
         </div>
       );
     case "thought":
-      return <div className="msg thought">{item.text}</div>;
-    case "tool":
-      return <ToolLine item={item} onOpenChild={onOpenChild} />;
+      return <ThoughtView text={item.text} />;
     case "plan":
       return <PlanCard entries={item.entries} />;
     case "sys":
-      return <div className={"sysline" + (item.error ? " err" : "")}>{item.text}</div>;
+      return (
+        <div style={{ color: item.error ? "var(--err)" : "var(--t5)", fontSize: 11.5, textAlign: "center" }}>
+          {item.text}
+        </div>
+      );
     case "perm":
       return <PermCard item={item} onAnswer={onPermAnswer} />;
   }
 }
 
-/** unified diff 按行着色 */
-export function DiffView({ text }: { text: string }) {
-  const lines = text.split("\n");
+/** 对话流:相邻工具项聚成一组(1px 缝隙 + 端部大圆角,与原型 t.radius 方案一致) */
+export function LogList({
+  items,
+  onPermAnswer,
+  onOpenChild,
+}: {
+  items: LogItem[];
+  onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
+  onOpenChild?: (id: string) => void;
+}) {
+  const out: ReactElement[] = [];
+  for (let i = 0; i < items.length; ) {
+    const it = items[i];
+    if (it.kind === "tool") {
+      const start = i;
+      const group: Extract<LogItem, { kind: "tool" }>[] = [];
+      while (i < items.length) {
+        const t = items[i];
+        if (t.kind !== "tool") break;
+        group.push(t);
+        i++;
+      }
+      const n = group.length;
+      out.push(
+        <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          {group.map((t, j) => (
+            <ToolCard
+              key={t.tcId || j}
+              item={t}
+              onOpenChild={onOpenChild}
+              radius={n === 1 ? "11px" : j === 0 ? "11px 11px 4px 4px" : j === n - 1 ? "4px 4px 11px 11px" : "4px"}
+            />
+          ))}
+        </div>,
+      );
+    } else {
+      out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} />);
+      i++;
+    }
+  }
+  return <>{out}</>;
+}
+
+interface DiffRow {
+  no: string;
+  text: string;
+  kind: "h" | "add" | "del" | "ctx";
+}
+
+/** unified diff → 带行号的行(行号取新文件侧,删除行取旧文件侧,同原型演示数据) */
+function parseDiff(text: string): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let oldN = 0;
+  let newN = 0;
+  for (const line of text.split("\n")) {
+    const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (m) {
+      oldN = +m[1];
+      newN = +m[2];
+      rows.push({ no: "", text: line, kind: "h" });
+      continue;
+    }
+    if (
+      line.startsWith("diff ") ||
+      line.startsWith("index ") ||
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("new file") ||
+      line.startsWith("deleted file") ||
+      line.startsWith("similarity") ||
+      line.startsWith("rename") ||
+      line.startsWith("old mode") ||
+      line.startsWith("new mode")
+    )
+      continue;
+    if (line.startsWith("+")) {
+      rows.push({ no: String(newN++), text: line, kind: "add" });
+    } else if (line.startsWith("-")) {
+      rows.push({ no: String(oldN++), text: line, kind: "del" });
+    } else {
+      rows.push({ no: String(newN), text: line, kind: "ctx" });
+      oldN++;
+      newN++;
+    }
+  }
+  return rows;
+}
+
+/** diff 面板(原型改动抽屉的行渲染:36px 行号列 + hunk 灰条 + 增删着色) */
+export function DiffPanel({ text }: { text: string }) {
+  const rows = useMemo(() => parseDiff(text), [text]);
+  if (!rows.some((r) => r.kind === "h")) {
+    // 非 diff 内容(加载中/错误/无差异提示)
+    return (
+      <pre style={{ margin: 0, padding: "10px 24px", font: "12px/1.9 " + MONO, color: "var(--t4)", whiteSpace: "pre-wrap" }}>
+        {text}
+      </pre>
+    );
+  }
   return (
-    <pre className="diff">
-      {lines.map((line, i) => {
-        let cls = "";
-        if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index "))
-          cls = "diff-meta";
-        else if (line.startsWith("@@")) cls = "diff-hunk";
-        else if (line.startsWith("+")) cls = "diff-add";
-        else if (line.startsWith("-")) cls = "diff-del";
-        return (
-          <span key={i} className={cls}>
-            {line}
-            {"\n"}
-          </span>
-        );
-      })}
-    </pre>
+    <div style={{ font: "12px/1.9 " + MONO }}>
+      {rows.map((r, i) =>
+        r.kind === "h" ? (
+          <div key={i} style={{ display: "flex", padding: "2px 24px", background: "var(--card)", color: "var(--t4)", fontSize: 11 }}>
+            <span style={{ width: 36, flex: "none" }} />
+            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{r.text}</span>
+          </div>
+        ) : (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              padding: "0 24px",
+              background: r.kind === "add" ? "var(--addBg)" : r.kind === "del" ? "var(--delBg)" : "transparent",
+              color: r.kind === "add" ? "var(--addT)" : r.kind === "del" ? "var(--delT)" : "var(--t3)",
+            }}
+          >
+            <span style={{ width: 36, color: "var(--t5)", flex: "none", opacity: 0.6 }}>{r.no}</span>
+            <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", minWidth: 0 }}>{r.text || " "}</span>
+          </div>
+        ),
+      )}
+    </div>
   );
 }

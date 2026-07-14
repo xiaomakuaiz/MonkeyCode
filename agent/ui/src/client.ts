@@ -1,5 +1,5 @@
 // 内核连接层:REST(会话管理)+ WS(帧双向流,含 call/call-response 同步查询)。
-import type { Frame, ModelInfo, SessionMeta } from "./types";
+import type { Frame, HostConfig, ModelInfo, SessionMeta } from "./types";
 
 export const token: string =
   location.hash.slice(1) || window.prompt("访问令牌(serve 启动时打印)") || "";
@@ -60,6 +60,7 @@ export const createSession = (workdir: string, model: string, createDir = false)
 
 interface TauriGlobal {
   core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> };
+  event?: { listen?: (name: string, cb: () => void) => Promise<() => void> };
 }
 
 /** 原生目录选择(桌面壳内可用);非壳环境或取消返回 null。 */
@@ -81,17 +82,29 @@ export function inDesktopShell(): boolean {
   return !!(window as { __TAURI__?: TauriGlobal }).__TAURI__?.core?.invoke;
 }
 
-/** 唤起壳的设置窗口(模型等配置归壳管理)。
- * 非壳环境或调用被拒(ACL 等)经 onError 上报,不静默吞掉。 */
-export function openHostSettings(onError: (msg: string) => void): void {
+/** 读取壳持有的应用配置(模型 + MCP);非壳环境返回 null(浏览器模式只读)。 */
+export async function getHostConfig(): Promise<HostConfig | null> {
   const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
-  if (!tauri?.core?.invoke) {
-    onError("浏览器模式下请在桌面应用中修改配置(或经宿主环境变量下发)");
-    return;
-  }
-  tauri.core.invoke("open_settings_window").catch((e) => {
-    onError("打开设置失败: " + (e instanceof Error ? e.message : String(e)));
-  });
+  if (!tauri?.core?.invoke) return null;
+  return (await tauri.core.invoke("get_config")) as HostConfig;
+}
+
+/** 保存应用配置:壳写盘(0600)并重启内核,成功后本页面会被壳导航到新内核 URL。 */
+export async function saveHostConfig(config: HostConfig): Promise<void> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) throw new Error("浏览器模式下配置只读,请在桌面应用中修改");
+  await tauri.core.invoke("save_config", { config });
+}
+
+/** 订阅壳事件(如托盘"设置"),返回退订函数;非壳环境为空操作。 */
+export function onHostEvent(name: string, cb: () => void): () => void {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  const listen = tauri?.event?.listen;
+  if (!listen) return () => {};
+  const un = listen(name, cb);
+  return () => {
+    un.then((f) => f()).catch(() => {});
+  };
 }
 
 export interface Conn {

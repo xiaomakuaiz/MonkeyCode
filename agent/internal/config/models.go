@@ -18,8 +18,9 @@ type ModelProfile struct {
 }
 
 // LoadModels 加载模型清单:MC_AGENT_MODELS 指向 JSON 数组文件。
-// 未设置该环境变量时返回 nil(调用方退回单配置路径)。
-// 保证:每项字段齐全、名称唯一、恰好一个 Default(未标记则取第一个)。
+// 未设置该环境变量时返回 nil(调用方退回单配置路径);清单存在但为空时
+// 返回非 nil 空切片(合法状态:桌面壳首启未配置,serve 以零模型模式启动)。
+// 非空时保证:每项字段齐全、名称唯一、恰好一个 Default(未标记则取第一个)。
 func LoadModels() ([]ModelProfile, error) {
 	path := os.Getenv("MC_AGENT_MODELS")
 	if path == "" {
@@ -34,7 +35,7 @@ func LoadModels() ([]ModelProfile, error) {
 		return nil, fmt.Errorf("模型清单 %s 解析失败: %w", path, err)
 	}
 	if len(profiles) == 0 {
-		return nil, fmt.Errorf("模型清单 %s 为空", path)
+		return []ModelProfile{}, nil
 	}
 
 	seen := map[string]bool{}

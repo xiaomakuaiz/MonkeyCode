@@ -731,6 +731,46 @@ func TestPerSessionModelAndSwitch(t *testing.T) {
 	ls.mu.Unlock()
 }
 
+// 零模型模式(宿主接管配置但用户未添加模型):服务照常起,
+// /api/models 返回空数组,建会话 400 且文案可引导配置,/healthz 外显版本。
+func TestZeroModelServe(t *testing.T) {
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Version:     "test-1.0",
+		NewProvider: func(string) (provider.Provider, error) {
+			return nil, fmt.Errorf("尚未配置模型,请先在设置中添加")
+		},
+		ListModels: func() []ModelInfo { return []ModelInfo{} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, data := apiReq(t, ts, "GET", "/api/models", "test-token", "")
+	if resp.StatusCode != 200 || strings.TrimSpace(string(data)) != "[]" {
+		t.Fatalf("零模型 /api/models 应返回 []: %d %s", resp.StatusCode, data)
+	}
+
+	resp, data = apiReq(t, ts, "POST", "/api/sessions", "test-token",
+		fmt.Sprintf(`{"workdir":%q}`, t.TempDir()))
+	if resp.StatusCode != 400 || !strings.Contains(string(data), "尚未配置模型") {
+		t.Fatalf("零模型建会话应 400 并引导配置: %d %s", resp.StatusCode, data)
+	}
+
+	hresp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hresp.Body.Close()
+	hdata, _ := io.ReadAll(hresp.Body)
+	if !strings.Contains(string(hdata), `"version":"test-1.0"`) {
+		t.Fatalf("/healthz 应外显版本: %s", hdata)
+	}
+}
+
 func framesContain(fs []frame.Frame, substr string) bool {
 	for _, f := range fs {
 		if strings.Contains(string(f.Data), substr) {

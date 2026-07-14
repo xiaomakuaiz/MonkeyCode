@@ -50,14 +50,19 @@ func serveCmd() *cobra.Command {
 				Token:            token,
 				SessionRoot:      session.DefaultRoot(),
 				SubagentMaxSteps: flags.subagentSteps,
+				Version:          version,
 			}
 
 			// 宿主(桌面壳)下发模型清单时走多模型路径:每会话可绑定/切换
 			// 不同模型;否则退回单配置(CLI 直连或平台登录)。
 			profiles, err := config.LoadModels()
 			if err != nil {
-				return err
+				// 清单内容问题不致死:降级为零模型模式,UI 引导用户重新配置。
+				// (若在此退出,坏配置持久化后壳每次启动都失败,用户无从自救)
+				fmt.Fprintf(os.Stderr, "警告: %v(以零模型模式启动)\n", err)
+				profiles = []config.ModelProfile{}
 			}
+			manifestMode := profiles != nil
 			if len(profiles) > 0 {
 				opts.Model = config.FindModel(profiles, "").Name
 				opts.NewProvider = func(name string) (provider.Provider, error) {
@@ -74,6 +79,17 @@ func serveCmd() *cobra.Command {
 					}
 					return out
 				}
+				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
+					platExtras, platRoots := platformExtras(cfg)
+					return skills.Assemble(workdir, platExtras, platRoots)
+				}
+			} else if manifestMode {
+				// 清单存在但为空(宿主已接管配置、用户尚未添加模型):
+				// 零模型模式——服务与 UI 照常起,建会话前由 UI 引导配置。
+				opts.NewProvider = func(string) (provider.Provider, error) {
+					return nil, fmt.Errorf("尚未配置模型,请先在设置中添加")
+				}
+				opts.ListModels = func() []server.ModelInfo { return []server.ModelInfo{} }
 				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
 					platExtras, platRoots := platformExtras(cfg)
 					return skills.Assemble(workdir, platExtras, platRoots)

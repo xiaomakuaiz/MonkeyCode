@@ -68,6 +68,8 @@ type Options struct {
 	// BuildExtras 按会话工作区装配系统提示增量(本地/平台技能与规则)
 	// 及工具只读附加根;nil 表示无增量。
 	BuildExtras func(workdir string) (*contextmgr.Extras, []string)
+	// Version 内核版本(/healthz 外显,宿主可据此做兼容判断)。
+	Version string
 }
 
 // Server localhost 宿主。
@@ -128,7 +130,7 @@ func (s *Server) Addr() string { return s.opts.Addr }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "model": s.opts.Model})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "model": s.opts.Model, "version": s.opts.Version})
 	})
 	mux.HandleFunc("GET /api/sessions", s.auth(s.handleListSessions))
 	mux.HandleFunc("POST /api/sessions", s.auth(s.handleCreateSession))
@@ -264,6 +266,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.opts.NewProvider(req.Model); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	// 展开 ~/(桌面 UI 的默认工作目录以 ~ 表达,跨平台由内核解析)
+	if req.Workdir == "~" || strings.HasPrefix(req.Workdir, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			req.Workdir = filepath.Join(home, strings.TrimPrefix(req.Workdir, "~"))
+		}
 	}
 	workdir, err := filepath.Abs(req.Workdir)
 	if err != nil {

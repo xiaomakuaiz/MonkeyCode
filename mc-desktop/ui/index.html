@@ -5,28 +5,44 @@
 <meta charset="utf-8">
 <title>MonkeyCode</title>
 <style>
+  :root {
+    --bg:#131316; --card:rgba(255,255,255,.04); --card2:rgba(255,255,255,.07);
+    --cardh:rgba(255,255,255,.09); --line:rgba(255,255,255,.05);
+    --t1:#fafafa; --t2:#d8d8de; --t3:#a1a1ac; --t4:#71717c;
+    --amber:#10b981; --amberT:#34d399; --onAmber:#04130c;
+    --err:#f87171; --codeBg:rgba(0,0,0,.35);
+  }
+  * { box-sizing:border-box; }
   body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
-         background:#0f1115; color:#e6e6e6;
-         font:15px/1.8 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
-  .box { max-width:520px; padding:32px; text-align:center; }
-  .err { color:#f85149; word-break:break-all; }
-  .hint { color:#8b93a3; font-size:13px; margin-top:12px; }
+         background:var(--bg); color:var(--t2);
+         font:13.5px/1.8 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .box { max-width:460px; padding:32px; display:flex; flex-direction:column;
+         align-items:center; gap:10px; text-align:center; animation:mcin .25s ease; }
+  .logo { width:52px; height:52px; border-radius:16px;
+          background:linear-gradient(135deg,#34d399,#059669);
+          display:flex; align-items:center; justify-content:center;
+          font:800 26px system-ui; box-shadow:0 6px 20px rgba(16,185,129,.3); }
+  h2 { margin:4px 0 0; font-size:18px; font-weight:700; color:var(--t1); letter-spacing:-.01em; }
+  .err { margin:6px 0 0; padding:9px 13px; background:var(--codeBg); border-radius:9px;
+         font:12.5px/1.7 ui-monospace,Menlo,monospace; color:var(--err); word-break:break-all; }
+  .hint { color:var(--t4); font-size:12px; line-height:1.7; margin:4px 0 0; }
+  button { margin-top:14px; padding:8px 22px; background:var(--amber); color:var(--onAmber);
+           border:0; border-radius:9px; cursor:pointer; font:600 12.5px/1.6 inherit; }
+  button:hover { opacity:.85; }
+  @keyframes mcin { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
 </style>
 </head>
 <body>
 <div class="box">
-  <h2>⚠ 启动失败</h2>
+  <div class="logo">🐒</div>
+  <h2>启动失败</h2>
   <p class="err" id="msg">未知错误</p>
-  <p class="hint">可尝试在设置中检查模型配置后重新保存;若为安装问题,
+  <p class="hint">内核未能启动(配置问题不会导致此页;通常是安装不完整),
      请重新安装应用后重试。</p>
-  <p><button id="settingsBtn" style="background:#4f8cff;color:#fff;border:0;border-radius:8px;
-     padding:8px 16px;cursor:pointer;font:inherit">打开设置</button></p>
 </div>
 <script>
   const m = decodeURIComponent(location.hash.slice(1) || '');
   if (m) document.getElementById('msg').textContent = m;
-  document.getElementById('settingsBtn').onclick = () =>
-    window.__TAURI__.core.invoke('open_settings_window').catch(() => {});
 </script>
 </body>
 </html>

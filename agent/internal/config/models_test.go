@@ -66,7 +66,6 @@ func TestLoadModelsErrors(t *testing.T) {
 		"字段不全":        `[{"name":"a","base_url":"u","model":"m"}]`,
 		"名称重复":        `[{"name":"a","base_url":"u","api_key":"k","model":"m"},{"name":"a","base_url":"u","api_key":"k","model":"m2"}]`,
 		"provider 非法": `[{"name":"a","provider":"gemini","base_url":"u","api_key":"k","model":"m"}]`,
-		"空清单":         `[]`,
 		"非法 JSON":     `{`,
 	}
 	for name, content := range cases {
@@ -74,5 +73,18 @@ func TestLoadModelsErrors(t *testing.T) {
 		if _, err := LoadModels(); err == nil {
 			t.Fatalf("%s 应报错", name)
 		}
+	}
+}
+
+// 空清单是合法状态(宿主接管配置但用户未添加模型):返回非 nil 空切片,
+// 与"未设置清单"(nil)区分,serve 据此进入零模型模式而非退回单配置。
+func TestLoadModelsEmptyManifest(t *testing.T) {
+	writeModels(t, `[]`)
+	profiles, err := LoadModels()
+	if err != nil {
+		t.Fatalf("空清单不应报错: %v", err)
+	}
+	if profiles == nil || len(profiles) != 0 {
+		t.Fatalf("空清单应返回非 nil 空切片: %#v", profiles)
 	}
 }

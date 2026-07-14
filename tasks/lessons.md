@@ -1,5 +1,14 @@
 # Lessons
 
+## 2026-07-14 「桌面客户端」的范围
+
+- **用户说"重构 mc-desktop / 桌面客户端"指的是用户看到的整个界面,不只是壳目录**:壳(mc-desktop)自身只有错误页和设置页,聊天主界面在 agent/ui(内核 embed 的 React 应用)。按目录字面理解只改了壳页面,被用户指出"agent 里的样式和交互都没改"。UI 类需求先问"用户实际看到的界面由哪些模块渲染",按视觉归属划范围,而不是按仓库目录名。
+
+## 2026-07-14 照原型重构 UI 不要"意译"
+
+- **给了高保真原型就逐块转写,别自己重新设计一套"近似"样式**:第一版把原型消化成自创的 CSS 类体系,间距/层级/文案细节全走样,被用户打回("你的这个样式真的不行")。正确做法:先把原型真实渲染截图当基准,然后 DOM 结构和内联样式数值原样搬(原型是内联样式就搬进 JSX,CSS 文件只留内联做不到的 hover/滚动条/keyframes),交互清单(排队发送、快捷键、行号 diff、空态文案)逐条核对。
+- **headless Chromium 截图验证 UI 时的两个坑**:合成器驱动的 opacity/transform 动画不吃 virtual-time,截图会定格在中间帧(注入 `*{animation:none!important}` 或加 `--run-all-compositor-stages-before-draw`);mock WebSocket 必须带 `static OPEN = 1` 等静态常量,否则代码里 `ws.readyState !== WebSocket.OPEN` 恒真,call 全部走"未连接"分支。截图空白先 `--dump-dom` 看 DOM 是否有内容,区分"没渲染"和"没截到"。
+
 ## 2026-07-14 IME 回车误发送(macOS 壳)
 
 - **WebKit 的 IME 确认键顺序与 Chromium 相反,`isComposing` 单独不够**:Chromium 上确认候选的
