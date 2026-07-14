@@ -240,7 +240,8 @@ export default function App() {
             placeholder="输入任务…(Enter 发送,Shift+Enter 换行)"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              // 输入法组合态(选字/确认候选)的 Enter 不发送
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 send();
               }
@@ -386,7 +387,7 @@ function NewSessionDialog({
           value={workdir}
           placeholder="/home/you/dev/project"
           onChange={(e) => setWorkdir(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void create()}
+          onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void create()}
         />
         {models.length > 1 && (
           <>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -21,8 +22,43 @@ type agentTool struct {
 }
 
 // ToolName MCP 工具的内核侧名称:mcp__<server>__<tool>。
+// LLM API 要求工具名匹配 ^[a-zA-Z0-9_-]+$,server/tool 名可能含中文、点号等
+// (设置页或 mcp.json 里用户随意起名),各段先净化再拼接。
 func ToolName(server, tool string) string {
-	return "mcp__" + server + "__" + tool
+	return "mcp__" + sanitizePart(server) + "__" + sanitizePart(tool)
+}
+
+// sanitizePart 把名字净化为 [a-zA-Z0-9_-]+:非法字符连段折叠为单个下划线;
+// 一旦发生改写,追加原名的确定性短哈希——既保证不同原名不会撞名
+// (如两个中文名都被折叠),又保证跨会话稳定(权限持久化规则不失效)。
+func sanitizePart(s string) string {
+	var b strings.Builder
+	dirty := false
+	prevUnderscore := false
+	for _, r := range s {
+		valid := r == '-' || r == '_' ||
+			(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if valid {
+			b.WriteRune(r)
+			prevUnderscore = r == '_'
+			continue
+		}
+		dirty = true
+		if !prevUnderscore {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+	if !dirty {
+		return s
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return fmt.Sprintf("x%08x", h.Sum32())
+	}
+	return fmt.Sprintf("%s_%08x", out, h.Sum32())
 }
 
 func (t *agentTool) Name() string { return ToolName(t.server.Name, t.tool.Name) }
