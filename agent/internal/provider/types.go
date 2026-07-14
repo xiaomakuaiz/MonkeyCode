@@ -78,7 +78,19 @@ type Usage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
-// Add 累加用量。
+// Merge 以流式 usage 快照更新单次请求的用量:input 取最新非零值,output 取
+// 最大值(协议中为累计快照)。不能用 Add——部分网关在每个增量事件都携带
+// 累计 usage,逐事件累加会把统计吹到数倍虚高。
+func (u *Usage) Merge(o Usage) {
+	if o.InputTokens > 0 {
+		u.InputTokens = o.InputTokens
+	}
+	if o.OutputTokens > u.OutputTokens {
+		u.OutputTokens = o.OutputTokens
+	}
+}
+
+// Add 累加用量(跨请求的会话级累计用;单次流式请求内用 Merge)。
 func (u *Usage) Add(o Usage) {
 	u.InputTokens += o.InputTokens
 	u.OutputTokens += o.OutputTokens

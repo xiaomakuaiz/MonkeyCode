@@ -191,7 +191,7 @@ func parseSSE(r io.Reader, h *StreamHandler) (*Result, error) {
 		switch ev.Type {
 		case "message_start":
 			if ev.Message != nil {
-				res.Usage.Add(ev.Message.Usage)
+				res.Usage.Merge(ev.Message.Usage)
 			}
 		case "content_block_start":
 			if ev.ContentBlock == nil {
@@ -238,7 +238,7 @@ func parseSSE(r io.Reader, h *StreamHandler) (*Result, error) {
 				res.StopReason = mapStopReason(ev.Delta.StopReason)
 			}
 			if ev.Usage != nil {
-				res.Usage.Add(*ev.Usage)
+				res.Usage.Merge(*ev.Usage)
 			}
 		case "message_stop":
 			gotMessageStop = true

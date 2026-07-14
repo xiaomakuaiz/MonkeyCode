@@ -14,7 +14,8 @@ export interface SessionMeta {
   model: string;
   turns: number;
   status: string; // created | running | finished | interrupted | error
-  worktree?: unknown;
+  updated_at?: string;
+  worktree?: { repo?: string };
 }
 
 /** WS 下行帧(data 为 base64(JSON)) */

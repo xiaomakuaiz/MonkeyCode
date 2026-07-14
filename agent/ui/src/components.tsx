@@ -27,8 +27,8 @@ export function SessionItem({
       <div className="sess-title">{meta.title || "(未命名)"}</div>
       <div className="sess-meta">
         <span className={"dot st-" + meta.status} title={meta.status} />
-        <span className="sess-dir">{meta.workdir}</span>
-        <span>· {meta.turns}轮</span>
+        <span>{meta.turns} 轮</span>
+        {meta.worktree && <span title="隔离 worktree 会话">· 隔离</span>}
       </div>
     </div>
   );

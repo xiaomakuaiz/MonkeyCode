@@ -33,7 +33,16 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
       ...(opts.headers || {}),
     },
   });
-  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (!r.ok) {
+    let msg = "HTTP " + r.status;
+    try {
+      const body = (await r.json()) as { error?: string };
+      if (body?.error) msg = body.error;
+    } catch {
+      /* 无 JSON 错误体 */
+    }
+    throw new Error(msg);
+  }
   return r.json() as Promise<T>;
 }
 
@@ -41,16 +50,35 @@ export const listSessions = () => api<SessionMeta[]>("/api/sessions");
 
 export const listModels = () => api<ModelInfo[]>("/api/models");
 
-export const createSession = (workdir: string, worktree: boolean, model: string) =>
+export const createSession = (workdir: string, model: string, createDir = false) =>
   api<SessionMeta>("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ workdir, worktree, model }),
+    body: JSON.stringify({ workdir, model, create_dir: createDir }),
   });
 
 // ==================== 宿主(桌面壳)集成 ====================
 
 interface TauriGlobal {
-  core?: { invoke?: (cmd: string) => Promise<unknown> };
+  core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> };
+}
+
+/** 原生目录选择(桌面壳内可用);非壳环境或取消返回 null。 */
+export async function pickDirectory(): Promise<string | null> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return null;
+  try {
+    const r = await tauri.core.invoke("plugin:dialog|open", {
+      options: { directory: true, multiple: false, title: "选择工作区目录" },
+    });
+    return typeof r === "string" ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 是否运行在桌面壳内。 */
+export function inDesktopShell(): boolean {
+  return !!(window as { __TAURI__?: TauriGlobal }).__TAURI__?.core?.invoke;
 }
 
 /** 唤起壳的设置窗口(模型等配置归壳管理)。

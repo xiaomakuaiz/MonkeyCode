@@ -3,9 +3,11 @@ import {
   b64encode,
   connect,
   createSession,
+  inDesktopShell,
   listModels,
   listSessions,
   openHostSettings,
+  pickDirectory,
   type Conn,
 } from "./client";
 import { DiffView, LogItemView, SessionItem } from "./components";
@@ -13,6 +15,35 @@ import { answerPerm, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { FileChange, Frame, ModelInfo, SessionMeta } from "./types";
 
 type Tab = "chat" | "changes";
+
+interface ProjectGroup {
+  dir: string;
+  name: string;
+  latest: string;
+  items: SessionMeta[];
+}
+
+/** 会话按项目(工作区目录)分组;worktree 会话归属原仓库目录 */
+function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
+  const map = new Map<string, SessionMeta[]>();
+  for (const m of sessions) {
+    const dir = m.worktree?.repo || m.workdir;
+    const list = map.get(dir);
+    if (list) list.push(m);
+    else map.set(dir, [m]);
+  }
+  const groups = [...map.entries()].map(([dir, items]) => {
+    items.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    return {
+      dir,
+      name: dir.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || dir,
+      latest: items[0]?.updated_at ?? "",
+      items,
+    };
+  });
+  groups.sort((a, b) => b.latest.localeCompare(a.latest));
+  return groups;
+}
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -23,11 +54,28 @@ export default function App() {
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [changesErr, setChangesErr] = useState("");
   const [diff, setDiff] = useState<{ path: string; text: string } | null>(null);
-  const [showNew, setShowNew] = useState(false);
+  const [showNew, setShowNew] = useState<{ dir: string } | null>(null);
   const [input, setInput] = useState("");
   const [childView, setChildView] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [sessionModel, setSessionModel] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("mc.collapsedGroups") || "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+
+  const toggleGroup = (dir: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      localStorage.setItem("mc.collapsedGroups", JSON.stringify([...next]));
+      return next;
+    });
+  };
 
   const connRef = useRef<Conn | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -173,17 +221,37 @@ export default function App() {
           <span className="brand-name">MonkeyCode</span>
           <span className="hint">本地内核</span>
         </div>
-        <button className="primary wide" onClick={() => setShowNew(true)}>
+        <button className="primary wide" onClick={() => setShowNew({ dir: "" })}>
           + 新建会话
         </button>
         <div className="sessions">
-          {sessions.map((m) => (
-            <SessionItem
-              key={m.id}
-              meta={m}
-              active={m.id === currentId}
-              onClick={() => openSession(m.id, m.model)}
-            />
+          {groupByProject(sessions).map((g) => (
+            <div key={g.dir} className="group">
+              <div className="group-head" title={g.dir} onClick={() => toggleGroup(g.dir)}>
+                <span className="chev">{collapsed.has(g.dir) ? "▸" : "▾"}</span>
+                <span className="group-name">{g.name}</span>
+                <span className="hint">{g.items.length}</span>
+                <button
+                  className="group-plus"
+                  title={"在 " + g.dir + " 新建会话"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowNew({ dir: g.dir });
+                  }}
+                >
+                  +
+                </button>
+              </div>
+              {!collapsed.has(g.dir) &&
+                g.items.map((m) => (
+                  <SessionItem
+                    key={m.id}
+                    meta={m}
+                    active={m.id === currentId}
+                    onClick={() => openSession(m.id, m.model)}
+                  />
+                ))}
+            </div>
           ))}
           {sessions.length === 0 && <div className="hint pad">暂无会话</div>}
         </div>
@@ -315,9 +383,10 @@ export default function App() {
       {showNew && (
         <NewSessionDialog
           models={models}
-          onClose={() => setShowNew(false)}
+          initialDir={showNew.dir}
+          onClose={() => setShowNew(null)}
           onCreated={(meta) => {
-            setShowNew(false);
+            setShowNew(null);
             void refreshSessions().then(() => openSession(meta.id, meta.model));
           }}
         />
@@ -351,28 +420,42 @@ function SessionViewer({ id }: { id: string }) {
 
 function NewSessionDialog({
   models,
+  initialDir,
   onClose,
   onCreated,
 }: {
   models: ModelInfo[];
+  initialDir: string;
   onClose: () => void;
   onCreated: (meta: SessionMeta) => void;
 }) {
-  const [workdir, setWorkdir] = useState("");
-  const [worktree, setWorktree] = useState(false);
+  const [workdir, setWorkdir] = useState(initialDir);
   const [model, setModel] = useState(models.find((m) => m.default)?.name ?? "");
   const [err, setErr] = useState("");
+  const [offerCreate, setOfferCreate] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const create = async () => {
+  const create = async (createDir = false) => {
     if (!workdir.trim() || busy) return;
     setBusy(true);
     setErr("");
+    setOfferCreate(false);
     try {
-      onCreated(await createSession(workdir.trim(), worktree, model));
+      onCreated(await createSession(workdir.trim(), model, createDir));
     } catch (e) {
-      setErr("创建失败: " + (e instanceof Error ? e.message : e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr("创建失败: " + msg);
+      if (msg.includes("目录不存在")) setOfferCreate(true);
       setBusy(false);
+    }
+  };
+
+  const browse = async () => {
+    const dir = await pickDirectory();
+    if (dir) {
+      setWorkdir(dir);
+      setErr("");
+      setOfferCreate(false);
     }
   };
 
@@ -380,15 +463,22 @@ function NewSessionDialog({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
         <h3>新建会话</h3>
-        <p className="hint">工作区目录(本机绝对路径)</p>
-        <input
-          type="text"
-          autoFocus
-          value={workdir}
-          placeholder="/home/you/dev/project"
-          onChange={(e) => setWorkdir(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void create()}
-        />
+        <p className="hint">工作区目录</p>
+        <div className="dir-row">
+          <input
+            type="text"
+            autoFocus
+            value={workdir}
+            placeholder="/home/you/dev/project"
+            onChange={(e) => setWorkdir(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void create()}
+          />
+          {inDesktopShell() && (
+            <button className="ghost" onClick={() => void browse()}>
+              浏览…
+            </button>
+          )}
+        </div>
         {models.length > 1 && (
           <>
             <p className="hint" style={{ marginTop: 12 }}>
@@ -404,11 +494,14 @@ function NewSessionDialog({
             </select>
           </>
         )}
-        <label className="hint check">
-          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
-          在隔离 worktree 中执行(需为 git 仓库)
-        </label>
         {err && <div className="sysline err">{err}</div>}
+        {offerCreate && (
+          <div className="sysline">
+            <button className="ghost" disabled={busy} onClick={() => void create(true)}>
+              创建该目录并继续
+            </button>
+          </div>
+        )}
         <div className="modal-actions">
           <button className="ghost" onClick={onClose}>
             取消

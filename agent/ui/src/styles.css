@@ -73,7 +73,28 @@ input[type="text"]:focus, textarea:focus { outline: none; border-color: var(--ac
 .brand { display: flex; align-items: baseline; gap: 8px; padding: 0 2px 4px; }
 .brand-name { font-size: 16px; font-weight: 650; letter-spacing: 0.2px; }
 
-.sessions { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.sessions { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+
+.group { display: flex; flex-direction: column; gap: 4px; }
+.group-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px; border-radius: 7px; cursor: pointer;
+  color: var(--dim); font-size: 12px; user-select: none;
+}
+.group-head:hover { background: var(--panel-2); color: var(--fg); }
+.chev { width: 12px; flex-shrink: 0; }
+.group-name {
+  font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.group-plus {
+  margin-left: auto; padding: 0 7px; font-size: 14px; line-height: 1.4;
+  background: transparent; border-color: transparent; color: var(--dim);
+}
+.group-plus:hover { color: var(--accent); }
+.group .sess { margin-left: 14px; }
+
+.dir-row { display: flex; gap: 8px; }
+.dir-row input { flex: 1; }
 .sess {
   padding: 9px 10px;
   border: 1px solid var(--border);

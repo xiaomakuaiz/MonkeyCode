@@ -250,6 +250,27 @@
 
 ---
 
+# M2.10:桌面体验五连修(2026-07-14,用户反馈)✅
+
+- [x] 1 新建会话选目录:壳接 tauri-plugin-dialog,UI"浏览…"原生目录选择(浏览器模式隐藏);
+      server 支持 create_dir,UI 报"目录不存在"时内联"创建该目录并继续"(api 错误改带服务端 message)
+- [x] 2 会话按项目组织:侧栏按 workdir 分组(worktree 会话归 Worktree.Repo),组按最近活动
+      排序、可折叠(localStorage 记忆),组头"+"预填目录新建;会话条目简化(去目录/模型)
+- [x] 3 隐藏 worktree 勾选(内核/CLI 能力保留;worktree 会话条目带"隔离"标记)
+- [x] 4 回放提速:loadCompactedReplay——连续同类文本增量合并单帧、usage 只留末帧、
+      bash output 进度帧丢弃、其余语义帧透传;主回放与子会话观察者共用;
+      3000 帧压到 <50 帧(测试锁定),文本完整性断言
+- [x] 5 压缩提示展示:compact_status 帧 React UI 渲染为系统行(此前仅 CLI 有)
+- [x] 6 上下文统计虚高(用户反馈):provider 对流式 usage 用 Add 累加,而协议中
+      message_delta/chunk 的 usage 是累计快照,网关每增量都带时统计被吹到数倍;
+      改为 Usage.Merge 快照语义(input 取最新非零、output 取最大),Add 保留给
+      会话级跨请求累计;anthropic/openai 双路径 + 回归测试(累计快照流形态)
+- [x] 验证:go 全量过(新增 TestReplayCompaction,改 TestWSReplayLargeHistory 为
+      文本完整性+帧数上限);create_dir 端到端(400→create_dir→目录落盘);
+      MODEL_E2E_OK 回归;壳 IPC 探针 OK
+
+---
+
 # M2.9:设置增强——MCP 配置 + 单窗口设置页(2026-07-14)✅
 
 - [x] MCP 进设置:壳存 mcp_servers(与内核 mcpServers 同构,壳不解释原样写盘),

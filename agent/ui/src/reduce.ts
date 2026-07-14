@@ -142,6 +142,11 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       return push(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
     case "usage_update":
       return { ...s, usage: { used: u.used ?? 0, size: u.size ?? 0 } };
+    case "compact_status":
+      return push(s, {
+        kind: "sys",
+        text: u.status === "started" ? "⟳ 上下文接近上限,正在压缩…" : "⟳ 上下文压缩完成",
+      });
     case "model_update": {
       const name = u.model ?? "";
       return { ...push(s, { kind: "sys", text: `模型已切换为 ${name}` }), model: name };

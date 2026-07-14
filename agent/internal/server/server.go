@@ -249,9 +249,10 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Workdir  string `json:"workdir"`
-		Worktree bool   `json:"worktree"`
-		Model    string `json:"model"` // 空 = 默认模型
+		Workdir   string `json:"workdir"`
+		Worktree  bool   `json:"worktree"`
+		Model     string `json:"model"`      // 空 = 默认模型
+		CreateDir bool   `json:"create_dir"` // 目录不存在时创建(新项目)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体无效"})
@@ -268,8 +269,14 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if st, err := os.Stat(workdir); err != nil || !st.IsDir() {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "工作区目录不存在: " + workdir})
-		return
+		if !req.CreateDir {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "工作区目录不存在: " + workdir})
+			return
+		}
+		if err := os.MkdirAll(workdir, 0o755); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "创建目录失败: " + err.Error()})
+			return
+		}
 	}
 	sess, err := session.New(s.opts.SessionRoot, workdir, s.modelNameOrDefault(req.Model), "")
 	if err != nil {
@@ -404,33 +411,18 @@ func (s *Server) publishChild(childID string, f frame.Frame) {
 	}
 }
 
-// replayEventsWatermark 回放事件并返回最后一帧的 seq(观察者衔接水位)。
+// replayEventsWatermark 压缩回放并返回原始最大 seq(观察者衔接水位)。
 func replayEventsWatermark(path string, c *wsClient) (uint64, error) {
-	f, err := os.Open(path)
+	lines, lastSeq, err := loadCompactedReplay(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil // 子会话刚创建尚无事件
-		}
 		return 0, err
 	}
-	defer f.Close()
-	var last uint64
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var fr frame.Frame
-		if json.Unmarshal([]byte(line), &fr) == nil && fr.Seq > last {
-			last = fr.Seq
-		}
-		if err := c.sendBlocking([]byte(line)); err != nil {
-			return last, err
+	for _, line := range lines {
+		if err := c.sendBlocking(line); err != nil {
+			return lastSeq, err
 		}
 	}
-	return last, scanner.Err()
+	return lastSeq, nil
 }
 
 // liveSession 获取(或惰性创建)运行态会话。
@@ -919,16 +911,49 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// replayEvents 把历史事件逐行发给新连接。
+// replayEvents 把历史事件压缩后发给新连接。
 func replayEvents(path string, c *wsClient) error {
+	lines, _, err := loadCompactedReplay(path)
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		if err := c.sendBlocking(line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadCompactedReplay 读取事件日志并做回放压缩,返回待发帧与原始最大 seq
+// (观察者水位)。长会话的原始帧以流式文本增量为主(每个增量一帧),逐帧
+// 回放会让客户端加载数千帧;合并后帧数下降 1~2 个数量级:
+//   - 连续的 agent_message_chunk / agent_thought_chunk 合并为单帧(文本拼接)
+//   - usage_update 只保留最后一帧(历史用量对回放无意义)
+//   - bash 实时输出的进度帧(in_progress + progress.kind=output)丢弃
+//
+// 其余帧原样透传(权限/计划/工具/子代理进度等语义帧不动)。
+func loadCompactedReplay(path string) ([][]byte, uint64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, 0, nil
 		}
-		return err
+		return nil, 0, err
 	}
 	defer f.Close()
+
+	type parsed struct {
+		raw []byte
+		fr  frame.Frame
+		// acp 载荷的浅解析(仅压缩所需字段)
+		update string
+		text   string
+	}
+	var frames []parsed
+	var lastSeq uint64
+	lastUsage := -1
+
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -936,11 +961,101 @@ func replayEvents(path string, c *wsClient) error {
 		if line == "" {
 			continue
 		}
-		if err := c.sendBlocking([]byte(line)); err != nil {
-			return err
+		raw := []byte(line)
+		p := parsed{raw: append([]byte(nil), raw...)}
+		if json.Unmarshal(raw, &p.fr) != nil {
+			frames = append(frames, p)
+			continue
 		}
+		if p.fr.Seq > lastSeq {
+			lastSeq = p.fr.Seq
+		}
+		if p.fr.Type == frame.TypeTaskRunning && p.fr.Kind == frame.KindACPEvent {
+			var env struct {
+				Update struct {
+					SessionUpdate string `json:"sessionUpdate"`
+					Content       struct {
+						Text string `json:"text"`
+					} `json:"content"`
+					Status   string `json:"status"`
+					Progress struct {
+						Kind string `json:"kind"`
+					} `json:"progress"`
+				} `json:"update"`
+			}
+			if json.Unmarshal(p.fr.Data, &env) == nil {
+				u := env.Update
+				p.update = u.SessionUpdate
+				p.text = u.Content.Text
+				if u.SessionUpdate == "tool_call_update" && u.Status == "in_progress" && u.Progress.Kind == "output" {
+					continue // 实时输出行对回放无意义
+				}
+				if u.SessionUpdate == "usage_update" {
+					lastUsage = len(frames) // 记录位置,输出时只留最后一个
+				}
+			}
+		}
+		frames = append(frames, p)
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	var out [][]byte
+	// 合并缓冲:同类文本增量连续段
+	runUpdate := ""
+	var runText strings.Builder
+	var runLast frame.Frame
+	runCount := 0
+	var runFirstRaw []byte
+	flush := func() {
+		if runCount == 0 {
+			return
+		}
+		if runCount == 1 {
+			out = append(out, runFirstRaw)
+		} else {
+			merged := runLast
+			data, err := json.Marshal(map[string]any{
+				"update": map[string]any{
+					"sessionUpdate": runUpdate,
+					"content":       map[string]any{"type": "text", "text": runText.String()},
+				},
+			})
+			if err == nil {
+				merged.Data = data
+				if line, err := json.Marshal(merged); err == nil {
+					out = append(out, line)
+				}
+			}
+		}
+		runUpdate, runCount = "", 0
+		runText.Reset()
+	}
+
+	for i, p := range frames {
+		isChunk := p.update == "agent_message_chunk" || p.update == "agent_thought_chunk"
+		if isChunk {
+			if runCount > 0 && p.update != runUpdate {
+				flush()
+			}
+			if runCount == 0 {
+				runUpdate = p.update
+				runFirstRaw = p.raw
+			}
+			runText.WriteString(p.text)
+			runLast = p.fr
+			runCount++
+			continue
+		}
+		flush()
+		if p.update == "usage_update" && i != lastUsage {
+			continue
+		}
+		out = append(out, p.raw)
+	}
+	flush()
+	return out, lastSeq, nil
 }
 
 func countEvents(path string) uint64 {

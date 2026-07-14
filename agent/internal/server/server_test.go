@@ -18,6 +18,7 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
+	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 )
 
 // stubProvider 按脚本依次返回结果。
@@ -278,10 +279,36 @@ func TestWSReplayLargeHistory(t *testing.T) {
 	sess.Close()
 
 	conn := dialWS(t, ts, id)
-	frames := wsCollect(t, conn, func(fs []frame.Frame) bool { return len(fs) >= total })
-	if len(frames) < total {
-		t.Fatalf("回放不完整: %d/%d", len(frames), total)
+	// 回放压缩:3000 个文本增量合并为极少数帧,但文本必须完整送达
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool { return replayTextLen(fs) >= total })
+	if got := replayTextLen(frames); got < total {
+		t.Fatalf("回放文本不完整: %d/%d", got, total)
 	}
+	if len(frames) > 50 {
+		t.Fatalf("回放未压缩: %d 帧", len(frames))
+	}
+}
+
+// replayTextLen 统计回放帧里 agent 文本增量的总长度。
+func replayTextLen(fs []frame.Frame) int {
+	n := 0
+	for _, f := range fs {
+		if f.Type != frame.TypeTaskRunning || f.Kind != frame.KindACPEvent {
+			continue
+		}
+		var env struct {
+			Update struct {
+				SessionUpdate string `json:"sessionUpdate"`
+				Content       struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"update"`
+		}
+		if json.Unmarshal(f.Data, &env) == nil && env.Update.SessionUpdate == "agent_message_chunk" {
+			n += len(env.Update.Content.Text)
+		}
+	}
+	return n
 }
 
 func TestWSPermissionFlow(t *testing.T) {
@@ -711,4 +738,86 @@ func framesContain(fs []frame.Frame, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestReplayCompaction 压缩规则:同类文本连续段合并、思考与正文互为边界、
+// 非文本帧透传、usage 只留末帧、bash output 进度帧丢弃。
+func TestReplayCompaction(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := session.New(dir, t.TempDir(), "m", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &frame.Builder{}
+	sess.Emit(b.TaskStarted())
+	sess.Emit(b.AgentThought("想一"))
+	sess.Emit(b.AgentThought("想二"))
+	sess.Emit(b.AgentText("答一"))
+	sess.Emit(b.AgentText("答二"))
+	sess.Emit(b.Usage(1000, 100))
+	sess.Emit(b.ToolCall(frame.ToolCallUpdate{ToolCallID: "t1", Title: "执行 ls", Status: "in_progress"}))
+	sess.Emit(b.ToolCallUpdate(frame.ToolCallUpdate{ToolCallID: "t1", Status: "in_progress",
+		Progress: tools.ProgressUpdate{Kind: "output", Line: "实时输出"}}))
+	sess.Emit(b.ToolCallUpdate(frame.ToolCallUpdate{ToolCallID: "t1", Status: "completed"}))
+	sess.Emit(b.AgentText("答三"))
+	sess.Emit(b.Usage(1000, 200))
+	sess.Emit(b.TaskEnded())
+	sess.Close()
+
+	lines, lastSeq, err := loadCompactedReplay(session.EventsPathFor(dir, sess.Meta.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastSeq == 0 {
+		t.Fatal("水位 seq 缺失")
+	}
+
+	var kinds []string
+	joined := ""
+	for _, line := range lines {
+		var f frame.Frame
+		if err := json.Unmarshal(line, &f); err != nil {
+			t.Fatalf("压缩产物非法 JSON: %v", err)
+		}
+		joined += string(f.Data)
+		if f.Type != frame.TypeTaskRunning {
+			kinds = append(kinds, string(f.Type))
+			continue
+		}
+		var env struct {
+			Update struct {
+				SessionUpdate string `json:"sessionUpdate"`
+				Content       struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"update"`
+		}
+		_ = json.Unmarshal(f.Data, &env)
+		kinds = append(kinds, env.Update.SessionUpdate+":"+env.Update.Content.Text)
+	}
+
+	want := []string{
+		"task-started",
+		"agent_thought_chunk:想一想二",
+		"agent_message_chunk:答一答二",
+		"tool_call:",
+		"tool_call_update:",
+		"agent_message_chunk:答三",
+		"usage_update:",
+		"task-ended",
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("帧序列不符:\n got=%v\nwant=%v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("第 %d 帧不符: got=%q want=%q", i, kinds[i], want[i])
+		}
+	}
+	if strings.Contains(joined, "实时输出") {
+		t.Fatal("output 进度帧未被丢弃")
+	}
+	if !strings.Contains(joined, `"used":200`) || strings.Contains(joined, `"used":100`) {
+		t.Fatal("usage 应只保留末帧")
+	}
 }

@@ -138,3 +138,46 @@ func TestConvertMessages(t *testing.T) {
 		t.Fatalf("tool msg: %+v", out[3])
 	}
 }
+
+// TestUsageMerge_CumulativeSnapshots 网关在每个 message_delta 都携带累计 usage
+// (且重复报 input)时,单次请求用量应取快照而非累加(回归:上下文统计虚高数倍)。
+func TestUsageMerge_CumulativeSnapshots(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":1000,"output_tokens":1}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"一"}}`,
+		`data: {"type":"message_delta","delta":{},"usage":{"input_tokens":1000,"output_tokens":10}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"二"}}`,
+		`data: {"type":"message_delta","delta":{},"usage":{"input_tokens":1000,"output_tokens":20}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":30}}`,
+		`data: {"type":"message_stop"}`,
+	}, "\n\n")
+
+	res, err := parseSSE(strings.NewReader(stream), &StreamHandler{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Usage.InputTokens != 1000 {
+		t.Fatalf("input 应取快照 1000,得 %d", res.Usage.InputTokens)
+	}
+	if res.Usage.OutputTokens != 30 {
+		t.Fatalf("output 应取最终累计 30,得 %d", res.Usage.OutputTokens)
+	}
+}
+
+func TestUsageMergeVsAdd(t *testing.T) {
+	var u Usage
+	u.Merge(Usage{InputTokens: 100, OutputTokens: 5})
+	u.Merge(Usage{OutputTokens: 12})                // 累计快照增长,input 缺省保留
+	u.Merge(Usage{InputTokens: 0, OutputTokens: 0}) // 空快照不回退
+	if u.InputTokens != 100 || u.OutputTokens != 12 {
+		t.Fatalf("Merge: %+v", u)
+	}
+	var total Usage
+	total.Add(u)
+	total.Add(Usage{InputTokens: 200, OutputTokens: 8})
+	if total.InputTokens != 300 || total.OutputTokens != 20 {
+		t.Fatalf("Add(会话累计): %+v", total)
+	}
+}

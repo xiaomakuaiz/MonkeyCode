@@ -207,7 +207,7 @@ func parseOAISSE(r io.Reader, h *StreamHandler) (*Result, error) {
 			return nil, fmt.Errorf("llm stream error: %s", ch.Error.Message)
 		}
 		if ch.Usage != nil {
-			res.Usage.Add(Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens})
+			res.Usage.Merge(Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens})
 		}
 		if len(ch.Choices) == 0 {
 			continue
