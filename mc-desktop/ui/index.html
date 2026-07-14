@@ -15,14 +15,18 @@
 </head>
 <body>
 <div class="box">
-  <h2>⚠ 内核启动失败</h2>
+  <h2>⚠ 启动失败</h2>
   <p class="err" id="msg">未知错误</p>
-  <p class="hint">请确认 mc-agent 已安装(agent 目录下 make install),
-     或设置环境变量 MC_AGENT_BIN 指向二进制路径,然后重启应用。</p>
+  <p class="hint">可尝试在设置中检查模型配置后重新保存;若为安装问题,
+     请重新安装应用后重试。</p>
+  <p><button id="settingsBtn" style="background:#4f8cff;color:#fff;border:0;border-radius:8px;
+     padding:8px 16px;cursor:pointer;font:inherit">打开设置</button></p>
 </div>
 <script>
   const m = decodeURIComponent(location.hash.slice(1) || '');
   if (m) document.getElementById('msg').textContent = m;
+  document.getElementById('settingsBtn').onclick = () =>
+    window.__TAURI__.core.invoke('open_settings_window').catch(() => {});
 </script>
 </body>
 </html>

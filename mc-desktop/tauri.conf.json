@@ -9,8 +9,37 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": null
-    }
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "shell-pages",
+          "description": "壳自带页面(设置/错误页)可调用壳的配置命令",
+          "windows": [
+            "main",
+            "settings"
+          ],
+          "permissions": [
+            "core:default"
+          ]
+        },
+        {
+          "identifier": "kernel-ui",
+          "description": "主窗口加载的内核 UI(127.0.0.1 remote)可唤起壳的设置窗口",
+          "windows": [
+            "main"
+          ],
+          "remote": {
+            "urls": [
+              "http://127.0.0.1:*"
+            ]
+          },
+          "permissions": [
+            "core:default"
+          ]
+        }
+      ]
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": false

@@ -1,10 +1,15 @@
-# mc-desktop — MonkeyCode 本地桌面客户端(Tauri 薄壳)
+# mc-desktop — MonkeyCode 本地桌面客户端(Tauri 壳)
 
-v0 形态:壳只做四件事——生成访问令牌、挑选空闲端口、拉起 `mc-agent serve` 子进程、打开窗口加载内核 UI。业务全部在 Go 内核(`agent/`),二者经 localhost WS 帧协议解耦;后续独立 React UI 可直接替换窗口内容,内核零改动。
+职责边界:**壳持有应用配置与宿主事务,agent 内核只是壳拉起的子进程**。
+
+- 配置(模型列表)存于壳的应用配置目录(`config.json`/`models.json`,0600),设置窗口增删改模型、标默认;保存即重启内核生效
+- 内核经环境变量注入配置(`MC_AGENT_MODELS` 指向壳写的清单;不走 argv,避免泄漏进 ps),内核零管理职责
+- 首启无配置直接进设置向导,全程不碰终端;托盘菜单"设置"随时可改
+- 对话业务与 UI 在 Go 内核(`agent/`),二者经 localhost WS 帧协议解耦
 
 ## 构建与运行
 
-前置:Rust 工具链、Linux 需 webkit2gtk;先安装内核(`agent/` 下 `make install`)并完成 `mc-agent config set`。
+前置:Rust 工具链、Linux 需 webkit2gtk;先安装内核(`agent/` 下 `make install`)。模型配置在应用内完成,无需命令行。
 
 ```bash
 cd mc-desktop

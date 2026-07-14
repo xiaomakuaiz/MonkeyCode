@@ -199,6 +199,57 @@
 
 ---
 
+# M2.8(进行中):壳持有配置——桌面自足闭环(2026-07-14,方向重定)
+
+> 架构决定(用户拍板):配置与设置归壳,agent 只是壳拉起的进程。
+> 曾按"内核配置 REST"实施半程,已全部回滚,agent 零改动。
+> 关键接缝:内核 config.Load 的 env 覆盖(MC_AGENT_*)本来就存在——壳把自己
+> 存的配置经环境变量注入 spawn 的内核即可,不碰内核代码、不污染 CLI 用户的
+> config.json;env 也不像 argv 那样暴露在 ps 里。
+
+> 扩围(用户确认):每会话可用不同模型(可跨 provider),且会话内可切换
+> (轮次间生效;消息历史是归一化格式,跨 provider 续聊安全)。
+> 一个 agent 进程承载全部会话不变(serve 本就每会话独立 engine/provider)。
+
+## 内核(仅消费侧改动)✅
+
+- [x] 模型清单:config.LoadModels 读 `MC_AGENT_MODELS` JSON 数组(name 缺省取 model、
+      名称唯一、default 恰一个);无清单退回现有单配置
+- [x] server.Options:NewProvider(model)+ListModels;`GET /api/models`;
+      `POST /api/sessions` 带 model(未知名 400);call `session_set_model`(执行中拒绝,
+      成功换 engine/子代理 provider + meta 落盘 + model_update 帧进日志,回放可见)
+- [x] loop.Engine.SetProvider;顺手修了真 bug:startTurn 延迟收尾可能清掉新轮次
+      running(turnSeq 代号守卫)+ task-ended 帧经 emit 先复位 running(帧是客户端
+      行为契约,状态先于帧可见)
+
+## 壳(mc-desktop)✅
+
+- [x] 配置存储:app_config_dir/config.json + models.json(0600);壳持有,内核只消费
+- [x] 设置页 ui/settings.html:模型增删改/设默认;get_config/save_config/open_settings_window
+      三个 command;withGlobalTauri + 内联 capability
+- [x] 首启无配置 → 设置窗口(不 spawn 内核);保存 → 写清单 → spawn(env 注入,不走 argv
+      防 ps 泄漏)→ 主窗口进内核 UI;托盘加"设置"项,保存即重启内核换新 URL
+- [x] 错误页去内核化:文案不再提 mc-agent,加"打开设置"按钮
+
+## UI ✅
+
+- [x] 新建会话模型下拉(默认预选,单模型时隐藏)
+- [x] 侧栏底部"⚙ 设置"按钮 → Tauri IPC 唤起壳设置窗口(remote capability 放行
+      127.0.0.1 源;浏览器直连模式降级为提示);会话列表不展示模型(用户要求)
+- [x] 状态栏模型下拉切换(运行中禁用,title 提示)→ call session_set_model;
+      model_update 渲染为"模型已切换为 X"系统行
+
+## 验证 ✅
+
+- [x] 内核单测:models 6 例 + server 端到端 1 例(清单/未知名 400/按会话解析/切换流转/
+      运行中拒绝/meta 落盘);全部 15 包过,gofmt/vet 干净;UI tsc+build 过
+- [x] e2e(echo-llm 按请求回显 model+key):会话绑乙 → 首轮 MODEL=model-b|KEY=key-b;
+      切甲 → 次轮 MODEL=model-a|KEY=key-a;列表 meta 更新(MODEL_E2E_OK)
+- [x] 壳无头冒烟:无配置 → 不 spawn 内核、开设置窗;写入配置重启 → 内核环境含
+      MC_AGENT_MODELS 指向壳写的清单、就绪;壳被杀内核跟随退出无孤儿
+
+---
+
 # M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
 
 ## B:工具进度通道(通用原语)

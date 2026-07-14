@@ -1,15 +1,18 @@
-// MonkeyCode 本地桌面客户端 —— Tauri 薄壳。
+// MonkeyCode 本地桌面客户端 —— Tauri 壳。
 //
-// 职责(刻意最小化):生成访问令牌 → 挑选空闲端口 → 拉起 mc-agent serve
-// 子进程 → 等待就绪 → 打开窗口加载内核 UI → 退出时回收子进程。
-// 业务全部在 Go 内核;壳与内核经 localhost WS 帧协议解耦,后续可
-// 替换为独立 React UI 而不动内核。
+// 职责边界:壳持有**应用配置**(模型列表等)与宿主事务(进程生命周期、
+// 托盘、设置窗口);agent 内核只是壳拉起的子进程,配置经环境变量注入
+// (MC_AGENT_MODELS 指向壳写出的模型清单),内核零管理职责。
+// 业务与对话 UI 在 Go 内核;壳与内核经 localhost WS 帧协议解耦。
 //
-// 托盘常驻:内核正常运行时关窗只隐藏(任务继续在内核跑),托盘菜单
-// "退出"才真正退出并回收内核;内核启动失败的错误页关窗即退出。
+// 生命周期:
+//   首启无配置 → 设置窗口;保存 → 写清单 → 拉起内核 → 主窗口加载内核 UI。
+//   随时修改 → 托盘"设置" → 保存即重启内核(会话在磁盘,重连自动回放)。
+//   关主窗口只隐藏(任务继续跑),托盘"退出"才真正退出并回收内核。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -17,56 +20,213 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-/// 内核子进程句柄(退出时回收)。子进程存在 ⇔ 关窗隐藏到托盘。
+// ==================== 应用配置(壳持有) ====================
+
+/// 一个模型配置项(与内核 MC_AGENT_MODELS 清单同构)。
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct ModelEntry {
+    name: String,
+    #[serde(default)]
+    provider: String, // anthropic | openai
+    base_url: String,
+    api_key: String,
+    model: String,
+    #[serde(default)]
+    default: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct DesktopConfig {
+    #[serde(default)]
+    models: Vec<ModelEntry>,
+}
+
+impl DesktopConfig {
+    fn valid(&self) -> bool {
+        !self.models.is_empty()
+            && self.models.iter().all(|m| {
+                !m.name.is_empty() && !m.base_url.is_empty() && !m.api_key.is_empty() && !m.model.is_empty()
+            })
+    }
+}
+
+fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map_err(|e| format!("无法定位配置目录: {e}"))
+}
+
+fn load_config(app: &AppHandle) -> DesktopConfig {
+    let Ok(dir) = config_dir(app) else {
+        return DesktopConfig::default();
+    };
+    fs::read(dir.join("config.json"))
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default()
+}
+
+/// 写应用配置 + 内核模型清单(均 0600,含 api_key)。
+fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<PathBuf, String> {
+    let dir = config_dir(app)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
+
+    let write = |path: &PathBuf, data: Vec<u8>| -> Result<(), String> {
+        fs::write(path, data).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    };
+
+    let cfg_data = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
+    write(&dir.join("config.json"), cfg_data)?;
+
+    let models_path = dir.join("models.json");
+    let models_data = serde_json::to_vec_pretty(&cfg.models).map_err(|e| e.to_string())?;
+    write(&models_path, models_data)?;
+    Ok(models_path)
+}
+
+// ==================== 状态 ====================
+
+/// 内核子进程句柄(退出时回收)。子进程存在 ⇔ 关主窗口隐藏到托盘。
 struct Kernel(Mutex<Option<Child>>);
 
 /// 托盘是否可用;不可用时关窗直接退出(否则窗口藏起来就找不回了)。
 struct TrayReady(AtomicBool);
+
+// ==================== Tauri 命令(设置页调用) ====================
+
+#[tauri::command]
+fn get_config(app: AppHandle) -> DesktopConfig {
+    load_config(&app)
+}
+
+/// 错误页"打开设置"按钮调用。
+#[tauri::command]
+fn open_settings_window(app: AppHandle) {
+    open_settings(&app);
+}
+
+/// 保存配置并(重)启内核,主窗口切到内核 UI。设置页保存按钮调用。
+#[tauri::command]
+fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
+    if !config.valid() {
+        return Err("至少需要一个完整的模型配置(名称/接口地址/API Key/模型标识)".into());
+    }
+    let models_path = save_config_files(&app, &config)?;
+
+    // 重启内核(阻塞等就绪,最多 15 秒);窗口操作回主线程
+    let (child, port, token) = start_kernel(&models_path)?;
+    if let Some(mut old) = app.state::<Kernel>().0.lock().unwrap().replace(child) {
+        let _ = old.kill();
+        let _ = old.wait();
+    }
+    let url = format!("http://127.0.0.1:{port}/#{token}");
+    app.run_on_main_thread({
+        let app = app.clone();
+        move || show_kernel_ui(&app, &url)
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ==================== 窗口 ====================
+
+/// 主窗口显示内核 UI(已存在则导航复用,否则创建)。顺手关掉设置窗口。
+fn show_kernel_ui(app: &AppHandle, url: &str) {
+    let parsed: Url = match url.parse() {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[mc-desktop] 内核 URL 无效: {e}");
+            return;
+        }
+    };
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.navigate(parsed);
+        let _ = win.show();
+        let _ = win.set_focus();
+    } else {
+        let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
+            .title("MonkeyCode")
+            .inner_size(1200.0, 800.0)
+            .build();
+    }
+    if let Some(sw) = app.get_webview_window("settings") {
+        let _ = sw.close();
+    }
+}
+
+/// 打开(或聚焦)设置窗口。
+fn open_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("MonkeyCode 设置")
+        .inner_size(640.0, 640.0)
+        .build();
+}
+
+/// 打开错误页(内核启动故障等宿主级错误)。
+fn open_error_page(app: &AppHandle, msg: &str) {
+    let url = PathBuf::from(format!("index.html#{}", urlencode(msg)));
+    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url))
+        .title("MonkeyCode")
+        .inner_size(720.0, 480.0)
+        .build();
+}
 
 fn main() {
     eprintln!("[mc-desktop] main 进入");
     tauri::Builder::default()
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
+        .invoke_handler(tauri::generate_handler![get_config, save_config, open_settings_window])
         .setup(|app| {
-            eprintln!("[mc-desktop] setup 进入,开始启动内核");
-            match start_kernel() {
+            // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
+            if let Err(e) = setup_tray(app.handle()) {
+                eprintln!("[mc-desktop] 托盘创建失败(关窗将直接退出): {e}");
+                app.state::<TrayReady>().0.store(false, Ordering::Relaxed);
+            }
+
+            let cfg = load_config(app.handle());
+            if !cfg.valid() {
+                eprintln!("[mc-desktop] 尚未配置模型,打开设置");
+                open_settings(app.handle());
+                return Ok(());
+            }
+            let models_path = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
+            match start_kernel(&models_path) {
                 Ok((child, port, token)) => {
                     eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
                     app.state::<Kernel>().0.lock().unwrap().replace(child);
-                    let url = format!("http://127.0.0.1:{port}/#{token}")
-                        .parse()
-                        .expect("kernel url");
-                    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                        .title("MonkeyCode")
-                        .inner_size(1200.0, 800.0)
-                        .build()?;
-                    // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞主窗口
-                    if let Err(e) = setup_tray(app.handle()) {
-                        eprintln!("[mc-desktop] 托盘创建失败(关窗将直接退出): {e}");
-                        app.state::<TrayReady>().0.store(false, Ordering::Relaxed);
-                    }
+                    show_kernel_ui(app.handle(), &format!("http://127.0.0.1:{port}/#{token}"));
                 }
                 Err(e) => {
                     eprintln!("[mc-desktop] 内核启动失败: {e}");
-                    // 打开占位页展示错误,不静默退出;此时无托盘,关窗即退出
-                    let url = format!("index.html#{}", urlencode(&e)).parse()?;
-                    WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url))
-                        .title("MonkeyCode")
-                        .inner_size(720.0, 480.0)
-                        .build()?;
+                    open_error_page(app.handle(), &e);
                 }
             }
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 内核在跑且托盘可用时,关窗只隐藏(托盘可恢复);
-            // 错误页(无内核)或托盘不可用时正常关闭退出
+            // 主窗口:内核在跑且托盘可用时关窗只隐藏;设置/错误页正常关闭
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
                 let app = window.app_handle();
                 let kernel_running = app.state::<Kernel>().0.lock().unwrap().is_some();
                 let tray_ready = app.state::<TrayReady>().0.load(Ordering::Relaxed);
@@ -96,18 +256,20 @@ fn main() {
         });
 }
 
-/// 创建托盘:菜单(显示窗口/退出)+ 左键单击恢复窗口。
+/// 创建托盘:菜单(显示窗口/设置/退出)+ 左键单击恢复窗口。
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
 
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("MonkeyCode")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
+            "show" => show_any_window(app),
+            "settings" => open_settings(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -118,7 +280,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                show_main_window(tray.app_handle());
+                show_any_window(tray.app_handle());
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -128,16 +290,22 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_main_window(app: &AppHandle) {
+/// 恢复主窗口;没有主窗口(如首启未配置)则打开设置。
+fn show_any_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
+    } else {
+        open_settings(app);
     }
 }
 
-/// 启动内核:返回 (子进程, 端口, 令牌)。
-fn start_kernel() -> Result<(Child, u16, String), String> {
+// ==================== 内核进程 ====================
+
+/// 启动内核:配置经环境变量注入(不走 argv,避免泄漏进 ps)。
+/// 返回 (子进程, 端口, 令牌)。
+fn start_kernel(models_path: &PathBuf) -> Result<(Child, u16, String), String> {
     let bin = find_agent().ok_or_else(|| {
         "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
     })?;
@@ -156,6 +324,7 @@ fn start_kernel() -> Result<(Child, u16, String), String> {
             // 管道关闭,内核随之退出,不留孤儿进程
             "--watch-stdin",
         ])
+        .env("MC_AGENT_MODELS", models_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -174,9 +343,7 @@ fn start_kernel() -> Result<(Child, u16, String), String> {
             return Ok((child, port, token));
         }
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!(
-                "内核进程提前退出({status})。常见原因:未配置模型,请先运行 mc-agent config set"
-            ));
+            return Err(format!("内核进程提前退出({status}),请检查模型配置是否有效"));
         }
         if Instant::now() > deadline {
             let _ = child.kill();
