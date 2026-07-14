@@ -29,22 +29,9 @@ jobs:
         with:
           workspaces: mc-desktop
 
-      - name: Build kernel (universal)
-        working-directory: agent
-        run: |
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o /tmp/mc-agent-arm64 ./cmd/mc-agent
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /tmp/mc-agent-amd64 ./cmd/mc-agent
-          mkdir -p ../mc-desktop/binaries
-          lipo -create -output ../mc-desktop/binaries/mc-agent-universal-apple-darwin /tmp/mc-agent-arm64 /tmp/mc-agent-amd64
-          ../mc-desktop/binaries/mc-agent-universal-apple-darwin --version
-
-      - name: Generate icons (icns)
-        working-directory: mc-desktop
-        run: npx --yes @tauri-apps/cli@^2 icon icons/icon.png
-
       - name: Build app bundle (universal, unsigned)
         working-directory: mc-desktop
-        run: npx --yes @tauri-apps/cli@^2 build --target universal-apple-darwin --config tauri.macos.conf.json
+        run: make macos   # 与本地打包同一入口(内核 universal sidecar + icons + bundle)
 
       - name: Zip .app
         working-directory: mc-desktop/target/universal-apple-darwin/release/bundle

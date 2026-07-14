@@ -17,6 +17,16 @@ cargo build --release
 ./target/release/mc-desktop
 ```
 
+macOS 分发包(在 Mac 上,universal .app/.dmg,内核 sidecar 打入):
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin   # 一次性
+make macos    # 产物在 target/universal-apple-darwin/release/bundle/dmg/
+```
+
+CI 的 desktop-macos.yml 走同一个 make 入口(push 自动构建,产物在 Actions Artifacts)。
+包未签名:同事首次打开需 右键→打开;提示"已损坏"时 `xattr -cr /Applications/MonkeyCode.app`。
+
 内核二进制查找顺序:`MC_AGENT_BIN` 环境变量 → 应用同目录 → PATH(含 `~/.local/bin`)。
 
 ## 进程生命周期
