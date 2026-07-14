@@ -1,6 +1,10 @@
 package provider
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -179,5 +183,44 @@ func TestUsageMergeVsAdd(t *testing.T) {
 	total.Add(Usage{InputTokens: 200, OutputTokens: 8})
 	if total.InputTokens != 300 || total.OutputTokens != 20 {
 		t.Fatalf("Add(会话累计): %+v", total)
+	}
+}
+
+// TestExtraHeaders 附加请求头(网关 Session-Id/Thread-Id 缓存亲和)随每次请求发送。
+func TestExtraHeaders(t *testing.T) {
+	var gotAnthropic, gotOpenAI http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "chat/completions") {
+			gotOpenAI = r.Header.Clone()
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		gotAnthropic = r.Header.Clone()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n"+
+			"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"+
+			"data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	headers := map[string]string{"Session-Id": "sess-1", "Thread-Id": "sess-1"}
+
+	a := NewAnthropic(srv.URL, "k", "m")
+	a.SetExtraHeaders(headers)
+	if _, err := a.Stream(context.Background(), Request{Messages: []Message{TextMessage(RoleUser, "hi")}}, &StreamHandler{}); err != nil {
+		t.Fatal(err)
+	}
+	if gotAnthropic.Get("Session-Id") != "sess-1" || gotAnthropic.Get("Thread-Id") != "sess-1" {
+		t.Fatalf("anthropic 缺附加头: %v", gotAnthropic)
+	}
+
+	o := NewOpenAI(srv.URL, "k", "m")
+	o.SetExtraHeaders(headers)
+	if _, err := o.Stream(context.Background(), Request{Messages: []Message{TextMessage(RoleUser, "hi")}}, &StreamHandler{}); err != nil {
+		t.Fatal(err)
+	}
+	if gotOpenAI.Get("Session-Id") != "sess-1" || gotOpenAI.Get("Thread-Id") != "sess-1" {
+		t.Fatalf("openai 缺附加头: %v", gotOpenAI)
 	}
 }

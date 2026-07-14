@@ -149,6 +149,12 @@ func (h *StreamHandler) toolUse(id, name string) {
 	}
 }
 
+// HeaderSetter 可注入附加请求头的客户端(如网关的 Session-Id/Thread-Id
+// 缓存亲和标识,用于命中前缀缓存)。
+type HeaderSetter interface {
+	SetExtraHeaders(h map[string]string)
+}
+
 // Provider LLM 提供方接口。
 type Provider interface {
 	// Stream 发起流式请求,回调增量,返回聚合结果。

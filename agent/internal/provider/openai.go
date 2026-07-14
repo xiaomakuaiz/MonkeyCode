@@ -18,8 +18,12 @@ type OpenAIClient struct {
 	baseURL string
 	apiKey  string
 	model   string
+	extra   map[string]string // 附加请求头(网关缓存亲和等)
 	http    *http.Client
 }
+
+// SetExtraHeaders 设置附加请求头(每次请求都携带)。
+func (c *OpenAIClient) SetExtraHeaders(h map[string]string) { c.extra = h }
 
 // NewOpenAI 创建客户端。baseURL 形如 https://host/v1(不带 /chat/completions)。
 func NewOpenAI(baseURL, apiKey, model string) *OpenAIClient {
@@ -146,6 +150,9 @@ func (c *OpenAIClient) Stream(ctx context.Context, req Request, h *StreamHandler
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("accept", "text/event-stream")
+	for k, v := range c.extra {
+		httpReq.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

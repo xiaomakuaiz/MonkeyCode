@@ -17,8 +17,12 @@ type AnthropicClient struct {
 	baseURL string
 	apiKey  string
 	model   string
+	extra   map[string]string // 附加请求头(网关缓存亲和等)
 	http    *http.Client
 }
+
+// SetExtraHeaders 设置附加请求头(每次请求都携带)。
+func (c *AnthropicClient) SetExtraHeaders(h map[string]string) { c.extra = h }
 
 // NewAnthropic 创建客户端。baseURL 形如 https://host/api/anthropic(不带 /v1/messages)。
 func NewAnthropic(baseURL, apiKey, model string) *AnthropicClient {
@@ -91,6 +95,9 @@ func (c *AnthropicClient) Stream(ctx context.Context, req Request, h *StreamHand
 	httpReq.Header.Set("authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	httpReq.Header.Set("accept", "text/event-stream")
+	for k, v := range c.extra {
+		httpReq.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

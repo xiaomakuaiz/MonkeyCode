@@ -519,6 +519,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 		sess.Meta.Model = s.modelNameOrDefault("")
 		_ = sess.SaveMeta()
 	}
+	applySessionHeaders(prov, sess.Meta.ID)
 
 	// 只读探索子代理(task 工具):工具集只读故自动放行;
 	// 子代理过程落盘为子会话,帧经 publishChild 分发给观察者
@@ -623,6 +624,7 @@ func (ls *liveSession) setModel(name string) (any, error) {
 		ls.mu.Unlock()
 		return nil, err
 	}
+	applySessionHeaders(prov, ls.sess.Meta.ID)
 	ls.engine.SetProvider(prov)
 	if ls.sub != nil {
 		ls.sub.Provider = prov
@@ -633,6 +635,17 @@ func (ls *liveSession) setModel(name string) (any, error) {
 
 	ls.emit(ls.builder.ModelUpdate(name))
 	return map[string]string{"model": name}, nil
+}
+
+// applySessionHeaders 注入网关缓存亲和标识:同一会话的请求带同一
+// Session-Id/Thread-Id,网关可据此路由到同一实例并命中前缀缓存。
+func applySessionHeaders(p provider.Provider, sessionID string) {
+	if hs, ok := p.(provider.HeaderSetter); ok {
+		hs.SetExtraHeaders(map[string]string{
+			"Session-Id": sessionID,
+			"Thread-Id":  sessionID,
+		})
+	}
 }
 
 // modelNameOrDefault 空名时返回默认模型展示名。

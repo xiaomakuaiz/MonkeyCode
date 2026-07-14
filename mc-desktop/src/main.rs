@@ -127,13 +127,10 @@ struct KernelUrl(Mutex<Option<String>>);
 /// 托盘句柄(系统明暗主题切换时换图标)。
 struct Tray(Mutex<Option<TrayIcon>>);
 
-/// 按系统主题选托盘图标(暗色主题用 icon-dark)。
-fn tray_icon_for(theme: Theme) -> Image<'static> {
-    let bytes: &[u8] = match theme {
-        Theme::Dark => include_bytes!("../icons/icon-dark.png"),
-        _ => include_bytes!("../icons/icon.png"),
-    };
-    Image::from_bytes(bytes).expect("托盘图标解码失败")
+/// 托盘图标:透明背景的图形版(adaptive-icon,无白色圆角底板),
+/// 彩色图形在明暗菜单栏下均可辨,两种主题共用。
+fn tray_icon_for(_theme: Theme) -> Image<'static> {
+    Image::from_bytes(include_bytes!("../icons/tray.png")).expect("托盘图标解码失败")
 }
 
 /// 主题变化时更新托盘图标。

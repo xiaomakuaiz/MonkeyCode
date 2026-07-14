@@ -213,6 +213,14 @@ func buildApp(interactive bool) (*app, error) {
 		}
 	}
 
+	// 网关缓存亲和:同一会话带同一 Session-Id/Thread-Id,命中前缀缓存
+	if hs, ok := p.(provider.HeaderSetter); ok && sess != nil {
+		hs.SetExtraHeaders(map[string]string{
+			"Session-Id": sess.Meta.ID,
+			"Thread-Id":  sess.Meta.ID,
+		})
+	}
+
 	// 只读探索子代理(task 工具):工具集只读故自动放行;
 	// 会话持久化开启时,子代理过程落盘为子会话(可独立回放)
 	sub := &subagent.Tool{Provider: p}
