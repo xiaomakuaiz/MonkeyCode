@@ -1240,7 +1240,7 @@ export default function App() {
                       background: yolo ? "var(--delBg)" : undefined,
                     }}
                   >
-                    {yolo ? "⚡ YOLO" : "🛡 默认权限"}
+                    {yolo ? "⚡ YOLO" : "默认权限"}
                   </div>
                   <div style={{ position: "relative", flex: "none" }}>
                     <div
