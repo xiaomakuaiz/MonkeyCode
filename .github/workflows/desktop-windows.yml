@@ -1,0 +1,51 @@
+name: Desktop Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat-local-version]
+    paths: ["mc-desktop/**", "agent/**", ".github/workflows/desktop-windows.yml"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mc-desktop
+
+      # 内核 sidecar:tauri bundle 按 <name>-<triple>.exe 查找,
+      # 安装后落地为应用同目录的 mc-agent.exe(壳 find_agent 的查找路径)
+      - name: Build kernel sidecar
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p ../mc-desktop/binaries
+          go build -trimpath -ldflags "-s -w" \
+            -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
+
+      - name: Build NSIS installer (unsigned)
+        working-directory: mc-desktop
+        run: npx --yes @tauri-apps/cli@^2 build --config tauri.windows.conf.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MonkeyCode-windows-x64
+          path: mc-desktop/target/release/bundle/nsis/*.exe

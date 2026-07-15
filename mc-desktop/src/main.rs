@@ -497,22 +497,30 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
     let port = kernel_port(app)?;
     let token = rand_token();
 
-    let mut child = Command::new(&bin)
-        .args([
-            "serve",
-            "--addr",
-            &format!("127.0.0.1:{port}"),
-            "--token",
-            &token,
-            // 壳持有内核 stdin 管道:壳以任何方式退出(含被 kill),
-            // 管道关闭,内核随之退出,不留孤儿进程
-            "--watch-stdin",
-        ])
-        .env("MC_AGENT_MODELS", &files.models)
-        .env("MC_AGENT_MCP_CONFIG", &files.mcp)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+    let mut cmd = Command::new(&bin);
+    cmd.args([
+        "serve",
+        "--addr",
+        &format!("127.0.0.1:{port}"),
+        "--token",
+        &token,
+        // 壳持有内核 stdin 管道:壳以任何方式退出(含被 kill),
+        // 管道关闭,内核随之退出,不留孤儿进程
+        "--watch-stdin",
+    ])
+    .env("MC_AGENT_MODELS", &files.models)
+    .env("MC_AGENT_MCP_CONFIG", &files.mcp)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::inherit())
+    .stderr(Stdio::inherit());
+    // Windows 下内核是 console 程序,GUI 壳拉起时会弹出控制台窗口,须显式抑制
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动内核失败({}): {e}", bin.display()))?;
 

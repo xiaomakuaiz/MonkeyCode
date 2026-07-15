@@ -4,16 +4,21 @@
 #   make macos          # universal .app/.dmg,内核 sidecar 打进包
 # 前置:Go 1.25+、Node 22、Rust 且已加双架构 target:
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin
+#
+# Windows 打包(在 Windows 上执行,Git Bash/MSYS;无 Windows 机器时走
+# CI: .github/workflows/desktop-windows.yml):
+#   make windows        # NSIS 安装包,内核 sidecar 打进包
 
 AGENT_DIR   := ../agent
 BIN_DIR     := binaries
 SIDECAR_ARM := $(BIN_DIR)/mc-agent-aarch64-apple-darwin
 SIDECAR_X64 := $(BIN_DIR)/mc-agent-x86_64-apple-darwin
 SIDECAR_UNI := $(BIN_DIR)/mc-agent-universal-apple-darwin
+SIDECAR_WIN := $(BIN_DIR)/mc-agent-x86_64-pc-windows-msvc.exe
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 
-.PHONY: dev run macos macos-release check-signing check-macos kernel-universal icons clean
+.PHONY: dev run macos macos-release windows check-signing check-macos check-windows kernel-universal kernel-windows icons clean
 
 # ---------- 开发 ----------
 
@@ -61,6 +66,23 @@ kernel-universal:
 	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_X64)) ./cmd/mc-agent
 	lipo -create -output $(SIDECAR_UNI) $(SIDECAR_ARM) $(SIDECAR_X64)
 	$(SIDECAR_UNI) --version
+
+# ---------- Windows 打包(NSIS 安装包,内核 sidecar)----------
+
+windows: check-windows kernel-windows
+	$(TAURI) build --config tauri.windows.conf.json $(EXTRA_TAURI_CONFIG)
+	@echo ""
+	@echo "打包完成,分发产物:"
+	@ls -lh target/release/bundle/nsis/*.exe 2>/dev/null || true
+
+check-windows:
+	@[ "$$OS" = "Windows_NT" ] || { echo "错误: Windows 打包需在 Windows 上执行(无 Windows 机器时用 CI: desktop-windows.yml)"; exit 1; }
+
+# Windows 内核 sidecar(x64;tauri bundle 按 <name>-<triple>.exe 查找,
+# 安装后落地为应用同目录的 mc-agent.exe,与壳的 find_agent 查找顺序吻合)。
+kernel-windows:
+	mkdir -p $(BIN_DIR)
+	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WIN)) ./cmd/mc-agent
 
 # 图标产物已入库,仅源图(icons/source.png,1024²)更新时重新生成。
 # 注意:tauri icon 无平台过滤参数,会连带产出 ios/android(生成后清理);
