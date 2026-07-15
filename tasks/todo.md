@@ -461,3 +461,21 @@
       四场景(完好不动/尾部悬空/悬空后接文本/部分缺失);-race 全绿,全仓测试过
 - [x] e2e(真实网关):手工构造悬空 tool_use 会话 → 旧二进制续聊报
       "tool_use ids found without tool_result"(即用户所见错误),新二进制续聊 task-ended
+
+# 子代理进度窗口重设计(2026-07-15)
+
+> 用户反馈:task 卡片只显示 toolcall,模型回复文本不可见;"已省略前 N 步"不合理,
+> 期望固定 3-5 行持续滚动。
+
+- [x] progressMapper:回复文本按行上抛(kind=subagent_text,跨 chunk 拼行,单行 200 字截断,
+      工具调用前/轮次结束时冲刷残余;思考流仍不上抛)
+- [x] UI:subItems 重构为 feed(工具步骤+文本行时间序混排,内存上限 200 条),
+      卡片固定渲染最后 5 条,旧条目自然滚出,删除"已省略前 N 步"行;
+      文本行 t5 色无状态标记,工具行样式不变
+- [x] 帧进事件日志(回放压缩仅丢 bash output),刷新后卡片内容不丢
+
+## 验证
+
+- [x] 单测 TestProgressMapperTextLines(拼行/空行跳过/冲刷时机/截断);全仓 -race 过,tsc 过
+- [x] e2e(真实模型):子代理轮次产生 3 条 subagent_text(探索前说明+结论)与
+      subagent_tool run/ok 混排,落盘 events.jsonl

@@ -69,7 +69,7 @@ export interface AcpUpdate {
 
 /** tool_call_update{status:in_progress} 的执行期进度载荷 */
 export interface ToolProgress {
-  kind: string; // subagent_tool | output | child_session
+  kind: string; // subagent_tool | subagent_text | output | child_session
   id?: string;
   title?: string;
   status?: string; // run | ok | fail
@@ -77,12 +77,10 @@ export interface ToolProgress {
   childSessionId?: string;
 }
 
-/** 子代理进度子项(挂在 task 工具行下) */
-export interface SubItem {
-  id: string;
-  title: string;
-  status: "run" | "ok" | "fail";
-}
+/** 子代理进度窗口的一条:工具步骤或回复文本行(按时间混排,挂在 task 工具行下) */
+export type SubEntry =
+  | { kind: "tool"; id: string; title: string; status: "run" | "ok" | "fail" }
+  | { kind: "text"; text: string };
 
 export interface PlanEntry {
   content: string;
@@ -103,8 +101,8 @@ export type LogItem =
       title: string;
       status: "run" | "ok" | "fail";
       out: string;
-      /** 子代理探索步骤(kind=subagent_tool 进度) */
-      subItems?: SubItem[];
+      /** 子代理进度窗口(工具步骤 + 回复文本行,时间序) */
+      feed?: SubEntry[];
       /** 最新输出行(kind=output 进度,如 bash 长命令) */
       lastLine?: string;
       /** 子代理子会话 ID(可打开完整回放) */

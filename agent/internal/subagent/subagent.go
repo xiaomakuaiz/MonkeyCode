@@ -187,19 +187,31 @@ func (t *Tool) closeChildSession(s *session.Session, engine *loop.Engine, runErr
 	s.Close()
 }
 
-// progressMapper 把子代理帧流压缩为主流程的进度项(B):只透传工具调用的
-// 开始/终态,文本与思考流不上抛。env 是主引擎的执行环境(其 Progress 由
-// 主 loop 注入并挂在 task 调用的 toolCallId 上)。
+// progressMapper 把子代理帧流压缩为主流程的进度项(B):透传工具调用的
+// 开始/终态,回复文本按行上抛(思考流不上抛)。env 是主引擎的执行环境
+// (其 Progress 由主 loop 注入并挂在 task 调用的 toolCallId 上)。
 type progressMapper struct {
 	env *tools.Env
+	buf strings.Builder // 未满一行的回复文本(流式增量跨 chunk 拼接)
 }
 
 func newProgressMapper(env *tools.Env) frame.Emitter {
 	return &progressMapper{env: env}
 }
 
+// textLineMax 单条文本进度的长度上限(超出截断,完整文本在子会话里)。
+const textLineMax = 200
+
 func (m *progressMapper) Emit(f frame.Frame) {
-	if f.Type != frame.TypeTaskRunning || f.Kind != frame.KindACPEvent {
+	switch f.Type {
+	case frame.TypeTaskEnded, frame.TypeTaskError:
+		m.flushText() // 轮次结束,冲刷未满一行的尾巴(通常是结论最后一行)
+		return
+	case frame.TypeTaskRunning:
+	default:
+		return
+	}
+	if f.Kind != frame.KindACPEvent {
 		return
 	}
 	var u struct {
@@ -208,6 +220,9 @@ func (m *progressMapper) Emit(f frame.Frame) {
 			ToolCallID    string `json:"toolCallId"`
 			Title         string `json:"title"`
 			Status        string `json:"status"`
+			Content       struct {
+				Text string `json:"text"`
+			} `json:"content"`
 		} `json:"update"`
 	}
 	if json.Unmarshal(f.Data, &u) != nil {
@@ -215,7 +230,10 @@ func (m *progressMapper) Emit(f frame.Frame) {
 	}
 	up := u.Update
 	switch up.SessionUpdate {
+	case "agent_message_chunk":
+		m.addText(up.Content.Text)
 	case "tool_call":
+		m.flushText() // 文本先于工具调用,保持时间顺序
 		m.env.EmitProgress(tools.ProgressUpdate{
 			Kind: "subagent_tool", ID: up.ToolCallID, Title: up.Title, Status: "run",
 		})
@@ -231,6 +249,36 @@ func (m *progressMapper) Emit(f frame.Frame) {
 			Kind: "subagent_tool", ID: up.ToolCallID, Title: up.Title, Status: status,
 		})
 	}
+}
+
+// addText 累积流式文本增量,每凑满一行上抛一条 subagent_text 进度。
+func (m *progressMapper) addText(delta string) {
+	m.buf.WriteString(delta)
+	for {
+		line, rest, ok := strings.Cut(m.buf.String(), "\n")
+		if !ok {
+			return
+		}
+		m.emitLine(line)
+		m.buf.Reset()
+		m.buf.WriteString(rest)
+	}
+}
+
+func (m *progressMapper) flushText() {
+	m.emitLine(m.buf.String())
+	m.buf.Reset()
+}
+
+func (m *progressMapper) emitLine(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if r := []rune(line); len(r) > textLineMax {
+		line = string(r[:textLineMax]) + "…"
+	}
+	m.env.EmitProgress(tools.ProgressUpdate{Kind: "subagent_text", Line: line})
 }
 
 func systemPrompt(workdir string) string {

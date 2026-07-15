@@ -236,6 +236,45 @@ func TestExecuteChildSessionAndProgress(t *testing.T) {
 	}
 }
 
+// TestProgressMapperTextLines 回复文本按行上抛:凑满一行即发、
+// 工具调用前与轮次结束时冲刷残余、空行跳过、超长截断。
+func TestProgressMapperTextLines(t *testing.T) {
+	var progress []tools.ProgressUpdate
+	env := &tools.Env{Progress: func(u tools.ProgressUpdate) { progress = append(progress, u) }}
+	m := newProgressMapper(env)
+	b := &frame.Builder{}
+
+	m.Emit(b.AgentText("我先查看"))
+	m.Emit(b.AgentText("配置文件\n\n然后"))                                                                   // 跨 chunk 拼行 + 空行跳过
+	m.Emit(b.ToolCall(frame.ToolCallUpdate{ToolCallID: "s1", Title: "读取 a.go", Status: "in_progress"})) // 冲刷"然后"
+	m.Emit(b.ToolCallUpdate(frame.ToolCallUpdate{ToolCallID: "s1", Title: "读取 a.go", Status: "completed"}))
+	m.Emit(b.AgentText("结论是 " + strings.Repeat("很长", 200))) // 超长,无换行
+	m.Emit(b.TaskEnded())                                   // 轮次结束冲刷
+
+	var got []string
+	for _, u := range progress {
+		switch u.Kind {
+		case "subagent_text":
+			got = append(got, u.Line)
+		case "subagent_tool":
+			got = append(got, "tool:"+u.Status)
+		}
+	}
+	want := []string{"我先查看配置文件", "然后", "tool:run", "tool:ok"}
+	if len(got) != 5 {
+		t.Fatalf("进度序列长度 %d: %v", len(got), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("第 %d 条 = %q, want %q", i, got[i], w)
+		}
+	}
+	last := got[4]
+	if !strings.HasPrefix(last, "结论是") || !strings.HasSuffix(last, "…") || len([]rune(last)) > textLineMax+1 {
+		t.Fatalf("超长行未截断: len=%d", len([]rune(last)))
+	}
+}
+
 func TestExecuteNoSessionRootDegrades(t *testing.T) {
 	p := &scripted{script: []func(provider.Request) (*provider.Result, error){textResp("ok")}}
 	tool := &Tool{Provider: p} // 无 SessionRoot:不落盘

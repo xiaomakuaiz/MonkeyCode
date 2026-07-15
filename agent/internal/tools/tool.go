@@ -15,11 +15,11 @@ import (
 // ProgressUpdate 工具执行期的进度上报载荷(经 loop 转成
 // tool_call_update{status:in_progress, progress} 帧,挂在当前工具调用上)。
 type ProgressUpdate struct {
-	Kind   string `json:"kind"`             // subagent_tool | output | child_session
+	Kind   string `json:"kind"`             // subagent_tool | subagent_text | output | child_session
 	ID     string `json:"id,omitempty"`     // 子项标识(如子代理内部的 toolCallId)
 	Title  string `json:"title,omitempty"`  // 子项标题(kind=subagent_tool)
 	Status string `json:"status,omitempty"` // run | ok | fail
-	Line   string `json:"line,omitempty"`   // 最新输出行(kind=output)
+	Line   string `json:"line,omitempty"`   // 文本行(kind=output 最新输出行 / subagent_text 回复行)
 	// ChildSessionID 子代理会话 ID(kind=child_session),
 	// 客户端可据此打开完整子会话回放。
 	ChildSessionID string `json:"childSessionId,omitempty"`

@@ -327,8 +327,8 @@ function statusMark(status: "run" | "ok" | "fail") {
   return status === "run" ? "◌" : status === "ok" ? "✓" : "✗";
 }
 
-/** 子步骤滚动窗口:只展示最后几条,更早的折叠为计数行(完整过程走"查看子会话")。 */
-const MAX_SUB_ITEMS = 5;
+/** 进度滚动窗口:固定只展示最后几条,旧条目自然滚出(完整过程走"查看子会话")。 */
+const FEED_WINDOW = 5;
 
 function ToolCard({
   item,
@@ -339,8 +339,8 @@ function ToolCard({
   radius: string;
   onOpenChild?: (id: string) => void;
 }) {
-  const subs = item.subItems ?? [];
-  const hidden = subs.length - MAX_SUB_ITEMS;
+  const feed = item.feed ?? [];
+  const visible = feed.slice(-FEED_WINDOW);
   // 标题按「动词 目标」拆开:动词弱化(t3)、目标等宽突出(t1),对应原型 verb/target
   const sp = item.title.indexOf(" ");
   const verb = sp > 0 ? item.title.slice(0, sp) : "";
@@ -408,24 +408,27 @@ function ToolCard({
           </span>
         )}
       </div>
-      {hidden > 0 && (
-        <div style={{ ...subStyle, color: "var(--t5)" }}>
-          <span style={{ flex: "none" }}>↳</span>… 已省略前 {hidden} 步
-        </div>
-      )}
-      {subs.slice(-MAX_SUB_ITEMS).map((s) => (
-        <div key={s.id} style={subStyle}>
+      {visible.map((s, i) => (
+        <div key={feed.length - visible.length + i} style={subStyle}>
           <span style={{ color: "var(--t5)", flex: "none" }}>↳</span>
-          <span
-            style={{
-              color: s.status === "run" ? "var(--t4)" : s.status === "ok" ? "var(--ok)" : "var(--err)",
-              fontSize: 10,
-              flex: "none",
-            }}
-          >
-            {statusMark(s.status)}
-          </span>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{s.title}</span>
+          {s.kind === "tool" ? (
+            <>
+              <span
+                style={{
+                  color: s.status === "run" ? "var(--t4)" : s.status === "ok" ? "var(--ok)" : "var(--err)",
+                  fontSize: 10,
+                  flex: "none",
+                }}
+              >
+                {statusMark(s.status)}
+              </span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{s.title}</span>
+            </>
+          ) : (
+            <span style={{ color: "var(--t5)", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+              {s.text}
+            </span>
+          )}
         </div>
       ))}
       {item.status === "run" && item.lastLine && (

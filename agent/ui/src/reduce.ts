@@ -2,7 +2,7 @@
 // 纯函数,不触 DOM。
 import { frameData } from "./client";
 import { b64decode } from "./client";
-import type { AcpUpdate, Frame, LogItem, PermOutcome, SubItem, ToolProgress, Usage } from "./types";
+import type { AcpUpdate, Frame, LogItem, PermOutcome, SubEntry, ToolProgress, Usage } from "./types";
 
 export interface ChatState {
   items: LogItem[];
@@ -69,7 +69,10 @@ function expirePerms(items: LogItem[]): LogItem[] {
   return items.map((it) => (it.kind === "perm" && it.state === "open" ? { ...it, state: "expired" } : it));
 }
 
-/** 执行期进度:更新对应工具项的子步骤/输出行/子会话引用 */
+/** 进度窗口在内存里保留的条数上限(渲染只取尾部几条,完整过程在子会话)。 */
+const MAX_FEED = 200;
+
+/** 执行期进度:更新对应工具项的进度窗口/输出行/子会话引用 */
 function applyProgress(s: ChatState, tcId: string, p: ToolProgress): ChatState {
   const items = s.items.slice();
   for (let i = items.length - 1; i >= 0; i--) {
@@ -77,16 +80,30 @@ function applyProgress(s: ChatState, tcId: string, p: ToolProgress): ChatState {
     if (it.kind !== "tool" || it.tcId !== tcId) continue;
     switch (p.kind) {
       case "subagent_tool": {
-        const subItems = (it.subItems ?? []).slice();
-        const idx = subItems.findIndex((x) => x.id === p.id);
-        const entry: SubItem = {
-          id: p.id ?? String(subItems.length),
+        let feed = (it.feed ?? []).slice();
+        const idx = feed.findIndex((x) => x.kind === "tool" && x.id === p.id);
+        const entry: SubEntry = {
+          kind: "tool",
+          id: p.id ?? String(feed.length),
           title: p.title ?? "",
-          status: (p.status as SubItem["status"]) ?? "run",
+          status: (p.status as "run" | "ok" | "fail") ?? "run",
         };
-        if (idx >= 0) subItems[idx] = { ...entry, title: entry.title || subItems[idx].title };
-        else subItems.push(entry);
-        items[i] = { ...it, subItems };
+        if (idx >= 0) {
+          const prev = feed[idx] as Extract<SubEntry, { kind: "tool" }>;
+          feed[idx] = { ...entry, title: entry.title || prev.title };
+        } else {
+          feed.push(entry);
+          if (feed.length > MAX_FEED) feed = feed.slice(-MAX_FEED);
+        }
+        items[i] = { ...it, feed };
+        break;
+      }
+      case "subagent_text": {
+        if (!p.line) break;
+        let feed = (it.feed ?? []).slice();
+        feed.push({ kind: "text", text: p.line });
+        if (feed.length > MAX_FEED) feed = feed.slice(-MAX_FEED);
+        items[i] = { ...it, feed };
         break;
       }
       case "output":
