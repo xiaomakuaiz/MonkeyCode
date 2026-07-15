@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	defaultMaxSteps = 80
+	// defaultMaxSteps 单轮步数刹车:防模型失控空转,不是任务预算——
+	// 交互场景用户随时可取消,真实长任务(大重构+验证循环)不应被它拦住。
+	defaultMaxSteps = 200
 	// 上下文预算(粗略):超过后拒绝继续,提示开新会话。压缩在 M3 实现。
 	defaultContextBudget = 180_000
 )
@@ -163,7 +165,8 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 		}
 	}
 
-	err := fmt.Errorf("达到单轮最大步数 %d,任务未完成", e.opts.MaxSteps)
+	// 步数耗尽时历史仍配对完整(每步的 tool_result 已入历史),可直接续跑
+	err := fmt.Errorf("达到单轮最大步数 %d,任务未完成;回复「继续」可接着执行", e.opts.MaxSteps)
 	e.emit(e.builder.TaskError(err.Error()))
 	return finalText, err
 }

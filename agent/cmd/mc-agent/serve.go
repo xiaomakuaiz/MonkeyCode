@@ -49,6 +49,7 @@ func serveCmd() *cobra.Command {
 				Addr:             addr,
 				Token:            token,
 				SessionRoot:      session.DefaultRoot(),
+				MaxSteps:         flags.maxSteps,
 				SubagentMaxSteps: flags.subagentSteps,
 				Version:          version,
 			}

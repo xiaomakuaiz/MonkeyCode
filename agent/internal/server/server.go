@@ -63,6 +63,8 @@ type Options struct {
 	UI []byte
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
 	AskTimeout time.Duration
+	// MaxSteps 主循环单轮步数上限,<=0 用 loop 默认值。
+	MaxSteps int
 	// SubagentMaxSteps 子代理单任务步数上限,<=0 用子代理默认值。
 	SubagentMaxSteps int
 	// BuildExtras 按会话工作区装配系统提示增量(本地/平台技能与规则)
@@ -685,7 +687,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	}
 	system := contextmgr.Build(sess.Meta.Workdir, extras)
 	ls.engine = loop.New(prov, reg, pol, emitter, ls.builder,
-		sess.Meta.Workdir, system, loop.Options{ReadRoots: readRoots})
+		sess.Meta.Workdir, system, loop.Options{MaxSteps: s.opts.MaxSteps, ReadRoots: readRoots})
 	sub.OnUsage = ls.engine.AddUsage
 
 	msgs, err := sess.LoadMessages()
