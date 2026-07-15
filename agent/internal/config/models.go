@@ -15,6 +15,8 @@ type ModelProfile struct {
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"` // 请求里的模型标识
 	Default  bool   `json:"default,omitempty"`
+	// ContextWindow 模型上下文窗口(token)。0 表示未配置,用内核默认预算。
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // LoadModels 加载模型清单:MC_AGENT_MODELS 指向 JSON 数组文件。
@@ -52,6 +54,9 @@ func LoadModels() ([]ModelProfile, error) {
 		case "", "anthropic", "openai", "openai_responses":
 		default:
 			return nil, fmt.Errorf("模型 %q 的 provider %q 不支持(anthropic/openai/openai_responses)", p.Name, p.Provider)
+		}
+		if p.ContextWindow < 0 {
+			return nil, fmt.Errorf("模型 %q 的 context_window 不能为负", p.Name)
 		}
 		if seen[p.Name] {
 			return nil, fmt.Errorf("模型清单名称重复: %q", p.Name)

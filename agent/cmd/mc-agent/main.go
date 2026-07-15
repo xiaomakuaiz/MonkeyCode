@@ -66,7 +66,7 @@ func main() {
 	pf.StringSliceVar(&flags.allow, "allow", nil, "预授权的工具名(可多次指定,如 --allow write_file)")
 	pf.IntVar(&flags.maxSteps, "max-steps", 0, "单轮最大步数(默认 10000)")
 	pf.IntVar(&flags.subagentSteps, "subagent-max-steps", 0, "子代理单任务最大步数(默认 5000)")
-	pf.IntVar(&flags.contextBudget, "context-budget", 0, "上下文 token 预算,超 80% 触发压缩(默认 180000)")
+	pf.IntVar(&flags.contextBudget, "context-budget", 0, "上下文 token 预算,超 80% 触发压缩(默认 200000)")
 	pf.StringVar(&flags.resumeID, "resume", "", "恢复指定会话继续对话")
 	pf.BoolVar(&flags.noSession, "no-session", false, "不持久化会话")
 	pf.BoolVar(&flags.worktree, "worktree", false, "在隔离的 git worktree 中执行(结束后用 mc-agent worktree apply/drop 处理改动)")

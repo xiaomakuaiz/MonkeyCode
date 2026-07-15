@@ -63,10 +63,11 @@ func TestLoadModelsNoDefaultTakesFirst(t *testing.T) {
 
 func TestLoadModelsErrors(t *testing.T) {
 	cases := map[string]string{
-		"字段不全":        `[{"name":"a","base_url":"u","model":"m"}]`,
-		"名称重复":        `[{"name":"a","base_url":"u","api_key":"k","model":"m"},{"name":"a","base_url":"u","api_key":"k","model":"m2"}]`,
-		"provider 非法": `[{"name":"a","provider":"gemini","base_url":"u","api_key":"k","model":"m"}]`,
-		"非法 JSON":     `{`,
+		"字段不全":              `[{"name":"a","base_url":"u","model":"m"}]`,
+		"名称重复":              `[{"name":"a","base_url":"u","api_key":"k","model":"m"},{"name":"a","base_url":"u","api_key":"k","model":"m2"}]`,
+		"provider 非法":       `[{"name":"a","provider":"gemini","base_url":"u","api_key":"k","model":"m"}]`,
+		"context_window 为负": `[{"name":"a","base_url":"u","api_key":"k","model":"m","context_window":-1}]`,
+		"非法 JSON":           `{`,
 	}
 	for name, content := range cases {
 		writeModels(t, content)

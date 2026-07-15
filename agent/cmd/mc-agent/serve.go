@@ -80,6 +80,12 @@ func serveCmd() *cobra.Command {
 					}
 					return out
 				}
+				opts.ContextBudget = func(name string) int {
+					if p := config.FindModel(profiles, name); p != nil {
+						return p.ContextWindow
+					}
+					return 0
+				}
 				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
 					platExtras, platRoots := platformExtras(cfg)
 					return skills.Assemble(workdir, platExtras, platRoots)

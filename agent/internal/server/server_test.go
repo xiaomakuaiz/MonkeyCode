@@ -731,6 +731,70 @@ func TestPerSessionModelAndSwitch(t *testing.T) {
 	ls.mu.Unlock()
 }
 
+// TestModelContextBudget 上下文预算随会话绑定的模型生效:配置了 context_window
+// 的模型 usage 帧分母用配置值,未配置的用 loop 默认值;切模型后同步切换。
+func TestModelContextBudget(t *testing.T) {
+	stubs := map[string]*namedStub{
+		"small": {name: "small", stubProvider: stubProvider{results: []*provider.Result{textResult("小")}}},
+		"big":   {name: "big", stubProvider: stubProvider{results: []*provider.Result{textResult("大")}}},
+	}
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Model:       "small",
+		NewProvider: func(name string) (provider.Provider, error) {
+			if name == "" {
+				name = "small"
+			}
+			s, ok := stubs[name]
+			if !ok {
+				return nil, fmt.Errorf("未知模型 %q", name)
+			}
+			return s, nil
+		},
+		ListModels: func() []ModelInfo {
+			return []ModelInfo{{Name: "small", Default: true}, {Name: "big"}}
+		},
+		ContextBudget: func(name string) int {
+			if name == "small" {
+				return 32000
+			}
+			return 0 // big 未配置 → loop 默认 200k
+		},
+		AskTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, data := apiReq(t, ts, "POST", "/api/sessions", "test-token",
+		fmt.Sprintf(`{"workdir":%q,"model":"small"}`, t.TempDir()))
+	if resp.StatusCode != 200 {
+		t.Fatalf("create: %d %s", resp.StatusCode, data)
+	}
+	var meta session.Meta
+	_ = json.Unmarshal(data, &meta)
+
+	conn := dialWS(t, ts, meta.ID)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("hi")})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	if !framesContain(frames, `"size":32000`) {
+		t.Fatalf("首轮 usage 分母应为配置的 32000: %v", summary(frames))
+	}
+
+	sendCall(t, conn, frame.KindSessionSetModel, map[string]string{"model": "big"})
+	wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypeCallResponse) && framesContain(fs, "model_update")
+	})
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("again")})
+	frames = wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	if !framesContain(frames, `"size":200000`) {
+		t.Fatalf("切换到未配置窗口的模型应回退默认 200000: %v", summary(frames))
+	}
+}
+
 // TestWSSetMode 切换权限模式:call 成功 + permission_mode_update 广播 + meta 落盘,
 // 非法 mode 报错。
 func TestWSSetMode(t *testing.T) {

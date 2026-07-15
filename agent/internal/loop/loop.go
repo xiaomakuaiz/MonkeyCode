@@ -19,8 +19,9 @@ const (
 	// defaultMaxSteps 单轮步数保险丝:只防模型失控空转(上下文压缩会让
 	// 死循环永远转下去,这是无人值守时唯一的总花费兜底),正常任务不该撞上。
 	defaultMaxSteps = 10000
-	// 上下文预算(粗略):超过后拒绝继续,提示开新会话。压缩在 M3 实现。
-	defaultContextBudget = 180_000
+	// defaultContextBudget 上下文预算缺省值:模型未配置 context_window 时使用,
+	// 输入 token 超预算 80% 触发压缩。
+	defaultContextBudget = 200_000
 )
 
 // Options 循环配置。
@@ -95,6 +96,14 @@ func (e *Engine) AddUsage(u provider.Usage) {
 // SetProvider 切换 LLM 客户端(轮次之间调用;消息历史为归一化格式,
 // 跨 provider 续聊安全)。调用方负责保证当前没有进行中的轮次。
 func (e *Engine) SetProvider(p provider.Provider) { e.provider = p }
+
+// SetContextBudget 切换上下文预算(随模型切换,轮次之间调用;<=0 回退默认值)。
+func (e *Engine) SetContextBudget(n int) {
+	if n <= 0 {
+		n = defaultContextBudget
+	}
+	e.opts.ContextBudget = n
+}
 
 // ModelName 当前模型标识(展示用)。
 func (e *Engine) ModelName() string { return e.provider.Model() }

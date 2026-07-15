@@ -487,3 +487,20 @@
 - [x] 默认最终定为主循环 10000、子代理 5000(纯保险丝,交互场景靠用户取消兜底)
 - [x] serve 链路接通 --max-steps(此前只有 run/chat 生效,桌面端写死 80)
 - [x] 报错文案引导恢复:步数耗尽时历史配对完整,提示"回复「继续」可接着执行"
+
+# 模型级上下文窗口配置(2026-07-15)
+
+> 用户反馈:模型配置没有上下文大小配置,压缩预算全局写死 180k(serve 路径甚至没接线,
+> 32k 小模型永不压缩直接溢出,1M 大模型 144k 就开始压缩)。
+> 方案:模型清单加高级项 context_window(设置表单默认折叠),默认 200k,配了用配置值。
+
+- [x] `internal/config/models.go`:ModelProfile 加 `context_window`(可选,负数报错)
+- [x] `internal/loop`:默认预算 180k→200k;Engine.SetContextBudget(切模型时同步,<=0 回退默认)
+- [x] `internal/server`:Options.ContextBudget(model) 回调;newLiveSession/setModel 接线
+      (此前 serve 路径压根没接 ContextBudget,桌面端一律 180k)
+- [x] `cmd/mc-agent`:serve 多模型分支提供回调;--context-budget 帮助文案改 200000
+- [x] UI:HostModel 加 context_window;settings.tsx 模型卡"高级选项"折叠区
+      (默认收起;已配置时折叠标题带出当前值;删除模型时折叠态复位防索引错位)
+- [x] 验证:models 负值用例 + TestModelContextBudget(usage 帧 size=32000 →切模型→200000);
+      全仓 go test -race 过,gofmt/vet 干净;UI tsc+build 过,uidist 重建;
+      真实二进制冒烟——带 context_window 清单正常起服,负值降级零模型模式(警告不致死)

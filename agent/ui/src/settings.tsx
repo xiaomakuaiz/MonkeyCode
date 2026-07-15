@@ -193,6 +193,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
   const desktop = inDesktopShell();
   const [models, setModels] = useState<HostModel[]>([]);
   const [defaultIdx, setDefaultIdx] = useState(0);
+  const [advOpen, setAdvOpen] = useState<Record<number, boolean>>({});
   const [mcps, setMcps] = useState<McpEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
@@ -353,6 +354,32 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                     />
                   </Field>
                 </div>
+                {/* 高级项默认折叠;已配置时在折叠标题上带出当前值 */}
+                <div
+                  className="hv-t1"
+                  style={{ marginTop: 10, fontSize: 11.5, color: "var(--t4)", cursor: "pointer", userSelect: "none" }}
+                  onClick={() => setAdvOpen((o) => ({ ...o, [i]: !o[i] }))}
+                >
+                  {advOpen[i] ? "▾" : "▸"} 高级选项
+                  {!advOpen[i] && m.context_window ? `(上下文窗口 ${m.context_window.toLocaleString()})` : ""}
+                </div>
+                {advOpen[i] && (
+                  <div style={{ marginTop: 8 }}>
+                    <Field label="上下文窗口(token)">
+                      <input
+                        style={input}
+                        type="number"
+                        min={1}
+                        value={m.context_window ?? ""}
+                        placeholder="200000(默认)"
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value, 10);
+                          patchModel(i, { context_window: Number.isFinite(n) && n > 0 ? n : undefined });
+                        }}
+                      />
+                    </Field>
+                  </div>
+                )}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, fontSize: 12 }}>
                   {i === defaultIdx ? (
                     <span style={{ color: "var(--amberT)", fontWeight: 600 }}>✓ 默认模型</span>
@@ -367,6 +394,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
                     onClick={() => {
                       setModels((ms) => ms.filter((_, j) => j !== i));
                       setDefaultIdx((d) => (i < d ? d - 1 : i === d ? 0 : d));
+                      setAdvOpen({}); // 按索引记忆,删除后索引移位,全部复位折叠
                     }}
                   >
                     删除

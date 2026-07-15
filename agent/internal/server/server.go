@@ -59,6 +59,8 @@ type Options struct {
 	NewProvider func(model string) (provider.Provider, error)
 	// ListModels 可选模型清单(展示名 + 默认标记);nil 表示单模型。
 	ListModels func() []ModelInfo
+	// ContextBudget 按模型名给出上下文预算(token);nil 或返回 <=0 用 loop 默认值。
+	ContextBudget func(model string) int
 	// UI 内嵌调试页面(nil 则不挂载)。
 	UI []byte
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
@@ -687,7 +689,10 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	}
 	system := contextmgr.Build(sess.Meta.Workdir, extras)
 	ls.engine = loop.New(prov, reg, pol, emitter, ls.builder,
-		sess.Meta.Workdir, system, loop.Options{MaxSteps: s.opts.MaxSteps, ReadRoots: readRoots})
+		sess.Meta.Workdir, system, loop.Options{
+			MaxSteps: s.opts.MaxSteps, ReadRoots: readRoots,
+			ContextBudget: s.modelContextBudget(sess.Meta.Model),
+		})
 	sub.OnUsage = ls.engine.AddUsage
 
 	msgs, err := sess.LoadMessages()
@@ -774,6 +779,7 @@ func (ls *liveSession) setModel(name string) (any, error) {
 	}
 	applySessionHeaders(prov, ls.sess.Meta.ID)
 	ls.engine.SetProvider(prov)
+	ls.engine.SetContextBudget(ls.srv.modelContextBudget(name))
 	if ls.sub != nil {
 		ls.sub.Provider = prov
 	}
@@ -828,6 +834,15 @@ func applySessionHeaders(p provider.Provider, sessionID string) {
 }
 
 // modelNameOrDefault 空名时返回默认模型展示名。
+// modelContextBudget 按模型名取上下文预算;未配置回调或模型未配置窗口时
+// 返回 0(loop 用默认值)。
+func (s *Server) modelContextBudget(name string) int {
+	if s.opts.ContextBudget == nil {
+		return 0
+	}
+	return s.opts.ContextBudget(name)
+}
+
 func (s *Server) modelNameOrDefault(name string) string {
 	if name != "" {
 		return name

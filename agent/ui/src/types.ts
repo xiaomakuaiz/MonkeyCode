@@ -14,6 +14,8 @@ export interface HostModel {
   api_key: string;
   model: string;
   default?: boolean;
+  /** 上下文窗口(token),高级项;缺省内核按 200k 处理 */
+  context_window?: number;
 }
 
 /** 壳持有的应用配置(经 Tauri IPC get_config/save_config 读写)。 */
