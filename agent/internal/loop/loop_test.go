@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -307,6 +308,151 @@ func (b *barrierTool) Execute(_ context.Context, env *tools.Env, input json.RawM
 		return "ok-" + in.Tag, nil
 	case <-time.After(3 * time.Second):
 		return "", fmt.Errorf("同批调用未并发执行")
+	}
+}
+
+// blockingTool 可并行桩工具:进入执行后阻塞到 ctx 取消(模拟长时间运行的子代理)。
+type blockingTool struct {
+	entered chan struct{} // 每次调用进入执行时发信号
+}
+
+func (b *blockingTool) Name() string                   { return "blocker" }
+func (b *blockingTool) Description() string            { return "stub" }
+func (b *blockingTool) InputSchema() map[string]any    { return map[string]any{"type": "object"} }
+func (b *blockingTool) Title(_ json.RawMessage) string { return "阻塞桩" }
+func (b *blockingTool) Parallelizable() bool           { return true }
+func (b *blockingTool) Execute(ctx context.Context, _ *tools.Env, _ json.RawMessage) (string, error) {
+	b.entered <- struct{}{}
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// TestRunTurn_InterruptKeepsToolPairing 中断发生在工具批执行中(如多个并行
+// 子代理其一报错后用户取消)时,历史必须保持 tool_use/tool_result 配对完整,
+// 否则落盘后会话永久无法继续(回归:继续对话报 "toolcall result 不存在")。
+func TestRunTurn_InterruptKeepsToolPairing(t *testing.T) {
+	sp := &scriptedProvider{script: []func(provider.Request) (*provider.Result, error){
+		func(provider.Request) (*provider.Result, error) {
+			return &provider.Result{
+				Message: provider.Message{Role: provider.RoleAssistant, Content: []provider.ContentBlock{
+					{Type: provider.BlockToolUse, ID: "t1", Name: "blocker", Input: []byte(`{}`)},
+					{Type: provider.BlockToolUse, ID: "t2", Name: "blocker", Input: []byte(`{}`)},
+					{Type: provider.BlockToolUse, ID: "t3", Name: "write_file", Input: []byte(`{"path":"a.txt","content":"x"}`)},
+				}},
+				StopReason: provider.StopToolUse,
+				Usage:      provider.Usage{InputTokens: 100, OutputTokens: 20},
+			}, nil
+		},
+	}}
+	eng, _ := newTestEngine(t, sp, Options{})
+	bt := &blockingTool{entered: make(chan struct{}, 2)}
+	eng.registry.Register(bt)
+
+	// 两个并行调用都进入执行后取消(串行的 write_file 尚未开始)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-bt.entered
+		<-bt.entered
+		cancel()
+	}()
+	_, err := eng.RunTurn(ctx, "并行探索然后被取消")
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("err = %v", err)
+	}
+
+	// 历史末条必须是完整的一批 tool_result(t1..t3 各一个)
+	last := eng.Messages[len(eng.Messages)-1]
+	if last.Role != provider.RoleUser || len(last.Content) != 3 {
+		t.Fatalf("中断后工具结果消息缺失/不完整: %+v", last)
+	}
+	for i, id := range []string{"t1", "t2", "t3"} {
+		b := last.Content[i]
+		if b.Type != provider.BlockToolResult || b.ToolUseID != id || !b.IsError {
+			t.Fatalf("第 %d 个结果异常: %+v", i, b)
+		}
+	}
+
+	// 中断后续聊:下一轮请求必须能构造(历史配对完整),正常结束
+	sp.script = append(sp.script, text("继续完成"))
+	out, err := eng.RunTurn(context.Background(), "继续")
+	if err != nil || out != "继续完成" {
+		t.Fatalf("中断后续聊失败: out=%q err=%v", out, err)
+	}
+	assertPaired(t, sp.Requests[len(sp.Requests)-1].Messages)
+}
+
+// assertPaired 校验消息序列中每个 tool_use 都有紧随其后的配对 tool_result。
+func assertPaired(t *testing.T, msgs []provider.Message) {
+	t.Helper()
+	for i, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type != provider.BlockToolUse {
+				continue
+			}
+			found := false
+			if i+1 < len(msgs) {
+				for _, nb := range msgs[i+1].Content {
+					if nb.Type == provider.BlockToolResult && nb.ToolUseID == b.ID {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("tool_use %s 无配对 tool_result(消息 %d)", b.ID, i)
+			}
+		}
+	}
+}
+
+func TestRepairHistory(t *testing.T) {
+	use := func(ids ...string) provider.Message {
+		m := provider.Message{Role: provider.RoleAssistant}
+		for _, id := range ids {
+			m.Content = append(m.Content, provider.ContentBlock{Type: provider.BlockToolUse, ID: id, Name: "task", Input: []byte(`{}`)})
+		}
+		return m
+	}
+	res := func(ids ...string) provider.Message {
+		m := provider.Message{Role: provider.RoleUser}
+		for _, id := range ids {
+			m.Content = append(m.Content, provider.ContentBlock{Type: provider.BlockToolResult, ToolUseID: id, Content: "ok"})
+		}
+		return m
+	}
+	userText := provider.TextMessage(provider.RoleUser, "继续")
+
+	// 场景 1:历史完好 → 原样
+	good := []provider.Message{userText, use("a"), res("a"), provider.TextMessage(provider.RoleAssistant, "done")}
+	if got := RepairHistory(good); len(got) != len(good) {
+		t.Fatalf("完好历史被改动: %d != %d", len(got), len(good))
+	}
+
+	// 场景 2:尾部悬空 tool_use(中断后落盘的典型形态)→ 插入合成结果消息
+	broken := []provider.Message{userText, use("a", "b")}
+	got := RepairHistory(broken)
+	assertPaired(t, got)
+	if len(got) != 3 || len(got[2].Content) != 2 {
+		t.Fatalf("未补齐合成结果: %+v", got)
+	}
+	if !got[2].Content[0].IsError || got[2].Content[0].ToolUseID != "a" {
+		t.Fatalf("合成结果异常: %+v", got[2].Content[0])
+	}
+
+	// 场景 3:悬空 tool_use 后跟用户文本(中断后已续过聊)→ 合成结果插到文本前
+	broken = []provider.Message{use("a"), userText}
+	got = RepairHistory(broken)
+	assertPaired(t, got)
+	if len(got) != 2 || got[1].Content[0].Type != provider.BlockToolResult || got[1].Content[1].Text != "继续" {
+		t.Fatalf("合成结果未插入文本前: %+v", got[1])
+	}
+
+	// 场景 4:部分缺失(三个 use 只有一个 result)→ 只补缺的
+	m := res("b")
+	broken = []provider.Message{use("a", "b", "c"), m}
+	got = RepairHistory(broken)
+	assertPaired(t, got)
+	if len(got[1].Content) != 3 {
+		t.Fatalf("部分缺失未补齐: %+v", got[1])
 	}
 }
 

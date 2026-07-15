@@ -150,13 +150,17 @@ func (e *Engine) RunTurn(ctx context.Context, userInput string) (string, error) 
 			return finalText, nil
 		}
 
-		// 执行全部工具调用,结果作为下一次请求的 user 消息
+		// 执行全部工具调用,结果作为下一次请求的 user 消息。
+		// 中断时 results 仍是完整一批(未执行的为中断占位)——tool_use 必须有
+		// 配对的 tool_result,否则历史落盘后所有后续请求都会被 API 拒绝
 		results, err := e.execBatch(ctx, toolUses)
+		if len(results) > 0 {
+			e.Messages = append(e.Messages, provider.Message{Role: provider.RoleUser, Content: results})
+		}
 		if err != nil {
 			e.emit(e.builder.TaskError(err.Error()))
 			return finalText, err
 		}
-		e.Messages = append(e.Messages, provider.Message{Role: provider.RoleUser, Content: results})
 	}
 
 	err := fmt.Errorf("达到单轮最大步数 %d,任务未完成", e.opts.MaxSteps)
@@ -185,7 +189,9 @@ func (e *Engine) callLLM(ctx context.Context) (*provider.Result, error) {
 // 可并行工具(tools.Parallelizable,如只读子代理)先并发执行——多个探索任务
 // 不再互相排队;其余工具(bash/写/编辑等)在并行组结束后按序串行,保证有副作用
 // 的工具之间、以及与并行组的只读执行之间互不交叠。
-// 用户中断时返回 ErrInterrupted(与旧串行语义一致:本批结果不进消息历史)。
+// 用户中断时返回 ErrInterrupted,但 results 仍是完整一批:已执行的保留真实
+// 结果,未执行的补中断占位——每个 tool_use 都必须有配对的 tool_result,
+// 否则消息历史损坏,会话无法继续。
 func (e *Engine) execBatch(ctx context.Context, toolUses []provider.ContentBlock) ([]provider.ContentBlock, error) {
 	results := make([]provider.ContentBlock, len(toolUses))
 
@@ -207,14 +213,23 @@ func (e *Engine) execBatch(ctx context.Context, toolUses []provider.ContentBlock
 			continue
 		}
 		if ctx.Err() != nil {
-			return nil, ErrInterrupted
+			results[i] = interruptedResult(tu)
+			continue
 		}
 		results[i] = e.execToolUse(ctx, tu)
 	}
 	if ctx.Err() != nil {
-		return nil, ErrInterrupted
+		return results, ErrInterrupted
 	}
 	return results, nil
+}
+
+// interruptedResult 未执行(或未执行完)的调用在中断时的占位结果。
+func interruptedResult(tu provider.ContentBlock) provider.ContentBlock {
+	return provider.ContentBlock{
+		Type: provider.BlockToolResult, ToolUseID: tu.ID,
+		Content: "工具执行被中断", IsError: true,
+	}
 }
 
 // parallelizable 工具是否声明了可并行执行(未注册的工具走串行路径报错)。

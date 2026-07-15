@@ -692,7 +692,8 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	ls.engine.Messages = msgs
+	// 旧版本中断轮次可能落盘"tool_use 无配对 tool_result"的损坏历史,加载时修复
+	ls.engine.Messages = loop.RepairHistory(msgs)
 	ls.engine.Usage = sess.Meta.Usage
 
 	// 上一进程遗留的未完轮次(如重启时正在执行/等待审批):

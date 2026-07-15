@@ -441,3 +441,23 @@
       (真实 write_file 落盘)/重建 liveSession 按 meta 恢复;-race ×3 全绿,全仓 go test 过,tsc 过
 - [x] 端到端(新构建二进制 + 真实 serve):WS call session_set_mode → call-response + 广播帧;
       重连回放含模式帧;meta.json/sessions API 带 mode;切回 default 后 meta 清空
+
+# 修复:中断丢弃工具结果导致会话报废(2026-07-15)
+
+> 用户报告:多个 subagent 并行时其一报错,继续对话接不上,报 "toolcall result 不存在"。
+> 根因:RunTurn 先把 assistant 的 tool_use 消息入历史,execBatch 中断时却丢弃整批
+> tool_result → 悬空 tool_use 落盘,后续每轮请求被 API 拒绝
+> (`tool_use ids were found without tool_result blocks immediately after`),会话永久报废。
+> 多 subagent 使执行窗口长达数分钟,其一报错时用户取消轮次即触发。
+
+- [x] loop.execBatch:中断不再丢结果——已执行的保留真实结果,未执行的补"工具执行被中断"
+      占位;RunTurn 先追加结果消息再返回 ErrInterrupted,历史恒保持配对完整
+- [x] loop.RepairHistory:为悬空 tool_use 补合成错误 tool_result(尾部悬空插新消息,
+      后跟用户文本则插到文本块前);serve 加载会话时过一遍,救活存量损坏会话
+
+## 验证
+
+- [x] 单测:中断时配对完整(2 并行阻塞桩 + 1 串行未执行)+ 中断后续聊;RepairHistory
+      四场景(完好不动/尾部悬空/悬空后接文本/部分缺失);-race 全绿,全仓测试过
+- [x] e2e(真实网关):手工构造悬空 tool_use 会话 → 旧二进制续聊报
+      "tool_use ids found without tool_result"(即用户所见错误),新二进制续聊 task-ended
