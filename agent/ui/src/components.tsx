@@ -2,7 +2,13 @@
 // 样式值取自「MonkeyCode 原型(离线版)」的内联样式,逐一对应,不另行发挥。
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
+import {
+  useMemo,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+} from "react";
 import { openExternal } from "./client";
 import { permStateLabel } from "./reduce";
 import type { LogItem, PlanEntry, SessionMeta } from "./types";
@@ -27,66 +33,198 @@ export function Markdown({ text }: { text: string }) {
   return <div className="md" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** 侧栏会话行:名称 + 右侧状态/轮数(时间无信息量,不展示) */
+/** 会话行操作菜单项样式 */
+const rowMenuItem: CSSProperties = {
+  padding: "8px 12px",
+  fontSize: 12.5,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  borderRadius: 8,
+  userSelect: "none",
+};
+
+/** 侧栏会话行:名称 + 右侧状态/轮数(时间无信息量,不展示);
+ * 悬停显示 ⋯ 操作菜单(归档/删除,删除需内联确认)。 */
 export function SessionRow({
   meta,
   active,
   onClick,
+  onArchive,
+  onDelete,
 }: {
   meta: SessionMeta;
   active: boolean;
   onClick: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
 }) {
-  const m =
-    meta.status === "running"
-      ? { text: "运行中", color: "var(--amberT)" }
-      : meta.status === "error"
-        ? { text: "出错", color: "var(--err)" }
-        : meta.status === "interrupted"
-          ? { text: "已中断", color: "var(--t5)" }
-          : { text: meta.turns > 0 ? meta.turns + " 轮" : "", color: "var(--t5)" };
+  const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
+  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  const running = meta.status === "running";
+  const m = running
+    ? { text: "运行中", color: "var(--amberT)" }
+    : meta.status === "error"
+      ? { text: "出错", color: "var(--err)" }
+      : meta.status === "interrupted"
+        ? { text: "已中断", color: "var(--t5)" }
+        : { text: meta.turns > 0 ? meta.turns + " 轮" : "", color: "var(--t5)" };
+  const closeMenu = () => setMenu("closed");
   return (
     <div
-      className="hv-cardh"
-      title={meta.workdir}
-      onClick={onClick}
-      style={{
-        background: active ? "var(--card2)" : "transparent",
-        borderRadius: 10,
-        padding: "9px 13px",
-        cursor: "pointer",
-      }}
+      style={{ position: "relative" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
     >
       <div
+        className="hv-cardh"
+        title={meta.workdir}
+        onClick={onClick}
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          fontSize: 13,
-          fontWeight: active ? 600 : 400,
-          color: active ? "var(--t1)" : "var(--t3)",
-          whiteSpace: "nowrap",
+          background: active ? "var(--card2)" : "transparent",
+          borderRadius: 10,
+          padding: "9px 13px",
+          cursor: "pointer",
         }}
       >
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{meta.title || "(未命名)"}</span>
-        {meta.worktree && (
-          <span
-            title="隔离 worktree 会话"
-            style={{
-              flex: "none",
-              fontSize: 10,
-              fontWeight: 600,
-              color: "var(--amberT)",
-              background: "var(--amberBg)",
-              borderRadius: 5,
-              padding: "1px 6px",
-            }}
-          >
-            隔离
-          </span>
-        )}
-        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: m.color }}>{m.text}</span>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 13,
+            fontWeight: active ? 600 : 400,
+            color: active ? "var(--t1)" : "var(--t3)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{meta.title || "(未命名)"}</span>
+          {meta.worktree && (
+            <span
+              title="隔离 worktree 会话"
+              style={{
+                flex: "none",
+                fontSize: 10,
+                fontWeight: 600,
+                color: "var(--amberT)",
+                background: "var(--amberBg)",
+                borderRadius: 5,
+                padding: "1px 6px",
+              }}
+            >
+              隔离
+            </span>
+          )}
+          {hover || menu !== "closed" ? (
+            <span
+              className="hv-t1"
+              title="会话操作"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenu(menu === "closed" ? "open" : "closed");
+              }}
+              style={{
+                marginLeft: "auto",
+                flex: "none",
+                fontSize: 14,
+                fontWeight: 700,
+                color: "var(--t4)",
+                padding: "0 3px",
+                cursor: "pointer",
+              }}
+            >
+              ⋯
+            </span>
+          ) : (
+            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: m.color }}>{m.text}</span>
+          )}
+        </div>
       </div>
+      {menu !== "closed" && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 29 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              closeMenu();
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: 6,
+              top: "85%",
+              zIndex: 30,
+              background: "var(--pop)",
+              border: "1px solid var(--line)",
+              borderRadius: 10,
+              boxShadow: "var(--shadow)",
+              padding: 4,
+              minWidth: 150,
+              animation: "mcin .15s ease",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {menu === "open" ? (
+              <>
+                <div
+                  className="hv-card"
+                  style={rowMenuItem}
+                  onClick={() => {
+                    closeMenu();
+                    onArchive();
+                  }}
+                >
+                  {meta.archived ? "取消归档" : "归档"}
+                </div>
+                {running ? (
+                  <div style={{ ...rowMenuItem, cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
+                    删除
+                  </div>
+                ) : (
+                  <div
+                    className="hv-card"
+                    style={{ ...rowMenuItem, color: "var(--err)" }}
+                    onClick={() => setMenu("confirm")}
+                  >
+                    删除
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div
+                  style={{
+                    padding: "8px 12px 4px",
+                    fontSize: 11.5,
+                    color: "var(--t4)",
+                    lineHeight: 1.6,
+                    maxWidth: 200,
+                    whiteSpace: "normal",
+                  }}
+                >
+                  删除后不可恢复。
+                  {meta.worktree ? "隔离工作区及未应用改动将一并删除。" : ""}
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <div
+                    className="hv-card"
+                    style={{ ...rowMenuItem, color: "var(--err)", fontWeight: 600 }}
+                    onClick={() => {
+                      closeMenu();
+                      onDelete();
+                    }}
+                  >
+                    确认删除
+                  </div>
+                  <div className="hv-card" style={rowMenuItem} onClick={closeMenu}>
+                    取消
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

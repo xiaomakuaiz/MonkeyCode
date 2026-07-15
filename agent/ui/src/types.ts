@@ -35,6 +35,8 @@ export interface SessionMeta {
   status: string; // created | running | finished | interrupted | error
   updated_at?: string;
   worktree?: { repo?: string };
+  /** 归档标记:移出常规列表,折叠到「已归档」组 */
+  archived?: boolean;
 }
 
 /** WS 下行帧(data 为 base64(JSON)) */

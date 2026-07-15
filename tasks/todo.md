@@ -368,6 +368,25 @@
 
 ---
 
+# M2.14:会话删除/归档(2026-07-15)✅
+
+> 归档=Meta.Archived 标记(可逆,UI 折叠到"已归档"组);删除=不可恢复,
+> 级联子会话 + worktree 连带回收,运行中 409 拒绝(先停止再删)。
+
+- [x] session:Meta.Archived;Delete(ID 防逃逸+存在性校验+RemoveAll);
+      SetArchived(非 live 磁盘直写;live 必须走内存副本防轮次收尾覆写)
+- [x] server:`DELETE/PATCH /api/sessions/{id}`;teardownLive(首个单会话回收路径:
+      断客户端/mcp/engine/sess.Close/摘 live 表,running 拒绝);dropChildWatchers;
+      删除级联 Parent 子会话 + Worktree.Remove(best-effort)
+- [x] UI:SessionRow 悬停 ⋯ 菜单(归档/删除,删除内联确认,worktree 提示连带删除,
+      running 禁用);侧栏"已归档 (n)"折叠组(localStorage 记忆);删当前会话复位回新建视图
+- [x] 验证:session 2 例 + server 3 例(含 live 归档不被轮次覆写、子会话级联、运行中 409),
+      全量测试/gofmt/vet 过;UI tsc+build 过;REST 端到端(归档落盘/删目录/worktree 目录与
+      git 登记回收/404);壳无头探针回归 4 项全过
+- [ ] Mac 真机人工:行悬停 ⋯ → 归档/展开回看/取消归档;删除当前会话回到新建任务视图
+
+---
+
 # M2.7:子代理可观测性——B 进度通道 + C 子会话(2026-07-13)✅
 
 ## B:工具进度通道(通用原语)

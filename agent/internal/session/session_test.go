@@ -290,3 +290,56 @@ func TestList_EmptyOrMissingRoot(t *testing.T) {
 		t.Fatalf("不存在的目录应返回 nil")
 	}
 }
+
+// ==================== 删除与归档 ====================
+
+func TestDelete(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root, t.TempDir(), "m", "victim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if err := Delete(root, s.Meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, s.Meta.ID)); !os.IsNotExist(err) {
+		t.Fatalf("会话目录应已删除: %v", err)
+	}
+
+	// 不存在的会话
+	if err := Delete(root, "no-such"); err == nil {
+		t.Fatal("删除不存在的会话应报错")
+	}
+	// 非法 ID(路径逃逸)
+	for _, id := range []string{"", ".", "..", "a/b", "../x"} {
+		if err := Delete(root, id); err == nil {
+			t.Fatalf("非法 ID %q 应报错", id)
+		}
+	}
+}
+
+func TestSetArchived(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root, t.TempDir(), "m", "arch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	meta, err := SetArchived(root, s.Meta.ID, true)
+	if err != nil || !meta.Archived {
+		t.Fatalf("归档失败: %+v err=%v", meta, err)
+	}
+	if got, err := ReadMeta(root, s.Meta.ID); err != nil || !got.Archived {
+		t.Fatalf("归档标记未落盘: %+v err=%v", got, err)
+	}
+	meta, err = SetArchived(root, s.Meta.ID, false)
+	if err != nil || meta.Archived {
+		t.Fatalf("取消归档失败: %+v err=%v", meta, err)
+	}
+	if _, err := SetArchived(root, "no-such", true); err == nil {
+		t.Fatal("归档不存在的会话应报错")
+	}
+}

@@ -21,12 +21,12 @@ import (
 // finished / interrupted / error(轮次终态);running 属于轮次生命周期,
 // 进程异常退出遗留的 running 会被 serve 加载时判定为中断。
 type Meta struct {
-	ID        string         `json:"id"`
-	Title     string         `json:"title"`
-	Workdir   string         `json:"workdir"`
-	Model     string         `json:"model"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Workdir string `json:"workdir"`
+	Model   string `json:"model"`
 	// Mode 权限模式("yolo" 时全部放行);空 = default。serve 加载时恢复。
-	Mode string `json:"mode,omitempty"`
+	Mode      string         `json:"mode,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	Turns     int            `json:"turns"`
@@ -37,6 +37,8 @@ type Meta struct {
 	// Parent 非空表示这是子代理的子会话(值为主会话 ID);
 	// 列表默认隐藏,可独立回放。
 	Parent string `json:"parent,omitempty"`
+	// Archived 归档标记:移出常规列表但保留数据,可随时取消。
+	Archived bool `json:"archived,omitempty"`
 }
 
 // Session 单个会话,持有打开的事件日志。
@@ -109,6 +111,39 @@ func ReadMeta(root, id string) (Meta, error) {
 // EventsPathFor 事件日志路径(不加载会话)。
 func EventsPathFor(root, id string) string {
 	return filepath.Join(root, id, "events.jsonl")
+}
+
+// validID 会话 ID 必须是单层目录名,防路径逃逸。
+func validID(id string) bool {
+	return id != "" && id != "." && id != ".." && filepath.Base(id) == id
+}
+
+// Delete 删除会话目录(元信息/事件日志/消息快照)。不可恢复。
+// 调用方负责先回收运行时资源(live 会话/worktree/子会话)。
+func Delete(root, id string) error {
+	if !validID(id) {
+		return fmt.Errorf("非法会话 ID: %q", id)
+	}
+	if _, err := ReadMeta(root, id); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(root, id))
+}
+
+// SetArchived 设置归档标记(非 live 会话的磁盘直写路径;live 会话须经
+// 其内存副本修改后 SaveMeta,否则会被轮次收尾的落盘覆写)。
+func SetArchived(root, id string, archived bool) (Meta, error) {
+	meta, err := ReadMeta(root, id)
+	if err != nil {
+		return meta, err
+	}
+	meta.Archived = archived
+	meta.UpdatedAt = time.Now()
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return meta, err
+	}
+	return meta, atomicWrite(filepath.Join(root, id, "meta.json"), data)
 }
 
 // List 列出全部会话元信息(按更新时间倒序)。

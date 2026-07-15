@@ -6,11 +6,13 @@ import {
   b64encode,
   connect,
   createSession,
+  deleteSession,
   inDesktopShell,
   listModels,
   listSessions,
   onHostEvent,
   pickDirectory,
+  setSessionArchived,
   type Conn,
 } from "./client";
 import { DiffPanel, LogList, MONO, SessionRow } from "./components";
@@ -105,6 +107,15 @@ export default function App() {
     }
   });
 
+  // 「已归档」组展开状态(默认收起)
+  const [archivedOpen, setArchivedOpen] = useState(() => localStorage.getItem("mc.archivedOpen") === "1");
+  const toggleArchived = () => {
+    setArchivedOpen((o) => {
+      localStorage.setItem("mc.archivedOpen", o ? "0" : "1");
+      return !o;
+    });
+  };
+
   const toggleGroup = (dir: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -149,6 +160,44 @@ export default function App() {
       return [];
     }
   }, []);
+
+  // 归档/取消归档:仅列表位置变化,当前打开的会话不强制关闭
+  const archiveSession = async (m: SessionMeta) => {
+    try {
+      await setSessionArchived(m.id, !m.archived);
+      await refreshSessions();
+    } catch (e) {
+      setStatus("⚠ 归档失败: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  // 删除会话;若删的是当前打开的会话,按 openSession 反向复位回新建任务视图
+  const removeSession = async (m: SessionMeta) => {
+    try {
+      await deleteSession(m.id);
+    } catch (e) {
+      setStatus("⚠ 删除失败: " + (e instanceof Error ? e.message : String(e)));
+      return;
+    }
+    if (m.id === currentId) {
+      connRef.current?.close();
+      connRef.current = null;
+      setCurrentId(null);
+      setView("new");
+      setChat(initialChat);
+      setChanges(null);
+      setChangesErr("");
+      setDrawerOpen(false);
+      setDiff(null);
+      setMenuOpen(false);
+      setQueued(null);
+      setSessionModel("");
+      setYolo(false);
+      setStatus("未连接");
+      localStorage.removeItem("mc.lastSession");
+    }
+    void refreshSessions();
+  };
 
   const openSession = useCallback(
     (id: string, model?: string, mode?: string) => {
@@ -391,7 +440,7 @@ export default function App() {
   const roundNo = Math.max(1, chat.items.filter((it) => it.kind === "user").length);
 
   const q = query.trim().toLowerCase();
-  const list = (
+  const filtered = (
     q
       ? sessions.filter(
           (m) => (m.title || "").toLowerCase().includes(q) || m.workdir.toLowerCase().includes(q),
@@ -400,6 +449,8 @@ export default function App() {
   )
     .slice()
     .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+  const list = filtered.filter((m) => !m.archived);
+  const archivedList = filtered.filter((m) => m.archived);
 
   const isNewView = view === "new" || currentId === null;
 
@@ -563,7 +614,7 @@ export default function App() {
               还没有会话。在右侧输入第一个任务开始。
             </div>
           )}
-          {sessions.length > 0 && list.length === 0 && (
+          {sessions.length > 0 && filtered.length === 0 && (
             <div style={{ padding: "2px 4px", fontSize: 11.5, color: "var(--t5)", lineHeight: 1.7 }}>
               没有匹配「{query.trim()}」的会话。
             </div>
@@ -646,12 +697,61 @@ export default function App() {
                       meta={m}
                       active={m.id === currentId && view === "session"}
                       onClick={() => openSession(m.id, m.model, m.mode)}
+                      onArchive={() => void archiveSession(m)}
+                      onDelete={() => void removeSession(m)}
                     />
                   ))}
                 </div>
               )}
             </div>
           ))}
+
+          {/* ==== 已归档(默认收起;行内可取消归档/删除,点击照常回看)==== */}
+          {archivedList.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div
+                onClick={toggleArchived}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  padding: "5px 6px 5px 4px",
+                  cursor: "pointer",
+                  userSelect: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span style={{ width: 10, flex: "none", fontSize: 9, color: "var(--t5)" }}>
+                  {archivedOpen ? "▼" : "▶"}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t5)" }}>已归档</span>
+                <span style={{ fontSize: 10.5, color: "var(--t5)" }}>{archivedList.length}</span>
+              </div>
+              {archivedOpen && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 1,
+                    marginLeft: 8,
+                    paddingLeft: 7,
+                    borderLeft: "1px solid var(--line)",
+                  }}
+                >
+                  {archivedList.map((m) => (
+                    <SessionRow
+                      key={m.id}
+                      meta={m}
+                      active={m.id === currentId && view === "session"}
+                      onClick={() => openSession(m.id, m.model, m.mode)}
+                      onArchive={() => void archiveSession(m)}
+                      onDelete={() => void removeSession(m)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div

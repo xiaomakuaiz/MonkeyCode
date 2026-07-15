@@ -967,3 +967,115 @@ func TestReplayCompaction(t *testing.T) {
 		t.Fatal("usage 应只保留末帧")
 	}
 }
+
+// ==================== 删除与归档 ====================
+
+func TestDeleteSession(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, t.TempDir())
+
+	// 未知 id → 404
+	resp, _ := apiReq(t, ts, "DELETE", "/api/sessions/no-such", "test-token", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("未知会话应 404,得 %d", resp.StatusCode)
+	}
+
+	// 运行中 → 409(直接驱动内部状态,参照 TestPerSessionModelAndSwitch)
+	ls, err := srv.liveSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls.mu.Lock()
+	ls.running = true
+	ls.mu.Unlock()
+	resp, body := apiReq(t, ts, "DELETE", "/api/sessions/"+id, "test-token", "")
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "正在执行") {
+		t.Fatalf("运行中删除应 409: %d %s", resp.StatusCode, body)
+	}
+	ls.mu.Lock()
+	ls.running = false
+	ls.mu.Unlock()
+
+	// 正常删除:live 回收 + 目录消失 + 列表消失
+	resp, body = apiReq(t, ts, "DELETE", "/api/sessions/"+id, "test-token", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("删除失败: %d %s", resp.StatusCode, body)
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.SessionRoot, id)); !os.IsNotExist(err) {
+		t.Fatalf("会话目录应已删除: %v", err)
+	}
+	srv.mu.Lock()
+	_, stillLive := srv.live[id]
+	srv.mu.Unlock()
+	if stillLive {
+		t.Fatal("live 表应已摘除")
+	}
+	resp, body = apiReq(t, ts, "GET", "/api/sessions", "test-token", "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(string(body), id) {
+		t.Fatalf("列表不应再含该会话: %s", body)
+	}
+}
+
+func TestDeleteSessionCascadesChildren(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+	parent := createSession(t, ts, t.TempDir())
+
+	// 手工构造子会话(子代理产物形态:Parent 指向父会话)
+	child, err := session.New(srv.opts.SessionRoot, t.TempDir(), "stub", "子任务")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.Meta.Parent = parent
+	if err := child.SaveMeta(); err != nil {
+		t.Fatal(err)
+	}
+	child.Close()
+
+	resp, body := apiReq(t, ts, "DELETE", "/api/sessions/"+parent, "test-token", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("删除失败: %d %s", resp.StatusCode, body)
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.SessionRoot, child.Meta.ID)); !os.IsNotExist(err) {
+		t.Fatalf("子会话目录应级联删除: %v", err)
+	}
+}
+
+func TestArchiveSession(t *testing.T) {
+	stub := &stubProvider{results: []*provider.Result{textResult("好的")}}
+	srv, ts := newTestServer(t, stub)
+
+	// 非 live 路径:磁盘直写
+	idle := createSession(t, ts, t.TempDir())
+	resp, body := apiReq(t, ts, "PATCH", "/api/sessions/"+idle, "test-token", `{"archived":true}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"archived":true`) {
+		t.Fatalf("归档失败: %d %s", resp.StatusCode, body)
+	}
+	resp, body = apiReq(t, ts, "GET", "/api/sessions", "test-token", "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"archived":true`) {
+		t.Fatalf("列表应带归档标记: %s", body)
+	}
+
+	// 缺字段 → 400;未知 id → 404
+	resp, _ = apiReq(t, ts, "PATCH", "/api/sessions/"+idle, "test-token", `{}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("缺 archived 字段应 400,得 %d", resp.StatusCode)
+	}
+	resp, _ = apiReq(t, ts, "PATCH", "/api/sessions/no-such", "test-token", `{"archived":true}`)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("未知会话应 404,得 %d", resp.StatusCode)
+	}
+
+	// live 路径:内存副本生效,轮次收尾的 SaveMeta 不覆写归档标记
+	live := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, live)
+	resp, _ = apiReq(t, ts, "PATCH", "/api/sessions/"+live, "test-token", `{"archived":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("live 归档失败: %d", resp.StatusCode)
+	}
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("hi")})
+	wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	meta, err := session.ReadMeta(srv.opts.SessionRoot, live)
+	if err != nil || !meta.Archived {
+		t.Fatalf("轮次收尾后归档标记应保留: %+v err=%v", meta, err)
+	}
+}

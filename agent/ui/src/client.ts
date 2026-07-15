@@ -56,6 +56,17 @@ export const createSession = (workdir: string, model: string, createDir = false)
     body: JSON.stringify({ workdir, model, create_dir: createDir }),
   });
 
+/** 删除会话(级联子会话与 worktree,不可恢复);运行中服务端拒绝(409)。 */
+export const deleteSession = (id: string) =>
+  api<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" });
+
+/** 归档/取消归档会话。 */
+export const setSessionArchived = (id: string, archived: boolean) =>
+  api<SessionMeta>(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived }),
+  });
+
 // ==================== 宿主(桌面壳)集成 ====================
 
 interface TauriGlobal {

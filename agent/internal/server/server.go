@@ -134,6 +134,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/sessions", s.auth(s.handleListSessions))
 	mux.HandleFunc("POST /api/sessions", s.auth(s.handleCreateSession))
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.auth(s.handleDeleteSession))
+	mux.HandleFunc("PATCH /api/sessions/{id}", s.auth(s.handlePatchSession))
 	mux.HandleFunc("GET /api/models", s.auth(s.handleListModels))
 	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
 	if s.opts.UI != nil {
@@ -310,6 +312,132 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.Close() // liveSession 打开时重新持有
 	writeJSON(w, http.StatusOK, sess.Meta)
+}
+
+var errSessionRunning = errors.New("会话正在执行,请先停止")
+
+// teardownLive 回收单个 live 会话(删除前调用):断开客户端、关 MCP/引擎/
+// 事件日志句柄、摘出 live 表。运行中返回 errSessionRunning 拒绝。
+// (批量退出路径在 ListenAndServe;这是首个单会话回收路径,额外补了
+// sess.Close 与客户端断开。)
+func (s *Server) teardownLive(id string) error {
+	s.mu.Lock()
+	ls, ok := s.live[id]
+	if !ok {
+		s.mu.Unlock()
+		return nil
+	}
+	ls.mu.Lock()
+	if ls.running {
+		ls.mu.Unlock()
+		s.mu.Unlock()
+		return errSessionRunning
+	}
+	ls.mu.Unlock()
+	delete(s.live, id)
+	s.mu.Unlock()
+
+	ls.emitMu.Lock()
+	clients := make([]*wsClient, 0, len(ls.clients))
+	for c := range ls.clients {
+		clients = append(clients, c)
+	}
+	ls.clients = map[*wsClient]struct{}{}
+	ls.emitMu.Unlock()
+	for _, c := range clients {
+		c.close(websocket.StatusGoingAway, "session deleted")
+	}
+	if ls.mcp != nil {
+		ls.mcp.Close()
+	}
+	ls.engine.Close()
+	ls.sess.Close()
+	return nil
+}
+
+// dropChildWatchers 断开某子会话的全部观察者并清表。
+func (s *Server) dropChildWatchers(childID string) {
+	s.childMu.Lock()
+	watchers := s.childWatch[childID]
+	delete(s.childWatch, childID)
+	s.childMu.Unlock()
+	for c := range watchers {
+		c.close(websocket.StatusGoingAway, "session deleted")
+	}
+}
+
+// handleDeleteSession 删除会话:回收 live 资源 → 级联删子会话 →
+// 连带回收 worktree(best-effort)→ 删磁盘目录。运行中 409。
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	meta, err := session.ReadMeta(s.opts.SessionRoot, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.teardownLive(id); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	s.dropChildWatchers(id) // 本会话自身可能是被观察的子会话
+	// 级联删除子代理的子会话(父会话删除后不可达)
+	if metas, err := session.List(s.opts.SessionRoot); err == nil {
+		for _, m := range metas {
+			if m.Parent != id {
+				continue
+			}
+			s.dropChildWatchers(m.ID)
+			if err := session.Delete(s.opts.SessionRoot, m.ID); err != nil {
+				slog.Warn("删除子会话失败", "id", m.ID, "err", err)
+			}
+		}
+	}
+	// worktree 目录与 git 登记连带回收;失败不阻塞(可经 mc-agent worktree drop 手工清理)
+	if meta.Worktree != nil {
+		if err := meta.Worktree.Remove(); err != nil {
+			slog.Warn("删除会话 worktree 失败", "id", id, "err", err)
+		}
+	}
+	if err := session.Delete(s.opts.SessionRoot, id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handlePatchSession 更新会话元信息,当前仅支持 archived 标记。
+func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Archived *bool `json:"archived"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Archived == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 archived 字段"})
+		return
+	}
+	// live 会话以内存副本为准:磁盘直写会被轮次收尾的 SaveMeta 覆掉
+	s.mu.Lock()
+	ls := s.live[id]
+	s.mu.Unlock()
+	if ls != nil {
+		ls.mu.Lock()
+		ls.sess.Meta.Archived = *req.Archived
+		err := ls.sess.SaveMeta()
+		meta := ls.sess.Meta
+		ls.mu.Unlock()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, meta)
+		return
+	}
+	meta, err := session.SetArchived(s.opts.SessionRoot, id, *req.Archived)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
 }
 
 // ==================== WS ====================
