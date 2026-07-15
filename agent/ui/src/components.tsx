@@ -60,6 +60,9 @@ export function SessionRow({
 }) {
   const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
   const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  // 菜单以 fixed 定位(脱离侧栏滚动容器的裁剪),按 ⋯ 的视口位置计算;
+  // 底部空间不足(列表末尾几行)时向上弹,避免被视口/状态栏遮住
+  const [pos, setPos] = useState<{ right: number; top?: number; bottom?: number }>({ right: 0 });
   const running = meta.status === "running";
   const m = running
     ? { text: "运行中", color: "var(--amberT)" }
@@ -120,7 +123,14 @@ export function SessionRow({
               title="会话操作"
               onClick={(e) => {
                 e.stopPropagation();
-                setMenu(menu === "closed" ? "open" : "closed");
+                if (menu !== "closed") return setMenu("closed");
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const up = r.bottom + 150 > window.innerHeight; // 预估菜单高度(确认态更高)
+                setPos({
+                  right: Math.max(8, window.innerWidth - r.right),
+                  ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+                });
+                setMenu("open");
               }}
               style={{
                 marginLeft: "auto",
@@ -150,9 +160,10 @@ export function SessionRow({
           />
           <div
             style={{
-              position: "absolute",
-              right: 6,
-              top: "85%",
+              position: "fixed",
+              right: pos.right,
+              top: pos.top,
+              bottom: pos.bottom,
               zIndex: 30,
               background: "var(--pop)",
               border: "1px solid var(--line)",
