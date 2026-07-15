@@ -152,12 +152,20 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     }
     let (child, port, token) = start_kernel(&app, &files)?;
     app.state::<Kernel>().0.lock().unwrap().replace(child);
-    let url = format!("http://127.0.0.1:{port}/#{token}");
-    app.run_on_main_thread({
+    let url = kernel_ui_url(port, &token);
+    // 导航延后到本命令返回之后:WebKitGTK 会重放"页面导航走时响应尚未送达"
+    // 的 IPC 请求(实测同一 invoke 二次进入本命令→内核被重启两次)。
+    // 先让响应落地,再整页导航到新内核 URL。
+    std::thread::spawn({
         let app = app.clone();
-        move || show_kernel_ui(&app, &url)
-    })
-    .map_err(|e| e.to_string())?;
+        move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = app.run_on_main_thread({
+                let app = app.clone();
+                move || show_kernel_ui(&app, &url)
+            });
+        }
+    });
     Ok(())
 }
 
@@ -300,12 +308,21 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
             builder = builder.initialization_script(
                 "const report = (m) => fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
-                 report('script-injected'); \
+                 report('script-injected:' + location.search + ':saved=' + (sessionStorage.getItem('mc-probe-saved') || '0')); \
                  setTimeout(() => { \
                    if (location.protocol !== 'http:') return; /* 仅在内核 UI 页触发 */ \
                    if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
                    window.__TAURI__.core.invoke('get_config') \
-                     .then(() => report('invoke-ok')) \
+                     .then((cfg) => { report('invoke-ok'); \
+                       /* 保存→重启内核→整页重载 全链路:sessionStorage 跨重载存活, \
+                          第二次加载报 reload-after-save-ok(仅片段变化的导航不会重载,此项会缺失) */ \
+                       if (!sessionStorage.getItem('mc-probe-saved')) { \
+                         sessionStorage.setItem('mc-probe-saved', '1'); \
+                         window.__TAURI__.core.invoke('save_config', {config: cfg}) \
+                           .then(() => report('save-ok')) \
+                           .catch((e) => report('save-err:' + String(e).slice(0, 80))); \
+                       } else { report('reload-after-save-ok'); } \
+                     }) \
                      .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
                    /* opener 全链路(命令 ACL + URL scope):无头环境以 BROWSER=/bin/true 承接 */ \
                    window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
@@ -370,7 +387,7 @@ fn main() {
                 Ok((child, port, token)) => {
                     eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
                     app.state::<Kernel>().0.lock().unwrap().replace(child);
-                    show_kernel_ui(app.handle(), &format!("http://127.0.0.1:{port}/#{token}"));
+                    show_kernel_ui(app.handle(), &kernel_ui_url(port, &token));
                 }
                 Err(e) => {
                     eprintln!("[mc-desktop] 内核启动失败: {e}");
@@ -580,6 +597,17 @@ fn rand_token() -> String {
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf).expect("getrandom");
     buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 内核 UI 入口 URL。boot 查询参数每次内核启动都不同:端口固定后,
+/// 仅 #token 变化的导航是同文档导航,webview 不会重载页面(设置视图
+/// 会永远停在"保存中");查询串变化才强制整页重载。token 走 fragment,
+/// 不出现在 HTTP 请求行。
+fn kernel_ui_url(port: u16, token: &str) -> String {
+    let mut buf = [0u8; 4];
+    getrandom::getrandom(&mut buf).expect("getrandom");
+    let boot: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+    format!("http://127.0.0.1:{port}/?boot={boot}#{token}")
 }
 
 fn urlencode(s: &str) -> String {

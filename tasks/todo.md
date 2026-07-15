@@ -521,3 +521,24 @@
 
 - [x] cargo build 过;无头冒烟三场景:首启分配并落盘 45789 → 二次启动复用同端口 →
       预占端口后启动打"被占用换新端口"警告并持久化新端口
+
+# 修复:保存配置永卡"保存中"(端口固定化的回归,2026-07-15)
+
+> 用户反馈:保存配置一直停在"保存并重启内核中"。两个叠加原因:
+> ① 端口固定后新旧 URL 仅 #token 不同,同文档导航不重载页面(原先整页重载
+>   隐式依赖"端口每次都变");
+> ② save_config 命令内同步导航,WebKitGTK 重放"导航时响应未送达"的 IPC
+>   请求 → 同一 invoke 二次进入命令,内核被重启两次(配置塞随机指纹实锤:
+>   两次调用指纹相同 = 传输层重放)。
+
+- [x] kernel_ui_url:URL 加每次内核启动都变的 boot 查询参数,查询串变化强制整页重载;
+      token 仍走 fragment 不上请求行
+- [x] save_config:导航延后到命令返回之后(spawn + 200ms),先让 IPC 响应落地
+- [x] 探针升级:save_config→内核重启→页面重载全链路(sessionStorage 跨重载标记,
+      第二次加载报 reload-after-save-ok);script-injected 带 boot 与标记状态
+
+## 验证
+
+- [x] 无头端到端:script-injected(load1) → invoke-ok → save-ok(响应送达)→
+      新 boot 重载(saved=1)→ reload-after-save-ok;save_config 仅执行一次;
+      nav-guard-ok 回归不受影响;端口文件持久化正常
