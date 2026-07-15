@@ -271,9 +271,27 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         let _ = win.show();
         let _ = win.set_focus();
     } else {
+        let opener = app.clone();
         let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
             .title("MonkeyCode")
-            .inner_size(1200.0, 800.0);
+            .inner_size(1200.0, 800.0)
+            // 导航守卫:webview 只许待在内核 UI(loopback)与壳自带页面;
+            // 其余导航(对话里的外部链接等)一律拒绝并交系统浏览器,
+            // 防止应用被"跳走"后无法返回。UI 侧已拦截点击,这里是兜底。
+            .on_navigation(move |url| {
+                let internal = match url.scheme() {
+                    "tauri" => true, // 壳自带页面(错误页)
+                    "http" | "https" => {
+                        matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "tauri.localhost"))
+                    }
+                    _ => false,
+                };
+                if !internal {
+                    use tauri_plugin_opener::OpenerExt;
+                    let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+                }
+                internal
+            });
         // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→壳配置 链路,
         // 结果经本地回环上报(无头环境唯一可靠的回读通道)
         if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
@@ -286,6 +304,9 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
                    window.__TAURI__.core.invoke('get_config') \
                      .then(() => report('invoke-ok')) \
                      .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
+                   /* 导航守卫:外域跳转应被拒;页面存活才能发出 1 秒后的上报 */ \
+                   setTimeout(() => { location.href = 'https://nav-guard.invalid/x'; }, 1000); \
+                   setTimeout(() => report('nav-guard-ok'), 2000); \
                  }, 3000);",
             );
         }
@@ -311,6 +332,7 @@ fn main() {
     eprintln!("[mc-desktop] main 进入");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))

@@ -36,7 +36,8 @@
             "core:default",
             "allow-get-config",
             "allow-save-config",
-            "dialog:allow-open"
+            "dialog:allow-open",
+            "opener:allow-open-url"
           ]
         }
       ]

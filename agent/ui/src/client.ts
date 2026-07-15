@@ -96,6 +96,16 @@ export async function saveHostConfig(config: HostConfig): Promise<void> {
   await tauri.core.invoke("save_config", { config });
 }
 
+/** 在系统浏览器打开外部链接:壳内经 opener 插件,浏览器模式开新标签页。 */
+export function openExternal(url: string): void {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (tauri?.core?.invoke) {
+    tauri.core.invoke("plugin:opener|open_url", { url }).catch(() => {});
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
 /** 订阅壳事件(如托盘"设置"),返回退订函数;非壳环境为空操作。 */
 export function onHostEvent(name: string, cb: () => void): () => void {
   const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;

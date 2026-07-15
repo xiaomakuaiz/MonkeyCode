@@ -2,7 +2,8 @@
 // 样式值取自「MonkeyCode 原型(离线版)」的内联样式,逐一对应,不另行发挥。
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useMemo, useState, type ReactElement } from "react";
+import { useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
+import { openExternal } from "./client";
 import { permStateLabel } from "./reduce";
 import type { LogItem, PlanEntry, SessionMeta } from "./types";
 
@@ -10,10 +11,20 @@ marked.setOptions({ gfm: true, breaks: true });
 
 export const MONO = "ui-monospace,Menlo,monospace";
 
+/** 正文里的链接一律不走 webview 导航(WKWebView 里点 <a> 会把应用页面跳走):
+ * http(s) 交系统浏览器/新标签页,其余协议直接拦下。 */
+function onMarkdownClick(e: ReactMouseEvent<HTMLDivElement>) {
+  const a = (e.target as HTMLElement).closest("a");
+  if (!a) return;
+  e.preventDefault();
+  const href = a.getAttribute("href") || "";
+  if (/^https?:/i.test(href)) openExternal(href);
+}
+
 /** agent 正文按 Markdown 渲染(净化后注入);流式期间随批次重渲染 */
 export function Markdown({ text }: { text: string }) {
   const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false }) as string), [text]);
-  return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="md" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /** 侧栏会话行:名称 + 右侧状态/轮数(时间无信息量,不展示) */
