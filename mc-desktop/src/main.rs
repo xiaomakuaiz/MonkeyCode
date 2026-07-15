@@ -143,12 +143,15 @@ fn get_config(app: AppHandle) -> DesktopConfig {
 fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     let files = save_config_files(&app, &config)?;
 
-    // 重启内核(阻塞等就绪,最多 15 秒);窗口操作回主线程
-    let (child, port, token) = start_kernel(&files)?;
-    if let Some(mut old) = app.state::<Kernel>().0.lock().unwrap().replace(child) {
+    // 端口固定复用:必须先停旧内核释放端口,再起新内核(阻塞等就绪,最多 15 秒)。
+    // 若新内核启动失败(仅安装级故障:二进制缺失等),设置视图内联展示错误,
+    // 重试保存即可再次拉起。
+    if let Some(mut old) = app.state::<Kernel>().0.lock().unwrap().take() {
         let _ = old.kill();
         let _ = old.wait();
     }
+    let (child, port, token) = start_kernel(&app, &files)?;
+    app.state::<Kernel>().0.lock().unwrap().replace(child);
     let url = format!("http://127.0.0.1:{port}/#{token}");
     app.run_on_main_thread({
         let app = app.clone();
@@ -363,7 +366,7 @@ fn main() {
             // 首启向导由内核 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
             let files = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
-            match start_kernel(&files) {
+            match start_kernel(app.handle(), &files) {
                 Ok((child, port, token)) => {
                     eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
                     app.state::<Kernel>().0.lock().unwrap().replace(child);
@@ -469,12 +472,12 @@ fn show_any_window(app: &AppHandle) {
 
 /// 启动内核:配置经环境变量注入(不走 argv,避免泄漏进 ps)。
 /// 返回 (子进程, 端口, 令牌)。
-fn start_kernel(files: &KernelFiles) -> Result<(Child, u16, String), String> {
+fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, String), String> {
     let bin = find_agent().ok_or_else(|| {
         "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
     })?;
 
-    let port = free_port().map_err(|e| format!("无法分配本地端口: {e}"))?;
+    let port = kernel_port(app)?;
     let token = rand_token();
 
     let mut child = Command::new(&bin)
@@ -543,6 +546,30 @@ fn find_agent() -> Option<PathBuf> {
         paths.push(PathBuf::from(home).join(".local/bin"));
     }
     paths.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
+}
+
+/// 内核端口:首次分配后持久化(配置目录 port 文件),之后复用。
+/// localStorage 按 origin(协议+主机+端口)隔离,端口一变 UI 本地偏好
+/// (主题/分组折叠等)就全部丢失;仅端口被其他进程占用时才换新并持久化。
+fn kernel_port(app: &AppHandle) -> Result<u16, String> {
+    let dir = config_dir(app)?;
+    let path = dir.join("port");
+    if let Some(p) = fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .filter(|&p| p != 0)
+    {
+        if TcpListener::bind(("127.0.0.1", p)).is_ok() {
+            return Ok(p);
+        }
+        eprintln!("[mc-desktop] 端口 {p} 被占用,换用新端口(UI 本地偏好将重置)");
+    }
+    let p = free_port().map_err(|e| format!("无法分配本地端口: {e}"))?;
+    let _ = fs::create_dir_all(&dir);
+    if let Err(e) = fs::write(&path, p.to_string()) {
+        eprintln!("[mc-desktop] 持久化端口失败(下次启动将换端口): {e}");
+    }
+    Ok(p)
 }
 
 fn free_port() -> std::io::Result<u16> {
