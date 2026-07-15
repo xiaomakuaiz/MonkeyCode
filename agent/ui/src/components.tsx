@@ -16,20 +16,7 @@ export function Markdown({ text }: { text: string }) {
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** 相对时间(会话列表右侧 meta,对应原型的「昨天 / 3 天前」) */
-function fmtAgo(iso?: string): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "";
-  const d = Date.now() - t;
-  if (d < 60_000) return "刚刚";
-  if (d < 3_600_000) return Math.floor(d / 60_000) + " 分钟前";
-  if (d < 86_400_000) return Math.floor(d / 3_600_000) + " 小时前";
-  if (d < 172_800_000) return "昨天";
-  return Math.floor(d / 86_400_000) + " 天前";
-}
-
-/** 侧栏会话行:名称 + 右侧状态/时间,下行等宽目录(原型 local list) */
+/** 侧栏会话行:名称 + 右侧状态/轮数(时间无信息量,不展示) */
 export function SessionRow({
   meta,
   active,
@@ -46,7 +33,7 @@ export function SessionRow({
         ? { text: "出错", color: "var(--err)" }
         : meta.status === "interrupted"
           ? { text: "已中断", color: "var(--t5)" }
-          : { text: fmtAgo(meta.updated_at), color: "var(--t5)" };
+          : { text: meta.turns > 0 ? meta.turns + " 轮" : "", color: "var(--t5)" };
   return (
     <div
       className="hv-cardh"

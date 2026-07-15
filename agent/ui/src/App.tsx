@@ -14,6 +14,7 @@ import {
   type Conn,
 } from "./client";
 import { DiffPanel, LogList, MONO, SessionRow } from "./components";
+import logoUrl from "./logo.png";
 import { SettingsView } from "./settings";
 import { answerPerm, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { FileChange, Frame, ModelInfo, SessionMeta } from "./types";
@@ -85,6 +86,7 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [sessionModel, setSessionModel] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [hoverGrp, setHoverGrp] = useState<string | null>(null); // 悬停的分组(CSS :hover 在 WKWebView 不可靠,用状态控制)
   // 新建任务视图
   const [newDir, setNewDir] = useState(DEFAULT_DIR);
   const [editDir, setEditDir] = useState(false);
@@ -428,48 +430,14 @@ export default function App() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 18px 14px" }}>
-          <div
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: 9,
-              background: "linear-gradient(135deg,#34d399,#059669)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              font: "800 14px system-ui",
-              boxShadow: "0 2px 8px rgba(16,185,129,.25)",
-            }}
-          >
-            🐒
-          </div>
+          <img
+            src={logoUrl}
+            alt=""
+            draggable={false}
+            style={{ width: 28, height: 28, borderRadius: 9, flex: "none" }}
+          />
           <div style={{ fontWeight: 700, fontSize: 14.5, color: "var(--t1)", letterSpacing: "-.01em" }}>
             MonkeyCode
-          </div>
-          <div
-            className="hv-cardh"
-            title="新建任务"
-            onClick={() => {
-              setView("new");
-              setMenuOpen(false);
-            }}
-            style={{
-              marginLeft: "auto",
-              width: 28,
-              height: 28,
-              borderRadius: 8,
-              background: "var(--card2)",
-              color: "var(--t2)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 600,
-              fontSize: 16,
-              cursor: "pointer",
-              userSelect: "none",
-            }}
-          >
-            +
           </div>
         </div>
         <div style={{ padding: "0 14px 12px" }}>
@@ -517,11 +485,35 @@ export default function App() {
           </div>
         </div>
 
-        {/* 表头在滚动容器之外,滚动列表时恒定可见 */}
-        <div style={{ padding: "20px 14px 0", flex: "none" }}>
-          <div style={{ display: "flex", padding: "0 4px 8px", whiteSpace: "nowrap" }}>
+        {/* 表头在滚动容器之外,滚动列表时恒定可见;右侧为通用的新建任务入口 */}
+        <div style={{ padding: "16px 14px 0", flex: "none" }}>
+          <div style={{ display: "flex", alignItems: "center", padding: "0 4px 6px", whiteSpace: "nowrap" }}>
             <span style={{ font: "600 10.5px system-ui", color: "var(--t4)", letterSpacing: ".1em" }}>本地会话</span>
             <span style={{ marginLeft: 6, font: "400 10.5px system-ui", color: "var(--t5)" }}>这台电脑</span>
+            <span
+              className="hv-cardh"
+              title="新建任务"
+              onClick={() => {
+                setView("new");
+                setMenuOpen(false);
+              }}
+              style={{
+                marginLeft: "auto",
+                width: 20,
+                height: 20,
+                borderRadius: 6,
+                background: "var(--card2)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 13,
+                color: "var(--t3)",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              +
+            </span>
           </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "0 14px" }}>
@@ -547,9 +539,10 @@ export default function App() {
           {groupByProject(list).map((g) => (
             <div key={g.dir} style={{ marginBottom: 12 }}>
               <div
-                className="grp-head"
                 title={g.dir}
                 onClick={() => toggleGroup(g.dir)}
+                onMouseEnter={() => setHoverGrp(g.dir)}
+                onMouseLeave={() => setHoverGrp(null)}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -577,7 +570,7 @@ export default function App() {
                 </span>
                 <span style={{ fontSize: 10.5, color: "var(--t5)" }}>{g.items.length}</span>
                 <span
-                  className="hv-t1 grp-plus"
+                  className="hv-t1"
                   title={"在 " + g.dir + " 新建会话"}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -598,6 +591,7 @@ export default function App() {
                     fontSize: 13,
                     color: "var(--t3)",
                     cursor: "pointer",
+                    visibility: hoverGrp === g.dir ? "visible" : "hidden",
                   }}
                 >
                   +
@@ -686,21 +680,12 @@ export default function App() {
           >
             {sessions.length === 0 ? (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 2 }}>
-                <div
-                  style={{
-                    width: 52,
-                    height: 52,
-                    borderRadius: 16,
-                    background: "linear-gradient(135deg,#34d399,#059669)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    font: "800 26px system-ui",
-                    boxShadow: "0 6px 20px rgba(16,185,129,.3)",
-                  }}
-                >
-                  🐒
-                </div>
+                <img
+                  src={logoUrl}
+                  alt=""
+                  draggable={false}
+                  style={{ width: 52, height: 52, borderRadius: 16 }}
+                />
                 <div style={{ fontSize: 20, fontWeight: 700, color: "var(--t1)", letterSpacing: "-.01em" }}>
                   把第一个任务交给 MonkeyCode
                 </div>

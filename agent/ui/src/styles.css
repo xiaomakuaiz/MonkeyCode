@@ -88,10 +88,6 @@ input, textarea, select, button { font-family: inherit; }
 :root.light ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.24); }
 :root.light * { scrollbar-color: rgba(0, 0, 0, 0.14) transparent; }
 
-/* 分组头的「+」悬停才出现,平时不占视觉 */
-.grp-plus { opacity: 0; transition: opacity 0.12s; }
-.grp-head:hover .grp-plus { opacity: 1; }
-
 /* hover 态(原型经 style-hover 实现,这里等价成工具类) */
 .hv-card:hover { background: var(--card) !important; }
 .hv-card2:hover { background: var(--card2) !important; }
