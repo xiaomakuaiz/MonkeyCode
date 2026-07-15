@@ -652,7 +652,6 @@ export default function App() {
                 >
                   {g.name}
                 </span>
-                <span style={{ fontSize: 10.5, color: "var(--t5)" }}>{g.items.length}</span>
                 <span
                   className="hv-t1"
                   title={"在 " + g.dir + " 新建会话"}
