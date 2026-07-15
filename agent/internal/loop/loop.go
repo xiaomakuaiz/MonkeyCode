@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	// defaultMaxSteps 单轮步数刹车:防模型失控空转,不是任务预算——
-	// 交互场景用户随时可取消,真实长任务(大重构+验证循环)不应被它拦住。
-	defaultMaxSteps = 200
+	// defaultMaxSteps 单轮步数保险丝:只防模型失控空转(上下文压缩会让
+	// 死循环永远转下去,这是无人值守时唯一的总花费兜底),正常任务不该撞上。
+	defaultMaxSteps = 500
 	// 上下文预算(粗略):超过后拒绝继续,提示开新会话。压缩在 M3 实现。
 	defaultContextBudget = 180_000
 )

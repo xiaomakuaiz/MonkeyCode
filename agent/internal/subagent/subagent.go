@@ -32,9 +32,9 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 )
 
-// defaultMaxSteps 子代理步数上限(探索任务小于主任务的 200,但需容纳
-// 大仓库的深入调研;步数耗尽时部分结论仍会返回,见 Execute)。
-const defaultMaxSteps = 50
+// defaultMaxSteps 子代理步数保险丝(小于主任务的 500,但需容纳大仓库的
+// 深入调研;步数耗尽时部分结论仍会返回,见 Execute)。
+const defaultMaxSteps = 200
 
 // Tool 实现 tools.Tool,把探索任务委托给独立子代理执行。
 type Tool struct {
