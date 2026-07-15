@@ -32,7 +32,8 @@ const markImeEnd = (e: { timeStamp: number }) => {
 const isImeEnter = (e: { timeStamp: number; nativeEvent: { isComposing: boolean } }) =>
   e.nativeEvent.isComposing || e.timeStamp - imeEndedAt < 100;
 
-const fmtK = (n: number) => (n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n));
+const fmtK = (n: number) =>
+  n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
 
 const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
 
