@@ -117,36 +117,45 @@ export function SessionRow({
               隔离
             </span>
           )}
-          {hover || menu !== "closed" ? (
-            <span
-              className="hv-t1"
-              title="会话操作"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (menu !== "closed") return setMenu("closed");
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                const up = r.bottom + 150 > window.innerHeight; // 预估菜单高度(确认态更高)
-                setPos({
-                  right: Math.max(8, window.innerWidth - r.right),
-                  ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
-                });
-                setMenu("open");
-              }}
-              style={{
-                marginLeft: "auto",
-                flex: "none",
-                fontSize: 14,
-                fontWeight: 700,
-                color: "var(--t4)",
-                padding: "0 3px",
-                cursor: "pointer",
-              }}
-            >
-              ⋯
-            </span>
-          ) : (
-            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: m.color }}>{m.text}</span>
-          )}
+          {/* 右侧定高插槽:状态文字与 ⋯ 互换时行高恒定,避免悬停引起整列抖动 */}
+          <span
+            style={{
+              marginLeft: "auto",
+              flex: "none",
+              height: 16,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+            }}
+          >
+            {hover || menu !== "closed" ? (
+              <span
+                className="hv-t1"
+                title="会话操作"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (menu !== "closed") return setMenu("closed");
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  const up = r.bottom + 150 > window.innerHeight; // 预估菜单高度(确认态更高)
+                  setPos({
+                    right: Math.max(8, window.innerWidth - r.right),
+                    ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+                  });
+                  setMenu("open");
+                }}
+                style={{
+                  font: "700 14px/16px system-ui",
+                  color: "var(--t4)",
+                  padding: "0 3px",
+                  cursor: "pointer",
+                }}
+              >
+                ⋯
+              </span>
+            ) : (
+              <span style={{ font: "400 11px/16px system-ui", color: m.color }}>{m.text}</span>
+            )}
+          </span>
         </div>
       </div>
       {menu !== "closed" && (
