@@ -100,7 +100,12 @@ export async function saveHostConfig(config: HostConfig): Promise<void> {
 export function openExternal(url: string): void {
   const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (tauri?.core?.invoke) {
-    tauri.core.invoke("plugin:opener|open_url", { url }).catch(() => {});
+    tauri.core.invoke("plugin:opener|open_url", { url }).catch((e) => {
+      // 调用被拒(ACL/scope 配置问题)也不能毫无反应:退回整页导航,
+      // 壳的 on_navigation 守卫会拒绝并转系统浏览器(Rust 侧不走 ACL)
+      console.error("opener 调用失败,退回导航守卫路径:", e);
+      location.href = url;
+    });
   } else {
     window.open(url, "_blank", "noopener,noreferrer");
   }

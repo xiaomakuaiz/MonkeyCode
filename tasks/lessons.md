@@ -1,5 +1,14 @@
 # Lessons
 
+## 2026-07-15 Tauri 插件权限是"命令 + scope"两层
+
+- **`opener:allow-open-url` 只放行命令,URL scope 在 `allow-default-urls` 里**——漏配 scope 时
+  调用全部被拒。Tauri 插件的 ACL 普遍是两层(命令允许 + 参数 scope),配 capability 时用
+  `<plugin>:default` 或去 `~/.cargo/registry/src/*/tauri-plugin-<x>-*/permissions/` 看 toml 确认,
+  别凭权限名猜。
+- **`catch(() => {})` 吞错让配置问题表现成"毫无反应"**:跨层调用(IPC/插件)失败必须外显
+  (console.error 起步)+ 尽量给降级路径(此例:invoke 失败退回整页导航,由壳导航守卫兜底打开)。
+
 ## 2026-07-14 「桌面客户端」的范围
 
 - **用户说"重构 mc-desktop / 桌面客户端"指的是用户看到的整个界面,不只是壳目录**:壳(mc-desktop)自身只有错误页和设置页,聊天主界面在 agent/ui(内核 embed 的 React 应用)。按目录字面理解只改了壳页面,被用户指出"agent 里的样式和交互都没改"。UI 类需求先问"用户实际看到的界面由哪些模块渲染",按视觉归属划范围,而不是按仓库目录名。

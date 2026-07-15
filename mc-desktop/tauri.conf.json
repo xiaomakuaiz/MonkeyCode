@@ -37,7 +37,8 @@
             "allow-get-config",
             "allow-save-config",
             "dialog:allow-open",
-            "opener:allow-open-url"
+            "opener:allow-open-url",
+            "opener:allow-default-urls"
           ]
         }
       ]

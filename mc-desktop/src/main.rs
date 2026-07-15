@@ -304,6 +304,10 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
                    window.__TAURI__.core.invoke('get_config') \
                      .then(() => report('invoke-ok')) \
                      .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
+                   /* opener 全链路(命令 ACL + URL scope):无头环境以 BROWSER=/bin/true 承接 */ \
+                   window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
+                     .then(() => report('opener-ok')) \
+                     .catch((e) => report('opener-err:' + String(e).slice(0, 80))); \
                    /* 导航守卫:外域跳转应被拒;页面存活才能发出 1 秒后的上报 */ \
                    setTimeout(() => { location.href = 'https://nav-guard.invalid/x'; }, 1000); \
                    setTimeout(() => report('nav-guard-ok'), 2000); \
