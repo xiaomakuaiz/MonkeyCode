@@ -51,6 +51,9 @@ const (
 	// KindSessionSetModel 切换会话模型(轮次间生效;执行中拒绝)。
 	// 成功后另发 model_update 帧进事件日志,回放可见。
 	KindSessionSetModel = "session_set_model"
+	// KindSessionSetMode 切换会话权限模式(default/yolo)。与 set_model 不同,
+	// 执行中也可切换;成功后另发 permission_mode_update 帧进事件日志。
+	KindSessionSetMode = "session_set_mode"
 )
 
 // Kind 帧内容子类型。
@@ -259,4 +262,14 @@ type modelUpdate struct {
 // ModelUpdate 会话模型切换(model 为展示名)。
 func (b *Builder) ModelUpdate(model string) Frame {
 	return b.acp(modelUpdate{SessionUpdate: "model_update", Model: model})
+}
+
+type permissionModeUpdate struct {
+	SessionUpdate string `json:"sessionUpdate"`
+	Mode          string `json:"mode"` // default | yolo
+}
+
+// PermissionModeUpdate 会话权限模式切换广播。
+func (b *Builder) PermissionModeUpdate(mode string) Frame {
+	return b.acp(permissionModeUpdate{SessionUpdate: "permission_mode_update", Mode: mode})
 }

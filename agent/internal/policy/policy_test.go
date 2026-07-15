@@ -75,6 +75,48 @@ func TestYolo(t *testing.T) {
 	}
 }
 
+func TestSetModeRuntimeSwitch(t *testing.T) {
+	e := New(ModeDefault, nil)
+	// default:写操作询问,非交互按拒绝
+	if err := e.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err == nil {
+		t.Fatal("default 模式下写操作应询问")
+	}
+	// 切 yolo:全部放行,含危险命令(与 --yolo 语义一致)
+	e.SetMode(ModeYolo)
+	if got := e.Mode(); got != ModeYolo {
+		t.Fatalf("Mode() = %v", got)
+	}
+	if err := e.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err != nil {
+		t.Fatalf("yolo 模式下写操作应放行: %v", err)
+	}
+	if err := e.Check(context.Background(), bashReq("sudo rm -rf /")); err != nil {
+		t.Fatalf("yolo 模式下危险命令也放行(与 --yolo 一致): %v", err)
+	}
+	// 切回 default:恢复询问
+	e.SetMode(ModeDefault)
+	if err := e.Check(context.Background(), Request{Tool: "write_file", Title: "w"}); err == nil {
+		t.Fatal("切回 default 后写操作应恢复询问")
+	}
+}
+
+func TestSetModeConcurrent(t *testing.T) {
+	e := New(ModeDefault, func(ctx context.Context, req Request) (Response, error) {
+		return Response{Approved: true}, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			_ = e.Check(context.Background(), bashReq("npm install"))
+		}
+	}()
+	for range 200 {
+		e.SetMode(ModeYolo)
+		e.SetMode(ModeDefault)
+	}
+	<-done
+}
+
 func TestAllowTool(t *testing.T) {
 	e := New(ModeDefault, nil)
 	e.AllowTool("write_file")

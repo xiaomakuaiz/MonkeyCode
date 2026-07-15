@@ -403,3 +403,22 @@
       与 subagent_tool run/ok 进度帧;子会话观察者回放 8 帧含子代理工具帧与结论;列表过滤与 parent
       字段正确(BC_ALL_OK);CLI 渲染 `⏺ 子代理探索 → ↳ ✓ 读取 hello.txt → ✓ 子结论`;
       sessions/--all 缩进显示子会话
+
+# 会话级 YOLO 模式(2026-07-15)
+
+> 计划:~/.claude/plans/fluffy-dreaming-tome.md。用户拍板:会话内随时切换(⇧Tab);
+> 语义与 CLI --yolo 完全一致(完全放行);只改内核+UI,不碰壳。
+
+- [x] policy:Engine.SetMode/Mode(加锁),decide() 改锁内快照读 mode
+- [x] frame:KindSessionSetMode + PermissionModeUpdate 帧(sessionUpdate:permission_mode_update)
+- [x] session.Meta 增 Mode(omitempty,空=default);newLiveSession 按 meta 恢复引擎模式
+- [x] server:liveSession.setMode(幂等校验→切引擎→yolo 时排空 pending asks 自动批准→meta 落盘→广播);handleCall 接线
+- [x] UI:reduce 处理 permission_mode_update(sys 行+permMode);App.tsx yolo 状态/toggleYolo(乐观+回滚)/composer 红框+pill(⚡ YOLO / 🛡 默认权限)/⇧Tab 快捷键;openSession 传 meta.mode
+- [x] 修复既有竞态:startTurn 两处 Meta 写/SaveMeta 无锁,与 setModel/setMode 并发 race(-race 复现),统一持 ls.mu
+
+## 验证
+
+- [x] 单测:policy 运行期切换(含 sudo 危险命令 yolo 放行)+并发冒烟;server WS 切换/pending 自动批准
+      (真实 write_file 落盘)/重建 liveSession 按 meta 恢复;-race ×3 全绿,全仓 go test 过,tsc 过
+- [x] 端到端(新构建二进制 + 真实 serve):WS call session_set_mode → call-response + 广播帧;
+      重连回放含模式帧;meta.json/sessions API 带 mode;切回 default 后 meta 清空

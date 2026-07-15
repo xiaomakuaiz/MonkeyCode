@@ -157,8 +157,25 @@ func (e *Engine) AllowTool(name string) {
 	e.remembered[name] = Allow
 }
 
+// SetMode 运行期切换引擎模式(会话内 YOLO 开关)。
+func (e *Engine) SetMode(m Mode) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.mode = m
+}
+
+// Mode 当前模式。
+func (e *Engine) Mode() Mode {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.mode
+}
+
 func (e *Engine) decide(req Request) (Decision, string) {
-	if e.mode == ModeYolo {
+	e.mu.Lock()
+	mode := e.mode
+	e.mu.Unlock()
+	if mode == ModeYolo {
 		return Allow, req.Tool
 	}
 	if readonlyTools[req.Tool] {

@@ -29,6 +29,8 @@ export interface SessionMeta {
   title: string;
   workdir: string;
   model: string;
+  /** 权限模式("yolo" 全放行;缺省 = default) */
+  mode?: string;
   turns: number;
   status: string; // created | running | finished | interrupted | error
   updated_at?: string;
@@ -60,6 +62,7 @@ export interface AcpUpdate {
   size?: number;
   progress?: ToolProgress;
   model?: string;
+  mode?: string;
 }
 
 /** tool_call_update{status:in_progress} 的执行期进度载荷 */

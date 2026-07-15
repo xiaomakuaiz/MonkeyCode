@@ -468,6 +468,7 @@ type liveSession struct {
 	builder *frame.Builder
 	mcp     *mcpclient.Manager
 	sub     *subagent.Tool // 切换模型时同步子代理的 provider
+	pol     *policy.Engine // 切换权限模式(YOLO)时直接操作
 
 	emitMu  sync.Mutex // 保证回放与实时推送无缝衔接
 	clients map[*wsClient]struct{}
@@ -489,8 +490,13 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	ls.builder.SetSeq(countEvents(sess.EventsPath()))
 
 	reg := tools.NewRegistry()
-	pol := policy.New(policy.ModeDefault, ls.asker)
+	mode := policy.ModeDefault
+	if sess.Meta.Mode == string(policy.ModeYolo) {
+		mode = policy.ModeYolo
+	}
+	pol := policy.New(mode, ls.asker)
 	pol.EnableProjectRules(sess.Meta.Workdir)
+	ls.pol = pol
 	emitter := frame.EmitterFunc(ls.emit)
 
 	// MCP 工具接入:单点失败仅告警,不阻塞会话
@@ -648,6 +654,37 @@ func (ls *liveSession) setModel(name string) (any, error) {
 	return map[string]string{"model": name}, nil
 }
 
+// setMode 切换会话权限模式(随时生效,含执行中)。切到 yolo 时自动放行
+// 所有 pending 审批;meta 落盘,广播 permission_mode_update 帧。
+func (ls *liveSession) setMode(mode string) (any, error) {
+	if mode != string(policy.ModeDefault) && mode != string(policy.ModeYolo) {
+		return nil, fmt.Errorf("未知权限模式: %q", mode)
+	}
+	if string(ls.pol.Mode()) == mode {
+		return map[string]string{"mode": mode}, nil
+	}
+	// 先切引擎再排空 pending:切换后新的 decide 直接 Allow,不会再产生 ask,
+	// 因此排空动作不会漏掉切换瞬间的审批。
+	ls.pol.SetMode(policy.Mode(mode))
+	ls.mu.Lock()
+	if mode == string(policy.ModeYolo) {
+		for id, ch := range ls.asks {
+			delete(ls.asks, id)
+			ch <- askResp{approved: true}
+		}
+	}
+	metaMode := ""
+	if mode == string(policy.ModeYolo) {
+		metaMode = mode
+	}
+	ls.sess.Meta.Mode = metaMode
+	_ = ls.sess.SaveMeta()
+	ls.mu.Unlock()
+
+	ls.emit(ls.builder.PermissionModeUpdate(mode))
+	return map[string]string{"mode": mode}, nil
+}
+
 // applySessionHeaders 注入网关缓存亲和标识:同一会话的请求带同一
 // Session-Id/Thread-Id,网关可据此路由到同一实例并命中前缀缓存。
 func applySessionHeaders(p provider.Provider, sessionID string) {
@@ -758,6 +795,12 @@ func (ls *liveSession) handleCall(c *wsClient, f *frame.Frame) {
 		}
 		_ = json.Unmarshal(f.Data, &p)
 		result, callErr = ls.setModel(p.Model)
+	case frame.KindSessionSetMode:
+		var p struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.Unmarshal(f.Data, &p)
+		result, callErr = ls.setMode(p.Mode)
 	default:
 		callErr = fmt.Errorf("未知 call kind: %s", f.Kind)
 	}
@@ -791,9 +834,12 @@ func (ls *liveSession) startTurn(input string) {
 	ls.cancelTurn = cancel
 	ls.mu.Unlock()
 
-	// 轮次开始即落 running:进程异常退出时留下可识别的遗留状态
+	// 轮次开始即落 running:进程异常退出时留下可识别的遗留状态。
+	// Meta 读写与落盘统一持 ls.mu(setMode 可在执行中并发写 Meta)
+	ls.mu.Lock()
 	ls.sess.Meta.Status = "running"
 	_ = ls.sess.SaveMeta()
+	ls.mu.Unlock()
 
 	ls.srv.turns.Add(1)
 	go func() {
@@ -811,6 +857,10 @@ func (ls *liveSession) startTurn(input string) {
 		}()
 		_, err := ls.engine.RunTurn(ctx, input)
 
+		if err := ls.sess.SaveMessages(ls.engine.Messages); err != nil {
+			ls.emit(ls.builder.TaskError("会话保存失败: " + err.Error()))
+		}
+		ls.mu.Lock()
 		ls.sess.Meta.Turns++
 		ls.sess.Meta.Usage = ls.engine.Usage
 		switch {
@@ -824,10 +874,8 @@ func (ls *liveSession) startTurn(input string) {
 		if ls.sess.Meta.Title == "" {
 			ls.sess.Meta.Title = firstLine(input)
 		}
-		if err := ls.sess.SaveMessages(ls.engine.Messages); err != nil {
-			ls.emit(ls.builder.TaskError("会话保存失败: " + err.Error()))
-		}
 		_ = ls.sess.SaveMeta()
+		ls.mu.Unlock()
 	}()
 }
 

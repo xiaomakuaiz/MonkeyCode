@@ -25,6 +25,8 @@ type Meta struct {
 	Title     string         `json:"title"`
 	Workdir   string         `json:"workdir"`
 	Model     string         `json:"model"`
+	// Mode 权限模式("yolo" 时全部放行);空 = default。serve 加载时恢复。
+	Mode string `json:"mode,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	Turns     int            `json:"turns"`

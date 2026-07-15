@@ -731,6 +731,112 @@ func TestPerSessionModelAndSwitch(t *testing.T) {
 	ls.mu.Unlock()
 }
 
+// TestWSSetMode 切换权限模式:call 成功 + permission_mode_update 广播 + meta 落盘,
+// 非法 mode 报错。
+func TestWSSetMode(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, id)
+
+	sendCall(t, conn, frame.KindSessionSetMode, map[string]string{"mode": "yolo"})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasCallResponse(fs, frame.KindSessionSetMode) && framesContain(fs, "permission_mode_update")
+	})
+	if !framesContain(frames, `"mode":"yolo"`) {
+		t.Fatalf("set_mode 响应异常: %v", summary(frames))
+	}
+	if m, err := session.ReadMeta(srv.opts.SessionRoot, id); err != nil || m.Mode != "yolo" {
+		t.Fatalf("meta.Mode 未落盘: %+v err=%v", m, err)
+	}
+
+	// 切回 default:meta 存空串
+	sendCall(t, conn, frame.KindSessionSetMode, map[string]string{"mode": "default"})
+	wsCollect(t, conn, func(fs []frame.Frame) bool {
+		r := lastCallResponse(fs, frame.KindSessionSetMode)
+		return r != nil && strings.Contains(string(r.Data), `"mode":"default"`)
+	})
+	if m, _ := session.ReadMeta(srv.opts.SessionRoot, id); m.Mode != "" {
+		t.Fatalf("切回 default 后 meta.Mode 应为空,实际 %q", m.Mode)
+	}
+
+	// 非法 mode
+	sendCall(t, conn, frame.KindSessionSetMode, map[string]string{"mode": "chaos"})
+	wsCollect(t, conn, func(fs []frame.Frame) bool {
+		r := lastCallResponse(fs, frame.KindSessionSetMode)
+		return r != nil && strings.Contains(string(r.Data), "error")
+	})
+}
+
+// TestSetModeAutoApprovesPendingAsk 执行中切 YOLO:pending 审批自动批准,
+// 工具真实执行,轮次跑完。
+func TestSetModeAutoApprovesPendingAsk(t *testing.T) {
+	workdir := t.TempDir()
+	stub := &stubProvider{results: []*provider.Result{
+		toolUseResult("write_file", `{"path":"yolo.txt","content":"auto"}`),
+		textResult("已写入"),
+	}}
+	_, ts := newTestServer(t, stub)
+	id := createSession(t, ts, workdir)
+	conn := dialWS(t, ts, id)
+
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("写文件")})
+	wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypePermissionReq)
+	})
+
+	// 不答复审批,直接切 YOLO
+	sendCall(t, conn, frame.KindSessionSetMode, map[string]string{"mode": "yolo"})
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+
+	var approved bool
+	for _, f := range frames {
+		if f.Type == frame.TypePermissionResolved && strings.Contains(string(f.Data), "approved") {
+			approved = true
+		}
+	}
+	if !approved {
+		t.Fatalf("切 YOLO 后 pending 审批应自动批准: %v", summary(frames))
+	}
+	data, err := os.ReadFile(filepath.Join(workdir, "yolo.txt"))
+	if err != nil || string(data) != "auto" {
+		t.Fatalf("自动批准后文件未写入: %v %q", err, data)
+	}
+}
+
+// TestSetModePersistsAcrossReload 模式落盘后,重建 liveSession 的引擎按 meta 恢复,
+// 且重连回放含 permission_mode_update 帧。
+func TestSetModePersistsAcrossReload(t *testing.T) {
+	srv, ts := newTestServer(t, &stubProvider{})
+	id := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, id)
+
+	sendCall(t, conn, frame.KindSessionSetMode, map[string]string{"mode": "yolo"})
+	wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasCallResponse(fs, frame.KindSessionSetMode)
+	})
+	conn.Close(websocket.StatusNormalClosure, "")
+
+	// 驱逐内存中的 liveSession,强制下次按 meta 重建(模拟内核重启)
+	srv.mu.Lock()
+	delete(srv.live, id)
+	srv.mu.Unlock()
+
+	conn2 := dialWS(t, ts, id)
+	frames := wsCollect(t, conn2, func(fs []frame.Frame) bool {
+		return framesContain(fs, "permission_mode_update")
+	})
+	if !framesContain(frames, `"mode":"yolo"`) {
+		t.Fatalf("回放缺少 yolo 模式帧: %v", summary(frames))
+	}
+	ls, err := srv.liveSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ls.pol.Mode(); string(got) != "yolo" {
+		t.Fatalf("重建后引擎模式应为 yolo,实际 %s", got)
+	}
+}
+
 // 零模型模式(宿主接管配置但用户未添加模型):服务照常起,
 // /api/models 返回空数组,建会话 400 且文案可引导配置,/healthz 外显版本。
 func TestZeroModelServe(t *testing.T) {

@@ -14,6 +14,8 @@ export interface ChatState {
   turnEnded: boolean;
   /** 会话当前模型(model_update 帧回写;空 = 以会话 meta 为准) */
   model: string;
+  /** 会话权限模式(permission_mode_update 帧回写;空 = 以会话 meta 为准) */
+  permMode: string;
 }
 
 export const initialChat: ChatState = {
@@ -23,6 +25,7 @@ export const initialChat: ChatState = {
   streamKind: "",
   turnEnded: false,
   model: "",
+  permMode: "",
 };
 
 const PERM_OUTCOME: Record<PermOutcome, string> = {
@@ -150,6 +153,12 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
     case "model_update": {
       const name = u.model ?? "";
       return { ...push(s, { kind: "sys", text: `模型已切换为 ${name}` }), model: name };
+    }
+    case "permission_mode_update": {
+      const mode = u.mode ?? "default";
+      const text =
+        mode === "yolo" ? "⚡ 已开启 YOLO 模式:所有操作不再询问,直接执行" : "已恢复默认权限模式";
+      return { ...push(s, { kind: "sys", text }), permMode: mode };
     }
     default:
       return s;

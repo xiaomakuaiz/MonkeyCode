@@ -85,6 +85,7 @@ export default function App() {
   const [childView, setChildView] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [sessionModel, setSessionModel] = useState("");
+  const [yolo, setYolo] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hoverGrp, setHoverGrp] = useState<string | null>(null); // 悬停的分组(CSS :hover 在 WKWebView 不可靠,用状态控制)
   // 新建任务视图
@@ -150,7 +151,7 @@ export default function App() {
   }, []);
 
   const openSession = useCallback(
-    (id: string, model?: string) => {
+    (id: string, model?: string, mode?: string) => {
       connRef.current?.close();
       setCurrentId(id);
       setView("session");
@@ -162,6 +163,7 @@ export default function App() {
       setMenuOpen(false);
       setQueued(null);
       setSessionModel(model ?? "");
+      setYolo(mode === "yolo");
       localStorage.setItem("mc.lastSession", id);
       connRef.current = connect(id, {
         onFrames: (batch: Frame[]) => setChat((s) => reduceBatch(s, batch)),
@@ -182,7 +184,7 @@ export default function App() {
         setNewModel(ms.find((m) => m.default)?.name ?? "");
         const last = localStorage.getItem("mc.lastSession");
         const meta = metas.find((m) => m.id === last);
-        if (meta) openSession(meta.id, meta.model);
+        if (meta) openSession(meta.id, meta.model, meta.mode);
         if (ms.length === 0 && inDesktopShell()) setView("settings");
       })
       .catch((e) => setStatus("无法连接服务: " + (e instanceof Error ? e.message : e)));
@@ -197,6 +199,11 @@ export default function App() {
   useEffect(() => {
     if (chat.model) setSessionModel(chat.model);
   }, [chat.model]);
+
+  // permission_mode_update 帧回写 YOLO 开关(回放/多客户端同步)
+  useEffect(() => {
+    if (chat.permMode) setYolo(chat.permMode === "yolo");
+  }, [chat.permMode]);
 
   // 新任务默认工作目录:沿用最近会话的目录,没有会话则用 ~/MonkeyCode(用户改过则不再跟随)
   const lastDir =
@@ -295,6 +302,26 @@ export default function App() {
     }
   };
 
+  const toggleYolo = async () => {
+    if (!connRef.current) return;
+    const prev = yolo;
+    const next = prev ? "default" : "yolo";
+    setYolo(!prev); // 乐观回写,失败回滚
+    try {
+      const r = await connRef.current.call<{ result?: { mode: string }; error?: string }>(
+        "session_set_mode",
+        { mode: next },
+      );
+      if (r.error) {
+        setYolo(prev);
+        setStatus("⚠ 切换权限模式失败: " + r.error);
+      }
+    } catch (e) {
+      setYolo(prev);
+      setStatus("⚠ 切换权限模式失败: " + (e instanceof Error ? e.message : e));
+    }
+  };
+
   const showDiff = async (path: string) => {
     setDiff({ path, text: "加载中…" });
     try {
@@ -328,7 +355,7 @@ export default function App() {
       if (first) pendingMsgRef.current = first;
       setNewText("");
       await refreshSessions();
-      openSession(meta.id, meta.model);
+      openSession(meta.id, meta.model, meta.mode);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setNewErr("创建失败: " + msg);
@@ -382,6 +409,11 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         searchRef.current?.focus();
+        return;
+      }
+      if (e.key === "Tab" && e.shiftKey && view === "session" && currentId) {
+        e.preventDefault();
+        void toggleYolo();
         return;
       }
       if (e.key === "Escape") {
@@ -613,7 +645,7 @@ export default function App() {
                       key={m.id}
                       meta={m}
                       active={m.id === currentId && view === "session"}
-                      onClick={() => openSession(m.id, m.model)}
+                      onClick={() => openSession(m.id, m.model, m.mode)}
                     />
                   ))}
                 </div>
@@ -1048,7 +1080,15 @@ export default function App() {
 
             {/* composer */}
             <div style={{ display: "flex", justifyContent: "center", padding: "0 24px 20px", flex: "none" }}>
-              <div style={{ ...COL, background: "var(--card)", border: "1px solid var(--line)", borderRadius: 16, padding: "13px 16px" }}>
+              <div
+                style={{
+                  ...COL,
+                  background: "var(--card)",
+                  border: `1px solid ${yolo ? "var(--err)" : "var(--line)"}`,
+                  borderRadius: 16,
+                  padding: "13px 16px",
+                }}
+              >
                 <textarea
                   ref={taRef}
                   rows={1}
@@ -1079,8 +1119,30 @@ export default function App() {
                   }}
                 />
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, fontSize: 12, color: "var(--t5)" }}>
-                  <span>⏎ 发送 · ⇧⏎ 换行</span>
-                  <div style={{ marginLeft: "auto", position: "relative", flex: "none" }}>
+                  <span>⏎ 发送 · ⇧⏎ 换行 · ⇧⇥ YOLO</span>
+                  {yolo && (
+                    <span style={{ color: "var(--err)", whiteSpace: "nowrap" }}>所有操作不经确认直接执行</span>
+                  )}
+                  <div
+                    className={yolo ? undefined : "hv-card2"}
+                    title="切换 YOLO 模式(⇧Tab):开启后所有操作不再询问,直接执行"
+                    onClick={() => void toggleYolo()}
+                    style={{
+                      marginLeft: "auto",
+                      padding: "4px 9px",
+                      borderRadius: 7,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      fontSize: 11.5,
+                      userSelect: "none",
+                      flex: "none",
+                      color: yolo ? "var(--err)" : "var(--t4)",
+                      background: yolo ? "var(--delBg)" : undefined,
+                    }}
+                  >
+                    {yolo ? "⚡ YOLO" : "🛡 默认权限"}
+                  </div>
+                  <div style={{ position: "relative", flex: "none" }}>
                     <div
                       className={chat.running ? undefined : "hv-card2"}
                       title={chat.running ? "轮次执行中,结束后可切换" : "切换本会话模型(下一轮生效)"}
