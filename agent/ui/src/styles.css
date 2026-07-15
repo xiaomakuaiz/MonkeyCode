@@ -29,6 +29,35 @@
   --shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
 
+/* 亮色主题(原型 .mc-root.light 的变量集,类挂在 <html> 上) */
+:root.light {
+  --bg: #f7f6f4;
+  --side: #efedea;
+  --card: rgba(0, 0, 0, 0.04);
+  --card2: rgba(0, 0, 0, 0.07);
+  --cardh: rgba(0, 0, 0, 0.09);
+  --line: rgba(0, 0, 0, 0.06);
+  --t1: #1f1d1a;
+  --t2: #44413c;
+  --t3: #6b665e;
+  --t4: #8f8a82;
+  --t5: #b3ada3;
+  --amber: #059669;
+  --amberT: #047857;
+  --amberBg: rgba(5, 150, 105, 0.09);
+  --amberBd: rgba(5, 150, 105, 0.3);
+  --ok: #16a34a;
+  --err: #dc2626;
+  --onAmber: #fff;
+  --codeBg: rgba(0, 0, 0, 0.05);
+  --addBg: rgba(22, 163, 74, 0.08);
+  --addT: #15803d;
+  --delBg: rgba(220, 38, 38, 0.07);
+  --delT: #b91c1c;
+  --pop: #ffffff;
+  --shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 
@@ -55,6 +84,13 @@ input, textarea, select, button { font-family: inherit; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.24); }
 * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.14) transparent; }
+:root.light ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); }
+:root.light ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.24); }
+:root.light * { scrollbar-color: rgba(0, 0, 0, 0.14) transparent; }
+
+/* 分组头的「+」悬停才出现,平时不占视觉 */
+.grp-plus { opacity: 0; transition: opacity 0.12s; }
+.grp-head:hover .grp-plus { opacity: 1; }
 
 /* hover 态(原型经 style-hover 实现,这里等价成工具类) */
 .hv-card:hover { background: var(--card) !important; }

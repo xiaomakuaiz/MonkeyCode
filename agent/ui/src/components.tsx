@@ -50,11 +50,12 @@ export function SessionRow({
   return (
     <div
       className="hv-cardh"
+      title={meta.workdir}
       onClick={onClick}
       style={{
         background: active ? "var(--card2)" : "transparent",
         borderRadius: 10,
-        padding: "10px 13px",
+        padding: "9px 13px",
         cursor: "pointer",
       }}
     >
@@ -87,18 +88,6 @@ export function SessionRow({
           </span>
         )}
         <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: m.color }}>{m.text}</span>
-      </div>
-      <div
-        style={{
-          font: "10.5px " + MONO,
-          color: "var(--t5)",
-          marginTop: 4,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {meta.workdir}
       </div>
     </div>
   );

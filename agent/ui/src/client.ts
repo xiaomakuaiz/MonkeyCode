@@ -151,7 +151,8 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
     h.onStatus("连接中…", false);
     const sock = new WebSocket(`ws://${location.host}/ws?session=${sessionId}&token=${token}`);
     ws = sock;
-    sock.onopen = () => h.onStatus(`已连接 · 会话 ${sessionId}`, true);
+    // 会话 ID 是内部标识,对用户无信息量,状态只报连接结果
+    sock.onopen = () => h.onStatus("已连接", true);
     sock.onclose = () => {
       if (ws !== sock || closed) return;
       h.onStatus("⚠ 连接断开,2 秒后自动重连…", false);

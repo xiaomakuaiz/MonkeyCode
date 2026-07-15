@@ -36,6 +36,35 @@ const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() 
 /** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
 const DEFAULT_DIR = "~/MonkeyCode";
 
+interface ProjectGroup {
+  dir: string;
+  name: string;
+  latest: string;
+  items: SessionMeta[];
+}
+
+/** 会话按项目(工作区目录)分组;worktree 会话归属原仓库目录 */
+function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
+  const map = new Map<string, SessionMeta[]>();
+  for (const m of sessions) {
+    const dir = m.worktree?.repo || m.workdir;
+    const list = map.get(dir);
+    if (list) list.push(m);
+    else map.set(dir, [m]);
+  }
+  const groups = [...map.entries()].map(([dir, items]) => {
+    items.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    return {
+      dir,
+      name: dir.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || dir,
+      latest: items[0]?.updated_at ?? "",
+      items,
+    };
+  });
+  groups.sort((a, b) => b.latest.localeCompare(a.latest));
+  return groups;
+}
+
 /** 720px 居中列(对话流 / 改动条 / 输入框共用的宽度约定) */
 const COL: CSSProperties = { width: 720, maxWidth: "100%" };
 
@@ -64,6 +93,24 @@ export default function App() {
   const [newErr, setNewErr] = useState("");
   const [offerCreate, setOfferCreate] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("mc.collapsedGroups") || "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+
+  const toggleGroup = (dir: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      localStorage.setItem("mc.collapsedGroups", JSON.stringify([...next]));
+      return next;
+    });
+  };
 
   const connRef = useRef<Conn | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -450,11 +497,34 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 14px" }}>
+        {/* 云端任务区:执行后端未上线,常驻原型的空态(有后端后在此渲染任务卡) */}
+        <div style={{ padding: "0 14px", flex: "none" }}>
+          <div style={{ display: "flex", alignItems: "center", padding: "0 4px 8px", whiteSpace: "nowrap" }}>
+            <span style={{ font: "600 10.5px system-ui", color: "var(--t4)", letterSpacing: ".1em" }}>云端任务</span>
+            <span style={{ marginLeft: 6, font: "400 10.5px system-ui", color: "var(--t5)" }}>跑在服务器</span>
+          </div>
+          <div
+            style={{
+              border: "1px dashed var(--line)",
+              borderRadius: 11,
+              padding: "14px 13px",
+              fontSize: 11.5,
+              color: "var(--t5)",
+              lineHeight: 1.7,
+            }}
+          >
+            还没有云端任务。长任务可以派发到服务器上跑,关掉客户端也会继续。
+          </div>
+        </div>
+
+        {/* 表头在滚动容器之外,滚动列表时恒定可见 */}
+        <div style={{ padding: "20px 14px 0", flex: "none" }}>
           <div style={{ display: "flex", padding: "0 4px 8px", whiteSpace: "nowrap" }}>
             <span style={{ font: "600 10.5px system-ui", color: "var(--t4)", letterSpacing: ".1em" }}>本地会话</span>
             <span style={{ marginLeft: 6, font: "400 10.5px system-ui", color: "var(--t5)" }}>这台电脑</span>
           </div>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 14px" }}>
           {sessions.length === 0 && (
             <div
               style={{
@@ -474,16 +544,88 @@ export default function App() {
               没有匹配「{query.trim()}」的会话。
             </div>
           )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {list.map((m) => (
-              <SessionRow
-                key={m.id}
-                meta={m}
-                active={m.id === currentId && view === "session"}
-                onClick={() => openSession(m.id, m.model)}
-              />
-            ))}
-          </div>
+          {groupByProject(list).map((g) => (
+            <div key={g.dir} style={{ marginBottom: 12 }}>
+              <div
+                className="grp-head"
+                title={g.dir}
+                onClick={() => toggleGroup(g.dir)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  padding: "5px 6px 5px 4px",
+                  cursor: "pointer",
+                  userSelect: "none",
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                }}
+              >
+                <span style={{ width: 10, flex: "none", fontSize: 9, color: "var(--t5)" }}>
+                  {collapsed.has(g.dir) ? "▶" : "▼"}
+                </span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--t3)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {g.name}
+                </span>
+                <span style={{ fontSize: 10.5, color: "var(--t5)" }}>{g.items.length}</span>
+                <span
+                  className="hv-t1 grp-plus"
+                  title={"在 " + g.dir + " 新建会话"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dirTouchedRef.current = true;
+                    setNewDir(g.dir);
+                    setEditDir(false);
+                    setView("new");
+                  }}
+                  style={{
+                    marginLeft: "auto",
+                    width: 20,
+                    height: 20,
+                    borderRadius: 6,
+                    background: "var(--card2)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 13,
+                    color: "var(--t3)",
+                    cursor: "pointer",
+                  }}
+                >
+                  +
+                </span>
+              </div>
+              {!collapsed.has(g.dir) && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 1,
+                    marginLeft: 8,
+                    paddingLeft: 7,
+                    borderLeft: "1px solid var(--line)",
+                  }}
+                >
+                  {g.items.map((m) => (
+                    <SessionRow
+                      key={m.id}
+                      meta={m}
+                      active={m.id === currentId && view === "session"}
+                      onClick={() => openSession(m.id, m.model)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
 
         <div
@@ -574,31 +716,32 @@ export default function App() {
               </div>
             )}
 
-            <div
-              style={{
-                ...COL,
-                width: 588,
-                border: "1px solid var(--amberBd)",
-                borderRadius: 16,
-                background: "var(--amberBg)",
-                padding: 20,
-              }}
-            >
+            {/* 环境双卡(原型:本地默认选中;云端执行后端未上线,置灰待开通) */}
+            <div style={{ display: "flex", gap: 12, maxWidth: "100%", flexWrap: "wrap", justifyContent: "center" }}>
               <div
-                style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14, fontWeight: 700, color: "var(--amberT)", whiteSpace: "nowrap" }}
+                style={{
+                  width: 288,
+                  border: "1px solid var(--amberBd)",
+                  borderRadius: 16,
+                  background: "var(--amberBg)",
+                  padding: 20,
+                  boxSizing: "border-box",
+                }}
               >
-                ⌂ 本地
-                <span
-                  style={{ marginLeft: "auto", fontSize: 10, background: "var(--amberBg)", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14, fontWeight: 700, color: "var(--amberT)", whiteSpace: "nowrap" }}
                 >
-                  默认 ⏎
-                </span>
-              </div>
-              <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.7, marginTop: 10 }}>
-                Agent 跑在这台电脑上,直接读写本地文件;每步权限逐一确认。
-              </div>
-              {editDir ? (
-                <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+                  ⌂ 本地
+                  <span
+                    style={{ marginLeft: "auto", fontSize: 10, background: "var(--amberBg)", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}
+                  >
+                    默认 ⏎
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.7, marginTop: 10 }}>
+                  Agent 跑在这台电脑上,直接读写本地文件;每步权限逐一确认。
+                </div>
+                {editDir ? (
                   <input
                     value={newDir}
                     autoFocus
@@ -610,86 +753,109 @@ export default function App() {
                     }}
                     onCompositionEnd={markImeEnd}
                     onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && setEditDir(false)}
-                    placeholder="/home/you/dev/project(工作区目录)"
+                    onBlur={() => setEditDir(false)}
+                    placeholder="/home/you/dev/project"
                     style={{
-                      flex: 1,
+                      width: "100%",
+                      marginTop: 12,
                       background: "var(--codeBg)",
                       border: "1px solid var(--line)",
                       borderRadius: 9,
-                      padding: "8px 11px",
-                      font: "11.5px " + MONO,
+                      padding: "7px 10px",
+                      font: "11px " + MONO,
                       color: "var(--t1)",
                       outline: "none",
                       minWidth: 0,
+                      boxSizing: "border-box",
                     }}
                   />
-                  {inDesktopShell() && (
-                    <div
-                      className="hv-cardh"
-                      onClick={() => void browse()}
-                      style={{
-                        padding: "8px 14px",
-                        background: "var(--card2)",
-                        borderRadius: 9,
-                        cursor: "pointer",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "var(--t2)",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      浏览…
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    marginTop: 12,
-                    font: "11px " + MONO,
-                    color: "var(--t5)",
-                    whiteSpace: "nowrap",
-                    minWidth: 0,
-                  }}
-                >
-                  <span style={{ color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis" }}>{newDir}</span>
-                  {newDir === DEFAULT_DIR && <span style={{ flex: "none" }}>· 将自动创建</span>}
-                  <span
-                    className="hv-t1"
-                    onClick={() => setEditDir(true)}
-                    style={{ marginLeft: "auto", cursor: "pointer", flex: "none", font: "12px system-ui" }}
+                ) : (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      marginTop: 12,
+                      font: "11px " + MONO,
+                      color: "var(--t5)",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }}
                   >
-                    更改
-                  </span>
-                  {inDesktopShell() && (
+                    <span style={{ color: "var(--t3)", overflow: "hidden", textOverflow: "ellipsis" }}>{newDir}</span>
+                    {newDir === DEFAULT_DIR && <span style={{ flex: "none" }}>· 自动创建</span>}
                     <span
                       className="hv-t1"
-                      onClick={() => void browse()}
-                      style={{ cursor: "pointer", flex: "none", font: "12px system-ui" }}
+                      onClick={() => setEditDir(true)}
+                      style={{ marginLeft: "auto", cursor: "pointer", flex: "none", font: "12px system-ui" }}
                     >
-                      浏览…
+                      更改
                     </span>
-                  )}
+                    {inDesktopShell() && (
+                      <span
+                        className="hv-t1"
+                        onClick={() => void browse()}
+                        style={{ cursor: "pointer", flex: "none", font: "12px system-ui" }}
+                      >
+                        浏览…
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  width: 288,
+                  border: "1px solid var(--line)",
+                  borderRadius: 16,
+                  background: "var(--card)",
+                  padding: 20,
+                  boxSizing: "border-box",
+                  opacity: 0.7,
+                }}
+              >
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14, fontWeight: 700, color: "var(--t1)", whiteSpace: "nowrap" }}
+                >
+                  ☁ 云端
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      fontSize: 10,
+                      background: "var(--card2)",
+                      color: "var(--t4)",
+                      borderRadius: 5,
+                      padding: "2px 8px",
+                      fontWeight: 600,
+                    }}
+                  >
+                    即将上线
+                  </span>
                 </div>
-              )}
-              {newErr && (
-                <div style={{ marginTop: 10, fontSize: 12, color: "var(--err)" }}>
-                  {newErr}
-                  {offerCreate && (
-                    <span
-                      className="hv-op"
-                      onClick={() => void createTask(true)}
-                      style={{ cursor: "pointer", color: "var(--amberT)", marginLeft: 8 }}
-                    >
-                      创建该目录并继续 →
-                    </span>
-                  )}
+                <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.7, marginTop: 10 }}>
+                  Agent 跑在云上服务器,关掉客户端也继续;完成后打包改动回来审查。
                 </div>
-              )}
+                <div style={{ display: "flex", font: "11px " + MONO, color: "var(--t5)", marginTop: 12, whiteSpace: "nowrap" }}>
+                  需要连接平台<span style={{ marginLeft: "auto" }}>长任务推荐</span>
+                </div>
+              </div>
             </div>
+
+            {newErr && (
+              <div style={{ ...COL, width: 588, fontSize: 12, color: "var(--err)" }}>
+                {newErr}
+                {offerCreate && (
+                  <span
+                    className="hv-op"
+                    onClick={() => void createTask(true)}
+                    style={{ cursor: "pointer", color: "var(--amberT)", marginLeft: 8 }}
+                  >
+                    创建该目录并继续 →
+                  </span>
+                )}
+              </div>
+            )}
 
             <div
               style={{ ...COL, width: 588, background: "var(--card)", border: "1px solid var(--line)", borderRadius: 16, padding: "13px 16px" }}
@@ -776,68 +942,24 @@ export default function App() {
                 </span>
               </div>
 
-              <div style={{ marginLeft: "auto", position: "relative", flex: "none" }}>
-                <div
-                  className={chat.running ? undefined : "hv-card"}
-                  title={chat.running ? "轮次执行中,结束后可切换" : "切换本会话模型(下一轮生效)"}
-                  onClick={() => !chat.running && setMenuOpen(!menuOpen)}
-                  style={{
-                    padding: "6px 12px",
-                    borderRadius: 8,
-                    cursor: chat.running ? "default" : "pointer",
-                    whiteSpace: "nowrap",
-                    fontSize: 12,
-                    color: chat.running ? "var(--t5)" : "var(--t3)",
-                    userSelect: "none",
-                  }}
-                >
-                  {currentModel || "模型"} ▾
-                </div>
-                {menuOpen && (
-                  <>
-                    <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setMenuOpen(false)} />
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 36,
-                        right: 0,
-                        width: 220,
-                        background: "var(--pop)",
-                        border: "1px solid var(--line)",
-                        borderRadius: 12,
-                        boxShadow: "var(--shadow)",
-                        padding: 6,
-                        zIndex: 30,
-                        animation: "mcin .15s ease",
-                      }}
-                    >
-                      {menuModels.map((m) => (
-                        <div
-                          key={m.name}
-                          className="hv-card"
-                          onClick={() => void switchModel(m.name)}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "8px 11px",
-                            borderRadius: 8,
-                            cursor: "pointer",
-                            fontSize: 12.5,
-                            color: m.name === currentModel ? "var(--amberT)" : "var(--t2)",
-                            fontWeight: m.name === currentModel ? 600 : 400,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {m.name}
-                          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>
-                            {m.default ? "默认" : ""}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
+              <div
+                className="hv-card"
+                title="查看本轮文件改动"
+                onClick={openDrawer}
+                style={{
+                  marginLeft: "auto",
+                  padding: "6px 12px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  fontSize: 12,
+                  color: "var(--t3)",
+                  flex: "none",
+                  userSelect: "none",
+                }}
+              >
+                <span style={{ color: "var(--amberT)" }}>⇄</span> 改动
+                {changes && changes.length > 0 ? ` · ${changes.length}` : ""}
               </div>
             </div>
             <div style={{ height: 1, background: "var(--line)", margin: "0 24px", flex: "none" }} />
@@ -857,69 +979,55 @@ export default function App() {
                 }}
               >
                 <LogList items={chat.items} onPermAnswer={onPermAnswer} onOpenChild={setChildView} />
-
-                {/* running bar */}
-                {chat.running && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--t3)", padding: "2px 0" }}>
-                    <span
-                      style={{
-                        width: 12,
-                        height: 12,
-                        border: "2px solid var(--amber)",
-                        borderTopColor: "transparent",
-                        borderRadius: "50%",
-                        animation: "mcspin .8s linear infinite",
-                        flex: "none",
-                      }}
-                    />
-                    {runningLabel}
-                    <span style={{ color: "var(--t5)" }}>
-                      · 第 {roundNo} 轮{usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}
-                    </span>
-                    <span
-                      className="hv-cardh"
-                      onClick={() => connRef.current?.send("user-cancel", {})}
-                      style={{
-                        marginLeft: "auto",
-                        padding: "5px 13px",
-                        background: "var(--card2)",
-                        borderRadius: 8,
-                        color: "var(--err)",
-                        cursor: "pointer",
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      ■ 停止
-                    </span>
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* changes strip */}
-            {changes && changes.length > 0 && (
+            {/* running bar:钉在输入框上方(不随对话流滚动) */}
+            {chat.running && (
               <div style={{ display: "flex", justifyContent: "center", padding: "0 24px 8px", flex: "none" }}>
                 <div
-                  className="hv-card2"
-                  onClick={openDrawer}
                   style={{
                     ...COL,
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
-                    fontSize: 12,
+                    fontSize: 12.5,
                     color: "var(--t3)",
-                    background: "var(--card)",
-                    border: "1px solid var(--line)",
-                    borderRadius: 10,
-                    padding: "8px 13px",
-                    cursor: "pointer",
+                    padding: "2px 0",
                     boxSizing: "border-box",
                   }}
                 >
-                  <span style={{ color: "var(--amberT)" }}>⇄</span>本轮改动 · {changes.length} 个文件
-                  <span style={{ marginLeft: "auto", color: "var(--t4)", whiteSpace: "nowrap" }}>查看 diff →</span>
+                  <span
+                    style={{
+                      width: 12,
+                      height: 12,
+                      border: "2px solid var(--amber)",
+                      borderTopColor: "transparent",
+                      borderRadius: "50%",
+                      animation: "mcspin .8s linear infinite",
+                      flex: "none",
+                    }}
+                  />
+                  {runningLabel}
+                  <span style={{ color: "var(--t5)" }}>
+                    · 第 {roundNo} 轮{usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}
+                  </span>
+                  <span
+                    className="hv-cardh"
+                    onClick={() => connRef.current?.send("user-cancel", {})}
+                    style={{
+                      marginLeft: "auto",
+                      padding: "5px 13px",
+                      background: "var(--card2)",
+                      borderRadius: 8,
+                      color: "var(--err)",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ■ 停止
+                  </span>
                 </div>
               </div>
             )}
@@ -985,9 +1093,72 @@ export default function App() {
                     boxSizing: "border-box",
                   }}
                 />
-                <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12, fontSize: 12, color: "var(--t5)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, fontSize: 12, color: "var(--t5)" }}>
                   <span>⏎ 发送 · ⇧⏎ 换行</span>
-                  <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>
+                  <div style={{ marginLeft: "auto", position: "relative", flex: "none" }}>
+                    <div
+                      className={chat.running ? undefined : "hv-card2"}
+                      title={chat.running ? "轮次执行中,结束后可切换" : "切换本会话模型(下一轮生效)"}
+                      onClick={() => !chat.running && setMenuOpen(!menuOpen)}
+                      style={{
+                        padding: "4px 9px",
+                        borderRadius: 7,
+                        cursor: chat.running ? "default" : "pointer",
+                        whiteSpace: "nowrap",
+                        fontSize: 11.5,
+                        color: chat.running ? "var(--t5)" : "var(--t4)",
+                        userSelect: "none",
+                      }}
+                    >
+                      {currentModel || "模型"} ▾
+                    </div>
+                    {menuOpen && (
+                      <>
+                        <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setMenuOpen(false)} />
+                        <div
+                          style={{
+                            position: "absolute",
+                            bottom: 32,
+                            right: 0,
+                            width: 220,
+                            background: "var(--pop)",
+                            border: "1px solid var(--line)",
+                            borderRadius: 12,
+                            boxShadow: "var(--shadow)",
+                            padding: 6,
+                            zIndex: 30,
+                            animation: "mcin .15s ease",
+                          }}
+                        >
+                          {menuModels.map((m) => (
+                            <div
+                              key={m.name}
+                              className="hv-card"
+                              onClick={() => void switchModel(m.name)}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                padding: "8px 11px",
+                                borderRadius: 8,
+                                cursor: "pointer",
+                                fontSize: 12.5,
+                                color: m.name === currentModel ? "var(--amberT)" : "var(--t2)",
+                                fontWeight: m.name === currentModel ? 600 : 400,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {m.name}
+                              <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>
+                                {m.default ? "默认" : ""}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <span style={{ fontSize: 11, color: "var(--t5)" }}>
                     {usage ? `${fmtK(usage.used)} / ${fmtK(usage.size)}` : ""}
                   </span>
                   <div

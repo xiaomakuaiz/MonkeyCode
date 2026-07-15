@@ -125,6 +125,59 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+// ---- 外观主题(纯客户端,localStorage 持久化,类挂 <html>) ----
+
+export type Theme = "dark" | "light";
+
+export function currentTheme(): Theme {
+  try {
+    return localStorage.getItem("mc.theme") === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+export function applyTheme(t: Theme) {
+  document.documentElement.classList.toggle("light", t === "light");
+  try {
+    localStorage.setItem("mc.theme", t);
+  } catch {
+    /* 无持久化则仅本次生效 */
+  }
+}
+
+/** 深色/浅色分段开关(原型设置弹窗的「外观」pill) */
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(currentTheme());
+  const pick = (t: Theme) => {
+    applyTheme(t);
+    setTheme(t);
+  };
+  const seg = (t: Theme, label: string) => (
+    <div
+      onClick={() => pick(t)}
+      style={{
+        padding: "6px 18px",
+        fontSize: 12.5,
+        fontWeight: 600,
+        borderRadius: 8,
+        cursor: "pointer",
+        userSelect: "none",
+        background: theme === t ? "var(--amber)" : "transparent",
+        color: theme === t ? "var(--onAmber)" : "var(--t3)",
+      }}
+    >
+      {label}
+    </div>
+  );
+  return (
+    <div style={{ display: "inline-flex", background: "var(--card)", borderRadius: 10, padding: 3, gap: 2 }}>
+      {seg("dark", "深色")}
+      {seg("light", "浅色")}
+    </div>
+  );
+}
+
 const emptyModel = (): HostModel => ({
   name: "",
   provider: "anthropic",
@@ -209,6 +262,15 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
           <div className="hv-cardh" onClick={onClose} style={{ ...btn, marginLeft: "auto" }}>
             返回
           </div>
+        </div>
+
+        {/* ==== 外观(纯客户端,桌面/浏览器模式都可用) ==== */}
+        <div style={{ width: 588, maxWidth: "100%", display: "flex", alignItems: "center", marginTop: 6 }}>
+          <span style={{ font: "600 10.5px system-ui", color: "var(--t4)", letterSpacing: ".1em" }}>外观</span>
+        </div>
+        <div style={{ ...card, display: "flex", alignItems: "center", gap: 12 }}>
+          <ThemeToggle />
+          <span style={{ fontSize: 12, color: "var(--t5)" }}>跟随本机保存,重启后保持。</span>
         </div>
 
         {!desktop && (
