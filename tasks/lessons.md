@@ -1,5 +1,10 @@
 # Lessons
 
+## 2026-07-15 UI 图标用色系字符,不用彩色 emoji
+
+- **agent/ui 全部图标是单色 unicode 字符(⌘ ⏎ ⇧ ✕ ⚡),不要混入彩色 emoji(🛡 被用户嫌丑)**:
+  加新 UI 元素前先 grep 现有图标用法对齐体系;默认/低调状态可以干脆不配图标。
+
 ## 2026-07-15 Tauri 插件权限是"命令 + scope"两层
 
 - **`opener:allow-open-url` 只放行命令,URL scope 在 `allow-default-urls` 里**——漏配 scope 时
