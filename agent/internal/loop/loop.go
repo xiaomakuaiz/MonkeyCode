@@ -18,7 +18,7 @@ import (
 const (
 	// defaultMaxSteps 单轮步数保险丝:只防模型失控空转(上下文压缩会让
 	// 死循环永远转下去,这是无人值守时唯一的总花费兜底),正常任务不该撞上。
-	defaultMaxSteps = 500
+	defaultMaxSteps = 10000
 	// 上下文预算(粗略):超过后拒绝继续,提示开新会话。压缩在 M3 实现。
 	defaultContextBudget = 180_000
 )
