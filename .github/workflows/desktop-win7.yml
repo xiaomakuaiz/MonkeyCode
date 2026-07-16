@@ -77,6 +77,8 @@ jobs:
           mkdir -p ../mc-desktop/binaries
           go build -trimpath -ldflags "-s -w" \
             -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
+          # 冒烟:至少保证在 runner(新版 Windows)上能启动(win7 兼容产物向上兼容)
+          ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe --version
 
       - name: Download WebView2 fixed runtime 109
         working-directory: mc-desktop
