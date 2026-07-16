@@ -10,5 +10,10 @@
         "displayLanguageSelector": false
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://release.monkeycode-ai.com/public/desktop/latest-windows.json"]
+    }
   }
 }

@@ -255,11 +255,19 @@ fn update_notice(app: &AppHandle, manual: bool, error: bool, msg: &str) {
 /// 组装更新器(自动/手动/UI 内三条路径共用):不一致即有更新 + 清单地址可覆盖。
 fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     use tauri_plugin_updater::UpdaterExt;
+    let handle = app.clone();
     let mut builder = app
         .updater_builder()
         .timeout(Duration::from_secs(30))
         // 与 latest.json 的版本号不一致即视为有更新
-        .version_comparator(|current, update| update.version != current);
+        .version_comparator(|current, update| update.version != current)
+        // Windows 安装器路径由插件直接退进程(不走 RunEvent::Exit),
+        // 必须先在这里回收内核,否则 mc-agent.exe 占用文件导致 NSIS 安装失败
+        .on_before_exit(move || {
+            if let Some(child) = handle.state::<Kernel>().0.lock().unwrap().take() {
+                stop_kernel(child);
+            }
+        });
     // 本机测试覆盖清单地址(release 构建强制 https,http 清单只在 debug 下可用)
     if let Ok(url) = std::env::var("MC_UPDATE_MANIFEST") {
         let u = url.parse().map_err(|e| format!("MC_UPDATE_MANIFEST 无效: {e}"))?;
@@ -372,6 +380,12 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
             builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true);
+        }
+        // Windows:去原生装饰栏,UI 侧自绘 36px 标题栏(拖拽区 + 窗口按钮);
+        // 错误页窗口不受影响(open_error_page 保留原生装饰,无自绘控件可用)
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.decorations(false);
         }
         // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→壳配置 链路,
         // 结果经本地回环上报(无头环境唯一可靠的回读通道)

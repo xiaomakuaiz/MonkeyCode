@@ -18,7 +18,7 @@ SIDECAR_WIN := $(BIN_DIR)/mc-agent-x86_64-pc-windows-msvc.exe
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 
-.PHONY: dev run macos macos-release windows check-signing check-macos check-windows kernel-universal kernel-windows icons clean
+.PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows kernel-universal kernel-windows icons clean
 
 # ---------- 开发 ----------
 
@@ -74,6 +74,13 @@ windows: check-windows kernel-windows
 	@echo ""
 	@echo "打包完成,分发产物:"
 	@ls -lh target/release/bundle/nsis/*.exe 2>/dev/null || true
+
+# 发布构建:在 windows 基础上叠加 createUpdaterArtifacts(需 TAURI_SIGNING_PRIVATE_KEY
+# 签名),并汇集 updater 产物(带版本文件名的 setup.exe + latest-windows.json)到
+# bundle/updater/,供人工上传 OSS。win7 通道由 CI(desktop-win7.yml)产出。
+windows-release: EXTRA_TAURI_CONFIG := --config tauri.release.conf.json
+windows-release: check-signing windows
+	python3 scripts/gen-latest-json.py windows
 
 check-windows:
 	@[ "$$OS" = "Windows_NT" ] || { echo "错误: Windows 打包需在 Windows 上执行(无 Windows 机器时用 CI: desktop-windows.yml)"; exit 1; }

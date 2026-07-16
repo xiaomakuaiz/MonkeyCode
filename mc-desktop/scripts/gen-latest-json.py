@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""汇集 updater 发布物:.app.tar.gz(.sig) 重命名为带版本文件名 + 生成 latest.json。
+"""汇集 updater 发布物:重命名为带版本文件名 + 生成对应平台的更新清单。
 
-产物集中在 bundle/updater/,人工上传 OSS(public/desktop/):
-先传 tar.gz,再覆盖 latest.json,顺序保证客户端不会拉到不存在的包。
+用法: gen-latest-json.py [macos|windows|win7]   (缺省 macos)
+
+三条更新通道各自独立,清单由对应平台的发布构建产出,互不协调:
+  macos   → latest.json          (darwin 双架构,universal .app.tar.gz)
+  windows → latest-windows.json  (windows-x86_64,NSIS setup exe)
+  win7    → latest-win7.json     (windows-x86_64,NSIS setup exe,捆 WebView2)
+
+产物集中在 bundle 目录下的 updater/,人工上传 OSS(public/desktop/):
+先传包,再覆盖清单,顺序保证客户端不会拉到不存在的包。
 """
 
 import json
@@ -17,26 +24,43 @@ URL_BASE = "https://release.monkeycode-ai.com/public/desktop/"
 version = json.loads((ROOT / "tauri.conf.json").read_text())["version"]
 short = version.removesuffix(".0.0")  # 26071401.0.0 → 26071401
 
-bundle = ROOT / "target/universal-apple-darwin/release/bundle"
-tarball = bundle / "macos/MonkeyCode.app.tar.gz"
-sig = pathlib.Path(str(tarball) + ".sig")
-if not tarball.exists() or not sig.exists():
+platform = sys.argv[1] if len(sys.argv) > 1 else "macos"
+
+if platform == "macos":
+    bundle = ROOT / "target/universal-apple-darwin/release/bundle"
+    src = bundle / "macos/MonkeyCode.app.tar.gz"
+    name = f"MonkeyCode_{short}_universal.app.tar.gz"
+    manifest_name = "latest.json"
+    # universal 包同时服务两种架构,两个 target key 指向同一 URL
+    targets = ["darwin-aarch64", "darwin-x86_64"]
+elif platform in ("windows", "win7"):
+    bundle = ROOT / "target/release/bundle"
+    src = bundle / f"nsis/MonkeyCode_{version}_x64-setup.exe"
+    # win7 包重命名区分通道(OSS 同目录),minisign 签名只关心内容与文件名无关
+    suffix = "-win7" if platform == "win7" else ""
+    name = f"MonkeyCode_{short}_x64-setup{suffix}.exe"
+    manifest_name = f"latest-{platform}.json"
+    targets = ["windows-x86_64"]
+else:
+    sys.exit(f"未知平台: {platform}(可选 macos/windows/win7)")
+
+sig = pathlib.Path(str(src) + ".sig")
+if not src.exists() or not sig.exists():
     sys.exit(
-        f"缺少 updater 产物: {tarball}(.sig)\n"
-        "需要带签名的发布构建(make macos-release,设置 TAURI_SIGNING_PRIVATE_KEY)"
+        f"缺少 updater 产物: {src}(.sig)\n"
+        "需要带签名的发布构建(--config tauri.release.conf.json,"
+        "设置 TAURI_SIGNING_PRIVATE_KEY)"
     )
 
 out = bundle / "updater"
 out.mkdir(exist_ok=True)
-name = f"MonkeyCode_{short}_universal.app.tar.gz"
-shutil.copy2(tarball, out / name)
+shutil.copy2(src, out / name)
 
-# universal 包同时服务两种架构,两个 target key 指向同一 URL
 entry = {"signature": sig.read_text(), "url": URL_BASE + name}
 manifest = {
     "version": version,
     "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "platforms": {"darwin-aarch64": entry, "darwin-x86_64": entry},
+    "platforms": {t: entry for t in targets},
 }
-(out / "latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-print(f"updater 产物就绪: {out / name} + latest.json(版本 {version})")
+(out / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+print(f"updater 产物就绪: {out / name} + {manifest_name}(版本 {version})")

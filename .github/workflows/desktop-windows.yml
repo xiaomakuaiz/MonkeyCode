@@ -41,11 +41,25 @@ jobs:
           go build -trimpath -ldflags "-s -w" \
             -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
 
-      - name: Build NSIS installer (unsigned)
+      # secret 就绪时走发布构建(额外产出签名的 updater setup.exe + latest-windows.json),
+      # 否则回退普通打包,CI 不红
+      - name: Build NSIS installer
         working-directory: mc-desktop
-        run: npx --yes @tauri-apps/cli@^2 build --config tauri.windows.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npx --yes @tauri-apps/cli@^2 build \
+              --config tauri.windows.conf.json --config tauri.release.conf.json
+            python scripts/gen-latest-json.py windows
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY 未配置,跳过 updater 产物"
+            npx --yes @tauri-apps/cli@^2 build --config tauri.windows.conf.json
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: MonkeyCode-windows-x64
-          path: mc-desktop/target/release/bundle/nsis/*.exe
+          path: |
+            mc-desktop/target/release/bundle/nsis/*.exe
+            mc-desktop/target/release/bundle/updater/*

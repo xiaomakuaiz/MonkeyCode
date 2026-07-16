@@ -37,10 +37,19 @@ CI 的 desktop-macos.yml 走同一个 make 入口(push 自动构建,产物在 Ac
 
 ## 自动更新与发布
 
-壳内置 tauri-plugin-updater:启动 5 秒后 + 托盘"检查更新"菜单,拉取 OSS 清单
-`https://release.monkeycode-ai.com/public/desktop/latest.json`,版本号与本地**不一致**即弹窗询问,
-确认后下载(minisign 验签)、原地替换 .app 并自动重启。未签名包不受影响
-(自更新下载无 quarantine 属性,不触发 Gatekeeper)。
+壳内置 tauri-plugin-updater:启动 5 秒后 + 托盘"检查更新"菜单,拉取 OSS 更新清单,
+版本号与本地**不一致**即弹窗询问,确认后下载(minisign 验签)安装并自动重启。
+macOS 原地替换 .app,未签名包不受影响(自更新下载无 quarantine 属性,不触发 Gatekeeper);
+Windows 静默跑 NSIS 安装器(壳先经 updater 的 `on_before_exit` 钩子回收内核进程,
+否则 mc-agent.exe 占用文件会导致安装失败)。
+
+三条更新通道各自独立清单(`public/desktop/` 下),由对应平台的发布构建产出,发布互不协调:
+
+| 通道 | 清单 | 产出 |
+|---|---|---|
+| macOS | `latest.json` | desktop-macos.yml(`make macos-release`) |
+| Windows | `latest-windows.json` | desktop-windows.yml |
+| Win7 | `latest-win7.json` | desktop-win7.yml |
 
 版本号格式 **`YYMMDDNN`**(日期 + 两位序号,如 26071401),内部以 semver 主版本位承载
 (`26071401.0.0`),`tauri.conf.json` 与 `Cargo.toml` 两处保持一致。
@@ -48,17 +57,19 @@ CI 的 desktop-macos.yml 走同一个 make 入口(push 自动构建,产物在 Ac
 发布流程(CI 出产物,人工上传 OSS):
 
 1. 把 `tauri.conf.json` + `Cargo.toml` 的版本改为当天新序号(如 `26071502.0.0`),push;
-2. CI(desktop-macos.yml)在配置了 `TAURI_SIGNING_PRIVATE_KEY` secret 时走 `make macos-release`,
-   Artifacts 里多出 `updater/` 目录:`MonkeyCode_<版本>_universal.app.tar.gz` + `latest.json`;
-3. 上传 OSS `public/desktop/`:**先传 tar.gz,再覆盖 latest.json**(顺序保证客户端不会拉到不存在的包)。
+2. 三条 desktop CI 在配置了 `TAURI_SIGNING_PRIVATE_KEY` secret 时走发布构建,
+   Artifacts 里多出 `updater/` 目录:带版本文件名的更新包 + 对应清单;
+3. 上传 OSS `public/desktop/`:**先传包,再覆盖清单**(顺序保证客户端不会拉到不存在的包)。
+   各平台可独立发布,只传自己通道的包和清单即可。
 
 签名密钥:`npx @tauri-apps/cli signer generate` 生成,公钥在 `tauri.conf.json`,私钥在
 GitHub secret `TAURI_SIGNING_PRIVATE_KEY`(丢失则无法再发更新,老用户需手动重装)。
 本地联调:`MC_UPDATE_MANIFEST=http://127.0.0.1:8000/latest.json ./target/debug/mc-desktop`
 可覆盖清单地址(http 仅 debug 构建放行)。
 
-macOS 完整链路人工验证:装当前版,OSS 放新版 tar.gz + latest.json,启动应弹"发现新版本",
-确认后自动重启为新版。
+完整链路人工验证:装当前版,OSS 放新版包 + 清单,启动应弹"发现新版本",确认后自动重启为新版。
+历史遗留:2607 早期的 Windows 安装烧的端点还是 `latest.json`(当时无 Windows 条目,从未能自动更新),
+需手动重装一次才能进入 `latest-windows.json` 新通道。
 
 ## 进程生命周期
 
