@@ -136,6 +136,8 @@ func (c *AnthropicClient) Stream(ctx context.Context, req Request, h *StreamHand
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	dumpLLMRequest(body)
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, err

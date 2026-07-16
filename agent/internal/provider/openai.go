@@ -220,6 +220,8 @@ func (c *OpenAIClient) Stream(ctx context.Context, req Request, h *StreamHandler
 		return nil, err
 	}
 
+	dumpLLMRequest(body)
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err

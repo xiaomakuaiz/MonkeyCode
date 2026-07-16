@@ -178,6 +178,8 @@ func (c *OpenAIResponsesClient) Stream(ctx context.Context, req Request, h *Stre
 		return nil, err
 	}
 
+	dumpLLMRequest(body)
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
