@@ -30,6 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 先换锁再装缓存:rust-cache 的 key 取自 Cargo.lock,必须是 win7 锁
+      - name: Use win7 dependency lock
+        working-directory: mc-desktop
+        run: cp Cargo.lock.win7 Cargo.lock
+
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.77.2
@@ -63,6 +68,9 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           go version
+          # 断言用的是 go-win7 而非 runner 预装的官方 Go(官方产物 Win7 上直接崩,
+          # 且 go version 输出无法区分,必须查 GOROOT)
+          [ "$(go env GOROOT)" = "$GOROOT" ]
           mkdir -p ../mc-desktop/binaries
           go build -trimpath -ldflags "-s -w" \
             -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
@@ -74,13 +82,16 @@ jobs:
             "https://github.com/westinyang/WebView2RuntimeArchive/releases/download/${WEBVIEW2_VERSION}/Microsoft.WebView2.FixedVersionRuntime.${WEBVIEW2_VERSION}.x64.cab"
           echo "${WEBVIEW2_CAB_SHA256}  webview2.cab" | sha256sum -c -
           mkdir -p webview2-fixed
-          expand.exe -F:* webview2.cab webview2-fixed >/dev/null
-          ls webview2-fixed/
-
-      # Win7 专用依赖锁:1.77.2 可编译的降级依赖树(lockfile v3)
-      - name: Use win7 dependency lock
-        working-directory: mc-desktop
-        run: cp Cargo.lock.win7 Cargo.lock
+          # 绝对路径调系统 expand:Git Bash 的 GNU expand(coreutils)在 PATH 里遮住它
+          /c/Windows/System32/expand.exe -F:* webview2.cab webview2-fixed >/dev/null
+          RUNTIME_DIR="webview2-fixed/Microsoft.WebView2.FixedVersionRuntime.${WEBVIEW2_VERSION}.x64"
+          # cab 内若是扁平文件(无顶层目录)则归位到 tauri 配置期望的目录
+          if [ ! -d "$RUNTIME_DIR" ]; then
+            mkdir -p "$RUNTIME_DIR"
+            find webview2-fixed -maxdepth 1 -type f ! -name "*.cab" -exec mv {} "$RUNTIME_DIR"/ \;
+          fi
+          test -f "$RUNTIME_DIR/msedgewebview2.exe"
+          ls "$RUNTIME_DIR" | head
 
       # 静态 CRT:Win7 上未必有 VC++ 运行库,自包含省去 redist 前置
       - name: Build NSIS installer (unsigned)
@@ -88,6 +99,9 @@ jobs:
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
+          # 断言 1.77.2(≥1.78 编出的 exe 最低要求 Win10,构建会成功但产物在 Win7 崩)
+          rustup default 1.77.2
+          rustc --version | grep -F "1.77.2"
           npx --yes @tauri-apps/cli@^2 build \
             --config tauri.windows.conf.json --config tauri.win7.conf.json \
             -- --locked
