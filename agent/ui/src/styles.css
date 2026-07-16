@@ -98,13 +98,13 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   border-radius: 9px;
   padding: 10px 14px;
   overflow-x: auto;
-  font: 12px/1.7 ui-monospace, Menlo, monospace;
+  font: 12px/1.7 ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
 }
 .md code {
   background: var(--codeBg);
   border-radius: 4px;
   padding: 1px 5px;
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
   font-size: 12px;
 }
 .md pre code { background: transparent; padding: 0; }
