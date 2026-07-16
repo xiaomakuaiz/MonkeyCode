@@ -131,7 +131,7 @@ func TestAnthropicStream_ImagePayloadIntact(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	c := NewAnthropic(ts.URL, "test-key", "test-model")
+	c := NewAnthropic(ts.URL, "test-key", "test-model", false)
 	msgs := []Message{
 		{Role: RoleUser, Content: []ContentBlock{{Type: BlockText, Text: "看图"}}},
 		{Role: RoleAssistant, Content: []ContentBlock{{Type: BlockToolUse, ID: "t1", Name: "read_file", Input: []byte(`{}`)}}},

@@ -169,9 +169,9 @@ func runEvalTask(cfg *config.Config, tasksDir string, t evalTask) (res evalResul
 	// 2. 运行 agent(yolo,无审批,无会话)
 	var p provider.Provider
 	if cfg.Provider == "openai" {
-		p = provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model)
+		p = provider.NewOpenAI(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.SkipTLSVerify)
 	} else {
-		p = provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model)
+		p = provider.NewAnthropic(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.SkipTLSVerify)
 	}
 	builder := &frame.Builder{}
 	renderer := NewRenderer()

@@ -18,6 +18,8 @@ export interface HostModel {
   context_window?: number;
   /** 支持图片输入(视觉);未勾选时读图降级为文本占位,不发图片块 */
   vision?: boolean;
+  /** 跳过 TLS 证书校验(不安全,仅自签名内网网关),高级项 */
+  skip_tls_verify?: boolean;
 }
 
 /** 壳持有的应用配置(经 Tauri IPC get_config/save_config 读写)。 */

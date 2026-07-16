@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // OpenAIClient OpenAI Chat Completions 兼容客户端(适配大多数国产模型网关)。
@@ -26,12 +25,13 @@ type OpenAIClient struct {
 func (c *OpenAIClient) SetExtraHeaders(h map[string]string) { c.extra = h }
 
 // NewOpenAI 创建客户端。baseURL 形如 https://host/v1(不带 /chat/completions)。
-func NewOpenAI(baseURL, apiKey, model string) *OpenAIClient {
+// insecureTLS 跳过证书校验(仅自签名内网网关)。
+func NewOpenAI(baseURL, apiKey, model string, insecureTLS bool) *OpenAIClient {
 	return &OpenAIClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 60 * time.Second}},
+		http:    newHTTPClient(insecureTLS),
 	}
 }
 

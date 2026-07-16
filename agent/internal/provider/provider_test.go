@@ -206,7 +206,7 @@ func TestExtraHeaders(t *testing.T) {
 
 	headers := map[string]string{"Session-Id": "sess-1", "Thread-Id": "sess-1"}
 
-	a := NewAnthropic(srv.URL, "k", "m")
+	a := NewAnthropic(srv.URL, "k", "m", false)
 	a.SetExtraHeaders(headers)
 	if _, err := a.Stream(context.Background(), Request{Messages: []Message{TextMessage(RoleUser, "hi")}}, &StreamHandler{}); err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestExtraHeaders(t *testing.T) {
 		t.Fatalf("anthropic 缺附加头: %v", gotAnthropic)
 	}
 
-	o := NewOpenAI(srv.URL, "k", "m")
+	o := NewOpenAI(srv.URL, "k", "m", false)
 	o.SetExtraHeaders(headers)
 	if _, err := o.Stream(context.Background(), Request{Messages: []Message{TextMessage(RoleUser, "hi")}}, &StreamHandler{}); err != nil {
 		t.Fatal(err)

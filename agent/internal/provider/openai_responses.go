@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // OpenAIResponsesClient OpenAI Responses 协议客户端(/responses)。
@@ -27,12 +26,13 @@ type OpenAIResponsesClient struct {
 func (c *OpenAIResponsesClient) SetExtraHeaders(h map[string]string) { c.extra = h }
 
 // NewOpenAIResponses 创建客户端。baseURL 形如 https://host/v1(不带 /responses)。
-func NewOpenAIResponses(baseURL, apiKey, model string) *OpenAIResponsesClient {
+// insecureTLS 跳过证书校验(仅自签名内网网关)。
+func NewOpenAIResponses(baseURL, apiKey, model string, insecureTLS bool) *OpenAIResponsesClient {
 	return &OpenAIResponsesClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 60 * time.Second}},
+		http:    newHTTPClient(insecureTLS),
 	}
 }
 

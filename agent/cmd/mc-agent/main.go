@@ -79,15 +79,16 @@ func main() {
 	}
 }
 
-// newProviderByName 按协议名构造 LLM 客户端。
-func newProviderByName(name, baseURL, apiKey, model string) (provider.Provider, error) {
+// newProviderByName 按协议名构造 LLM 客户端。insecureTLS 跳过证书校验
+// (仅自签名内网网关,模型高级配置显式开启)。
+func newProviderByName(name, baseURL, apiKey, model string, insecureTLS bool) (provider.Provider, error) {
 	switch name {
 	case "", "anthropic":
-		return provider.NewAnthropic(baseURL, apiKey, model), nil
+		return provider.NewAnthropic(baseURL, apiKey, model, insecureTLS), nil
 	case "openai":
-		return provider.NewOpenAI(baseURL, apiKey, model), nil
+		return provider.NewOpenAI(baseURL, apiKey, model, insecureTLS), nil
 	case "openai_responses":
-		return provider.NewOpenAIResponses(baseURL, apiKey, model), nil
+		return provider.NewOpenAIResponses(baseURL, apiKey, model, insecureTLS), nil
 	default:
 		return nil, fmt.Errorf("未知 provider %q(支持 anthropic/openai/openai_responses)", name)
 	}
@@ -142,7 +143,7 @@ func buildApp(interactive bool) (*app, error) {
 		return nil, fmt.Errorf("工作区目录不存在: %s", workdir)
 	}
 
-	p, err := newProviderByName(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model)
+	p, err := newProviderByName(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.SkipTLSVerify)
 	if err != nil {
 		return nil, err
 	}

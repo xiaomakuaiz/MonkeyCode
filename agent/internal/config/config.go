@@ -17,6 +17,8 @@ type Config struct {
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
+	// SkipTLSVerify 跳过 TLS 证书校验(不安全,仅自签名内网网关)。
+	SkipTLSVerify bool `json:"skip_tls_verify,omitempty"`
 
 	PlatformURL     string `json:"platform_url,omitempty"`
 	PlatformToken   string `json:"platform_token,omitempty"`

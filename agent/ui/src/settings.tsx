@@ -454,20 +454,35 @@ export function SettingsView({
                     </Field>
                   </div>
                   {advOpen[i] && (
-                    <Field label="上下文窗口(token)">
-                      <input
-                        style={input}
-                        type="number"
-                        min={1}
-                        value={m.context_window ?? ""}
-                        placeholder="200000(默认)"
-                        onChange={(e) => {
-                          const n = parseInt(e.target.value, 10);
-                          patchModel(i, { context_window: Number.isFinite(n) && n > 0 ? n : undefined });
-                        }}
-                        className="hv-bd"
-                      />
-                    </Field>
+                    <>
+                      <Field label="上下文窗口(token)">
+                        <input
+                          style={input}
+                          type="number"
+                          min={1}
+                          value={m.context_window ?? ""}
+                          placeholder="200000(默认)"
+                          onChange={(e) => {
+                            const n = parseInt(e.target.value, 10);
+                            patchModel(i, { context_window: Number.isFinite(n) && n > 0 ? n : undefined });
+                          }}
+                          className="hv-bd"
+                        />
+                      </Field>
+                      <label
+                        title="跳过 HTTPS 证书校验,连接可被窃听或篡改。仅用于自签名证书的内网网关;公网接口在老系统(如 Win7)验不过时内核会自动用内置根证书兜底,无需开启"
+                        style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontSize: 12, userSelect: "none" }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!m.skip_tls_verify}
+                          onChange={(e) => patchModel(i, { skip_tls_verify: e.target.checked || undefined })}
+                          style={{ accentColor: "var(--err)", margin: 0 }}
+                        />
+                        跳过 TLS 证书校验
+                        {m.skip_tls_verify && <span style={{ color: "var(--err)", fontWeight: 600 }}>(不安全,仅限内网自签名网关)</span>}
+                      </label>
+                    </>
                   )}
                   <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 2, fontSize: 12 }}>
                     <span

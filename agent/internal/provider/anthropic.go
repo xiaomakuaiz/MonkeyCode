@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // AnthropicClient Anthropic Messages 协议客户端(兼容各类 Anthropic 风格网关)。
@@ -25,13 +24,13 @@ type AnthropicClient struct {
 func (c *AnthropicClient) SetExtraHeaders(h map[string]string) { c.extra = h }
 
 // NewAnthropic 创建客户端。baseURL 形如 https://host/api/anthropic(不带 /v1/messages)。
-func NewAnthropic(baseURL, apiKey, model string) *AnthropicClient {
+// insecureTLS 跳过证书校验(仅自签名内网网关)。
+func NewAnthropic(baseURL, apiKey, model string, insecureTLS bool) *AnthropicClient {
 	return &AnthropicClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		model:   model,
-		// 总超时不设(流式长连接),连接与响应头超时由 Transport 控制
-		http: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 60 * time.Second}},
+		http:    newHTTPClient(insecureTLS),
 	}
 }
 

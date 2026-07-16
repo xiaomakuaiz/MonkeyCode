@@ -21,6 +21,9 @@ type ModelProfile struct {
 	// 不发图片块(非视觉模型收到 image 块的行为取决于网关:报错或把
 	// base64 当文本灌进上下文,两者都不可接受)。
 	Vision bool `json:"vision,omitempty"`
+	// SkipTLSVerify 跳过 TLS 证书校验(不安全,仅自签名内网网关;
+	// 公网证书因系统根证书库过旧验不过的场景由内置 Mozilla 根兜底,无需开启)。
+	SkipTLSVerify bool `json:"skip_tls_verify,omitempty"`
 }
 
 // LoadModels 加载模型清单:MC_AGENT_MODELS 指向 JSON 数组文件。
