@@ -431,22 +431,22 @@ export function Sidebar({
         <div style={{ height: 12, flex: "none" }} />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "2px 16px 14px" }}>
-        <div
+        <img src={logoUrl} alt="" draggable={false} style={{ width: 30, height: 30, borderRadius: 8, flex: "none" }} />
+        <span style={{ fontWeight: 700, fontSize: 14 }}>MonkeyCode</span>
+        <span
           style={{
-            width: 30,
-            height: 30,
-            borderRadius: 8,
-            background: "var(--card)",
-            boxShadow: "0 1px 3px rgba(0,0,0,.12)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            fontSize: 9.5,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            color: "var(--acc)",
+            background: "var(--accBg)",
+            borderRadius: 5,
+            padding: "1.5px 6px",
             flex: "none",
           }}
         >
-          <img src={logoUrl} alt="" draggable={false} style={{ width: 20, height: 20, borderRadius: 5 }} />
-        </div>
-        <span style={{ fontWeight: 700, fontSize: 14 }}>MonkeyCode</span>
+          Work
+        </span>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
