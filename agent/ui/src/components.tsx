@@ -34,37 +34,57 @@ export function Markdown({ text }: { text: string }) {
   return <div className="md" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** 思考块:单行内联折叠(✦ 思考 + 摘要省略),点击展开为完整文本(设计稿 think) */
+/** 思考块:单行折叠(✦ 思考 + 摘要省略),点击在下方展开完整文本的缩进块。
+ * 全文不放进标题 flex 行:多行文本会把居中的图标顶到段落中部,标签与内容挤作一团。 */
 function ThoughtView({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div
-      onClick={() => setOpen(!open)}
-      style={{
-        display: "flex",
-        alignItems: "baseline",
-        gap: 8,
-        fontSize: 12,
-        color: "var(--t4)",
-        cursor: "pointer",
-        userSelect: "none",
-        lineHeight: 1.6,
-      }}
-    >
-      <IconSpark style={{ alignSelf: "center" }} />
-      <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>思考</span>
-      {open ? (
-        <span style={{ flex: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{text}</span>
-      ) : (
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {text.trim().replace(/\s+/g, " ")}
-        </span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 12,
+          color: "var(--t4)",
+          cursor: "pointer",
+          userSelect: "none",
+          lineHeight: 1.6,
+          minWidth: 0,
+        }}
+      >
+        <IconSpark />
+        <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>思考</span>
+        {!open && (
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {text.trim().replace(/\s+/g, " ")}
+          </span>
+        )}
+        {open && <span style={{ flex: 1 }} />}
+        <IconChevronRight
+          size={9}
+          color="var(--t6)"
+          style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
+        />
+      </div>
+      {open && (
+        <div
+          style={{
+            marginLeft: 5,
+            borderLeft: "2px solid var(--line)",
+            padding: "2px 0 2px 13px",
+            fontSize: 12,
+            color: "var(--t4)",
+            lineHeight: 1.7,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            animation: "mcin .2s ease",
+          }}
+        >
+          {text}
+        </div>
       )}
-      <IconChevronRight
-        size={9}
-        color="var(--t6)"
-        style={{ alignSelf: "center", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
-      />
     </div>
   );
 }
