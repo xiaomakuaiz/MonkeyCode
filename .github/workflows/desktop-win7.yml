@@ -8,8 +8,10 @@ name: Desktop Windows 7 Build
 # 维护约束:
 #   - agent/go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
 #   - mc-desktop/Cargo.toml 改依赖后,需重新生成 Cargo.lock.win7(cargo +1.77.2 降级流程)
-#   - 目标机需 Win7 SP1 + SHA-2 更新(KB4474419/KB4490628);UCRT 已随包
-#     app-local 分发(无需 KB2999226),Win8+ API 由 YY-Thunks 兜底(无需 KB3080149)
+#   - 目标机基线(即 go-win7 标准补丁版的官方测试环境;判据:能跑 Chrome 109 的系统即可):
+#     Win7 SP1 + KB3020369 + KB3125574(便利性汇总,缺它会 "bcrypt.dll not found" 崩)
+#     + KB4490628 + KB4474419(SHA-2)。UCRT 已随包 app-local 分发(无需 KB2999226),
+#     Win8+ API 由 YY-Thunks 兜底(无需 KB3080149)
 
 on:
   workflow_dispatch:
