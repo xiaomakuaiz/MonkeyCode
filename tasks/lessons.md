@@ -6,6 +6,13 @@
 
 # Lessons
 
+## 2026-07-16 编码类修复要覆盖进程全部文本 IO
+
+- **Windows Python 默认 locale 编码(cp1252),修 UnicodeDecodeError 只改报错那一行会被
+  下一处(print 中文走 stdout)再打脸**:同类问题一次扫全——read_text/write_text 显式
+  encoding="utf-8" + 开头 sys.stdout/stderr.reconfigure(encoding="utf-8")。验证必须跑通
+  **成功路径**(伪造产物走到最后一行输出),LC_ALL=C 可在 Linux 模拟非 UTF-8 环境。
+
 ## 2026-07-16 CI 平台脚本不要靠试错迭代
 
 - **给陌生执行环境(Windows runner + Git Bash)写流水线,首跑前每一步都要按目标环境语义
