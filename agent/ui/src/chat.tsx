@@ -35,6 +35,15 @@ const COL_MAX = "clamp(680px, 55vw, 860px)";
 
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
 
+/** 待发送附件(已上传到工作区) */
+export interface Attachment {
+  path: string;
+  name: string;
+  isImage: boolean;
+  /** 图片的本地预览(dataURL);非图片无 */
+  preview?: string;
+}
+
 // 输入法(IME)组合态的 Enter 只是确认候选词,不能当作提交。Chromium 上该 keydown
 // 的 isComposing 为 true 即可拦截;但 WebKit(macOS 壳的 WKWebView)顺序相反:
 // compositionend 先于 keydown 触发且 isComposing 已复位。故再记录组合结束时刻,
@@ -207,7 +216,7 @@ export function ChatView({
   currentModel,
   yolo,
   atts,
-  onAddImages,
+  onAddFiles,
   onRemoveAtt,
   uploadUrl,
   onSend,
@@ -230,9 +239,9 @@ export function ChatView({
   models: ModelInfo[];
   currentModel: string;
   yolo: boolean;
-  /** 待发送图片附件(已上传到工作区) */
-  atts: { path: string; preview: string }[];
-  onAddImages: (files: File[]) => void;
+  /** 待发送附件(已上传到工作区) */
+  atts: Attachment[];
+  onAddFiles: (files: File[]) => void;
   onRemoveAtt: (i: number) => void;
   uploadUrl?: (path: string) => string;
   onSend: () => void;
@@ -280,22 +289,22 @@ export function ChatView({
     }
   };
 
-  // 粘贴图片:剪贴板里的 image item 上传为附件(文本粘贴不受影响)
+  // 粘贴附件:剪贴板里的 file item(截图/复制的文件)上传为附件,文本粘贴不受影响
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const files: File[] = [];
     for (const item of e.clipboardData.items) {
-      if (item.kind === "file" && item.type.startsWith("image/")) {
+      if (item.kind === "file") {
         const f = item.getAsFile();
         if (f) files.push(f);
       }
     }
     if (files.length) {
       e.preventDefault();
-      onAddImages(files);
+      onAddFiles(files);
     }
   };
 
-  // 拖拽图片进对话区
+  // 拖拽文件进对话区
   const onDragEnter = (e: DragEvent<HTMLDivElement>) => {
     if (![...e.dataTransfer.items].some((i) => i.kind === "file")) return;
     e.preventDefault();
@@ -313,8 +322,8 @@ export function ChatView({
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
-    const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
-    if (files.length) onAddImages(files);
+    const files = [...e.dataTransfer.files];
+    if (files.length) onAddFiles(files);
   };
 
   const workdir = meta?.workdir ?? "";
@@ -368,7 +377,7 @@ export function ChatView({
             color: "var(--acc)",
           }}
         >
-          松开以添加图片
+          松开以添加文件
         </div>
       )}
       {/* ==== 标题栏(空白区可拖拽窗口,macOS 常规行为)==== */}
@@ -624,12 +633,34 @@ export function ChatView({
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
               {atts.map((a, i) => (
                 <span key={a.path} style={{ position: "relative", display: "flex" }}>
-                  <img
-                    src={a.preview}
-                    alt={a.path}
-                    title={a.path}
-                    style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: "1px solid var(--cardBd)" }}
-                  />
+                  {a.isImage ? (
+                    <img
+                      src={a.preview}
+                      alt={a.path}
+                      title={a.path}
+                      style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: "1px solid var(--cardBd)" }}
+                    />
+                  ) : (
+                    <span
+                      title={a.path}
+                      style={{
+                        height: 30,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "0 10px",
+                        borderRadius: 8,
+                        border: "1px solid var(--cardBd)",
+                        background: "var(--codeBg)",
+                        fontSize: 12,
+                        color: "var(--t2)",
+                        maxWidth: 220,
+                      }}
+                    >
+                      <IconFolder size={12} color="var(--t4)" />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                    </span>
+                  )}
                   <button
                     title="移除"
                     onClick={() => onRemoveAtt(i)}
@@ -660,7 +691,7 @@ export function ChatView({
             ref={taRef}
             rows={2}
             value={input}
-            placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片可作为附件"}
+            placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片/文件可作为附件"}
             onChange={(e) => setInput(e.target.value)}
             onCompositionEnd={markImeEnd}
             onKeyDown={onKey}

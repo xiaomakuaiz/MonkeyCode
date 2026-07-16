@@ -14,12 +14,12 @@ import {
   onHostEvent,
   setSessionArchived,
   updateCheck,
-  uploadImage,
-  uploadImageURL,
+  uploadFile,
+  uploadFileURL,
   type Conn,
   type UpdateStatus,
 } from "./client";
-import { basename, ChatView } from "./chat";
+import { basename, ChatView, type Attachment } from "./chat";
 import { DiffPanel, LogList, MONO } from "./components";
 import { IconX } from "./icons";
 import { NewTaskView } from "./newtask";
@@ -219,15 +219,14 @@ export default function App() {
     if (connRef.current?.send("user-input", { content: b64encode(queued) })) setQueued(null);
   }, [chat.running, queued]);
 
-  // 待发送的图片附件(已上传到工作区,发送时以 [图片] 路径行拼进消息文本)
-  const [atts, setAtts] = useState<{ path: string; preview: string }[]>([]);
+  // 待发送附件(已上传到工作区,发送时以 [图片]/[文件] 路径行拼进消息文本)
+  const [atts, setAtts] = useState<Attachment[]>([]);
 
-  const addImages = async (files: File[]) => {
+  const addFiles = async (files: File[]) => {
     if (!currentId) return;
     for (const f of files) {
-      if (!f.type.startsWith("image/")) continue;
       if (f.size > 20 * 1024 * 1024) {
-        setStatus(`⚠ 图片 ${f.name} 过大(上限 20MB)`);
+        setStatus(`⚠ ${f.name || "文件"} 过大(上限 20MB)`);
         continue;
       }
       try {
@@ -238,16 +237,17 @@ export default function App() {
           r.readAsDataURL(f);
         });
         const b64 = dataURL.slice(dataURL.indexOf(",") + 1);
-        const { path } = await uploadImage(currentId, f.type, b64);
-        setAtts((a) => [...a, { path, preview: dataURL }]);
+        const isImage = f.type.startsWith("image/");
+        const { path } = await uploadFile(currentId, f.name, f.type, b64);
+        setAtts((a) => [...a, { path, isImage, name: f.name || path.split("/").pop() || "", preview: isImage ? dataURL : undefined }]);
       } catch (e) {
-        setStatus("⚠ 图片上传失败: " + (e instanceof Error ? e.message : String(e)));
+        setStatus("⚠ 附件上传失败: " + (e instanceof Error ? e.message : String(e)));
       }
     }
   };
 
   const send = () => {
-    const lines = atts.map((a) => `[图片] ${a.path}`);
+    const lines = atts.map((a) => `${a.isImage ? "[图片]" : "[文件]"} ${a.path}`);
     const text = [input.trim(), ...lines].filter(Boolean).join("\n");
     if (!text || !connRef.current) return;
     if (chat.running) {
@@ -483,9 +483,9 @@ export default function App() {
             currentModel={currentModel}
             yolo={yolo}
             atts={atts}
-            onAddImages={(files) => void addImages(files)}
+            onAddFiles={(files) => void addFiles(files)}
             onRemoveAtt={(i) => setAtts((a) => a.filter((_, j) => j !== i))}
-            uploadUrl={currentId ? (p) => uploadImageURL(currentId, p) : undefined}
+            uploadUrl={currentId ? (p) => uploadFileURL(currentId, p) : undefined}
             onSend={send}
             onStop={() => connRef.current?.send("user-cancel", {})}
             onClearQueued={() => setQueued(null)}

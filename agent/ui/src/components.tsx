@@ -330,18 +330,19 @@ function TurnDivider() {
   );
 }
 
-/** 用户消息里的图片行:`[图片] <工作区相对路径>`(composer 发送时拼接的约定格式) */
-const IMAGE_LINE = /^\[图片\] (\S+)$/;
+/** 用户消息里的附件行:`[图片]/[文件] <工作区相对路径>`(composer 发送时拼接的约定格式) */
+const ATT_LINE = /^\[(图片|文件)\] (\S+)$/;
 
-/** 用户气泡:文本 + 附图缩略图(点击看大图) */
+/** 用户气泡:文本 + 附图缩略图(点击看大图)+ 文件 chip(点击下载) */
 function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: string) => string }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const lines = text.split("\n");
   const images: string[] = [];
+  const files: string[] = [];
   const rest: string[] = [];
   for (const line of lines) {
-    const m = line.match(IMAGE_LINE);
-    if (m && uploadUrl) images.push(m[1]);
+    const m = line.match(ATT_LINE);
+    if (m && uploadUrl) (m[1] === "图片" ? images : files).push(m[2]);
     else rest.push(line);
   }
   const body = rest.join("\n").trim();
@@ -363,8 +364,8 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
         }}
       >
         {body}
-        {images.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: body ? 8 : 2 }}>
+        {(images.length > 0 || files.length > 0) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: body ? 8 : 2, alignItems: "center" }}>
             {images.map((p) => (
               <img
                 key={p}
@@ -381,6 +382,32 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
                   display: "block",
                 }}
               />
+            ))}
+            {files.map((p) => (
+              <span
+                key={p}
+                title={p + "(点击下载)"}
+                onClick={() => openExternal(new URL(uploadUrl!(p), location.origin).href)}
+                style={{
+                  height: 28,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "0 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--accBd)",
+                  background: "var(--card)",
+                  fontSize: 12,
+                  color: "var(--t2)",
+                  maxWidth: 240,
+                  cursor: "pointer",
+                }}
+              >
+                📄
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p.split("/").pop()}
+                </span>
+              </span>
             ))}
           </div>
         )}

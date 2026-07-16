@@ -1249,11 +1249,29 @@ func TestUploadAndFetchImage(t *testing.T) {
 		t.Fatalf("回读失败: %d", resp.StatusCode)
 	}
 
-	// 非法类型/文件名
-	resp, _ = apiReq(t, ts, "POST", "/api/sessions/"+id+"/uploads", "test-token",
-		`{"media_type":"application/pdf","data":"AAAA"}`)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("非白名单类型应 400,实际 %d", resp.StatusCode)
+	// 任意类型附件:允许上传,保留清洗后的原始文件名
+	resp, body = apiReq(t, ts, "POST", "/api/sessions/"+id+"/uploads", "test-token",
+		`{"name":"报告 v1.pdf","media_type":"application/pdf","data":"AAAA"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("任意附件应允许上传,实际 %d: %s", resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, &up); err != nil || up.Path != ".mc-agent/uploads/报告_v1.pdf" {
+		t.Fatalf("附件路径应保留清洗后的原名: %s", body)
+	}
+	// 非图片回读按二进制附件下发(防 html 在应用同源渲染执行)
+	resp, _ = apiReq(t, ts, "GET", "/api/sessions/"+id+"/uploads/"+up.Path[len(".mc-agent/uploads/"):], "test-token", "")
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/octet-stream" {
+		t.Fatalf("非图片应按 octet-stream 下发: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+
+	// 穿越文件名:清洗为纯文件名后接受
+	resp, body = apiReq(t, ts, "POST", "/api/sessions/"+id+"/uploads", "test-token",
+		`{"name":"../../evil.sh","media_type":"text/x-sh","data":"AAAA"}`)
+	if err := json.Unmarshal(body, &up); resp.StatusCode != http.StatusOK || err != nil || up.Path != ".mc-agent/uploads/evil.sh" {
+		t.Fatalf("穿越文件名应清洗为纯文件名: %d %s", resp.StatusCode, body)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, ".mc-agent", "uploads", "evil.sh")); err != nil {
+		t.Fatalf("清洗后的文件应落在 uploads 内: %v", err)
 	}
 	resp, _ = apiReq(t, ts, "GET", "/api/sessions/"+id+"/uploads/..%2Fsecret", "test-token", "")
 	if resp.StatusCode == http.StatusOK {

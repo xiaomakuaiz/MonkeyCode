@@ -356,6 +356,10 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
             .title("MonkeyCode")
             .inner_size(1200.0, 800.0)
+            // Tauri 默认的原生拖放处理器会在窗口层吞掉文件拖拽,HTML5 的
+            // drag/drop 事件到不了页面(对话区拖入图片/文件依赖 DOM 事件);
+            // 禁用后由 UI 侧统一处理
+            .disable_drag_drop_handler()
             // 导航守卫:webview 只许待在内核 UI(loopback)与壳自带页面;
             // 其余导航(对话里的外部链接等)一律拒绝并交系统浏览器,
             // 防止应用被"跳走"后无法返回。UI 侧已拦截点击,这里是兜底。
@@ -586,6 +590,12 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
     let port = kernel_port(app)?;
     let token = rand_token();
 
+    // 内核 stdout/stderr 落盘:GUI 壳没有控制台,不落盘的话内核 panic/报错
+    // 文本直接丢失,"exit code: N" 无从诊断(Win7 排障教训)。每次启动截断重写。
+    let log_path = config_dir(app)?.join("kernel.log");
+    let log_out = fs::File::create(&log_path).ok();
+    let log_err = log_out.as_ref().and_then(|f| f.try_clone().ok());
+
     let mut cmd = Command::new(&bin);
     cmd.args([
         "serve",
@@ -600,8 +610,8 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
     .env("MC_AGENT_MODELS", &files.models)
     .env("MC_AGENT_MCP_CONFIG", &files.mcp)
     .stdin(Stdio::piped())
-    .stdout(Stdio::inherit())
-    .stderr(Stdio::inherit());
+    .stdout(log_out.map(Stdio::from).unwrap_or_else(Stdio::inherit))
+    .stderr(log_err.map(Stdio::from).unwrap_or_else(Stdio::inherit));
     // Windows 下内核是 console 程序,GUI 壳拉起时会弹出控制台窗口,须显式抑制
     #[cfg(windows)]
     {
@@ -625,7 +635,18 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
             return Ok((child, port, token));
         }
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("内核进程提前退出({status}),请检查模型配置是否有效"));
+            // 附上内核日志尾部,让错误页直接可诊断(而不是只有退出码)
+            let tail = fs::read_to_string(&log_path)
+                .map(|s| {
+                    let lines: Vec<_> = s.lines().collect();
+                    lines[lines.len().saturating_sub(15)..].join("\n")
+                })
+                .unwrap_or_default();
+            return Err(format!(
+                "内核进程提前退出({status})。日志({}):\n{}",
+                log_path.display(),
+                if tail.is_empty() { "(空)" } else { &tail }
+            ));
         }
         if Instant::now() > deadline {
             let _ = child.kill();

@@ -456,8 +456,8 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 
 // ==================== 图片上传(对话粘贴/拖拽) ====================
 
-// uploadExts 允许上传的图片 MIME → 扩展名。
-var uploadExts = map[string]string{
+// uploadImageExts 常见图片 MIME → 扩展名(剪贴板图片无文件名时的命名兜底)。
+var uploadImageExts = map[string]string{
 	"image/png":  ".png",
 	"image/jpeg": ".jpg",
 	"image/gif":  ".gif",
@@ -466,9 +466,30 @@ var uploadExts = map[string]string{
 
 const uploadMaxBytes = 20 * 1024 * 1024
 
-// handleUpload 保存对话里粘贴/拖入的图片到工作区 .mc-agent/uploads/,返回
-// 工作区相对路径。对话文本携带该路径,模型经 read_file 查看,或用工具按
-// 路径处理(裁剪/移动/当测试素材等)。
+// sanitizeUploadName 清洗上传文件名:去路径、去首尾点、白名单字符;
+// 不合法返回空(由调用方回退时间戳命名)。
+func sanitizeUploadName(name string) string {
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_', r >= 0x4e00 && r <= 0x9fff: // 常用汉字
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := strings.Trim(b.String(), "._")
+	if out == "" || len(out) > 120 {
+		return ""
+	}
+	return out
+}
+
+// handleUpload 保存对话里粘贴/拖入的文件(图片或任意附件)到工作区
+// .mc-agent/uploads/,返回工作区相对路径。对话文本携带该路径,模型经
+// read_file 查看(图片/文本),或用工具按路径处理。
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	meta, err := session.ReadMeta(s.opts.SessionRoot, r.PathValue("id"))
 	if err != nil {
@@ -476,25 +497,21 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		MediaType string `json:"media_type"`
-		Data      string `json:"data"` // base64 图片字节
+		Name      string `json:"name"`       // 原始文件名(可空,如剪贴板截图)
+		MediaType string `json:"media_type"` // MIME(可空)
+		Data      string `json:"data"`       // base64 文件字节
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, uploadMaxBytes*2)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体解析失败: " + err.Error()})
 		return
 	}
-	ext, ok := uploadExts[req.MediaType]
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的图片类型: " + req.MediaType})
-		return
-	}
 	raw, err := base64.StdEncoding.DecodeString(req.Data)
 	if err != nil || len(raw) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "图片数据无效"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "文件数据无效"})
 		return
 	}
 	if len(raw) > uploadMaxBytes {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("图片过大(%d 字节,上限 %d)", len(raw), uploadMaxBytes)})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("文件过大(%d 字节,上限 %d)", len(raw), uploadMaxBytes)})
 		return
 	}
 
@@ -509,16 +526,27 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		_ = os.WriteFile(gi, []byte("*\n"), 0o644)
 	}
 
-	base := "img-" + time.Now().Format("20060102-150405")
-	name := base + ext
+	// 命名:优先保留原始文件名(清洗后);无名(剪贴板截图)按时间戳
+	name := sanitizeUploadName(req.Name)
+	if name == "" {
+		prefix := "file-"
+		ext := ".bin"
+		if e, ok := uploadImageExts[req.MediaType]; ok {
+			prefix, ext = "img-", e
+		}
+		name = prefix + time.Now().Format("20060102-150405") + ext
+	}
+	// 重名追加序号(插在扩展名前)
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
 	for i := 2; ; i++ {
 		if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
 			break
 		}
-		name = fmt.Sprintf("%s-%d%s", base, i, ext)
+		name = fmt.Sprintf("%s-%d%s", stem, i, ext)
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "写入图片失败: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "写入文件失败: " + err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -526,8 +554,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetUpload 回读已上传图片(UI 气泡缩略图用;<img> 无法带请求头,
-// 鉴权走 ?token= 查询参数,s.auth 已支持)。
+// handleGetUpload 回读已上传文件(UI 气泡缩略图/附件下载;<img> 无法带
+// 请求头,鉴权走 ?token= 查询参数,s.auth 已支持)。非图片一律按二进制
+// 附件下发,防止 html 等在应用同源下渲染执行。
 func (s *Server) handleGetUpload(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
@@ -538,6 +567,17 @@ func (s *Server) handleGetUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
 		return
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	isImage := false
+	for _, e := range uploadImageExts {
+		if strings.EqualFold(filepath.Ext(name), e) || (e == ".jpg" && strings.EqualFold(filepath.Ext(name), ".jpeg")) {
+			isImage = true
+		}
+	}
+	if !isImage {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	}
 	http.ServeFile(w, r, filepath.Join(meta.Workdir, ".mc-agent", "uploads", name))
 }

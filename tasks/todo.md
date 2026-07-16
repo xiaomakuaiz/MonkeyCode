@@ -681,3 +681,23 @@
 - [x] UI 端到端(无头 Chromium):拖入 PNG → chip → 发送 → 气泡缩略图加载成功
       (naturalWidth=100)→ 文件落盘 .mc-agent/uploads/ + .gitignore;无 console 错误
 - [ ] 真实视觉模型冒烟(本机无可用 vision key,待网关 key 后补)
+
+# 修复+增强:壳内拖拽失效 + 附件放开为任意文件(2026-07-16)
+
+> 用户反馈:粘贴可用但拖拽不行;且希望能传文件。
+> 拖拽根因:Tauri 默认原生 drag-drop 处理器在窗口层吞掉文件拖拽,
+> HTML5 drop 事件到不了页面(无头浏览器测试无壳,故未暴露)。
+
+- [x] 壳:WebviewWindowBuilder.disable_drag_drop_handler()
+- [x] 内核:上传路由放开任意类型;保留清洗后的原始文件名(路径穿越清洗、
+      重名序号、空名回退时间戳);GET 非图片按 octet-stream + attachment
+      下发(防 html 同源渲染执行)
+- [x] UI:粘贴/拖拽收所有文件;非图片渲染文件名 chip;气泡 [文件] 行渲染
+      可下载 chip;[图片]/[文件] 前缀区分
+
+## 验证
+
+- [x] go test 全绿(上传测试改为任意类型 + 原名保留 + octet-stream + 穿越清洗)
+- [x] 无头端到端:同时拖入 PNG + "启动日志 v2.log" → 双 chips → 发送 →
+      气泡缩略图 + 文件 chip → 工作区两文件落盘(原名保留)
+- [ ] 壳内拖拽待真机回归(disable_drag_drop_handler 需重新打包)

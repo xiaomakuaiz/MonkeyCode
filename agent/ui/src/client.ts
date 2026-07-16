@@ -67,15 +67,16 @@ export const setSessionArchived = (id: string, archived: boolean) =>
     body: JSON.stringify({ archived }),
   });
 
-/** 上传对话里粘贴/拖入的图片到会话工作区 .mc-agent/uploads/,返回工作区相对路径。 */
-export const uploadImage = (sessionId: string, mediaType: string, dataB64: string) =>
+/** 上传对话里粘贴/拖入的文件(图片或任意附件)到会话工作区 .mc-agent/uploads/,
+ * 返回工作区相对路径。原始文件名尽量保留(内核清洗);剪贴板截图可传空名。 */
+export const uploadFile = (sessionId: string, name: string, mediaType: string, dataB64: string) =>
   api<{ path: string }>(`/api/sessions/${sessionId}/uploads`, {
     method: "POST",
-    body: JSON.stringify({ media_type: mediaType, data: dataB64 }),
+    body: JSON.stringify({ name, media_type: mediaType, data: dataB64 }),
   });
 
-/** 已上传图片的回读 URL(<img> 无法带请求头,token 走查询参数)。 */
-export function uploadImageURL(sessionId: string, path: string): string {
+/** 已上传文件的回读 URL(<img>/下载无法带请求头,token 走查询参数)。 */
+export function uploadFileURL(sessionId: string, path: string): string {
   const name = path.split("/").pop() ?? "";
   return `/api/sessions/${sessionId}/uploads/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
 }
