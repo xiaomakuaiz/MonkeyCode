@@ -55,12 +55,6 @@ export default function TitleBar() {
         userSelect: "none",
       }}
     >
-      <span
-        data-tauri-drag-region=""
-        style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.2, color: "var(--t4)", padding: "0 14px" }}
-      >
-        MonkeyCode
-      </span>
       <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
       <button className="hv" title="最小化" onClick={() => void windowMinimize()} style={btn}>
         <Glyph d="M0 5h10" />
