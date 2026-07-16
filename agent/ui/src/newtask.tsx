@@ -97,20 +97,7 @@ export function NewTaskView({
     <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ margin: "0 auto", width: "100%", maxWidth: 640, padding: "max(40px,14vh) 36px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginBottom: 8 }}>
-          <div
-            style={{
-              width: 46,
-              height: 46,
-              borderRadius: 13,
-              background: "var(--card)",
-              boxShadow: "0 1px 2px rgba(30,45,38,.08),0 6px 18px rgba(30,45,38,.1),inset 0 0 0 1px rgba(31,138,91,.08)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <img src={logoUrl} alt="" draggable={false} style={{ width: 28, height: 28, borderRadius: 7 }} />
-          </div>
+          <img src={logoUrl} alt="" draggable={false} style={{ width: 52, height: 52 }} />
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.2, marginTop: 6 }}>开始一个新任务</div>
           <div style={{ fontSize: 12, color: "var(--t6)" }}>告诉我要做什么,剩下的交给我</div>
         </div>

@@ -442,20 +442,7 @@ export function ChatView({
       {/* ==== 对话流 / 空态 ==== */}
       {empty ? (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24 }}>
-          <div
-            style={{
-              width: 52,
-              height: 52,
-              borderRadius: 14,
-              background: "var(--card)",
-              boxShadow: "0 2px 8px rgba(30,45,38,.1)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <img src={logoUrl} alt="" draggable={false} style={{ width: 32, height: 32, borderRadius: 8 }} />
-          </div>
+          <img src={logoUrl} alt="" draggable={false} style={{ width: 52, height: 52 }} />
           <div style={{ fontSize: 15, fontWeight: 700, textAlign: "center", maxWidth: 420 }}>
             在 <span style={{ whiteSpace: "nowrap", fontFamily: MONO, fontSize: 13.5 }}>{workdir}</span> 开始新任务
           </div>
