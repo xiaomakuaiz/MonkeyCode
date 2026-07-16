@@ -163,25 +163,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		// 先取消进行中的轮次并等待其保存中断状态,再关 HTTP
-		s.mu.Lock()
-		for _, ls := range s.live {
-			ls.mu.Lock()
-			if ls.cancelTurn != nil {
-				ls.cancelTurn()
-			}
-			ls.mu.Unlock()
-		}
-		s.mu.Unlock()
-		waitTimeout(&s.turns, 3*time.Second)
-		s.mu.Lock()
-		for _, ls := range s.live {
-			if ls.mcp != nil {
-				ls.mcp.Close()
-			}
-			ls.engine.Close()
-		}
-		s.mu.Unlock()
-
+		s.drainLive()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
@@ -189,6 +171,30 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// drainLive 取消所有进行中的轮次,等待其把消息快照与 meta 落盘,再关会话资源。
+// 这是"历史已保留"承诺的落点:宿主(桌面壳)停内核须走 stdin 关闭/SIGTERM
+// 到达这里;直接 kill 会丢掉执行中轮次的全部消息。
+func (s *Server) drainLive() {
+	s.mu.Lock()
+	for _, ls := range s.live {
+		ls.mu.Lock()
+		if ls.cancelTurn != nil {
+			ls.cancelTurn()
+		}
+		ls.mu.Unlock()
+	}
+	s.mu.Unlock()
+	waitTimeout(&s.turns, 3*time.Second)
+	s.mu.Lock()
+	for _, ls := range s.live {
+		if ls.mcp != nil {
+			ls.mcp.Close()
+		}
+		ls.engine.Close()
+	}
+	s.mu.Unlock()
 }
 
 func waitTimeout(wg *sync.WaitGroup, d time.Duration) {

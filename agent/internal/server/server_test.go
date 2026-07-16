@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -433,6 +434,74 @@ func TestPermissionTimeoutResolves(t *testing.T) {
 	}
 	if !timeoutResolved {
 		t.Fatalf("缺少 permission-resolved(timeout) 帧: %v", summary(frames))
+	}
+}
+
+// blockingProvider 请求一直阻塞到 ctx 取消(模拟停机时正在执行的长 LLM 请求)。
+type blockingProvider struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingProvider) Model() string { return "stub" }
+
+func (b *blockingProvider) Stream(ctx context.Context, _ provider.Request, _ *provider.StreamHandler) (*provider.Result, error) {
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestDrainLiveSavesInFlightTurn 优雅停机必须把执行中轮次的消息落盘。
+// 宿主(桌面壳)升级重启/保存设置时经 stdin 关闭触发本路径;若消息未落盘,
+// 重启后 UI 回放(events.jsonl 实时写)看着完好,模型上下文(messages.json)
+// 却停留在上一个完整轮次,用户发"继续"接不上。
+func TestDrainLiveSavesInFlightTurn(t *testing.T) {
+	stub := &blockingProvider{started: make(chan struct{})}
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Model:       "stub",
+		NewProvider: func(string) (provider.Provider, error) { return stub, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	id := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, id)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("升级前正在干的活")})
+	select {
+	case <-stub.started: // LLM 请求已发出,轮次执行中
+	case <-time.After(5 * time.Second):
+		t.Fatal("轮次未启动")
+	}
+
+	srv.drainLive()
+
+	sess, err := session.Load(srv.opts.SessionRoot, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if sess.Meta.Status != "interrupted" {
+		t.Fatalf("meta 状态应为 interrupted,实际 %s", sess.Meta.Status)
+	}
+	msgs, err := sess.LoadMessages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if strings.Contains(b.Text, "升级前正在干的活") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("中断轮次的用户输入未落盘,快照共 %d 条消息", len(msgs))
 	}
 }
 

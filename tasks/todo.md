@@ -542,3 +542,26 @@
 - [x] 无头端到端:script-injected(load1) → invoke-ok → save-ok(响应送达)→
       新 boot 重载(saved=1)→ reload-after-save-ok;save_config 仅执行一次;
       nav-guard-ok 回归不受影响;端口文件持久化正常
+
+# 修复:升级重启后"继续"上下文丢失(2026-07-16)
+
+> 用户反馈:检查更新升级 mc-desktop 后,会话提示"服务已重启,上一轮执行已中断;
+> 历史已保留,请重新发送指令继续",发"继续"发现模型没有上下文。
+> 根因:messages.json(模型上下文)只在轮次收尾落盘,而壳在升级重启/保存设置/
+> 退出时对内核 child.kill()(SIGKILL),执行中轮次的消息全部丢失;
+> events.jsonl(UI 回放)逐帧实时落盘所以界面看着完好,更具迷惑性。
+> 内核本有优雅退出路径(SIGTERM/stdin 关闭 → 取消轮次 → 等落盘),壳没走。
+
+- [x] mc-desktop/src/main.rs:新增 stop_kernel(关 stdin 管道触发内核优雅退出,
+      10s 超时兜底强杀),替换 save_config 与 RunEvent::Exit 里的裸 kill
+- [x] agent/internal/server:ListenAndServe 收尾逻辑抽成 drainLive(行为不变),
+      补回归测试 TestDrainLiveSavesInFlightTurn 钉住"优雅停机落盘执行中轮次"契约
+
+## 验证
+
+- [x] cargo check 通过(mc-desktop)
+- [x] 实测内核 stdin 关闭 → 0.0s 优雅退出、退出码 0(--watch-stdin 契约成立)
+- [x] TestDrainLiveSavesInFlightTurn:轮次阻塞在 LLM 请求时 drainLive,
+      messages.json 含本轮用户输入、meta 状态 interrupted
+- [x] agent 全量 go test ./... 通过
+

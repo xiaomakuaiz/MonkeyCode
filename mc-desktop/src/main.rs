@@ -130,6 +130,27 @@ fn sync_tray_theme(app: &AppHandle, theme: Theme) {
     }
 }
 
+/// 停止内核:关 stdin 管道触发内核优雅退出(--watch-stdin 契约:内核取消
+/// 进行中的轮次并落盘会话消息快照),超时未退再强杀兜底。
+/// 不可直接 kill:messages.json(模型上下文)只在轮次收尾落盘,强杀会丢掉
+/// 执行中轮次的全部消息;而 UI 回放(events.jsonl)逐帧实时落盘看着完好,
+/// 重启后用户发"继续"才发现模型没了上下文。
+fn stop_kernel(mut child: Child) {
+    drop(child.stdin.take());
+    // 内核侧收尾预算:取消轮次等待 3s + HTTP 优雅关闭 3s,留足余量
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(_) => break,
+        }
+    }
+    eprintln!("[mc-desktop] 内核未在期限内优雅退出,强制终止");
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 // ==================== Tauri 命令(内核 UI 的设置视图调用) ====================
 
 #[tauri::command]
@@ -146,9 +167,8 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     // 端口固定复用:必须先停旧内核释放端口,再起新内核(阻塞等就绪,最多 15 秒)。
     // 若新内核启动失败(仅安装级故障:二进制缺失等),设置视图内联展示错误,
     // 重试保存即可再次拉起。
-    if let Some(mut old) = app.state::<Kernel>().0.lock().unwrap().take() {
-        let _ = old.kill();
-        let _ = old.wait();
+    if let Some(old) = app.state::<Kernel>().0.lock().unwrap().take() {
+        stop_kernel(old);
     }
     let (child, port, token) = start_kernel(&app, &files)?;
     app.state::<Kernel>().0.lock().unwrap().replace(child);
@@ -425,9 +445,8 @@ fn main() {
                 api.prevent_exit();
             }
             RunEvent::Exit => {
-                if let Some(mut child) = app.state::<Kernel>().0.lock().unwrap().take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                if let Some(child) = app.state::<Kernel>().0.lock().unwrap().take() {
+                    stop_kernel(child);
                 }
             }
             _ => {}
