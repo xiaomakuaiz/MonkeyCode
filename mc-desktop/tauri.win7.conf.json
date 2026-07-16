@@ -1,5 +1,8 @@
 {
   "bundle": {
+    "resources": {
+      "ucrt/*": "./"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "fixedRuntime",

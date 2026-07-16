@@ -8,7 +8,8 @@ name: Desktop Windows 7 Build
 # 维护约束:
 #   - agent/go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
 #   - mc-desktop/Cargo.toml 改依赖后,需重新生成 Cargo.lock.win7(cargo +1.77.2 降级流程)
-#   - 目标机需 Win7 SP1 + SHA-2 更新(KB4474419/KB4490628)
+#   - 目标机需 Win7 SP1 + SHA-2 更新(KB4474419/KB4490628);UCRT 已随包
+#     app-local 分发(无需 KB2999226),Win8+ API 由 YY-Thunks 兜底(无需 KB3080149)
 
 on:
   workflow_dispatch:
@@ -95,6 +96,21 @@ jobs:
           test -f "$RUNTIME_DIR/msedgewebview2.exe"
           ls "$RUNTIME_DIR" | head
 
+      # UCRT app-local 部署(微软官方支持):Win7 无 KB2999226 时 api-ms-win-crt-*
+      # 缺失,壳 exe(依赖树中 /MD 预编译库引入动态 UCRT 导入)和 WebView2 运行时
+      # (Chromium 本身依赖 UCRT)都起不来。从 runner 的 Windows SDK 取可再分发的
+      # UCRT DLL:壳 exe 旁(bundle.resources)+ WebView2 固定版目录各放一份
+      - name: Bundle app-local UCRT
+        working-directory: mc-desktop
+        run: |
+          UCRT_SRC=$(ls -d "/c/Program Files (x86)/Windows Kits/10/Redist/"*/ucrt/DLLs/x64 2>/dev/null | sort | tail -1)
+          [ -n "$UCRT_SRC" ] || UCRT_SRC="/c/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/x64"
+          test -f "$UCRT_SRC/ucrtbase.dll"
+          mkdir -p ucrt
+          cp "$UCRT_SRC"/*.dll ucrt/
+          echo "UCRT DLLs: $(ls ucrt | wc -l)"
+          cp ucrt/*.dll "webview2-fixed/Microsoft.WebView2.FixedVersionRuntime.${WEBVIEW2_VERSION}.x64/"
+
       # YY-Thunks:链接期把 Win8+ API 的导入(如 WebView2LoaderStatic.lib 引用的
       # EventSetInformation)替换为本地 thunk(运行时 GetProcAddress,缺失时优雅降级),
       # 一次性消除整类"无法定位程序输入点"启动失败,目标机无需补 KB
@@ -107,20 +123,35 @@ jobs:
           unzip -o -q yy-thunks.zip -d yy-thunks
           test -f yy-thunks/objs/x64/YY_Thunks_for_Win7.obj
 
-      # 静态 CRT:Win7 上未必有 VC++ 运行库,自包含省去 redist 前置
-      - name: Build NSIS installer (unsigned)
+      # 静态 CRT:Win7 上未必有 VC++ 运行库,自包含省去 redist 前置。
+      # secret 就绪时走发布构建(额外产出签名的 updater setup.exe + latest-win7.json),
+      # 否则回退普通打包,CI 不红
+      - name: Build NSIS installer
         working-directory: mc-desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           # 断言 1.77.2(≥1.78 编出的 exe 最低要求 Win10,构建会成功但产物在 Win7 崩)
           rustup default 1.77.2
           rustc --version | grep -F "1.77.2"
           YY_OBJ=$(cygpath -w "$PWD/yy-thunks/objs/x64/YY_Thunks_for_Win7.obj")
           export RUSTFLAGS="-C target-feature=+crt-static -C link-arg=$YY_OBJ"
+          EXTRA_CONFIG=""
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            EXTRA_CONFIG="--config tauri.release.conf.json"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY 未配置,跳过 updater 产物"
+          fi
           npx --yes @tauri-apps/cli@^2 build \
-            --config tauri.windows.conf.json --config tauri.win7.conf.json \
+            --config tauri.windows.conf.json --config tauri.win7.conf.json $EXTRA_CONFIG \
             -- --locked
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            python scripts/gen-latest-json.py win7
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: MonkeyCode-win7-x64
-          path: mc-desktop/target/release/bundle/nsis/*.exe
+          path: |
+            mc-desktop/target/release/bundle/nsis/*.exe
+            mc-desktop/target/release/bundle/updater/*
