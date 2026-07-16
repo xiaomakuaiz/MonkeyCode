@@ -18,6 +18,11 @@ import shutil
 import sys
 from datetime import datetime, timezone
 
+# Windows 的 Python 默认 locale 编码(cp1252):文件读写与 stdout/stderr 的
+# 中文都会炸,进程内所有文本 IO 统一钉死 UTF-8
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 URL_BASE = "https://release.monkeycode-ai.com/public/desktop/"
 

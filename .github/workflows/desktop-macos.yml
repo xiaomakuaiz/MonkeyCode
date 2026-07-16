@@ -1,10 +1,8 @@
 name: Desktop macOS Build
 
+# macOS runner 计费贵,不随 push 自动构建;需要出包时在 Actions 页手动 Run workflow
 on:
   workflow_dispatch:
-  push:
-    branches: [feat-local-version]
-    paths: ["mc-desktop/**", "agent/**", ".github/workflows/desktop-macos.yml"]
 
 jobs:
   build:
