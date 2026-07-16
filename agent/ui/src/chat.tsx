@@ -55,16 +55,19 @@ export const markImeEnd = (e: { timeStamp: number }) => {
 export const isImeEnter = (e: { timeStamp: number; nativeEvent: { isComposing: boolean } }) =>
   e.nativeEvent.isComposing || e.timeStamp - imeEndedAt < 100;
 
-/** 上下文用量圆环(设计稿 composer 的 ctx ring) */
+/** 上下文用量圆环(设计稿 composer 的 ctx ring):悬停展示精确数字气泡
+ * (自定义气泡而非 title:WKWebView 的原生提示不可靠且出现慢) */
 function ContextRing({ usage }: { usage: Usage | null }) {
+  const [hover, setHover] = useState(false);
   const C = 2 * Math.PI * 7;
   const frac = usage && usage.size > 0 ? usage.used / usage.size : 0;
   const dash = (C * Math.max(0.03, Math.min(1, frac))).toFixed(1) + " " + C.toFixed(1);
-  const title = usage
-    ? `上下文 ${fmtK(usage.used)} / ${fmtK(usage.size)} tokens (${(frac * 100).toFixed(1)}%)`
-    : "上下文用量";
   return (
-    <span title={title} style={{ display: "flex", flex: "none", cursor: "default" }}>
+    <span
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ position: "relative", display: "flex", flex: "none", cursor: "default" }}
+    >
       <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
         <circle cx="9" cy="9" r="7" stroke="rgba(120,130,125,.25)" strokeWidth="2" />
         <circle
@@ -78,6 +81,41 @@ function ContextRing({ usage }: { usage: Usage | null }) {
           transform="rotate(-90 9 9)"
         />
       </svg>
+      {hover && (
+        <span
+          style={{
+            position: "absolute",
+            bottom: 26,
+            right: -6,
+            zIndex: 30,
+            background: "var(--pop)",
+            border: "1px solid var(--line)",
+            borderRadius: 8,
+            boxShadow: "var(--shadow)",
+            padding: "7px 11px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 3,
+            whiteSpace: "nowrap",
+            animation: "mcin .12s ease",
+          }}
+        >
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: "var(--t5)" }}>上下文用量</span>
+          {usage ? (
+            <>
+              <span style={{ font: "12px " + MONO, color: "var(--t1)" }}>
+                {usage.used.toLocaleString()} / {usage.size.toLocaleString()} tokens
+              </span>
+              <span style={{ fontSize: 11, color: frac > 0.85 ? "var(--err)" : "var(--t4)" }}>
+                已用 {(frac * 100).toFixed(1)}%
+                {frac > 0.85 ? " · 接近上限,即将自动压缩" : `,剩余 ${fmtK(Math.max(0, usage.size - usage.used))}`}
+              </span>
+            </>
+          ) : (
+            <span style={{ fontSize: 11.5, color: "var(--t4)" }}>暂无数据,本轮请求后更新</span>
+          )}
+        </span>
+      )}
     </span>
   );
 }
