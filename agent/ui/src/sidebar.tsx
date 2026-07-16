@@ -423,9 +423,10 @@ export function Sidebar({
         minHeight: 0,
       }}
     >
-      {/* macOS 壳:标题栏 Overlay,红绿灯落在此区,整条可拖拽窗口 */}
+      {/* macOS 壳:标题栏 Overlay,红绿灯落在此区,整条可拖拽窗口
+          (Tauri 的拖拽区机制是 data-tauri-drag-region 属性,不是 CSS app-region) */}
       {isMacShell() ? (
-        <div style={{ height: 50, flex: "none", WebkitAppRegion: "drag" } as CSSProperties} />
+        <div data-tauri-drag-region="" style={{ height: 50, flex: "none" }} />
       ) : (
         <div style={{ height: 12, flex: "none" }} />
       )}

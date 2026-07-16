@@ -95,7 +95,7 @@ export function NewTaskView({
 
   return (
     <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ margin: "0 auto", width: "100%", maxWidth: 520, padding: "max(40px,14vh) 36px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ margin: "0 auto", width: "100%", maxWidth: 640, padding: "max(40px,14vh) 36px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <div
             style={{

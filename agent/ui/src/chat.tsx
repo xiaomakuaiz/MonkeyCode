@@ -22,6 +22,9 @@ import type { LogItem, ModelInfo, SessionMeta, Usage } from "./types";
 const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
 
+/** 对话/composer 共用列宽:680 起随窗口加宽,宽屏封顶 860(保持可读行长) */
+const COL_MAX = "clamp(680px, 55vw, 860px)";
+
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
 
 // 输入法(IME)组合态的 Enter 只是确认候选词,不能当作提交。Chromium 上该 keydown
@@ -285,8 +288,8 @@ export function ChatView({
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-      {/* ==== 标题栏 ==== */}
-      <div style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
+      {/* ==== 标题栏(空白区可拖拽窗口,macOS 常规行为)==== */}
+      <div data-tauri-drag-region="" style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
           <span style={{ fontWeight: 700, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {meta?.title || "新任务"}
@@ -298,7 +301,7 @@ export function ChatView({
             <span style={{ fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{workdir}</span>
           </span>
         </div>
-        <span style={{ flex: 1 }} />
+        <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
         <button
           className="hv"
           title="查看本轮文件改动"
@@ -464,14 +467,14 @@ export function ChatView({
         </div>
       ) : (
         <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
-          <div style={{ maxWidth: 680, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
             <LogList items={chat.items} onPermAnswer={onPermAnswer} onOpenChild={onOpenChild} />
           </div>
         </div>
       )}
 
       {/* ==== 运行条 + 排队 + composer(680 列,钉在底部)==== */}
-      <div style={{ flex: "none", maxWidth: 680, width: "100%", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ flex: "none", maxWidth: COL_MAX, width: "100%", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {chat.running && (
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span
