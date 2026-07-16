@@ -8,10 +8,9 @@ name: Desktop Windows 7 Build
 # 维护约束:
 #   - agent/go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
 #   - mc-desktop/Cargo.toml 改依赖后,需重新生成 Cargo.lock.win7(cargo +1.77.2 降级流程)
-#   - 目标机基线(即 go-win7 标准补丁版的官方测试环境;判据:能跑 Chrome 109 的系统即可):
-#     Win7 SP1 + KB3020369 + KB3125574(便利性汇总,缺它会 "bcrypt.dll not found" 崩)
-#     + KB4490628 + KB4474419(SHA-2)。UCRT 已随包 app-local 分发(无需 KB2999226),
-#     Win8+ API 由 YY-Thunks 兜底(无需 KB3080149)
+#   - 目标机:Win7 SP1 即可(零 KB 前置)。内核经 go-win7 legacy 工具链覆盖
+#     未打更新的裸机;UCRT 已随包 app-local 分发(无需 KB2999226);Win8+ API 由
+#     YY-Thunks 兜底(无需 KB3080149)。尽管如此仍建议目标机打齐更新(安全)
 
 on:
   workflow_dispatch:
@@ -21,6 +20,7 @@ on:
 
 env:
   GO_WIN7_VERSION: patched-1.26.5 # 与 agent/go.mod 的 go 1.26.5 对应
+  GO_WIN7_LEGACY_SHA256: "1fded9947a2da9e3eb8f6dc1754637dbb4f4eb82d6024c227fae870986cf629c"
   WEBVIEW2_VERSION: 109.0.1518.78
   WEBVIEW2_CAB_SHA256: "7622281cf83de1a35e3a471f432f7a897d65f0a7d3975df08512b7b253dd45c7"
   YY_THUNKS_VERSION: v1.2.1
@@ -53,19 +53,39 @@ jobs:
           workspaces: mc-desktop
           key: win7
 
-      # go-win7 补丁工具链(不用 setup-go:必须整套替换,且 GOTOOLCHAIN=local
-      # 防止 go.mod 版本超前时被静默换回官方工具链——那会悄悄丢掉 Win7 兼容性)
-      - name: Install go-win7 toolchain
+      # go-win7 legacy 工具链:比标准版额外修复未打更新的裸 Win7 SP1(LoadLibraryEx
+      # 新标志回退——缺 KB2533623 时标准版 "bcrypt.dll not found" 崩;sysSocket 回退)。
+      # 打过更新的系统行为与标准版一致(运行时自动检测),一个包覆盖新旧机器。
+      # legacy 只发源码,首次在 runner 上自举构建(~15min),之后走缓存。
+      - name: Restore go-win7 legacy toolchain cache
+        id: go-legacy-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go-win7-legacy
+          key: go-win7-legacy-${{ env.GO_WIN7_VERSION }}
+
+      - name: Build go-win7 legacy toolchain (cache miss)
+        if: steps.go-legacy-cache.outputs.cache-hit != 'true'
         run: |
-          curl -sL -o go-win7.zip \
-            "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/go-for-win7-windows-amd64.zip"
-          # zip 内容即 GOROOT(bin/ pkg/ src/ 在顶层,无 go/ 包装目录)
-          mkdir -p "$HOME/go-win7"
-          unzip -q go-win7.zip -d "$HOME/go-win7"
-          test -x "$HOME/go-win7/bin/go.exe"
-          echo "GOROOT=$(cygpath -w "$HOME/go-win7")" >> "$GITHUB_ENV"
+          curl -sL -o go-legacy.zip \
+            "https://github.com/XTLS/go-win7/releases/download/${GO_WIN7_VERSION}/source-legacy.zip"
+          echo "${GO_WIN7_LEGACY_SHA256}  go-legacy.zip" | sha256sum -c -
+          # zip 内容即 Go 源码树(src/ 在顶层,无包装目录)
+          mkdir -p "$HOME/go-win7-legacy"
+          unzip -q go-legacy.zip -d "$HOME/go-win7-legacy"
+          # 用 runner 预装的官方 Go 自举(只参与编译工具链,不进产物)
+          export GOROOT_BOOTSTRAP=$(cygpath -w "$(go env GOROOT)")
+          cd "$HOME/go-win7-legacy/src"
+          cmd //c make.bat
+
+      # GOTOOLCHAIN=local 防止 go.mod 版本超前时被静默换回官方工具链
+      # ——那会悄悄丢掉 Win7 兼容性
+      - name: Activate go-win7 legacy toolchain
+        run: |
+          test -x "$HOME/go-win7-legacy/bin/go.exe"
+          echo "GOROOT=$(cygpath -w "$HOME/go-win7-legacy")" >> "$GITHUB_ENV"
           echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
-          echo "$HOME/go-win7/bin" >> "$GITHUB_PATH"
+          echo "$HOME/go-win7-legacy/bin" >> "$GITHUB_PATH"
 
       - name: Build kernel sidecar (win7-compatible)
         working-directory: agent
