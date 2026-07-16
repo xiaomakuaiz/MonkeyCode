@@ -701,3 +701,17 @@
 - [x] 无头端到端:同时拖入 PNG + "启动日志 v2.log" → 双 chips → 发送 →
       气泡缩略图 + 文件 chip → 工作区两文件落盘(原名保留)
 - [ ] 壳内拖拽待真机回归(disable_drag_drop_handler 需重新打包)
+
+# 增强:模型视觉能力门禁(2026-07-16)
+
+> 用户看到请求里的大段 base64 质疑可用性。base64 内嵌本身是多模态 API 的
+> 标准形态(API 入口解码,不进文本 token);真正的问题是非视觉模型收到
+> image 块的行为不可控(网关报错或把 base64 当文本烧 token)。
+
+- [x] config.ModelProfile 加 vision 字段(缺省 false = 安全默认不发图)
+- [x] loop:Options.Vision + SetVision;非视觉模型的图片块降级为文本占位
+      (提示去设置开启或用工具按路径处理)
+- [x] server/serve:ModelVision 接线(镜像 ContextBudget 模式),切模型同步
+- [x] 设置 UI:模型卡"支持图片"勾选框
+- [x] 测试:vision 模型图片块进下次请求(原集成测试加标记);非 vision 模型
+      得到占位文本且无图片块;全量 go test + tsc + 构建通过

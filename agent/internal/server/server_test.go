@@ -1321,6 +1321,7 @@ func TestReadImageToolResultReachesNextRequest(t *testing.T) {
 		SessionRoot: t.TempDir(),
 		Model:       "stub",
 		NewProvider: func(string) (provider.Provider, error) { return stub, nil },
+		ModelVision: func(string) bool { return true },
 		AskTimeout:  5 * time.Second,
 	})
 	if err != nil {
@@ -1354,5 +1355,61 @@ func TestReadImageToolResultReachesNextRequest(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("第二次请求的历史中缺少 tool_result 图片块: %+v", stub.reqs[1].Messages)
+	}
+}
+
+// TestNonVisionModelGetsPlaceholder 未标记 vision 的模型读图时,tool_result
+// 必须是文本占位而非图片块(base64 灌给非视觉模型:网关报错或当文本烧 token)。
+func TestNonVisionModelGetsPlaceholder(t *testing.T) {
+	workdir := t.TempDir()
+	png, _ := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+	if err := os.WriteFile(filepath.Join(workdir, "shot.png"), png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &captureStub{results: []*provider.Result{
+		toolUseResult("read_file", `{"path":"shot.png"}`),
+		textResult("好的"),
+	}}
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Model:       "stub",
+		NewProvider: func(string) (provider.Provider, error) { return stub, nil },
+		// ModelVision 缺省 → 不支持
+		AskTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	id := createSession(t, ts, workdir)
+	conn := dialWS(t, ts, id)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("看看 shot.png")})
+	wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	for _, m := range stub.reqs[1].Messages {
+		for _, b := range m.Content {
+			if b.Type != provider.BlockToolResult {
+				continue
+			}
+			for _, ib := range b.Blocks {
+				if ib.Type == provider.BlockImage {
+					t.Fatal("非视觉模型的请求不应包含图片块")
+				}
+			}
+			joined := b.Content
+			for _, ib := range b.Blocks {
+				joined += ib.Text
+			}
+			if b.ToolUseID == "t1" && !strings.Contains(joined, "图片内容不可见") {
+				t.Fatalf("应为占位文本: %+v", b)
+			}
+		}
 	}
 }

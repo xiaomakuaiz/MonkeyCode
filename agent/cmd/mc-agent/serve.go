@@ -86,6 +86,12 @@ func serveCmd() *cobra.Command {
 					}
 					return 0
 				}
+				opts.ModelVision = func(name string) bool {
+					if p := config.FindModel(profiles, name); p != nil {
+						return p.Vision
+					}
+					return false
+				}
 				opts.BuildExtras = func(workdir string) (*contextmgr.Extras, []string) {
 					platExtras, platRoots := platformExtras(cfg)
 					return skills.Assemble(workdir, platExtras, platRoots)

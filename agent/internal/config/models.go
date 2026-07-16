@@ -17,6 +17,10 @@ type ModelProfile struct {
 	Default  bool   `json:"default,omitempty"`
 	// ContextWindow 模型上下文窗口(token)。0 表示未配置,用内核默认预算。
 	ContextWindow int `json:"context_window,omitempty"`
+	// Vision 模型支持图片输入。false 时 read_file 读图降级为文本占位,
+	// 不发图片块(非视觉模型收到 image 块的行为取决于网关:报错或把
+	// base64 当文本灌进上下文,两者都不可接受)。
+	Vision bool `json:"vision,omitempty"`
 }
 
 // LoadModels 加载模型清单:MC_AGENT_MODELS 指向 JSON 数组文件。

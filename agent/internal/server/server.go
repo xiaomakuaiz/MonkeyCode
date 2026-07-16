@@ -63,6 +63,8 @@ type Options struct {
 	ListModels func() []ModelInfo
 	// ContextBudget 按模型名给出上下文预算(token);nil 或返回 <=0 用 loop 默认值。
 	ContextBudget func(model string) int
+	// ModelVision 按模型名给出是否支持图片输入;nil 视为不支持(安全默认)。
+	ModelVision func(model string) bool
 	// UI 内嵌调试页面(nil 则不挂载)。
 	UI []byte
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
@@ -830,6 +832,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 		sess.Meta.Workdir, system, loop.Options{
 			MaxSteps: s.opts.MaxSteps, ReadRoots: readRoots,
 			ContextBudget: s.modelContextBudget(sess.Meta.Model),
+			Vision:        s.modelVision(sess.Meta.Model),
 		})
 	sub.OnUsage = ls.engine.AddUsage
 
@@ -918,6 +921,7 @@ func (ls *liveSession) setModel(name string) (any, error) {
 	applySessionHeaders(prov, ls.sess.Meta.ID)
 	ls.engine.SetProvider(prov)
 	ls.engine.SetContextBudget(ls.srv.modelContextBudget(name))
+	ls.engine.SetVision(ls.srv.modelVision(name))
 	if ls.sub != nil {
 		ls.sub.Provider = prov
 	}
@@ -979,6 +983,14 @@ func (s *Server) modelContextBudget(name string) int {
 		return 0
 	}
 	return s.opts.ContextBudget(name)
+}
+
+// modelVision 按模型名取视觉能力;未配置回调视为不支持(不发图片块)。
+func (s *Server) modelVision(name string) bool {
+	if s.opts.ModelVision == nil {
+		return false
+	}
+	return s.opts.ModelVision(name)
 }
 
 func (s *Server) modelNameOrDefault(name string) string {

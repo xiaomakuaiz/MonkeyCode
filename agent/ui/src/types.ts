@@ -16,6 +16,8 @@ export interface HostModel {
   default?: boolean;
   /** 上下文窗口(token),高级项;缺省内核按 200k 处理 */
   context_window?: number;
+  /** 支持图片输入(视觉);未勾选时读图降级为文本占位,不发图片块 */
+  vision?: boolean;
 }
 
 /** 壳持有的应用配置(经 Tauri IPC get_config/save_config 读写)。 */

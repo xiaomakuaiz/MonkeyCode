@@ -479,6 +479,18 @@ export function SettingsView({
                       高级选项
                       {!advOpen[i] && m.context_window ? `(上下文窗口 ${m.context_window.toLocaleString()})` : ""}
                     </span>
+                    <label
+                      title="模型支持图片输入(视觉)。未勾选时对话里的图片以文件路径提供,模型不会收到图片内容"
+                      style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontWeight: 600, userSelect: "none" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!m.vision}
+                        onChange={(e) => patchModel(i, { vision: e.target.checked })}
+                        style={{ accentColor: "var(--acc)", margin: 0 }}
+                      />
+                      支持图片
+                    </label>
                     {i === defaultIdx ? (
                       <span style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 700, color: "var(--acc)" }}>✓ 默认模型</span>
                     ) : (

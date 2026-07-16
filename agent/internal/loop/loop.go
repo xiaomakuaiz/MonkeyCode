@@ -32,6 +32,8 @@ type Options struct {
 	CompactThreshold float64
 	// ReadRoots 工作区外允许只读访问的目录(如平台技能缓存)。
 	ReadRoots []string
+	// Vision 当前模型支持图片输入;false 时工具结果里的图片块降级为文本占位。
+	Vision bool
 }
 
 // Engine 一次会话的执行引擎。
@@ -104,6 +106,9 @@ func (e *Engine) SetContextBudget(n int) {
 	}
 	e.opts.ContextBudget = n
 }
+
+// SetVision 切换视觉能力标记(随模型切换,轮次之间调用)。
+func (e *Engine) SetVision(v bool) { e.opts.Vision = v }
 
 // ModelName 当前模型标识(展示用)。
 func (e *Engine) ModelName() string { return e.provider.Model() }
@@ -236,6 +241,22 @@ func (e *Engine) execBatch(ctx context.Context, toolUses []provider.ContentBlock
 	return results, nil
 }
 
+// stripImageBlocks 把图片块替换为文本占位(非视觉模型用)。
+func stripImageBlocks(blocks []provider.ContentBlock) []provider.ContentBlock {
+	out := make([]provider.ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type == provider.BlockImage {
+			out = append(out, provider.ContentBlock{
+				Type: provider.BlockText,
+				Text: "[图片内容不可见:当前模型未开启图片支持。可在设置里为该模型勾选“支持图片”,或改用工具按文件路径处理]",
+			})
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 // interruptedResult 未执行(或未执行完)的调用在中断时的占位结果。
 func interruptedResult(tu provider.ContentBlock) provider.ContentBlock {
 	return provider.ContentBlock{
@@ -313,6 +334,11 @@ func (e *Engine) execToolUse(ctx context.Context, tu provider.ContentBlock) prov
 			}
 			finish("failed", err.Error())
 			return result(err.Error(), true)
+		}
+		// 非视觉模型:图片块降级为文本占位——不发 base64(网关要么报错,
+		// 要么把它当文本灌进上下文,烧 token 且模型读不懂)
+		if !e.opts.Vision {
+			blocks = stripImageBlocks(blocks)
 		}
 		finish("completed", display)
 		if len(blocks) == 1 && blocks[0].Type == provider.BlockText {
