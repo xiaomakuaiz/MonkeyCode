@@ -107,6 +107,42 @@ export async function saveHostConfig(config: HostConfig): Promise<void> {
   await tauri.core.invoke("save_config", { config });
 }
 
+/** 是否 macOS 桌面壳(标题栏为 Overlay,侧栏顶部须为红绿灯预留拖拽区)。 */
+export function isMacShell(): boolean {
+  return inDesktopShell() && /Mac/.test(navigator.userAgent);
+}
+
+/** 宿主信息(应用版本等);非壳环境返回 null。 */
+export async function getHostInfo(): Promise<{ version: string } | null> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return null;
+  try {
+    return (await tauri.core.invoke("host_info")) as { version: string };
+  } catch {
+    return null;
+  }
+}
+
+export interface UpdateStatus {
+  available: boolean;
+  current?: string;
+  latest?: string;
+}
+
+/** 检查应用更新(壳内可用);非壳环境或检查失败抛错。 */
+export async function updateCheck(): Promise<UpdateStatus> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) throw new Error("浏览器模式下不可用");
+  return (await tauri.core.invoke("update_check")) as UpdateStatus;
+}
+
+/** 下载安装更新并重启应用(update_check 确认有新版后调用)。 */
+export async function updateInstall(): Promise<void> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) throw new Error("浏览器模式下不可用");
+  await tauri.core.invoke("update_install");
+}
+
 /** 在系统浏览器打开外部链接:壳内经 opener 插件,浏览器模式开新标签页。 */
 export function openExternal(url: string): void {
   const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;

@@ -1,5 +1,5 @@
 // 展示型组件:消息、思考、工具卡片、计划卡、审批卡、diff 等。
-// 样式值取自「MonkeyCode 原型(离线版)」的内联样式,逐一对应,不另行发挥。
+// 样式值取自「MonkeyCode 桌面应用设计」(浅色绿调),逐一对应,不另行发挥。
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import {
@@ -10,8 +10,9 @@ import {
   type ReactElement,
 } from "react";
 import { openExternal } from "./client";
+import { IconCheck, IconChevronRight, IconSpark } from "./icons";
 import { permStateLabel } from "./reduce";
-import type { LogItem, PlanEntry, SessionMeta } from "./types";
+import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -33,286 +34,59 @@ export function Markdown({ text }: { text: string }) {
   return <div className="md" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** 会话行操作菜单项样式 */
-const rowMenuItem: CSSProperties = {
-  padding: "8px 12px",
-  fontSize: 12.5,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-  borderRadius: 8,
-  userSelect: "none",
-};
-
-/** 侧栏会话行:名称 + 右侧状态/轮数(时间无信息量,不展示);
- * 悬停显示 ⋯ 操作菜单(归档/删除,删除需内联确认)。 */
-export function SessionRow({
-  meta,
-  active,
-  onClick,
-  onArchive,
-  onDelete,
-}: {
-  meta: SessionMeta;
-  active: boolean;
-  onClick: () => void;
-  onArchive: () => void;
-  onDelete: () => void;
-}) {
-  const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
-  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
-  // 菜单以 fixed 定位(脱离侧栏滚动容器的裁剪),按 ⋯ 的视口位置计算;
-  // 底部空间不足(列表末尾几行)时向上弹,避免被视口/状态栏遮住
-  const [pos, setPos] = useState<{ right: number; top?: number; bottom?: number }>({ right: 0 });
-  const running = meta.status === "running";
-  const m = running
-    ? { text: "运行中", color: "var(--amberT)" }
-    : meta.status === "error"
-      ? { text: "出错", color: "var(--err)" }
-      : meta.status === "interrupted"
-        ? { text: "已中断", color: "var(--t5)" }
-        : { text: meta.turns > 0 ? meta.turns + " 轮" : "", color: "var(--t5)" };
-  const closeMenu = () => setMenu("closed");
-  return (
-    <div
-      style={{ position: "relative" }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      <div
-        className="hv-cardh"
-        title={meta.workdir}
-        onClick={onClick}
-        style={{
-          background: active ? "var(--card2)" : "transparent",
-          borderRadius: 10,
-          padding: "9px 13px",
-          cursor: "pointer",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            fontSize: 13,
-            fontWeight: active ? 600 : 400,
-            color: active ? "var(--t1)" : "var(--t3)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{meta.title || "(未命名)"}</span>
-          {meta.worktree && (
-            <span
-              title="隔离 worktree 会话"
-              style={{
-                flex: "none",
-                fontSize: 10,
-                fontWeight: 600,
-                color: "var(--amberT)",
-                background: "var(--amberBg)",
-                borderRadius: 5,
-                padding: "1px 6px",
-              }}
-            >
-              隔离
-            </span>
-          )}
-          {/* 右侧定高插槽:状态文字与 ⋯ 互换时行高恒定,避免悬停引起整列抖动 */}
-          <span
-            style={{
-              marginLeft: "auto",
-              flex: "none",
-              height: 16,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-end",
-            }}
-          >
-            {hover || menu !== "closed" ? (
-              <span
-                className="hv-t1"
-                title="会话操作"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (menu !== "closed") return setMenu("closed");
-                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const up = r.bottom + 150 > window.innerHeight; // 预估菜单高度(确认态更高)
-                  setPos({
-                    right: Math.max(8, window.innerWidth - r.right),
-                    ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
-                  });
-                  setMenu("open");
-                }}
-                style={{
-                  font: "700 14px/16px system-ui",
-                  color: "var(--t4)",
-                  padding: "0 3px",
-                  cursor: "pointer",
-                }}
-              >
-                ⋯
-              </span>
-            ) : (
-              <span style={{ font: "400 11px/16px system-ui", color: m.color }}>{m.text}</span>
-            )}
-          </span>
-        </div>
-      </div>
-      {menu !== "closed" && (
-        <>
-          <div
-            style={{ position: "fixed", inset: 0, zIndex: 29 }}
-            onClick={(e) => {
-              e.stopPropagation();
-              closeMenu();
-            }}
-          />
-          <div
-            style={{
-              position: "fixed",
-              right: pos.right,
-              top: pos.top,
-              bottom: pos.bottom,
-              zIndex: 30,
-              background: "var(--pop)",
-              border: "1px solid var(--line)",
-              borderRadius: 10,
-              boxShadow: "var(--shadow)",
-              padding: 4,
-              minWidth: 150,
-              animation: "mcin .15s ease",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {menu === "open" ? (
-              <>
-                <div
-                  className="hv-card"
-                  style={rowMenuItem}
-                  onClick={() => {
-                    closeMenu();
-                    onArchive();
-                  }}
-                >
-                  {meta.archived ? "取消归档" : "归档"}
-                </div>
-                {running ? (
-                  <div style={{ ...rowMenuItem, cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
-                    删除
-                  </div>
-                ) : (
-                  <div
-                    className="hv-card"
-                    style={{ ...rowMenuItem, color: "var(--err)" }}
-                    onClick={() => setMenu("confirm")}
-                  >
-                    删除
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div
-                  style={{
-                    padding: "8px 12px 4px",
-                    fontSize: 11.5,
-                    color: "var(--t4)",
-                    lineHeight: 1.6,
-                    maxWidth: 200,
-                    whiteSpace: "normal",
-                  }}
-                >
-                  删除后不可恢复。
-                  {meta.worktree ? "隔离工作区及未应用改动将一并删除。" : ""}
-                </div>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <div
-                    className="hv-card"
-                    style={{ ...rowMenuItem, color: "var(--err)", fontWeight: 600 }}
-                    onClick={() => {
-                      closeMenu();
-                      onDelete();
-                    }}
-                  >
-                    确认删除
-                  </div>
-                  <div className="hv-card" style={rowMenuItem} onClick={closeMenu}>
-                    取消
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** 思考块:默认折叠为「✦ 思考 — 摘要 ▸」一行,点击展开(原型 thinking) */
+/** 思考块:单行内联折叠(✦ 思考 + 摘要省略),点击展开为完整文本(设计稿 think) */
 function ThoughtView({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
-  const summary = text.trim().split("\n")[0] || "…";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div
-        className="hv-t3"
-        onClick={() => setOpen(!open)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 9,
-          fontSize: 12,
-          color: "var(--t4)",
-          cursor: "pointer",
-          whiteSpace: "nowrap",
-          minWidth: 0,
-        }}
-      >
-        <span style={{ flex: "none" }}>✦ 思考</span>
-        <span style={{ color: "var(--t5)", overflow: "hidden", textOverflow: "ellipsis" }}>— {summary}</span>
-        <span style={{ color: "var(--t5)", flex: "none" }}>{open ? "▾" : "▸"}</span>
-      </div>
-      {open && (
-        <div
-          style={{
-            borderLeft: "2px solid var(--line)",
-            padding: "2px 0 2px 14px",
-            fontSize: 12.5,
-            color: "var(--t4)",
-            lineHeight: 1.8,
-            whiteSpace: "pre-wrap",
-            animation: "mcin .2s ease",
-          }}
-        >
-          {text}
-        </div>
+    <div
+      onClick={() => setOpen(!open)}
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+        fontSize: 12,
+        color: "var(--t4)",
+        cursor: "pointer",
+        userSelect: "none",
+        lineHeight: 1.6,
+      }}
+    >
+      <IconSpark style={{ alignSelf: "center" }} />
+      <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>思考</span>
+      {open ? (
+        <span style={{ flex: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{text}</span>
+      ) : (
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {text.trim().replace(/\s+/g, " ")}
+        </span>
       )}
+      <IconChevronRight
+        size={9}
+        color="var(--t6)"
+        style={{ alignSelf: "center", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
+      />
     </div>
   );
 }
+
+/** 白卡通用样式(工具/计划/子代理共用,设计稿 agent card) */
+const cardStyle: CSSProperties = {
+  background: "var(--card)",
+  border: "1px solid var(--cardBd)",
+  borderRadius: 10,
+  boxShadow: "var(--cardSh)",
+  padding: "11px 14px",
+};
 
 function PlanCard({ entries }: { entries: PlanEntry[] }) {
   const mark = (s: string) => (s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐");
   return (
-    <div
-      style={{
-        border: "1px solid var(--line)",
-        borderRadius: 14,
-        background: "var(--card)",
-        padding: "13px 16px",
-        fontSize: 12.5,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        animation: "mcin .25s ease",
-      }}
-    >
+    <div style={{ ...cardStyle, fontSize: 12.5, display: "flex", flexDirection: "column", gap: 4, animation: "mcin .25s ease" }}>
       {entries.map((e, i) => (
         <div
           key={i}
           style={{
-            color: e.status === "completed" ? "var(--t5)" : e.status === "in_progress" ? "var(--amberT)" : "var(--t3)",
+            color: e.status === "completed" ? "var(--t5)" : e.status === "in_progress" ? "var(--acc)" : "var(--t2)",
             textDecoration: e.status === "completed" ? "line-through" : "none",
           }}
         >
@@ -323,134 +97,111 @@ function PlanCard({ entries }: { entries: PlanEntry[] }) {
   );
 }
 
-function statusMark(status: "run" | "ok" | "fail") {
-  return status === "run" ? "◌" : status === "ok" ? "✓" : "✗";
+/** 状态圆点:执行中空心绿点呼吸,结束灰描边(设计稿 agents 的 dot) */
+function StatusDot({ status }: { status: "run" | "ok" | "fail" }) {
+  const run = status === "run";
+  return (
+    <span
+      style={{
+        width: 7,
+        height: 7,
+        borderRadius: "50%",
+        flex: "none",
+        border: `1.5px solid ${run ? "var(--acc)" : status === "ok" ? "var(--t5)" : "var(--err)"}`,
+        background: run ? "var(--accBd)" : "transparent",
+        animation: run ? "mcpulse 1.4s infinite" : "none",
+      }}
+    />
+  );
+}
+
+function stepMark(status: "run" | "ok" | "fail") {
+  if (status === "ok") return <IconCheck size={10} />;
+  if (status === "fail") return <span style={{ color: "var(--err)", fontSize: 10, flex: "none" }}>✗</span>;
+  return <span style={{ color: "var(--t5)", fontSize: 10, flex: "none", animation: "mcpulse 1.2s infinite" }}>◌</span>;
 }
 
 /** 进度滚动窗口:固定只展示最后几条,旧条目自然滚出(完整过程走"查看子会话")。 */
 const FEED_WINDOW = 5;
 
-function ToolCard({
+export function ToolCard({
   item,
-  radius,
   onOpenChild,
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
-  radius: string;
   onOpenChild?: (id: string) => void;
 }) {
   const feed = item.feed ?? [];
   const visible = feed.slice(-FEED_WINDOW);
-  // 标题按「动词 目标」拆开:动词弱化(t3)、目标等宽突出(t1),对应原型 verb/target
+  // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
   const sp = item.title.indexOf(" ");
   const verb = sp > 0 ? item.title.slice(0, sp) : "";
   const target = sp > 0 ? item.title.slice(sp + 1) : item.title;
-  const subStyle = {
+  const stepRow: CSSProperties = {
     display: "flex",
-    gap: 8,
-    alignItems: "baseline",
-    padding: "0 14px 7px 35px",
-    font: "11.5px/1.7 " + MONO,
-    color: "var(--t4)",
+    gap: 7,
+    alignItems: "center",
+    paddingLeft: 15,
+    font: "11px/1.7 " + MONO,
+    color: "var(--t3)",
     whiteSpace: "nowrap",
     minWidth: 0,
-  } as const;
+  };
   return (
-    <div style={{ background: "var(--card)", borderRadius: radius, overflow: "hidden" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "9px 14px",
-          fontSize: 12.5,
-          whiteSpace: "nowrap",
-          minWidth: 0,
-        }}
-      >
-        <span
-          style={{
-            color: item.status === "run" ? "var(--t4)" : item.status === "ok" ? "var(--ok)" : "var(--err)",
-            fontSize: 11,
-            flex: "none",
-            display: "inline-block",
-            animation: item.status === "run" ? "mcspin 1s linear infinite" : "none",
-          }}
-        >
-          {statusMark(item.status)}
-        </span>
-        {verb && <span style={{ color: "var(--t3)", flex: "none" }}>{verb}</span>}
-        <span style={{ font: "12px " + MONO, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis" }}>
+    <div style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
+        <StatusDot status={item.status} />
+        {verb && <span style={{ fontWeight: 600, flex: "none", color: "var(--t1)" }}>{verb}</span>}
+        <span style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
           {target}
         </span>
-        {item.childSessionId && onOpenChild && (
-          <span
-            className="hv-t1"
-            onClick={() => onOpenChild(item.childSessionId!)}
-            style={{ font: "11.5px " + MONO, color: "var(--amberT)", cursor: "pointer", flex: "none" }}
-          >
-            查看子会话
-          </span>
-        )}
+        <span style={{ flex: 1 }} />
         {item.out && (
-          <span
-            style={{
-              marginLeft: "auto",
-              color: "var(--t5)",
-              fontSize: 11,
-              flex: "none",
-              maxWidth: "45%",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
+          <span style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%", overflow: "hidden", textOverflow: "ellipsis" }}>
             {item.out}
           </span>
         )}
+        {item.childSessionId && onOpenChild && (
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              onOpenChild(item.childSessionId!);
+            }}
+            style={{ fontSize: 11.5, fontWeight: 600, flex: "none" }}
+          >
+            查看子会话
+          </a>
+        )}
       </div>
-      {visible.map((s, i) => (
-        <div key={feed.length - visible.length + i} style={subStyle}>
-          <span style={{ color: "var(--t5)", flex: "none" }}>↳</span>
-          {s.kind === "tool" ? (
-            <>
-              <span
-                style={{
-                  color: s.status === "run" ? "var(--t4)" : s.status === "ok" ? "var(--ok)" : "var(--err)",
-                  fontSize: 10,
-                  flex: "none",
-                }}
-              >
-                {statusMark(s.status)}
-              </span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{s.title}</span>
-            </>
-          ) : (
-            <span style={{ color: "var(--t5)", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-              {s.text}
-            </span>
-          )}
+      {visible.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {visible.map((s, i) => (
+            <div key={feed.length - visible.length + i} style={stepRow}>
+              {s.kind === "tool" ? (
+                <>
+                  {stepMark(s.status)}
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{s.title}</span>
+                </>
+              ) : (
+                <span style={{ color: "var(--t5)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {s.text}
+                </span>
+              )}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
       {item.status === "run" && item.lastLine && (
-        <div
-          style={{
-            ...subStyle,
-            display: "block",
-            color: "var(--t5)",
-            fontStyle: "italic",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            animation: "mcpulse 1.2s infinite",
-          }}
-        >
-          ↳ {item.lastLine}
+        <div style={{ ...stepRow, display: "block", color: "var(--t5)", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", animation: "mcpulse 1.2s infinite" }}>
+          {item.lastLine}
         </div>
       )}
     </div>
   );
 }
 
-/** 审批卡终态文案(原型 resolvedText 风格) */
+/** 审批卡终态文案 */
 function permResolved(state: string): { text: string; color: string } {
   switch (state) {
     case "allowed":
@@ -473,33 +224,42 @@ function PermCard({
   item: Extract<LogItem, { kind: "perm" }>;
   onAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
 }) {
-  const btn = {
-    padding: "7px 18px",
-    background: "var(--card2)",
+  const btn: CSSProperties = {
+    height: 28,
+    display: "flex",
+    alignItems: "center",
+    padding: "0 14px",
+    background: "var(--card)",
+    border: "1px solid var(--line)",
     color: "var(--t2)",
-    borderRadius: 9,
+    borderRadius: 8,
     cursor: "pointer",
-  } as const;
+    fontSize: 12.5,
+    fontWeight: 600,
+    userSelect: "none",
+    whiteSpace: "nowrap",
+  };
   return (
     <div
       style={{
-        border: "1px solid var(--amberBd)",
-        borderRadius: 14,
-        background: "var(--amberBg)",
-        padding: "15px 17px",
-        maxWidth: 540,
+        border: "1px solid var(--warnBd)",
+        borderRadius: 12,
+        background: "var(--warnBg)",
+        padding: "13px 15px",
+        maxWidth: 560,
         animation: "mcin .25s ease",
       }}
     >
-      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--amberT)", whiteSpace: "nowrap" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--warn)", whiteSpace: "nowrap" }}>
         需要确认 · {item.tool || "执行操作"}
       </div>
       <div
         style={{
-          margin: "10px 0 12px",
-          padding: "9px 13px",
-          background: "var(--codeBg)",
-          borderRadius: 9,
+          margin: "9px 0 11px",
+          padding: "8px 12px",
+          background: "var(--card)",
+          border: "1px solid var(--line2)",
+          borderRadius: 8,
           font: "12.5px " + MONO,
           color: "var(--t1)",
           wordBreak: "break-all",
@@ -508,34 +268,44 @@ function PermCard({
         {item.title}
       </div>
       {item.state === "open" ? (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, fontWeight: 600, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <div
-            className="hv-op"
+            className="hv-acc"
             onClick={() => onAnswer(item.id, "allow")}
-            style={{ ...btn, background: "var(--amber)", color: "var(--onAmber)" }}
+            style={{ ...btn, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)" }}
           >
             允许
           </div>
-          <div className="hv-cardh" onClick={() => onAnswer(item.id, "always")} style={btn}>
+          <div className="hv" onClick={() => onAnswer(item.id, "always")} style={btn}>
             本会话始终
           </div>
-          <div className="hv-cardh" onClick={() => onAnswer(item.id, "persist")} style={btn}>
+          <div className="hv" onClick={() => onAnswer(item.id, "persist")} style={btn}>
             此项目永久
           </div>
           <div
-            className="hv-err"
+            className="hv-errbg"
             onClick={() => onAnswer(item.id, "deny")}
-            style={{ padding: "7px 14px", color: "var(--t4)", borderRadius: 9, cursor: "pointer" }}
+            style={{ ...btn, background: "transparent", border: "1px solid rgba(194,80,62,.3)", color: "var(--err)" }}
           >
             拒绝
           </div>
-          <span style={{ marginLeft: "auto", fontWeight: 400, fontSize: 11, color: "var(--t5)" }}>
-            ⏎ 允许 · esc 拒绝
-          </span>
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>⏎ 允许 · esc 拒绝</span>
         </div>
       ) : (
         <div style={{ fontSize: 12, color: permResolved(item.state).color }}>{permResolved(item.state).text}</div>
       )}
+    </div>
+  );
+}
+
+/** 轮次分隔线:横线 + 居中小字(设计稿"本轮结束") */
+function TurnDivider() {
+  const line = <span style={{ flex: 1, height: 1, background: "var(--line2)" }} />;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--t6)", fontSize: 10.5, letterSpacing: 1 }}>
+      {line}
+      本轮结束
+      {line}
     </div>
   );
 }
@@ -550,25 +320,29 @@ function ItemView({
   switch (item.kind) {
     case "user":
       return (
-        <div
-          style={{
-            alignSelf: "flex-end",
-            maxWidth: "70%",
-            background: "var(--card2)",
-            borderRadius: "16px 16px 5px 16px",
-            padding: "10px 16px",
-            color: "var(--t1)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            animation: "mcin .25s ease",
-          }}
-        >
-          {item.text}
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div
+            style={{
+              maxWidth: "70%",
+              background: "var(--userBg)",
+              border: "1px solid var(--accBd)",
+              borderRadius: "12px 12px 3px 12px",
+              padding: "9px 15px",
+              fontSize: 13.5,
+              lineHeight: 1.6,
+              color: "var(--t1)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              animation: "mcin .25s ease",
+            }}
+          >
+            {item.text}
+          </div>
         </div>
       );
     case "agent":
       return (
-        <div style={{ maxWidth: "90%", color: "var(--t2)", wordBreak: "break-word", animation: "mcin .25s ease" }}>
+        <div style={{ maxWidth: "92%", wordBreak: "break-word", animation: "mcin .25s ease" }}>
           <Markdown text={item.text} />
         </div>
       );
@@ -577,6 +351,7 @@ function ItemView({
     case "plan":
       return <PlanCard entries={item.entries} />;
     case "sys":
+      if (item.text === "— 本轮结束 —") return <TurnDivider />;
       return (
         <div style={{ color: item.error ? "var(--err)" : "var(--t5)", fontSize: 11.5, textAlign: "center" }}>
           {item.text}
@@ -587,7 +362,7 @@ function ItemView({
   }
 }
 
-/** 对话流:相邻工具项聚成一组(1px 缝隙 + 端部大圆角,与原型 t.radius 方案一致) */
+/** 对话流:相邻工具卡聚成一列(间距 8,设计稿 agents 列) */
 export function LogList({
   items,
   onPermAnswer,
@@ -609,16 +384,10 @@ export function LogList({
         group.push(t);
         i++;
       }
-      const n = group.length;
       out.push(
-        <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+        <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {group.map((t, j) => (
-            <ToolCard
-              key={t.tcId || j}
-              item={t}
-              onOpenChild={onOpenChild}
-              radius={n === 1 ? "11px" : j === 0 ? "11px 11px 4px 4px" : j === n - 1 ? "4px 4px 11px 11px" : "4px"}
-            />
+            <ToolCard key={t.tcId || j} item={t} onOpenChild={onOpenChild} />
           ))}
         </div>,
       );
@@ -636,7 +405,7 @@ interface DiffRow {
   kind: "h" | "add" | "del" | "ctx";
 }
 
-/** unified diff → 带行号的行(行号取新文件侧,删除行取旧文件侧,同原型演示数据) */
+/** unified diff → 带行号的行(行号取新文件侧,删除行取旧文件侧) */
 function parseDiff(text: string): DiffRow[] {
   const rows: DiffRow[] = [];
   let oldN = 0;
@@ -675,7 +444,7 @@ function parseDiff(text: string): DiffRow[] {
   return rows;
 }
 
-/** diff 面板(原型改动抽屉的行渲染:36px 行号列 + hunk 灰条 + 增删着色) */
+/** diff 面板(改动抽屉的行渲染:36px 行号列 + hunk 灰条 + 增删着色) */
 export function DiffPanel({ text }: { text: string }) {
   const rows = useMemo(() => parseDiff(text), [text]);
   if (!rows.some((r) => r.kind === "h")) {
@@ -690,7 +459,7 @@ export function DiffPanel({ text }: { text: string }) {
     <div style={{ font: "12px/1.9 " + MONO }}>
       {rows.map((r, i) =>
         r.kind === "h" ? (
-          <div key={i} style={{ display: "flex", padding: "2px 24px", background: "var(--card)", color: "var(--t4)", fontSize: 11 }}>
+          <div key={i} style={{ display: "flex", padding: "2px 24px", background: "var(--codeBg)", color: "var(--t4)", fontSize: 11 }}>
             <span style={{ width: 36, flex: "none" }} />
             <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{r.text}</span>
           </div>

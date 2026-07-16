@@ -565,3 +565,48 @@
       messages.json 含本轮用户输入、meta 状态 interrupted
 - [x] agent 全量 go test ./... 通过
 
+
+# 重构:按新设计稿重做 agent/ui(2026-07-16)
+
+> 设计稿:agent/ui/MonkeyCode 桌面应用设计.html(bundler 打包,已解包分析)。
+> 浅色绿调 macOS 风格,四屏:侧栏 / Chat / New Task / Settings。
+> 协议层(client/reduce/types)不动,视图层全部重写并拆分文件。
+
+## 设计稿 → 功能映射决策
+
+- 侧栏:云端任务空态 + 本地会话分组(悬停 +/⋯ 菜单:归档/删除,删除保留内联确认);
+  无搜索框(设计稿删除了 ⌘K 搜索,跟随);已归档作为置灰分组
+- Chat:标题栏(标题+目录+改动按钮+⋯);空会话态;用户气泡右对齐;思考单行折叠;
+  工具/子代理白卡;"本轮结束"分隔线;运行条(轮次+tokens+停止);排队 chip;
+  composer(权限 pill 默认/YOLO 循环 ⇧⇥ + 模型菜单 + 上下文圆环 + 发送)
+- New Task:居中卡(文件夹下拉:最近目录+选择其他/手动输入)+ 本地/云端分段
+  (云端显示"准备中"提示,仍建本地会话)+ 模型 + 开始任务;目录不存在确认创建保留
+- Settings:外观(浅色固定,深色置灰"即将支持")/ 关于(版本+检查更新,壳内可用)/
+  模型卡(可编辑,高级选项=上下文窗口)/ MCP 段保留(设计稿没画,按同卡风格)
+- 主题:跟随设计稿改为浅色单主题,移除深色(mc.theme 弃用)
+- 壳新增:host_info(版本)、update_check、update_install 三命令 + capability;
+  macOS titleBarStyle Overlay(侧栏顶部留红绿灯拖拽区,仅 mac 壳内渲染)
+
+## 任务
+
+- [x] 壳:host_info/update_check/update_install 三命令 + build.rs 命令清单 +
+      capability 权限 + macOS titleBarStyle Overlay(cfg 门控,未在 mac 实测)
+- [x] styles.css:新设计令牌(浅色绿调)+ hover/keyframes/md 样式
+- [x] icons.tsx:设计稿 SVG 图标集(20 个)
+- [x] components.tsx:重样式(Markdown/Thought/Plan/Tool/Perm/Diff/LogList/本轮结束分隔)
+- [x] sidebar.tsx / chat.tsx / newtask.tsx / settings.tsx:四屏重写
+- [x] App.tsx:精简为状态容器 + 布局切换;client.ts 加宿主更新 API
+- [x] index.html:浅色底色,移除主题闪屏脚本
+- [x] 构建:tsc 零错误 + vite build(306KB 单文件)→ uidist 入库;cargo check 通过
+- [x] 验证:内核 serve + 无头 Chromium 实测
+
+## 验证
+
+- [x] 四屏截图核对:侧栏(分组/悬停⋯菜单/归档组/连接状态)、Chat(标题栏+改动徽标、
+      用户气泡、思考折叠、工具卡、本轮结束分隔线、composer 权限 pill/模型菜单/
+      上下文圆环)、New Task(文件夹下拉+最近目录+手动输入、本地/云端分段、云端提示)、
+      Settings(外观/浏览器只读提示)
+- [x] 真实历史会话回放渲染正常(markdown 表格/代码块/子代理卡);改动抽屉 + diff 正常
+- [x] 全程无 pageerror/console error
+- [ ] macOS 红绿灯 Overlay 与桌面壳内 关于/检查更新 卡片待真机回归(本机无 mac/无显示)
+

@@ -1,0 +1,564 @@
+// 侧栏:云端任务空态 + 本地会话分组列表 + 连接状态/设置入口。
+// 布局与数值取自设计稿 Sidebar 区块;macOS 壳内顶部为红绿灯预留拖拽区。
+import { useState, type CSSProperties } from "react";
+import { isMacShell } from "./client";
+import {
+  IconArchive,
+  IconChevronRight,
+  IconCloud,
+  IconDots,
+  IconGear,
+  IconMonitor,
+  IconPlus,
+  IconTrash,
+} from "./icons";
+import logoUrl from "./logo.png";
+import type { SessionMeta } from "./types";
+
+export interface ProjectGroup {
+  dir: string;
+  name: string;
+  latest: string;
+  items: SessionMeta[];
+}
+
+/** 会话按项目(工作区目录)分组;worktree 会话归属原仓库目录 */
+export function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
+  const map = new Map<string, SessionMeta[]>();
+  for (const m of sessions) {
+    const dir = m.worktree?.repo || m.workdir;
+    const list = map.get(dir);
+    if (list) list.push(m);
+    else map.set(dir, [m]);
+  }
+  const groups = [...map.entries()].map(([dir, items]) => {
+    items.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    return {
+      dir,
+      name: dir.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || dir,
+      latest: items[0]?.updated_at ?? "",
+      items,
+    };
+  });
+  groups.sort((a, b) => b.latest.localeCompare(a.latest));
+  return groups;
+}
+
+const sectionHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 5,
+  fontSize: 11,
+  fontWeight: 700,
+  color: "var(--t4)",
+  padding: "6px 6px 4px",
+  letterSpacing: 0.4,
+};
+
+const iconBtn: CSSProperties = {
+  width: 20,
+  height: 20,
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  padding: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 5,
+  flex: "none",
+};
+
+/** 会话行状态文案(时间无信息量,不展示) */
+function rowStatus(meta: SessionMeta): { text: string; color: string } {
+  switch (meta.status) {
+    case "running":
+      return { text: "运行中", color: "var(--acc)" };
+    case "error":
+      return { text: "出错", color: "var(--err)" };
+    case "interrupted":
+      return { text: "已中断", color: "inherit" };
+    default:
+      return { text: meta.turns > 0 ? meta.turns + " 轮" : "", color: "inherit" };
+  }
+}
+
+function SessionRow({
+  meta,
+  active,
+  archived,
+  onClick,
+  onArchive,
+  onDelete,
+}: {
+  meta: SessionMeta;
+  active: boolean;
+  archived: boolean;
+  onClick: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+}) {
+  const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
+  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  // 菜单以 fixed 定位(脱离侧栏滚动容器的裁剪),按 ⋯ 的视口位置计算;
+  // 底部空间不足时向上弹,避免被视口遮住
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
+  const running = meta.status === "running";
+  const showActions = hover || menu !== "closed";
+  const st = rowStatus(meta);
+  const bg = active ? (archived ? "var(--hov3)" : "rgba(31,138,91,.85)") : "transparent";
+  const fg = active && !archived ? "#fff" : "var(--t2)";
+  const closeMenu = () => setMenu("closed");
+
+  const menuItem: CSSProperties = {
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 9px",
+    borderRadius: 6,
+    fontSize: 12.5,
+    color: "var(--t1)",
+    textAlign: "left",
+    whiteSpace: "nowrap",
+  };
+
+  return (
+    <div
+      style={{ position: "relative" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <div
+        className={active ? undefined : "hv"}
+        title={meta.workdir}
+        onClick={onClick}
+        style={{
+          height: 28,
+          display: "flex",
+          alignItems: "center",
+          gap: 2,
+          padding: "0 5px 0 23px",
+          borderRadius: 6,
+          cursor: "pointer",
+          fontSize: 12.5,
+          background: bg,
+          color: fg,
+          fontWeight: active ? 500 : 400,
+          whiteSpace: "nowrap",
+          minWidth: 0,
+        }}
+      >
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{meta.title || "新任务"}</span>
+        {meta.worktree && !showActions && (
+          <span
+            title="隔离 worktree 会话"
+            style={{
+              flex: "none",
+              fontSize: 10,
+              fontWeight: 600,
+              color: active ? "rgba(255,255,255,.85)" : "var(--acc)",
+              background: active ? "rgba(255,255,255,.18)" : "var(--accBg)",
+              borderRadius: 5,
+              padding: "1px 6px",
+              marginRight: 3,
+            }}
+          >
+            隔离
+          </span>
+        )}
+        {!showActions ? (
+          <span style={{ fontSize: 11, opacity: 0.7, flex: "none", fontWeight: 400, paddingRight: 3, color: st.color === "inherit" ? undefined : st.color }}>
+            {st.text}
+          </span>
+        ) : (
+          <button
+            title="更多操作"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (menu !== "closed") return closeMenu();
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const up = r.bottom + 160 > window.innerHeight; // 预估菜单高度(确认态更高)
+              setPos({
+                left: Math.min(r.left, window.innerWidth - 170),
+                ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+              });
+              setMenu("open");
+            }}
+            style={{
+              ...iconBtn,
+              background: menu !== "closed" ? "var(--hov3)" : "transparent",
+            }}
+            className="hv3"
+          >
+            <IconDots color={active && !archived ? "rgba(255,255,255,.85)" : "var(--t3)"} />
+          </button>
+        )}
+      </div>
+      {menu !== "closed" && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 29 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              closeMenu();
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              left: pos.left,
+              top: pos.top,
+              bottom: pos.bottom,
+              zIndex: 30,
+              background: "var(--pop)",
+              border: "1px solid var(--line)",
+              borderRadius: 9,
+              boxShadow: "var(--shadow)",
+              padding: 4,
+              display: "flex",
+              flexDirection: "column",
+              minWidth: 118,
+              animation: "mcin .15s ease",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {menu === "open" ? (
+              <>
+                <button
+                  className="hv"
+                  style={menuItem}
+                  onClick={() => {
+                    closeMenu();
+                    onArchive();
+                  }}
+                >
+                  <IconArchive />
+                  {meta.archived ? "取消归档" : "归档"}
+                </button>
+                {running ? (
+                  <button style={{ ...menuItem, cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
+                    <IconTrash color="var(--t5)" />
+                    删除
+                  </button>
+                ) : (
+                  <button className="hv-errbg" style={{ ...menuItem, color: "var(--err)" }} onClick={() => setMenu("confirm")}>
+                    <IconTrash />
+                    删除
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
+                  删除后不可恢复。
+                  {meta.worktree ? "隔离工作区及未应用改动将一并删除。" : ""}
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button
+                    className="hv-errbg"
+                    style={{ ...menuItem, color: "var(--err)", fontWeight: 600 }}
+                    onClick={() => {
+                      closeMenu();
+                      onDelete();
+                    }}
+                  >
+                    确认删除
+                  </button>
+                  <button className="hv" style={menuItem} onClick={closeMenu}>
+                    取消
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Group({
+  name,
+  nameColor,
+  expanded,
+  onToggle,
+  onNewTask,
+  children,
+}: {
+  name: string;
+  nameColor?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onNewTask?: () => void;
+  children: React.ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <div
+        className="hv"
+        onClick={onToggle}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{
+          height: 28,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "0 4px 0 8px",
+          borderRadius: 6,
+          cursor: "pointer",
+          userSelect: "none",
+          fontWeight: 600,
+          fontSize: 12.5,
+        }}
+      >
+        <span style={{ width: 12, height: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <IconChevronRight style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
+        </span>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: nameColor ?? "var(--t1)" }}>
+          {name}
+        </span>
+        {onNewTask && hover && (
+          <button
+            className="hv3"
+            title="在此文件夹新建任务"
+            onClick={(e) => {
+              e.stopPropagation();
+              onNewTask();
+            }}
+            style={iconBtn}
+          >
+            <IconPlus size={10} color="var(--t3)" />
+          </button>
+        )}
+      </div>
+      {expanded && <div style={{ display: "flex", flexDirection: "column", gap: 1, paddingBottom: 3 }}>{children}</div>}
+    </div>
+  );
+}
+
+export function Sidebar({
+  sessions,
+  currentId,
+  sessionActive,
+  connected,
+  status,
+  settingsActive,
+  updateAvailable,
+  onSelect,
+  onNewTask,
+  onOpenSettings,
+  onArchive,
+  onDelete,
+}: {
+  sessions: SessionMeta[];
+  currentId: string | null;
+  /** 当前处于会话视图(选中态只在会话视图下渲染) */
+  sessionActive: boolean;
+  connected: boolean;
+  status: string;
+  settingsActive: boolean;
+  updateAvailable: boolean;
+  onSelect: (m: SessionMeta) => void;
+  onNewTask: (dir?: string) => void;
+  onOpenSettings: () => void;
+  onArchive: (m: SessionMeta) => void;
+  onDelete: (m: SessionMeta) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("mc.collapsedGroups") || "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const [archivedOpen, setArchivedOpen] = useState(() => localStorage.getItem("mc.archivedOpen") === "1");
+
+  const toggleGroup = (dir: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      localStorage.setItem("mc.collapsedGroups", JSON.stringify([...next]));
+      return next;
+    });
+  };
+  const toggleArchived = () => {
+    setArchivedOpen((o) => {
+      localStorage.setItem("mc.archivedOpen", o ? "0" : "1");
+      return !o;
+    });
+  };
+
+  const list = sessions.filter((m) => !m.archived);
+  const archived = sessions
+    .filter((m) => m.archived)
+    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+
+  const row = (m: SessionMeta, inArchived: boolean) => (
+    <SessionRow
+      key={m.id}
+      meta={m}
+      active={m.id === currentId && sessionActive}
+      archived={inArchived}
+      onClick={() => onSelect(m)}
+      onArchive={() => onArchive(m)}
+      onDelete={() => onDelete(m)}
+    />
+  );
+
+  return (
+    <div
+      style={{
+        width: 256,
+        flex: "none",
+        background: "var(--side)",
+        borderRight: "1px solid var(--line)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
+      {/* macOS 壳:标题栏 Overlay,红绿灯落在此区,整条可拖拽窗口 */}
+      {isMacShell() ? (
+        <div style={{ height: 50, flex: "none", WebkitAppRegion: "drag" } as CSSProperties} />
+      ) : (
+        <div style={{ height: 12, flex: "none" }} />
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "2px 16px 14px" }}>
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: 8,
+            background: "var(--card)",
+            boxShadow: "0 1px 3px rgba(0,0,0,.12)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flex: "none",
+          }}
+        >
+          <img src={logoUrl} alt="" draggable={false} style={{ width: 20, height: 20, borderRadius: 5 }} />
+        </div>
+        <span style={{ fontWeight: 700, fontSize: 14 }}>MonkeyCode</span>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+        {/* 云端任务:执行后端未上线,常驻空态(有后端后在此渲染任务卡) */}
+        <div style={{ ...sectionHeader, marginTop: -1 }}>
+          <IconCloud style={{ marginTop: -1 }} />
+          云端任务
+        </div>
+        <div
+          style={{
+            borderRadius: 8,
+            border: "1px dashed rgba(30,40,35,.22)",
+            padding: "9px 11px",
+            fontSize: 11.5,
+            color: "var(--t4)",
+            lineHeight: 1.55,
+            marginBottom: 8,
+          }}
+        >
+          还没有云端任务。长任务可派发到服务器,关掉客户端也会继续。
+        </div>
+
+        <div style={sectionHeader}>
+          <IconMonitor style={{ marginTop: -1 }} />
+          <span style={{ flex: 1 }}>本地会话</span>
+          <button className="hv2" title="新建任务" onClick={() => onNewTask()} style={iconBtn}>
+            <IconPlus color="var(--t4)" />
+          </button>
+        </div>
+
+        {sessions.length === 0 && (
+          <div
+            style={{
+              borderRadius: 8,
+              border: "1px dashed rgba(30,40,35,.22)",
+              padding: "9px 11px",
+              fontSize: 11.5,
+              color: "var(--t4)",
+              lineHeight: 1.55,
+            }}
+          >
+            还没有会话。点上方 + 开始第一个任务。
+          </div>
+        )}
+
+        {groupByProject(list).map((g) => (
+          <Group
+            key={g.dir}
+            name={g.name}
+            expanded={!collapsed.has(g.dir)}
+            onToggle={() => toggleGroup(g.dir)}
+            onNewTask={() => onNewTask(g.dir)}
+          >
+            {g.items.map((m) => row(m, false))}
+          </Group>
+        ))}
+
+        {archived.length > 0 && (
+          <Group name="已归档" nameColor="#9aa19b" expanded={archivedOpen} onToggle={toggleArchived}>
+            {archived.map((m) => row(m, true))}
+          </Group>
+        )}
+      </div>
+
+      <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 7, padding: "0 14px", borderTop: "1px solid rgba(30,40,35,.1)" }}>
+        <span
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: connected ? "var(--ok)" : "var(--t6)",
+            flex: "none",
+          }}
+        />
+        <span title={status} style={{ fontSize: 12, color: "var(--t3)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {status}
+        </span>
+        <button
+          className="hv2"
+          title="设置"
+          onClick={onOpenSettings}
+          style={{
+            position: "relative",
+            width: 26,
+            height: 26,
+            border: "none",
+            borderRadius: 7,
+            background: settingsActive ? "rgba(31,138,91,.15)" : "transparent",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            flex: "none",
+          }}
+        >
+          {updateAvailable && (
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                right: 2,
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: "#e8913a",
+                border: "1.5px solid var(--side)",
+              }}
+            />
+          )}
+          <IconGear />
+        </button>
+      </div>
+    </div>
+  );
+}

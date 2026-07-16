@@ -189,6 +189,48 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// 宿主信息(内核 UI 的设置视图"关于"卡片展示)。
+#[tauri::command]
+fn host_info(app: AppHandle) -> serde_json::Value {
+    serde_json::json!({ "version": display_version(&app.package_info().version.to_string()) })
+}
+
+/// UI 内检查更新:返回结果而非弹对话框(设置视图内联展示)。
+#[tauri::command]
+async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
+    let updater = build_updater(&app)?;
+    match updater.check().await {
+        Ok(Some(u)) => Ok(serde_json::json!({
+            "available": true,
+            "current": display_version(&u.current_version),
+            "latest": display_version(&u.version),
+        })),
+        Ok(None) => Ok(serde_json::json!({
+            "available": false,
+            "current": display_version(&app.package_info().version.to_string()),
+        })),
+        Err(e) => Err(format!("检查更新失败: {e}")),
+    }
+}
+
+/// UI 内下载安装更新并重启(update_check 确认有新版后调用)。
+#[tauri::command]
+async fn update_install(app: AppHandle) -> Result<(), String> {
+    let updater = build_updater(&app)?;
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        Ok(None) => return Err("当前已是最新版本".into()),
+        Err(e) => return Err(format!("检查更新失败: {e}")),
+    };
+    eprintln!("[mc-desktop] 更新: UI 内触发下载安装 {}", update.version);
+    update
+        .download_and_install(|_, _| {}, || eprintln!("[mc-desktop] 更新: 下载完成,安装中"))
+        .await
+        .map_err(|e| format!("更新失败: {e}"))?;
+    eprintln!("[mc-desktop] 更新: 安装完成,重启应用");
+    app.restart();
+}
+
 // ==================== 自动更新 ====================
 //
 // OSS 静态清单(latest.json)+ tauri-plugin-updater:版本号与本地**不一致**
@@ -210,11 +252,9 @@ fn update_notice(app: &AppHandle, manual: bool, error: bool, msg: &str) {
     }
 }
 
-/// 检查更新并在有新版时询问用户;确认则下载安装 + 重启(内核经 RunEvent::Exit 回收)。
-async fn check_update(app: AppHandle, manual: bool) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+/// 组装更新器(自动/手动/UI 内三条路径共用):不一致即有更新 + 清单地址可覆盖。
+fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     use tauri_plugin_updater::UpdaterExt;
-
     let mut builder = app
         .updater_builder()
         .timeout(Duration::from_secs(30))
@@ -222,17 +262,19 @@ async fn check_update(app: AppHandle, manual: bool) {
         .version_comparator(|current, update| update.version != current);
     // 本机测试覆盖清单地址(release 构建强制 https,http 清单只在 debug 下可用)
     if let Ok(url) = std::env::var("MC_UPDATE_MANIFEST") {
-        match url.parse() {
-            Ok(u) => match builder.endpoints(vec![u]) {
-                Ok(b) => builder = b,
-                Err(e) => return update_notice(&app, manual, true, &format!("更新地址无效: {e}")),
-            },
-            Err(e) => return update_notice(&app, manual, true, &format!("MC_UPDATE_MANIFEST 无效: {e}")),
-        }
+        let u = url.parse().map_err(|e| format!("MC_UPDATE_MANIFEST 无效: {e}"))?;
+        builder = builder.endpoints(vec![u]).map_err(|e| format!("更新地址无效: {e}"))?;
     }
-    let updater = match builder.build() {
+    builder.build().map_err(|e| format!("初始化更新器失败: {e}"))
+}
+
+/// 检查更新并在有新版时询问用户;确认则下载安装 + 重启(内核经 RunEvent::Exit 回收)。
+async fn check_update(app: AppHandle, manual: bool) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+    let updater = match build_updater(&app) {
         Ok(u) => u,
-        Err(e) => return update_notice(&app, manual, true, &format!("初始化更新器失败: {e}")),
+        Err(e) => return update_notice(&app, manual, true, &e),
     };
 
     let update = match updater.check().await {
@@ -323,6 +365,14 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
                 }
                 internal
             });
+        // macOS:标题栏悬浮融入侧栏(红绿灯直接落在 UI 上),对齐新设计;
+        // UI 侧在 mac 壳内为侧栏顶部预留拖拽区
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+        }
         // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→壳配置 链路,
         // 结果经本地回环上报(无头环境唯一可靠的回读通道)
         if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
@@ -381,7 +431,13 @@ fn main() {
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(Tray(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![get_config, save_config])
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            host_info,
+            update_check,
+            update_install
+        ])
         .setup(|app| {
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle()) {

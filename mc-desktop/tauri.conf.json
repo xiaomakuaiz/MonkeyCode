@@ -36,6 +36,9 @@
             "core:default",
             "allow-get-config",
             "allow-save-config",
+            "allow-host-info",
+            "allow-update-check",
+            "allow-update-install",
             "dialog:allow-open",
             "opener:allow-open-url",
             "opener:allow-default-urls"

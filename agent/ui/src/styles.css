@@ -1,61 +1,42 @@
-/* 样式取自「MonkeyCode 原型(离线版)」:设计令牌 + 内联样式覆盖不到的部分
- * (hover、滚动条、keyframes、markdown 渲染产物)。布局与间距全部以内联样式
- * 写在组件里,数值与原型逐一对应。 */
+/* 设计令牌与全局样式,取自「MonkeyCode 桌面应用设计」(浅色绿调):
+ * 布局与间距以内联样式写在组件里,数值与设计稿逐一对应;
+ * 这里只放变量、hover 工具类、keyframes、滚动条与 markdown 渲染产物。 */
 :root {
-  --bg: #131316;
-  --side: #0e0e10;
-  --card: rgba(255, 255, 255, 0.04);
-  --card2: rgba(255, 255, 255, 0.07);
-  --cardh: rgba(255, 255, 255, 0.09);
-  --line: rgba(255, 255, 255, 0.05);
-  --t1: #fafafa;
-  --t2: #d8d8de;
-  --t3: #a1a1ac;
-  --t4: #71717c;
-  --t5: #55555e;
-  --amber: #10b981;
-  --amberT: #34d399;
-  --amberBg: rgba(16, 185, 129, 0.08);
-  --amberBd: rgba(16, 185, 129, 0.28);
-  --ok: #34d399;
-  --err: #f87171;
-  --onAmber: #04130c;
-  --codeBg: rgba(0, 0, 0, 0.35);
-  --addBg: rgba(52, 211, 153, 0.07);
-  --addT: #9fe8c9;
-  --delBg: rgba(248, 113, 113, 0.08);
-  --delT: #f0a8a8;
-  --pop: #1b1b1f;
-  --shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
-}
-
-/* 亮色主题(原型 .mc-root.light 的变量集,类挂在 <html> 上) */
-:root.light {
-  --bg: #f7f6f4;
-  --side: #efedea;
-  --card: rgba(0, 0, 0, 0.04);
-  --card2: rgba(0, 0, 0, 0.07);
-  --cardh: rgba(0, 0, 0, 0.09);
-  --line: rgba(0, 0, 0, 0.06);
-  --t1: #1f1d1a;
-  --t2: #44413c;
-  --t3: #6b665e;
-  --t4: #8f8a82;
-  --t5: #b3ada3;
-  --amber: #059669;
-  --amberT: #047857;
-  --amberBg: rgba(5, 150, 105, 0.09);
-  --amberBd: rgba(5, 150, 105, 0.3);
-  --ok: #16a34a;
-  --err: #dc2626;
-  --onAmber: #fff;
-  --codeBg: rgba(0, 0, 0, 0.05);
-  --addBg: rgba(22, 163, 74, 0.08);
-  --addT: #15803d;
-  --delBg: rgba(220, 38, 38, 0.07);
-  --delT: #b91c1c;
-  --pop: #ffffff;
-  --shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  --bg: #fcfdfc;            /* 主区底色 */
+  --side: #eef1ee;          /* 侧栏底色 */
+  --line: rgba(30, 40, 35, 0.12);
+  --line2: rgba(30, 40, 35, 0.08);
+  --t1: #1d221f;            /* 标题/正文强调 */
+  --t2: #2a302b;            /* 正文 */
+  --t3: #59605a;            /* 次级文字/图标 */
+  --t4: #7b827c;            /* 分组标题/弱文字 */
+  --t5: #8a918b;            /* 更弱 */
+  --t6: #a8afa9;            /* 最弱/占位 */
+  --acc: #1f8a5b;           /* 品牌绿 */
+  --accH: #25a06b;          /* 品牌绿 hover */
+  --accBg: rgba(31, 138, 91, 0.12);
+  --accBd: rgba(31, 138, 91, 0.2);
+  --onAcc: #fff;
+  --ok: #28a866;
+  --err: #c2503e;
+  --errBg: rgba(194, 80, 62, 0.09);
+  --warn: #a16207;
+  --warnBg: rgba(232, 193, 90, 0.14);
+  --warnBd: rgba(161, 98, 7, 0.35);
+  --card: #ffffff;
+  --cardBd: rgba(30, 40, 35, 0.1);
+  --cardSh: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --hov: rgba(120, 130, 125, 0.12);
+  --hov2: rgba(120, 130, 125, 0.18);
+  --hov3: rgba(120, 130, 125, 0.25);
+  --pop: #fcfdfd;
+  --shadow: 0 8px 28px rgba(30, 45, 38, 0.2);
+  --codeBg: rgba(30, 40, 35, 0.05);
+  --userBg: #e9f2ec;
+  --addBg: rgba(40, 168, 102, 0.08);
+  --addT: #1c7a4b;
+  --delBg: rgba(194, 80, 62, 0.08);
+  --delT: #a63d2e;
 }
 
 * { box-sizing: border-box; }
@@ -63,16 +44,17 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
   background: var(--bg);
-  color: var(--t2);
-  font-size: 13.5px;
+  color: var(--t1);
+  font-size: 13px;
+  overflow: hidden;
 }
 
-a { color: var(--amberT); }
-a:hover { color: var(--amber); }
+a { color: var(--acc); text-decoration: none; }
+a:hover { color: #166b46; text-decoration: underline; }
 input, textarea, select, button { font-family: inherit; }
-::placeholder { color: var(--t5); }
+textarea::placeholder, input::placeholder { color: var(--t6); }
 
 @keyframes mcspin { to { transform: rotate(360deg); } }
 @keyframes mcpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -81,25 +63,34 @@ input, textarea, select, button { font-family: inherit; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.24); }
-* { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.14) transparent; }
-:root.light ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); }
-:root.light ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.24); }
-:root.light * { scrollbar-color: rgba(0, 0, 0, 0.14) transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(110, 120, 115, 0.22);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(110, 120, 115, 0.38); background-clip: content-box; }
+* { scrollbar-width: thin; scrollbar-color: rgba(110, 120, 115, 0.22) transparent; }
 
-/* hover 态(原型经 style-hover 实现,这里等价成工具类) */
-.hv-card:hover { background: var(--card) !important; }
-.hv-card2:hover { background: var(--card2) !important; }
-.hv-cardh:hover { background: var(--cardh) !important; }
+/* hover 态(设计稿经 style-hover 表达,这里等价成工具类;
+ * WKWebView 下组件对关键交互仍以状态控制 hover,类是浏览器模式的补充) */
+.hv:hover { background: var(--hov) !important; }
+.hv2:hover { background: var(--hov2) !important; }
+.hv3:hover { background: var(--hov3) !important; }
 .hv-t1:hover { color: var(--t1) !important; }
-.hv-t3:hover { color: var(--t3) !important; }
 .hv-err:hover { color: var(--err) !important; }
-.hv-op:hover { opacity: 0.85; }
+.hv-errbg:hover { background: var(--errBg) !important; }
+.hv-op:hover { filter: brightness(0.97); }
+.hv-acc:hover { background: var(--accH) !important; }
+.hv-accbg:hover { background: rgba(31, 138, 91, 0.07) !important; }
+.hv-bd:hover { border-color: var(--acc) !important; }
 
 /* markdown 渲染产物(无法内联) */
+.md { font-size: 13.5px; line-height: 1.8; color: var(--t2); }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
+.md ul, .md ol { margin: 0 0 10px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.md p { margin: 0 0 10px; }
 .md pre {
   background: var(--codeBg);
   border-radius: 9px;
@@ -108,7 +99,7 @@ input, textarea, select, button { font-family: inherit; }
   font: 12px/1.7 ui-monospace, Menlo, monospace;
 }
 .md code {
-  background: var(--card2);
+  background: var(--codeBg);
   border-radius: 4px;
   padding: 1px 5px;
   font-family: ui-monospace, Menlo, monospace;

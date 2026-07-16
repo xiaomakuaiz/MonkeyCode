@@ -5,15 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MonkeyCode</title>
     <style>
-      html, body { background: #131316; }
-      html.light, html.light body { background: #f7f6f4; }
+      html, body { background: #fcfdfc; }
     </style>
-    <script>
-      // 首帧前应用持久化主题,避免亮色用户看到深色闪屏
-      try {
-        if (localStorage.getItem("mc.theme") === "light") document.documentElement.classList.add("light");
-      } catch { /* localStorage 不可用则保持深色 */ }
-    </script>
   </head>
   <body>
     <div id="root"></div>
