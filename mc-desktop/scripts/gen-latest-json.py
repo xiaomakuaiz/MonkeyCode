@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 URL_BASE = "https://release.monkeycode-ai.com/public/desktop/"
 
-version = json.loads((ROOT / "tauri.conf.json").read_text())["version"]
+# 显式 UTF-8:Windows 的 Python 默认用 locale 编码(cp1252),读含中文的文件会炸
+version = json.loads((ROOT / "tauri.conf.json").read_text(encoding="utf-8"))["version"]
 short = version.removesuffix(".0.0")  # 26071401.0.0 → 26071401
 
 platform = sys.argv[1] if len(sys.argv) > 1 else "macos"
@@ -56,11 +57,11 @@ out = bundle / "updater"
 out.mkdir(exist_ok=True)
 shutil.copy2(src, out / name)
 
-entry = {"signature": sig.read_text(), "url": URL_BASE + name}
+entry = {"signature": sig.read_text(encoding="utf-8"), "url": URL_BASE + name}
 manifest = {
     "version": version,
     "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "platforms": {t: entry for t in targets},
 }
-(out / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+(out / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(f"updater 产物就绪: {out / name} + {manifest_name}(版本 {version})")
