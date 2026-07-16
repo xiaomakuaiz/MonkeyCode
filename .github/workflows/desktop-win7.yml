@@ -20,6 +20,8 @@ env:
   GO_WIN7_VERSION: patched-1.26.5 # 与 agent/go.mod 的 go 1.26.5 对应
   WEBVIEW2_VERSION: 109.0.1518.78
   WEBVIEW2_CAB_SHA256: "7622281cf83de1a35e3a471f432f7a897d65f0a7d3975df08512b7b253dd45c7"
+  YY_THUNKS_VERSION: v1.2.1
+  YY_THUNKS_SHA256: "36b6cf1f8f9ac0d05863140d20d8ca70a796775e520fed2842667b517a867f52"
 
 jobs:
   build:
@@ -93,15 +95,27 @@ jobs:
           test -f "$RUNTIME_DIR/msedgewebview2.exe"
           ls "$RUNTIME_DIR" | head
 
+      # YY-Thunks:链接期把 Win8+ API 的导入(如 WebView2LoaderStatic.lib 引用的
+      # EventSetInformation)替换为本地 thunk(运行时 GetProcAddress,缺失时优雅降级),
+      # 一次性消除整类"无法定位程序输入点"启动失败,目标机无需补 KB
+      - name: Download YY-Thunks
+        working-directory: mc-desktop
+        run: |
+          curl -sL -o yy-thunks.zip \
+            "https://github.com/Chuyu-Team/YY-Thunks/releases/download/${YY_THUNKS_VERSION}/YY-Thunks-Objs.zip"
+          echo "${YY_THUNKS_SHA256}  yy-thunks.zip" | sha256sum -c -
+          unzip -o -q yy-thunks.zip -d yy-thunks
+          test -f yy-thunks/objs/x64/YY_Thunks_for_Win7.obj
+
       # 静态 CRT:Win7 上未必有 VC++ 运行库,自包含省去 redist 前置
       - name: Build NSIS installer (unsigned)
         working-directory: mc-desktop
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
           # 断言 1.77.2(≥1.78 编出的 exe 最低要求 Win10,构建会成功但产物在 Win7 崩)
           rustup default 1.77.2
           rustc --version | grep -F "1.77.2"
+          YY_OBJ=$(cygpath -w "$PWD/yy-thunks/objs/x64/YY_Thunks_for_Win7.obj")
+          export RUSTFLAGS="-C target-feature=+crt-static -C link-arg=$YY_OBJ"
           npx --yes @tauri-apps/cli@^2 build \
             --config tauri.windows.conf.json --config tauri.win7.conf.json \
             -- --locked
