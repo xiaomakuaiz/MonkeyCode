@@ -67,6 +67,19 @@ export const setSessionArchived = (id: string, archived: boolean) =>
     body: JSON.stringify({ archived }),
   });
 
+/** 上传对话里粘贴/拖入的图片到会话工作区 .mc-agent/uploads/,返回工作区相对路径。 */
+export const uploadImage = (sessionId: string, mediaType: string, dataB64: string) =>
+  api<{ path: string }>(`/api/sessions/${sessionId}/uploads`, {
+    method: "POST",
+    body: JSON.stringify({ media_type: mediaType, data: dataB64 }),
+  });
+
+/** 已上传图片的回读 URL(<img> 无法带请求头,token 走查询参数)。 */
+export function uploadImageURL(sessionId: string, path: string): string {
+  const name = path.split("/").pop() ?? "";
+  return `/api/sessions/${sessionId}/uploads/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
+}
+
 // ==================== 宿主(桌面壳)集成 ====================
 
 interface TauriGlobal {
@@ -110,6 +123,39 @@ export async function saveHostConfig(config: HostConfig): Promise<void> {
 /** 是否 macOS 桌面壳(标题栏为 Overlay,侧栏顶部须为红绿灯预留拖拽区)。 */
 export function isMacShell(): boolean {
   return inDesktopShell() && /Mac/.test(navigator.userAgent);
+}
+
+/** 是否 Windows 桌面壳(壳去掉了原生装饰栏,UI 须自绘 36px 标题栏)。 */
+export function isWindowsShell(): boolean {
+  return inDesktopShell() && /Windows/.test(navigator.userAgent);
+}
+
+// 窗口控制(自绘标题栏按钮用):core window 命令不带 label 即作用于调用方窗口。
+// 关闭走壳的 CloseRequested 拦截 → 隐藏到托盘,与原生关闭按钮行为一致。
+
+function windowCmd(cmd: string): Promise<unknown> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return Promise.reject(new Error("非桌面壳环境"));
+  return tauri.core.invoke(`plugin:window|${cmd}`);
+}
+
+export const windowMinimize = () => windowCmd("minimize").catch(console.error);
+export const windowToggleMaximize = () => windowCmd("toggle_maximize").catch(console.error);
+export const windowClose = () => windowCmd("close").catch(console.error);
+
+export async function windowIsMaximized(): Promise<boolean> {
+  try {
+    return (await windowCmd("is_maximized")) as boolean;
+  } catch {
+    return false;
+  }
+}
+
+/** 监听窗口尺寸变化(最大化/还原图标切换用);返回解除监听函数。 */
+export function onWindowResized(cb: () => void): () => void {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  const unlisten = tauri?.event?.listen?.("tauri://resize", cb);
+  return () => void unlisten?.then((f) => f());
 }
 
 /** 宿主信息(应用版本等);非壳环境返回 null。 */

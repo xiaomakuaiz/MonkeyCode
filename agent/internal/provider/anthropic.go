@@ -38,12 +38,63 @@ func NewAnthropic(baseURL, apiKey, model string) *AnthropicClient {
 func (c *AnthropicClient) Model() string { return c.model }
 
 type anthropicReq struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
-	Messages  []Message `json:"messages"`
-	Tools     []ToolDef `json:"tools,omitempty"`
-	Stream    bool      `json:"stream"`
+	Model     string      `json:"model"`
+	MaxTokens int         `json:"max_tokens"`
+	System    string      `json:"system,omitempty"`
+	Messages  []awMessage `json:"messages"`
+	Tools     []ToolDef   `json:"tools,omitempty"`
+	Stream    bool        `json:"stream"`
+}
+
+// awBlock Anthropic 线上内容块。与内部 ContentBlock 的差异:tool_result 的
+// content 在线上可为字符串或块数组(富内容结果,如图片),内部模型用
+// Content/Blocks 两个字段表达,发送前在此归一。
+type awBlock struct {
+	Type      BlockType       `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   any             `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+	Source    *ImageSource    `json:"source,omitempty"`
+}
+
+type awMessage struct {
+	Role    Role      `json:"role"`
+	Content []awBlock `json:"content"`
+}
+
+func toAnthropicWire(msgs []Message) []awMessage {
+	out := make([]awMessage, len(msgs))
+	for i, m := range msgs {
+		blocks := make([]awBlock, len(m.Content))
+		for j, b := range m.Content {
+			w := awBlock{
+				Type: b.Type, Text: b.Text,
+				Thinking: b.Thinking, Signature: b.Signature,
+				ID: b.ID, Name: b.Name, Input: b.Input,
+				ToolUseID: b.ToolUseID, IsError: b.IsError, Source: b.Source,
+			}
+			if b.Type == BlockToolResult {
+				if len(b.Blocks) > 0 {
+					inner := make([]awBlock, len(b.Blocks))
+					for k, ib := range b.Blocks {
+						inner[k] = awBlock{Type: ib.Type, Text: ib.Text, Source: ib.Source}
+					}
+					w.Content = inner
+				} else if b.Content != "" {
+					w.Content = b.Content
+				}
+			}
+			blocks[j] = w
+		}
+		out[i] = awMessage{Role: m.Role, Content: blocks}
+	}
+	return out
 }
 
 // HTTPError 非 2xx 响应。
@@ -78,7 +129,7 @@ func (c *AnthropicClient) Stream(ctx context.Context, req Request, h *StreamHand
 		Model:     c.model,
 		MaxTokens: maxTokens,
 		System:    req.System,
-		Messages:  req.Messages,
+		Messages:  toAnthropicWire(req.Messages),
 		Tools:     req.Tools,
 		Stream:    true,
 	})

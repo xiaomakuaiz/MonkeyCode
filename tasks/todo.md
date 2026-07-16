@@ -610,3 +610,74 @@
 - [x] 全程无 pageerror/console error
 - [ ] macOS 红绿灯 Overlay 与桌面壳内 关于/检查更新 卡片待真机回归(本机无 mac/无显示)
 
+
+# 2026-07-16:Windows 自绘标题栏 + Windows 自动更新
+
+> 计划:~/.claude/plans/cozy-enchanting-crescent.md(已批准)
+> 取向:36px 细自绘标题栏;更新清单拆分端点(latest-windows.json / latest-win7.json)
+
+## A. Windows 无边框 + 自绘标题栏
+
+- [x] main.rs:主窗口 Windows 分支 decorations(false)
+- [x] tauri.conf.json:kernel-ui 加 window 权限(已对照 gen/schemas 核实名字)
+- [x] client.ts:isWindowsShell + 窗口控制封装
+- [x] titlebar.tsx(新):36px 标题栏(拖拽区 + 最小化/最大化/关闭)
+- [x] App.tsx:根布局改 column + 条件渲染 TitleBar
+
+## B. Windows 自动更新
+
+- [x] tauri.windows.conf.json:updater 端点 → latest-windows.json
+- [x] main.rs:build_updater 加 on_before_exit 回收内核(防 NSIS 文件占用)
+- [x] gen-latest-json.py:平台模式 macos/windows/win7
+- [x] Makefile:windows-release 目标
+- [x] desktop-windows.yml / desktop-win7.yml:secret + release 构建 + 清单 + artifact
+- [x] README:发布流程文档
+
+## 验证
+
+- [x] agent/ui npm run build 过;mc-desktop cargo check 过
+- [x] gen-latest-json.py 三模式假产物 dry-run
+- [ ] 推 CI 核对产物(exe + .sig + 清单)
+- [ ] Windows 实机人工验证(标题栏 + 更新全链路)
+
+## Review
+
+- 标题栏:壳 Windows 分支 decorations(false);UI 新增 titlebar.tsx(36px,拖拽区 +
+  最小化/最大化-还原/关闭,close hover 红底白字),App 根布局改 column 条件渲染;
+  窗口命令走 core.invoke("plugin:window|…")(与 dialog/opener 惯例一致),权限名
+  已对照 gen/schemas 核实。关闭按钮走壳的 CloseRequested 拦截 → 隐藏到托盘。
+- 自动更新:根因 = Windows 构建无签名 updater 产物 + latest.json 无 windows 条目。
+  端点拆分(latest-windows.json / latest-win7.json),gen-latest-json.py 平台模式化,
+  两条 Windows CI 加 secret 发布构建(无 secret 降级不红),Makefile 加 windows-release。
+  关键坑修复:updater 在 Windows 硬退进程不走 RunEvent::Exit,build_updater 加
+  on_before_exit 先 stop_kernel,否则 mc-agent.exe 锁文件 NSIS 安装必败。
+- 验证:tsc+vite 过;cargo check 过;清单脚本三模式假产物 dry-run 结构正确;
+  无头 Chromium 截图(mock Windows 壳)标题栏渲染正确,浏览器模式无标题栏。
+- 遗留:现存 Windows 安装端点烧的是 latest.json,需手动重装一次进新通道(已确认接受);
+  Win11 无边框失去最大化按钮 hover 的 Snap Layouts 弹层。
+
+# 功能:会话支持粘贴/拖拽图片(2026-07-16)
+
+> 方案(与用户对齐):图片落成工作区文件 + 对话文本附路径,模型经 read_file
+> 查看——不动 RunTurn/帧协议/压缩,图片可被工具二次处理(裁剪/OCR/素材)。
+> 三协议对齐:Anthropic 原生 tool_result 图片块;OpenAI Chat/Responses 的
+> 工具结果不支持图片(协议限制),序列化层转"占位文本 + 合成 user 图片消息",
+> 归一化历史仍是标准 tool_result 块,跨协议切模型一致。
+
+- [x] provider:BlockImage/ImageSource/tool_result Blocks;anthropic 线格式转换;
+      openai/openai_responses 降级转换(flattenToolResult)
+- [x] tools:BlocksTool 接口;read_file 图片分支(解码/1568px 缩放/重编码,
+      x/image 依赖;小图原字节直传);工具描述更新
+- [x] loop:execToolUse 走 BlocksTool,单文本块压平;compact 摘要图片占位 [图片]
+- [x] server:POST/GET /api/sessions/{id}/uploads(白名单/20MB 上限/防穿越/
+      uploads/.gitignore 自免疫)
+- [x] UI:composer 粘贴/拖拽(蒙层)→ 上传 → 缩略 chips(可移除)→ 发送拼
+      [图片] 路径行;用户气泡缩略图 + 点击大图;排队兼容
+
+## 验证
+
+- [x] Go 单测:三协议 wire 形状 ×3、read_file 图片分支 ×4、上传路由(含防穿越)、
+      集成(read_file 读图 → 图片块进入下一次 LLM 请求历史);全量 go test 通过
+- [x] UI 端到端(无头 Chromium):拖入 PNG → chip → 发送 → 气泡缩略图加载成功
+      (naturalWidth=100)→ 文件落盘 .mc-agent/uploads/ + .gitignore;无 console 错误
+- [ ] 真实视觉模型冒烟(本机无可用 vision key,待网关 key 后补)

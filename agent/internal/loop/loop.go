@@ -302,6 +302,25 @@ func (e *Engine) execToolUse(ctx context.Context, tu provider.ContentBlock) prov
 		},
 	}
 
+	// 富内容工具(BlocksTool,如 read_file 读图)结果为块列表;单文本块压平回
+	// 普通字符串结果,保持历史形状简单
+	if bt, ok := tool.(tools.BlocksTool); ok {
+		blocks, display, err := bt.ExecuteBlocks(ctx, env, tu.Input)
+		if err != nil {
+			if ctx.Err() != nil {
+				finish("failed", "已中断")
+				return result("工具执行被中断", true)
+			}
+			finish("failed", err.Error())
+			return result(err.Error(), true)
+		}
+		finish("completed", display)
+		if len(blocks) == 1 && blocks[0].Type == provider.BlockText {
+			return result(blocks[0].Text, false)
+		}
+		return provider.ContentBlock{Type: provider.BlockToolResult, ToolUseID: tu.ID, Blocks: blocks}
+	}
+
 	out, err := tool.Execute(ctx, env, tu.Input)
 	if err != nil {
 		if ctx.Err() != nil {

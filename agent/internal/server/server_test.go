@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1210,5 +1211,130 @@ func TestArchiveSession(t *testing.T) {
 	meta, err := session.ReadMeta(srv.opts.SessionRoot, live)
 	if err != nil || !meta.Archived {
 		t.Fatalf("轮次收尾后归档标记应保留: %+v err=%v", meta, err)
+	}
+}
+
+// ==================== 图片上传(对话粘贴/拖拽) ====================
+
+func TestUploadAndFetchImage(t *testing.T) {
+	_, ts := newTestServer(t, &stubProvider{})
+	workdir := t.TempDir()
+	id := createSession(t, ts, workdir)
+
+	// 1x1 PNG
+	pngB64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	resp, body := apiReq(t, ts, "POST", "/api/sessions/"+id+"/uploads", "test-token",
+		fmt.Sprintf(`{"media_type":"image/png","data":%q}`, pngB64))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload status = %d: %s", resp.StatusCode, body)
+	}
+	var up struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(body, &up); err != nil || !strings.HasPrefix(up.Path, ".mc-agent/uploads/img-") {
+		t.Fatalf("返回路径不对: %s", body)
+	}
+	// 文件落在工作区 + gitignore 自免疫
+	if _, err := os.Stat(filepath.Join(workdir, up.Path)); err != nil {
+		t.Fatalf("上传文件不存在: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, ".mc-agent", "uploads", ".gitignore")); err != nil {
+		t.Fatalf("uploads/.gitignore 缺失: %v", err)
+	}
+
+	// 回读(气泡缩略图路径)
+	name := strings.TrimPrefix(up.Path, ".mc-agent/uploads/")
+	resp, body = apiReq(t, ts, "GET", "/api/sessions/"+id+"/uploads/"+name, "test-token", "")
+	if resp.StatusCode != http.StatusOK || len(body) == 0 {
+		t.Fatalf("回读失败: %d", resp.StatusCode)
+	}
+
+	// 非法类型/文件名
+	resp, _ = apiReq(t, ts, "POST", "/api/sessions/"+id+"/uploads", "test-token",
+		`{"media_type":"application/pdf","data":"AAAA"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("非白名单类型应 400,实际 %d", resp.StatusCode)
+	}
+	resp, _ = apiReq(t, ts, "GET", "/api/sessions/"+id+"/uploads/..%2Fsecret", "test-token", "")
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("路径穿越应被拒绝")
+	}
+}
+
+// captureStub 记录每次请求的 provider stub(验证图片块进入下一次请求历史)。
+type captureStub struct {
+	results []*provider.Result
+	idx     int
+	mu      sync.Mutex
+	reqs    []provider.Request
+}
+
+func (s *captureStub) Model() string { return "stub" }
+
+func (s *captureStub) Stream(_ context.Context, req provider.Request, _ *provider.StreamHandler) (*provider.Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reqs = append(s.reqs, req)
+	if s.idx >= len(s.results) {
+		return nil, fmt.Errorf("stub 脚本耗尽")
+	}
+	res := s.results[s.idx]
+	s.idx++
+	return res, nil
+}
+
+// TestReadImageToolResultReachesNextRequest read_file 读图后,图片块必须作为
+// tool_result 富内容进入消息历史,并出现在下一次 LLM 请求里(模型真正"看到"图)。
+func TestReadImageToolResultReachesNextRequest(t *testing.T) {
+	workdir := t.TempDir()
+	// 1x1 PNG
+	png, _ := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+	if err := os.WriteFile(filepath.Join(workdir, "shot.png"), png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &captureStub{results: []*provider.Result{
+		toolUseResult("read_file", `{"path":"shot.png"}`),
+		textResult("这张图是一个像素"),
+	}}
+	srv, err := New(Options{
+		Token:       "test-token",
+		SessionRoot: t.TempDir(),
+		Model:       "stub",
+		NewProvider: func(string) (provider.Provider, error) { return stub, nil },
+		AskTimeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	id := createSession(t, ts, workdir)
+	conn := dialWS(t, ts, id)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("看看 shot.png")})
+	wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.reqs) != 2 {
+		t.Fatalf("应有两次 LLM 请求,实际 %d", len(stub.reqs))
+	}
+	var found bool
+	for _, m := range stub.reqs[1].Messages {
+		for _, b := range m.Content {
+			if b.Type != provider.BlockToolResult {
+				continue
+			}
+			for _, ib := range b.Blocks {
+				if ib.Type == provider.BlockImage && ib.Source != nil && ib.Source.MediaType == "image/png" && ib.Source.Data != "" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("第二次请求的历史中缺少 tool_result 图片块: %+v", stub.reqs[1].Messages)
 	}
 }

@@ -22,7 +22,15 @@ const (
 	BlockThinking   BlockType = "thinking"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
+	BlockImage      BlockType = "image"
 )
+
+// ImageSource 图片数据(形状对齐 Anthropic 的 source 对象)。
+type ImageSource struct {
+	Type      string `json:"type"`       // 固定 base64
+	MediaType string `json:"media_type"` // image/png 等
+	Data      string `json:"data"`       // base64 编码的图片字节
+}
 
 // ContentBlock 消息内容块。
 type ContentBlock struct {
@@ -43,7 +51,14 @@ type ContentBlock struct {
 	// tool_result
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
+	// Blocks 富内容工具结果(如 read_file 读图):非空时 Content 忽略,
+	// 序列化交由各 provider 客户端(Anthropic 转 content 块数组;OpenAI 系
+	// 协议的工具结果不支持图片,转为占位文本 + 合成 user 图片消息)。
+	Blocks  []ContentBlock `json:"blocks,omitempty"`
+	IsError bool           `json:"is_error,omitempty"`
+
+	// image(source 对齐 Anthropic base64 形状)
+	Source *ImageSource `json:"source,omitempty"`
 }
 
 // Message 一条对话消息。

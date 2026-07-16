@@ -1,6 +1,14 @@
 // 会话视图:标题栏 / 对话流 / 运行条 / 排队 chip / composer。
 // 布局与数值取自设计稿 Chat 屏;协议交互(发送/审批/切模型等)经 props 回调 App。
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type CSSProperties,
+  type DragEvent,
+  type KeyboardEvent,
+} from "react";
 import { LogList, MONO } from "./components";
 import {
   IconArchive,
@@ -198,6 +206,10 @@ export function ChatView({
   models,
   currentModel,
   yolo,
+  atts,
+  onAddImages,
+  onRemoveAtt,
+  uploadUrl,
   onSend,
   onStop,
   onClearQueued,
@@ -218,6 +230,11 @@ export function ChatView({
   models: ModelInfo[];
   currentModel: string;
   yolo: boolean;
+  /** 待发送图片附件(已上传到工作区) */
+  atts: { path: string; preview: string }[];
+  onAddImages: (files: File[]) => void;
+  onRemoveAtt: (i: number) => void;
+  uploadUrl?: (path: string) => string;
   onSend: () => void;
   onStop: () => void;
   onClearQueued: () => void;
@@ -233,6 +250,8 @@ export function ChatView({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
   const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0); // dragenter/leave 在子元素间反复触发,计数配对
 
   // 自动滚动(仅当用户停留在底部)
   useEffect(() => {
@@ -261,6 +280,43 @@ export function ChatView({
     }
   };
 
+  // 粘贴图片:剪贴板里的 image item 上传为附件(文本粘贴不受影响)
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files: File[] = [];
+    for (const item of e.clipboardData.items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length) {
+      e.preventDefault();
+      onAddImages(files);
+    }
+  };
+
+  // 拖拽图片进对话区
+  const onDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    if (![...e.dataTransfer.items].some((i) => i.kind === "file")) return;
+    e.preventDefault();
+    dragDepth.current++;
+    setDragging(true);
+  };
+  const onDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (--dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  };
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+    if (files.length) onAddImages(files);
+  };
+
   const workdir = meta?.workdir ?? "";
   const empty = chat.items.length === 0 && !chat.running;
   const openPerm = [...chat.items].reverse().find((it) => it.kind === "perm" && it.state === "open") as
@@ -287,7 +343,34 @@ export function ChatView({
   };
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+    <div
+      style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 8,
+            zIndex: 20,
+            border: "2px dashed var(--acc)",
+            borderRadius: 14,
+            background: "rgba(31,138,91,.06)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            fontSize: 14,
+            fontWeight: 700,
+            color: "var(--acc)",
+          }}
+        >
+          松开以添加图片
+        </div>
+      )}
       {/* ==== 标题栏(空白区可拖拽窗口,macOS 常规行为)==== */}
       <div data-tauri-drag-region="" style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
@@ -455,7 +538,7 @@ export function ChatView({
       ) : (
         <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
-            <LogList items={chat.items} onPermAnswer={onPermAnswer} onOpenChild={onOpenChild} />
+            <LogList items={chat.items} onPermAnswer={onPermAnswer} onOpenChild={onOpenChild} uploadUrl={uploadUrl} />
           </div>
         </div>
       )}
@@ -537,14 +620,51 @@ export function ChatView({
             flexDirection: "column",
           }}
         >
+          {atts.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
+              {atts.map((a, i) => (
+                <span key={a.path} style={{ position: "relative", display: "flex" }}>
+                  <img
+                    src={a.preview}
+                    alt={a.path}
+                    title={a.path}
+                    style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: "1px solid var(--cardBd)" }}
+                  />
+                  <button
+                    title="移除"
+                    onClick={() => onRemoveAtt(i)}
+                    style={{
+                      position: "absolute",
+                      top: -5,
+                      right: -5,
+                      width: 17,
+                      height: 17,
+                      border: "1px solid var(--line)",
+                      borderRadius: "50%",
+                      background: "var(--card)",
+                      boxShadow: "var(--cardSh)",
+                      cursor: "pointer",
+                      padding: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <IconX size={8} color="var(--t3)" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             ref={taRef}
             rows={2}
             value={input}
-            placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…"}
+            placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片可作为附件"}
             onChange={(e) => setInput(e.target.value)}
             onCompositionEnd={markImeEnd}
             onKeyDown={onKey}
+            onPaste={onPaste}
             style={{
               border: "none",
               outline: "none",
@@ -579,7 +699,7 @@ export function ChatView({
                 alignItems: "center",
                 justifyContent: "center",
                 flex: "none",
-                opacity: input.trim() ? 1 : 0.45,
+                opacity: input.trim() || atts.length > 0 ? 1 : 0.45,
               }}
             >
               <IconSend />

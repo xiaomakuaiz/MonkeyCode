@@ -38,10 +38,29 @@ func NewOpenAI(baseURL, apiKey, model string) *OpenAIClient {
 func (c *OpenAIClient) Model() string { return c.model }
 
 type oaiMessage struct {
+	// Content 通常为 string;带图片的 user 消息为 []oaiPart(多模态 parts 数组)
 	Role       string        `json:"role"`
-	Content    string        `json:"content,omitempty"`
+	Content    any           `json:"content,omitempty"`
 	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
+}
+
+// oaiPart 多模态内容分片(user 消息携带图片时使用)。
+type oaiPart struct {
+	Type     string `json:"type"` // text | image_url
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
+func oaiImagePart(src *ImageSource) oaiPart {
+	return oaiPart{
+		Type: "image_url",
+		ImageURL: &struct {
+			URL string `json:"url"`
+		}{URL: "data:" + src.MediaType + ";base64," + src.Data},
+	}
 }
 
 type oaiToolCall struct {
@@ -84,10 +103,11 @@ func convertMessages(system string, msgs []Message) []oaiMessage {
 		switch m.Role {
 		case RoleAssistant:
 			om := oaiMessage{Role: "assistant"}
+			var text string
 			for _, b := range m.Content {
 				switch b.Type {
 				case BlockText:
-					om.Content += b.Text
+					text += b.Text
 				case BlockToolUse:
 					tc := oaiToolCall{ID: b.ID, Type: "function"}
 					tc.Function.Name = b.Name
@@ -97,6 +117,9 @@ func convertMessages(system string, msgs []Message) []oaiMessage {
 					// OpenAI 协议不回传推理内容
 				}
 			}
+			if text != "" {
+				om.Content = text
+			}
 			out = append(out, om)
 		case RoleUser:
 			var texts []string
@@ -104,20 +127,74 @@ func convertMessages(system string, msgs []Message) []oaiMessage {
 				switch b.Type {
 				case BlockText:
 					texts = append(texts, b.Text)
+				case BlockImage:
+					// 顶层图片块(合成消息等):转 parts 数组,与文本一起发
+					// 实际组装在下方统一处理,这里先收集
 				case BlockToolResult:
-					content := b.Content
+					text, images := flattenToolResult(b)
 					if b.IsError {
-						content = "[错误] " + content
+						text = "[错误] " + text
 					}
-					out = append(out, oaiMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: content})
+					out = append(out, oaiMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: text})
+					// OpenAI 协议的 tool 消息不支持图片:紧跟一条合成 user
+					// 消息携带图片,模型实际可见,效果对齐 Anthropic 的
+					// tool_result 图片块
+					if len(images) > 0 {
+						parts := []oaiPart{{Type: "text", Text: "以下是上一条工具结果中的图片:"}}
+						for _, src := range images {
+							parts = append(parts, oaiImagePart(src))
+						}
+						out = append(out, oaiMessage{Role: "user", Content: parts})
+					}
 				}
 			}
-			if len(texts) > 0 {
+			// 用户消息本体:纯文本为 string;携带顶层图片块时转 parts 数组
+			var images []*ImageSource
+			for _, b := range m.Content {
+				if b.Type == BlockImage && b.Source != nil {
+					images = append(images, b.Source)
+				}
+			}
+			switch {
+			case len(images) > 0:
+				var parts []oaiPart
+				if len(texts) > 0 {
+					parts = append(parts, oaiPart{Type: "text", Text: strings.Join(texts, "\n")})
+				}
+				for _, src := range images {
+					parts = append(parts, oaiImagePart(src))
+				}
+				out = append(out, oaiMessage{Role: "user", Content: parts})
+			case len(texts) > 0:
 				out = append(out, oaiMessage{Role: "user", Content: strings.Join(texts, "\n")})
 			}
 		}
 	}
 	return out
+}
+
+// flattenToolResult 拆解工具结果:文本部分(纯 Content 或 Blocks 里的 text 块)
+// 与图片块分离,供不支持富工具结果的协议(OpenAI 系)降级处理。
+func flattenToolResult(b ContentBlock) (string, []*ImageSource) {
+	if len(b.Blocks) == 0 {
+		return b.Content, nil
+	}
+	var texts []string
+	var images []*ImageSource
+	for _, ib := range b.Blocks {
+		switch ib.Type {
+		case BlockText:
+			texts = append(texts, ib.Text)
+		case BlockImage:
+			if ib.Source != nil {
+				images = append(images, ib.Source)
+			}
+		}
+	}
+	if len(images) > 0 {
+		texts = append(texts, "(图片内容见下一条消息)")
+	}
+	return strings.Join(texts, "\n"), images
 }
 
 // Stream 实现 Provider。

@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -141,6 +143,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.auth(s.handleDeleteSession))
 	mux.HandleFunc("PATCH /api/sessions/{id}", s.auth(s.handlePatchSession))
 	mux.HandleFunc("GET /api/models", s.auth(s.handleListModels))
+	mux.HandleFunc("POST /api/sessions/{id}/uploads", s.auth(s.handleUpload))
+	mux.HandleFunc("GET /api/sessions/{id}/uploads/{name}", s.auth(s.handleGetUpload))
 	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
 	if s.opts.UI != nil {
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -448,6 +452,94 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meta)
+}
+
+// ==================== 图片上传(对话粘贴/拖拽) ====================
+
+// uploadExts 允许上传的图片 MIME → 扩展名。
+var uploadExts = map[string]string{
+	"image/png":  ".png",
+	"image/jpeg": ".jpg",
+	"image/gif":  ".gif",
+	"image/webp": ".webp",
+}
+
+const uploadMaxBytes = 20 * 1024 * 1024
+
+// handleUpload 保存对话里粘贴/拖入的图片到工作区 .mc-agent/uploads/,返回
+// 工作区相对路径。对话文本携带该路径,模型经 read_file 查看,或用工具按
+// 路径处理(裁剪/移动/当测试素材等)。
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	meta, err := session.ReadMeta(s.opts.SessionRoot, r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
+		return
+	}
+	var req struct {
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"` // base64 图片字节
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, uploadMaxBytes*2)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体解析失败: " + err.Error()})
+		return
+	}
+	ext, ok := uploadExts[req.MediaType]
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的图片类型: " + req.MediaType})
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(req.Data)
+	if err != nil || len(raw) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "图片数据无效"})
+		return
+	}
+	if len(raw) > uploadMaxBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("图片过大(%d 字节,上限 %d)", len(raw), uploadMaxBytes)})
+		return
+	}
+
+	dir := filepath.Join(meta.Workdir, ".mc-agent", "uploads")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "创建上传目录失败: " + err.Error()})
+		return
+	}
+	// uploads 不入库:目录内放自免疫的 .gitignore(仅首次创建)
+	gi := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(gi); os.IsNotExist(err) {
+		_ = os.WriteFile(gi, []byte("*\n"), 0o644)
+	}
+
+	base := "img-" + time.Now().Format("20060102-150405")
+	name := base + ext
+	for i := 2; ; i++ {
+		if _, err := os.Stat(filepath.Join(dir, name)); os.IsNotExist(err) {
+			break
+		}
+		name = fmt.Sprintf("%s-%d%s", base, i, ext)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "写入图片失败: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"path": ".mc-agent/uploads/" + name,
+	})
+}
+
+// handleGetUpload 回读已上传图片(UI 气泡缩略图用;<img> 无法带请求头,
+// 鉴权走 ?token= 查询参数,s.auth 已支持)。
+func (s *Server) handleGetUpload(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "非法文件名"})
+		return
+	}
+	meta, err := session.ReadMeta(s.opts.SessionRoot, r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "会话不存在"})
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(meta.Workdir, ".mc-agent", "uploads", name))
 }
 
 // ==================== WS ====================

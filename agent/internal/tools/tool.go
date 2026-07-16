@@ -61,6 +61,13 @@ type Parallelizable interface {
 	Parallelizable() bool
 }
 
+// BlocksTool 可选接口:结果可为富内容块(如图片)的工具。实现者的结果
+// 一律经 ExecuteBlocks 返回(loop 不再调 Execute);display 为 UI 工具卡
+// 展示用的一行文本。
+type BlocksTool interface {
+	ExecuteBlocks(ctx context.Context, env *Env, input json.RawMessage) (blocks []provider.ContentBlock, display string, err error)
+}
+
 // Registry 工具注册表。
 type Registry struct {
 	tools map[string]Tool

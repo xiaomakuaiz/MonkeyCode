@@ -7,12 +7,15 @@ import {
   createSession,
   deleteSession,
   inDesktopShell,
+  isWindowsShell,
   getHostInfo,
   listModels,
   listSessions,
   onHostEvent,
   setSessionArchived,
   updateCheck,
+  uploadImage,
+  uploadImageURL,
   type Conn,
   type UpdateStatus,
 } from "./client";
@@ -23,6 +26,7 @@ import { NewTaskView } from "./newtask";
 import { answerPerm, initialChat, reduceBatch, type ChatState } from "./reduce";
 import { groupByProject, Sidebar } from "./sidebar";
 import { SettingsView } from "./settings";
+import TitleBar from "./titlebar";
 import type { FileChange, Frame, LogItem, ModelInfo, SessionMeta } from "./types";
 
 /** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
@@ -114,6 +118,7 @@ export default function App() {
       setDrawerOpen(false);
       setDiff(null);
       setQueued(null);
+      setAtts([]);
       setSessionModel("");
       setYolo(false);
       setStatus("未连接");
@@ -133,6 +138,7 @@ export default function App() {
       setDrawerOpen(false);
       setDiff(null);
       setQueued(null);
+      setAtts([]);
       setSessionModel(model ?? "");
       setYolo(mode === "yolo");
       localStorage.setItem("mc.lastSession", id);
@@ -213,16 +219,48 @@ export default function App() {
     if (connRef.current?.send("user-input", { content: b64encode(queued) })) setQueued(null);
   }, [chat.running, queued]);
 
+  // 待发送的图片附件(已上传到工作区,发送时以 [图片] 路径行拼进消息文本)
+  const [atts, setAtts] = useState<{ path: string; preview: string }[]>([]);
+
+  const addImages = async (files: File[]) => {
+    if (!currentId) return;
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) continue;
+      if (f.size > 20 * 1024 * 1024) {
+        setStatus(`⚠ 图片 ${f.name} 过大(上限 20MB)`);
+        continue;
+      }
+      try {
+        const dataURL = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as string);
+          r.onerror = () => reject(new Error("读取文件失败"));
+          r.readAsDataURL(f);
+        });
+        const b64 = dataURL.slice(dataURL.indexOf(",") + 1);
+        const { path } = await uploadImage(currentId, f.type, b64);
+        setAtts((a) => [...a, { path, preview: dataURL }]);
+      } catch (e) {
+        setStatus("⚠ 图片上传失败: " + (e instanceof Error ? e.message : String(e)));
+      }
+    }
+  };
+
   const send = () => {
-    const text = input.trim();
+    const lines = atts.map((a) => `[图片] ${a.path}`);
+    const text = [input.trim(), ...lines].filter(Boolean).join("\n");
     if (!text || !connRef.current) return;
     if (chat.running) {
       // 运行中先排队,本轮结束自动发送(可点 ✕ 取消)
       setQueued(text);
       setInput("");
+      setAtts([]);
       return;
     }
-    if (connRef.current.send("user-input", { content: b64encode(text) })) setInput("");
+    if (connRef.current.send("user-input", { content: b64encode(text) })) {
+      setInput("");
+      setAtts([]);
+    }
   };
 
   const onPermAnswer = (id: string, action: "allow" | "always" | "persist" | "deny") => {
@@ -368,15 +406,19 @@ export default function App() {
     <div
       style={{
         display: "flex",
+        flexDirection: "column",
         width: "100vw",
         height: "100vh",
         background: "var(--bg)",
         color: "var(--t1)",
         fontSize: 13,
         overflow: "hidden",
-        position: "relative",
       }}
     >
+      {/* Windows 壳:装饰栏已去除,自绘 36px 标题栏(拖拽 + 窗口按钮) */}
+      {isWindowsShell() && <TitleBar />}
+      {/* 原根容器降级为内容行:改动抽屉的 absolute 以此为锚,始终盖在标题栏之下 */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
       <Sidebar
         sessions={sessions}
         currentId={currentId}
@@ -440,6 +482,10 @@ export default function App() {
             models={menuModels}
             currentModel={currentModel}
             yolo={yolo}
+            atts={atts}
+            onAddImages={(files) => void addImages(files)}
+            onRemoveAtt={(i) => setAtts((a) => a.filter((_, j) => j !== i))}
+            uploadUrl={currentId ? (p) => uploadImageURL(currentId, p) : undefined}
             onSend={send}
             onStop={() => connRef.current?.send("user-cancel", {})}
             onClearQueued={() => setQueued(null)}
@@ -579,6 +625,7 @@ export default function App() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

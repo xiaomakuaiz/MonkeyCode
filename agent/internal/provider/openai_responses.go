@@ -40,8 +40,10 @@ func (c *OpenAIResponsesClient) Model() string { return c.model }
 
 // respContent message 项内的内容块。
 type respContent struct {
-	Type string `json:"type"` // input_text | output_text
-	Text string `json:"text"`
+	Type string `json:"type"`           // input_text | output_text | input_image
+	Text string `json:"text,omitempty"` // input_text / output_text
+	// input_image(data URL)
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 // respItem Responses input/output 的一项。
@@ -104,23 +106,45 @@ func convertResponsesInput(msgs []Message) []respItem {
 			}
 		case RoleUser:
 			var texts []string
+			var images []*ImageSource
 			for _, b := range m.Content {
 				switch b.Type {
 				case BlockText:
 					texts = append(texts, b.Text)
+				case BlockImage:
+					if b.Source != nil {
+						images = append(images, b.Source)
+					}
 				case BlockToolResult:
-					content := b.Content
+					content, imgs := flattenToolResult(b)
 					if b.IsError {
 						content = "[错误] " + content
 					}
 					out = append(out, respItem{Type: "function_call_output", CallID: b.ToolUseID, Output: content})
+					// Responses 的 function_call_output 只收字符串:图片经合成
+					// user 消息补发,模型实际可见(对齐 Anthropic 行为)
+					if len(imgs) > 0 {
+						content := []respContent{{Type: "input_text", Text: "以下是上一条工具结果中的图片:"}}
+						for _, src := range imgs {
+							content = append(content, respContent{
+								Type: "input_image", ImageURL: "data:" + src.MediaType + ";base64," + src.Data,
+							})
+						}
+						out = append(out, respItem{Type: "message", Role: "user", Content: content})
+					}
 				}
 			}
-			if len(texts) > 0 {
-				out = append(out, respItem{
-					Type: "message", Role: "user",
-					Content: []respContent{{Type: "input_text", Text: strings.Join(texts, "\n")}},
-				})
+			if len(texts) > 0 || len(images) > 0 {
+				content := []respContent{}
+				if len(texts) > 0 {
+					content = append(content, respContent{Type: "input_text", Text: strings.Join(texts, "\n")})
+				}
+				for _, src := range images {
+					content = append(content, respContent{
+						Type: "input_image", ImageURL: "data:" + src.MediaType + ";base64," + src.Data,
+					})
+				}
+				out = append(out, respItem{Type: "message", Role: "user", Content: content})
 			}
 		}
 	}

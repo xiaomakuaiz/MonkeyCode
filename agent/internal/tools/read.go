@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 )
 
 const (
@@ -26,7 +28,8 @@ type readFileInput struct {
 func (t *ReadFile) Name() string { return "read_file" }
 
 func (t *ReadFile) Description() string {
-	return "读取工作区内的文件内容,输出带行号。大文件可用 offset/limit 分页读取。"
+	return "读取工作区内的文件内容,输出带行号。大文件可用 offset/limit 分页读取。" +
+		"也支持读取图片文件(png/jpg/gif/webp),将返回图片内容供查看。"
 }
 
 func (t *ReadFile) InputSchema() map[string]any {
@@ -45,6 +48,30 @@ func (t *ReadFile) Title(input json.RawMessage) string {
 	var in readFileInput
 	_ = json.Unmarshal(input, &in)
 	return "读取 " + in.Path
+}
+
+// ExecuteBlocks 实现 BlocksTool:图片文件返回图片块,其余走文本路径。
+func (t *ReadFile) ExecuteBlocks(ctx context.Context, env *Env, input json.RawMessage) ([]provider.ContentBlock, string, error) {
+	var in readFileInput
+	if err := unmarshalInput(input, &in); err != nil {
+		return nil, "", err
+	}
+	if IsImagePath(in.Path) {
+		p, err := ResolveForRead(env, in.Path)
+		if err != nil {
+			return nil, "", err
+		}
+		if st, serr := os.Stat(p); serr != nil || st.IsDir() {
+			// 不存在/是目录等按文本路径的报错口径处理
+		} else {
+			return ReadImageBlocks(p, in.Path)
+		}
+	}
+	out, err := t.Execute(ctx, env, input)
+	if err != nil {
+		return nil, "", err
+	}
+	return []provider.ContentBlock{{Type: provider.BlockText, Text: out}}, out, nil
 }
 
 func (t *ReadFile) Execute(_ context.Context, env *Env, input json.RawMessage) (string, error) {

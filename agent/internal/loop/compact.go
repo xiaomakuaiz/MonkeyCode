@@ -82,7 +82,24 @@ func renderTranscript(msgs []provider.Message) string {
 				if blk.IsError {
 					status = "(失败)"
 				}
-				fmt.Fprintf(&b, "[工具结果%s] %s\n", status, clip(blk.Content, 600))
+				content := blk.Content
+				// 富内容结果:文本部分照录,图片以占位符入摘要(不可静默丢弃,
+				// 否则压缩后模型不知道曾看过图;文件路径仍在文本里,可重新读)
+				if len(blk.Blocks) > 0 {
+					var parts []string
+					for _, ib := range blk.Blocks {
+						switch ib.Type {
+						case provider.BlockText:
+							parts = append(parts, ib.Text)
+						case provider.BlockImage:
+							parts = append(parts, "[图片]")
+						}
+					}
+					content = strings.Join(parts, " ")
+				}
+				fmt.Fprintf(&b, "[工具结果%s] %s\n", status, clip(content, 600))
+			case provider.BlockImage:
+				b.WriteString("[图片]\n")
 			}
 			// thinking 块不进摘要
 		}

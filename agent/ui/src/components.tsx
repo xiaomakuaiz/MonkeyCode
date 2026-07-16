@@ -330,36 +330,98 @@ function TurnDivider() {
   );
 }
 
+/** 用户消息里的图片行:`[图片] <工作区相对路径>`(composer 发送时拼接的约定格式) */
+const IMAGE_LINE = /^\[图片\] (\S+)$/;
+
+/** 用户气泡:文本 + 附图缩略图(点击看大图) */
+function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: string) => string }) {
+  const [zoom, setZoom] = useState<string | null>(null);
+  const lines = text.split("\n");
+  const images: string[] = [];
+  const rest: string[] = [];
+  for (const line of lines) {
+    const m = line.match(IMAGE_LINE);
+    if (m && uploadUrl) images.push(m[1]);
+    else rest.push(line);
+  }
+  const body = rest.join("\n").trim();
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div
+        style={{
+          maxWidth: "70%",
+          background: "var(--userBg)",
+          border: "1px solid var(--accBd)",
+          borderRadius: "12px 12px 3px 12px",
+          padding: "9px 15px",
+          fontSize: 13.5,
+          lineHeight: 1.6,
+          color: "var(--t1)",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          animation: "mcin .25s ease",
+        }}
+      >
+        {body}
+        {images.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: body ? 8 : 2 }}>
+            {images.map((p) => (
+              <img
+                key={p}
+                src={uploadUrl!(p)}
+                alt={p}
+                title={p}
+                onClick={() => setZoom(p)}
+                style={{
+                  maxWidth: 150,
+                  maxHeight: 120,
+                  borderRadius: 8,
+                  border: "1px solid var(--accBd)",
+                  cursor: "zoom-in",
+                  display: "block",
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+      {zoom && (
+        <div
+          onClick={() => setZoom(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(20,30,25,.55)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={uploadUrl!(zoom)}
+            alt={zoom}
+            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "0 24px 70px rgba(0,0,0,.4)" }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ItemView({
   item,
   onPermAnswer,
+  uploadUrl,
 }: {
   item: Exclude<LogItem, { kind: "tool" }>;
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
+  uploadUrl?: (path: string) => string;
 }) {
   switch (item.kind) {
     case "user":
-      return (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <div
-            style={{
-              maxWidth: "70%",
-              background: "var(--userBg)",
-              border: "1px solid var(--accBd)",
-              borderRadius: "12px 12px 3px 12px",
-              padding: "9px 15px",
-              fontSize: 13.5,
-              lineHeight: 1.6,
-              color: "var(--t1)",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              animation: "mcin .25s ease",
-            }}
-          >
-            {item.text}
-          </div>
-        </div>
-      );
+      return <UserBubble text={item.text} uploadUrl={uploadUrl} />;
     case "agent":
       return (
         <div style={{ maxWidth: "92%", wordBreak: "break-word", animation: "mcin .25s ease" }}>
@@ -387,10 +449,13 @@ export function LogList({
   items,
   onPermAnswer,
   onOpenChild,
+  uploadUrl,
 }: {
   items: LogItem[];
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
   onOpenChild?: (id: string) => void;
+  /** 已上传图片路径 → 可渲染 URL(气泡缩略图;不传则图片行按纯文本展示) */
+  uploadUrl?: (path: string) => string;
 }) {
   const out: ReactElement[] = [];
   for (let i = 0; i < items.length; ) {
@@ -412,7 +477,7 @@ export function LogList({
         </div>,
       );
     } else {
-      out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} />);
+      out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} uploadUrl={uploadUrl} />);
       i++;
     }
   }

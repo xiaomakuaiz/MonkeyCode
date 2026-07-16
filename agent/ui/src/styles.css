@@ -84,6 +84,8 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .hv-acc:hover { background: var(--accH) !important; }
 .hv-accbg:hover { background: rgba(31, 138, 91, 0.07) !important; }
 .hv-bd:hover { border-color: var(--acc) !important; }
+/* Windows 自绘标题栏的关闭按钮:hover 红底白字(系统惯例,明暗主题同色) */
+.hv-caption-close:hover { background: #e81123 !important; color: #fff !important; }
 
 /* markdown 渲染产物(无法内联) */
 .md { font-size: 13.5px; line-height: 1.8; color: var(--t2); }
