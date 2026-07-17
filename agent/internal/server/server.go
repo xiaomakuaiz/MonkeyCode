@@ -78,6 +78,10 @@ type Options struct {
 	BuildExtras func(workdir string) (*contextmgr.Extras, []string)
 	// Version 内核版本(/healthz 外显,宿主可据此做兼容判断)。
 	Version string
+	// AuthRoutes 宿主注册附加业务路由的钩子(如百智云账号 API)。
+	// 回调拿到路由器与鉴权包装器,注册的处理器须自行套 auth;
+	// server 对这些路由的业务零知识。
+	AuthRoutes func(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc)
 }
 
 // Server localhost 宿主。
@@ -148,6 +152,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/uploads", s.auth(s.handleUpload))
 	mux.HandleFunc("GET /api/sessions/{id}/uploads/{name}", s.auth(s.handleGetUpload))
 	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
+	if s.opts.AuthRoutes != nil {
+		s.opts.AuthRoutes(mux, s.auth)
+	}
 	if s.opts.UI != nil {
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {

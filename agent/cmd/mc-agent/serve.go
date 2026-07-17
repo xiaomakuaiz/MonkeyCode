@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/chaitin/MonkeyCode/agent/internal/baizhi"
 	"github.com/chaitin/MonkeyCode/agent/internal/config"
 	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
@@ -127,6 +129,10 @@ func serveCmd() *cobra.Command {
 					return skills.Assemble(workdir, platExtras, platRoots)
 				}
 			}
+			// 百智云账号 API:UI 经内核代理登录(cookie 与配置同目录,0600)
+			bz := baizhi.NewService("", filepath.Join(filepath.Dir(config.Path()), "baizhi-cookies.json"))
+			opts.AuthRoutes = bz.Routes
+
 			if !noUI {
 				opts.UI = embeddedUI
 			}

@@ -63,6 +63,40 @@ export function uploadFileURL(sessionId: string, path: string): string {
   return `/api/sessions/${sessionId}/uploads/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
 }
 
+// ==================== 百智云账号(内核代理;凭证 cookie 不出内核) ====================
+
+export interface BaizhiStatus {
+  logged_in: boolean;
+  host: string;
+  profile?: Record<string, unknown>;
+}
+
+export const baizhiStatus = () => api<BaizhiStatus>("/api/baizhi/status");
+
+export const baizhiSendCode = (phone: string) =>
+  api<{ ok: boolean }>("/api/baizhi/send-code", {
+    method: "POST",
+    body: JSON.stringify({ phone }),
+  });
+
+export const baizhiLogin = (phone: string, code: string) =>
+  api<{ ok: boolean }>("/api/baizhi/login", {
+    method: "POST",
+    body: JSON.stringify({ phone, code }),
+  });
+
+export const baizhiLogout = () =>
+  api<{ ok: boolean }>("/api/baizhi/logout", { method: "POST" });
+
+/** 发起微信扫码会话,返回二维码(data URL,直接给 <img>)。 */
+export const baizhiWechatStart = () =>
+  api<{ qr: string }>("/api/baizhi/wechat/start", { method: "POST" });
+
+/** 长轮询一次扫码状态(内核侧最长挂 ~35s,拿到结果立即再调)。
+ * status: waiting | scanned | canceled | expired | ok(ok 即登录完成)。 */
+export const baizhiWechatPoll = () =>
+  api<{ status: "waiting" | "scanned" | "canceled" | "expired" | "ok" }>("/api/baizhi/wechat/poll");
+
 // ==================== 宿主(桌面壳)集成 ====================
 
 interface TauriGlobal {
