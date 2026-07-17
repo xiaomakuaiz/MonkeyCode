@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -67,6 +68,9 @@ type Options struct {
 	ModelVision func(model string) bool
 	// UI 内嵌调试页面(nil 则不挂载)。
 	UI []byte
+	// UIAssets UI 静态资产(webfont 等,/fonts/ 下挂载;nil 则不挂载)。
+	// 内容不含机密且文件名带内容哈希,免鉴权 + 长缓存。
+	UIAssets fs.FS
 	// AskTimeout 权限审批等待上限(默认 10 分钟)。
 	AskTimeout time.Duration
 	// MaxSteps 主循环单轮步数上限,<=0 用 loop 默认值。
@@ -164,6 +168,18 @@ func (s *Server) Handler() http.Handler {
 			w.Header().Set("content-type", "text/html; charset=utf-8")
 			_, _ = w.Write(s.opts.UI)
 		})
+	}
+	if s.opts.UIAssets != nil {
+		files := http.FileServerFS(s.opts.UIAssets)
+		mux.Handle("GET /fonts/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 字体切片文件名带内容哈希可永久缓存;fonts.css 名字固定,缓存放短
+			if strings.HasSuffix(r.URL.Path, ".css") {
+				w.Header().Set("cache-control", "public, max-age=3600")
+			} else {
+				w.Header().Set("cache-control", "public, max-age=31536000, immutable")
+			}
+			files.ServeHTTP(w, r)
+		}))
 	}
 	return mux
 }

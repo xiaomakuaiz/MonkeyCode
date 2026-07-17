@@ -92,7 +92,9 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  /* HarmonyOS Sans SC 经 /fonts/ webfont 随应用加载(fonts.css),不依赖本机安装;
+   * 降级链:HarmonyOS Sans → 苹方 → 微软雅黑 → sans-serif */
+  font-family: "HarmonyOS Sans SC", "HarmonyOS Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--bg);
   color: var(--t1);
   font-size: 13px;
@@ -245,13 +247,13 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   border-radius: 9px;
   padding: 10px 14px;
   overflow-x: auto;
-  font: 12px/1.7 ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
+  font: 12px/1.7 "JetBrains Mono", "HarmonyOS Sans SC", ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
 }
 .md code {
   background: var(--codeBg);
   border-radius: 4px;
   padding: 1px 5px;
-  font-family: ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
+  font-family: "JetBrains Mono", "HarmonyOS Sans SC", ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
   font-size: 12px;
 }
 .md pre code { background: transparent; padding: 0; }

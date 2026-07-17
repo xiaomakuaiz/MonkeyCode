@@ -33,9 +33,10 @@ import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
 
-// 等宽栈:显式列出各平台字体,Windows 上不能只留 monospace 泛型——
+// 等宽栈:JetBrains Mono 经 webfont 随应用加载(latin 子集),中文回退 HarmonyOS Sans SC;
+// 其后仍显式列出各平台字体,Windows 上不能只留 monospace 泛型——
 // Win7 WebView2 对泛型的解析不可靠(显示乱码),中文回退也会掉进宋体位图
-export const MONO = 'ui-monospace,Menlo,Consolas,"Courier New","Microsoft YaHei",monospace';
+export const MONO = '"JetBrains Mono","HarmonyOS Sans SC",ui-monospace,Menlo,Consolas,"Courier New","Microsoft YaHei",monospace';
 
 /** 正文里的链接一律不走 webview 导航(WKWebView 里点 <a> 会把应用页面跳走):
  * http(s) 交系统浏览器/新标签页,其余协议直接拦下。 */

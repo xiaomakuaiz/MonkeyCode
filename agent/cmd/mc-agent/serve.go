@@ -1,9 +1,10 @@
 package main
 
 import (
-	_ "embed"
+	"embed"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -18,11 +19,12 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/skills"
 )
 
-// 内嵌 UI:agent/ui(React + Vite)构建的单文件产物,构建产物入库,
+// 内嵌 UI:agent/ui(React + Vite)构建的单文件产物 + 手工入库的 webfont
+// 资产(uidist/fonts,HarmonyOS Sans SC / JetBrains Mono 切片),构建产物入库,
 // go build 不依赖 node;改 UI 后在 agent/ui 下执行 npm run build 再编译内核。
 //
-//go:embed uidist/index.html
-var embeddedUI []byte
+//go:embed uidist
+var uiFS embed.FS
 
 func serveCmd() *cobra.Command {
 	var addr, token string
@@ -134,7 +136,16 @@ func serveCmd() *cobra.Command {
 			opts.AuthRoutes = bz.Routes
 
 			if !noUI {
-				opts.UI = embeddedUI
+				ui, err := uiFS.ReadFile("uidist/index.html")
+				if err != nil {
+					return fmt.Errorf("内嵌 UI 缺失: %w", err)
+				}
+				assets, err := fs.Sub(uiFS, "uidist")
+				if err != nil {
+					return err
+				}
+				opts.UI = ui
+				opts.UIAssets = assets
 			}
 			srv, err := server.New(opts)
 			if err != nil {
