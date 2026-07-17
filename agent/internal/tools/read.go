@@ -67,11 +67,11 @@ func (t *ReadFile) ExecuteBlocks(ctx context.Context, env *Env, input json.RawMe
 			return ReadImageBlocks(p, in.Path)
 		}
 	}
-	out, err := t.Execute(ctx, env, input)
+	out, display, err := t.read(env, in)
 	if err != nil {
 		return nil, "", err
 	}
-	return []provider.ContentBlock{{Type: provider.BlockText, Text: out}}, out, nil
+	return []provider.ContentBlock{{Type: provider.BlockText, Text: out}}, display, nil
 }
 
 func (t *ReadFile) Execute(_ context.Context, env *Env, input json.RawMessage) (string, error) {
@@ -79,18 +79,25 @@ func (t *ReadFile) Execute(_ context.Context, env *Env, input json.RawMessage) (
 	if err := unmarshalInput(input, &in); err != nil {
 		return "", err
 	}
+	out, _, err := t.read(env, in)
+	return out, err
+}
+
+// read 同时产出模型侧与 UI 展示侧两个版本:行号是给模型精确定位用的
+// (edit/引用行号),对人只是噪音,display 保留原文。
+func (t *ReadFile) read(env *Env, in readFileInput) (out, display string, err error) {
 	p, err := ResolveForRead(env, in.Path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	st, err := os.Stat(p)
 	if err != nil {
-		return "", fmt.Errorf("无法读取 %s: %w", in.Path, err)
+		return "", "", fmt.Errorf("无法读取 %s: %w", in.Path, err)
 	}
 	if st.IsDir() {
 		entries, err := os.ReadDir(p)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "%s 是目录,包含 %d 项:\n", in.Path, len(entries))
@@ -103,15 +110,15 @@ func (t *ReadFile) Execute(_ context.Context, env *Env, input json.RawMessage) (
 			b.WriteString(suffix)
 			b.WriteString("\n")
 		}
-		return b.String(), nil
+		return b.String(), b.String(), nil
 	}
 
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(data) > 4*1024*1024 {
-		return "", fmt.Errorf("文件 %s 过大(%d 字节),请用 grep 或 offset/limit 定位后再读", in.Path, len(data))
+		return "", "", fmt.Errorf("文件 %s 过大(%d 字节),请用 grep 或 offset/limit 定位后再读", in.Path, len(data))
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -124,21 +131,23 @@ func (t *ReadFile) Execute(_ context.Context, env *Env, input json.RawMessage) (
 		limit = readMaxLines
 	}
 	if offset > len(lines) {
-		return "", fmt.Errorf("offset %d 超出文件总行数 %d", offset, len(lines))
+		return "", "", fmt.Errorf("offset %d 超出文件总行数 %d", offset, len(lines))
 	}
 
 	end := min(offset-1+limit, len(lines))
-	var b strings.Builder
+	var b, d strings.Builder
 	for i := offset - 1; i < end; i++ {
 		line := lines[i]
 		if len(line) > readMaxLineLen {
 			line = line[:readMaxLineLen] + "...[行过长截断]"
 		}
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
+		d.WriteString(line)
+		d.WriteByte('\n')
 	}
-	out := b.String()
+	out = b.String()
 	if end < len(lines) {
 		out += fmt.Sprintf("\n[文件共 %d 行,已显示 %d-%d 行,继续读取请用 offset=%d]", len(lines), offset, end, end+1)
 	}
-	return truncateOutput(out, readMaxBytes), nil
+	return truncateOutput(out, readMaxBytes), truncateOutput(d.String(), readMaxBytes), nil
 }

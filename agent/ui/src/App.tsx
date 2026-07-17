@@ -757,7 +757,7 @@ export default function App() {
                 <IconX size={11} color="var(--t4)" />
               </button>
             </div>
-            <SessionViewer id={childView} />
+            <SessionViewer id={childView} workdir={currentMeta?.workdir} />
           </div>
         </div>
       )}
@@ -767,7 +767,7 @@ export default function App() {
 }
 
 /** 子会话只读回放/跟看:复用同一 WS 协议(服务端对子会话走观察者路径) */
-function SessionViewer({ id }: { id: string }) {
+function SessionViewer({ id, workdir }: { id: string; workdir?: string }) {
   const [chat, setChat] = useState<ChatState>(initialChat);
   const [status, setStatus] = useState("连接中…");
 
@@ -782,7 +782,7 @@ function SessionViewer({ id }: { id: string }) {
   return (
     <div style={{ overflowY: "auto", flex: 1, paddingRight: 6, display: "flex", flexDirection: "column", gap: 14, lineHeight: 1.8 }}>
       <div style={{ color: "var(--t4)", fontSize: 12 }}>{status}</div>
-      <LogList items={chat.items} onPermAnswer={() => {}} />
+      <LogList items={chat.items} onPermAnswer={() => {}} workdir={workdir} />
     </div>
   );
 }

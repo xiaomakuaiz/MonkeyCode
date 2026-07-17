@@ -127,9 +127,11 @@ function PlanCard({ entries }: { entries: PlanEntry[] }) {
   );
 }
 
-/** 状态圆点:执行中空心绿点呼吸,结束灰描边(设计稿 agents 的 dot) */
+/** 状态标记:执行中空心绿点呼吸(设计稿 agents 的 dot),结束 ✓/✗——
+ * 与子代理进度行 stepMark 同一套语言,终态只靠描边颜色区分读不出来 */
 function StatusDot({ status }: { status: "run" | "ok" | "fail" }) {
-  const run = status === "run";
+  if (status === "ok") return <IconCheck size={11} />;
+  if (status === "fail") return <span style={{ color: "var(--err)", fontSize: 11, flex: "none" }}>✗</span>;
   return (
     <span
       style={{
@@ -137,9 +139,9 @@ function StatusDot({ status }: { status: "run" | "ok" | "fail" }) {
         height: 7,
         borderRadius: "50%",
         flex: "none",
-        border: `1.5px solid ${run ? "var(--acc)" : status === "ok" ? "var(--t5)" : "var(--err)"}`,
-        background: run ? "var(--accBd)" : "transparent",
-        animation: run ? "mcpulse 1.4s infinite" : "none",
+        border: "1.5px solid var(--acc)",
+        background: "var(--accBd)",
+        animation: "mcpulse 1.4s infinite",
       }}
     />
   );
@@ -154,19 +156,29 @@ function stepMark(status: "run" | "ok" | "fail") {
 /** 进度滚动窗口:固定只展示最后几条,旧条目自然滚出(完整过程走"查看子会话")。 */
 const FEED_WINDOW = 5;
 
+/** 标题里的工作区绝对路径收敛为相对路径(历史会话标题已落盘,只能渲染时处理) */
+function stripWorkdir(text: string, workdir?: string): string {
+  if (!workdir) return text;
+  const prefix = workdir.endsWith("/") ? workdir : workdir + "/";
+  return text.split(prefix).join("");
+}
+
 export function ToolCard({
   item,
   onOpenChild,
+  workdir,
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
   onOpenChild?: (id: string) => void;
+  workdir?: string;
 }) {
   const feed = item.feed ?? [];
   const visible = feed.slice(-FEED_WINDOW);
   // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
-  const sp = item.title.indexOf(" ");
-  const verb = sp > 0 ? item.title.slice(0, sp) : "";
-  const target = sp > 0 ? item.title.slice(sp + 1) : item.title;
+  const title = stripWorkdir(item.title, workdir);
+  const sp = title.indexOf(" ");
+  const verb = (sp > 0 ? title.slice(0, sp) : "").replace(/[::]$/, "");
+  const target = sp > 0 ? title.slice(sp + 1) : title;
   const stepRow: CSSProperties = {
     display: "flex",
     gap: 7,
@@ -211,7 +223,7 @@ export function ToolCard({
               {s.kind === "tool" ? (
                 <>
                   {stepMark(s.status)}
-                  <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{s.title}</span>
+                  <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{stripWorkdir(s.title, workdir)}</span>
                 </>
               ) : (
                 <span className="ellipsis" style={{ color: "var(--t5)", flex: 1, minWidth: 0 }}>
@@ -487,12 +499,15 @@ export function LogList({
   onPermAnswer,
   onOpenChild,
   uploadUrl,
+  workdir,
 }: {
   items: LogItem[];
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
   onOpenChild?: (id: string) => void;
   /** 已上传图片路径 → 可渲染 URL(气泡缩略图;不传则图片行按纯文本展示) */
   uploadUrl?: (path: string) => string;
+  /** 工作区根:工具卡标题里的绝对路径按它收敛为相对路径 */
+  workdir?: string;
 }) {
   const out: ReactElement[] = [];
   for (let i = 0; i < items.length; ) {
@@ -509,7 +524,7 @@ export function LogList({
       out.push(
         <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {group.map((t, j) => (
-            <ToolCard key={t.tcId || j} item={t} onOpenChild={onOpenChild} />
+            <ToolCard key={t.tcId || j} item={t} onOpenChild={onOpenChild} workdir={workdir} />
           ))}
         </div>,
       );

@@ -115,6 +115,18 @@ func TestReadWriteFile(t *testing.T) {
 	if !strings.Contains(out, "1\tline1") {
 		t.Fatalf("out = %q", out)
 	}
+
+	// 模型串带行号,display 是不带行号的原文(UI 预览用)
+	blocks, display, err := r.ExecuteBlocks(context.Background(), env, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(blocks[0].Text, "1\tline1") {
+		t.Fatalf("blocks[0].Text = %q", blocks[0].Text)
+	}
+	if display != "line1\nline2\n\n" {
+		t.Fatalf("display = %q", display)
+	}
 }
 
 func TestBashCwdPersistence(t *testing.T) {
