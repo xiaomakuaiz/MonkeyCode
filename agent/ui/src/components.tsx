@@ -59,7 +59,7 @@ function ThoughtView({ text }: { text: string }) {
         <IconSpark />
         <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>思考</span>
         {!open && (
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>
             {text.trim().replace(/\s+/g, " ")}
           </span>
         )}
@@ -91,19 +91,10 @@ function ThoughtView({ text }: { text: string }) {
   );
 }
 
-/** 白卡通用样式(工具/计划/子代理共用,设计稿 agent card) */
-const cardStyle: CSSProperties = {
-  background: "var(--card)",
-  border: "1px solid var(--cardBd)",
-  borderRadius: 10,
-  boxShadow: "var(--cardSh)",
-  padding: "11px 14px",
-};
-
 function PlanCard({ entries }: { entries: PlanEntry[] }) {
   const mark = (s: string) => (s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐");
   return (
-    <div style={{ ...cardStyle, fontSize: 12.5, display: "flex", flexDirection: "column", gap: 4, animation: "mcin .25s ease" }}>
+    <div className="card" style={{ padding: "11px 14px", fontSize: 12.5, display: "flex", flexDirection: "column", gap: 4, animation: "mcin .25s ease" }}>
       {entries.map((e, i) => (
         <div
           key={i}
@@ -170,16 +161,16 @@ export function ToolCard({
     minWidth: 0,
   };
   return (
-    <div style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
+    <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
         <StatusDot status={item.status} />
         {verb && <span style={{ fontWeight: 600, flex: "none", color: "var(--t1)" }}>{verb}</span>}
-        <span style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+        <span className="ellipsis" style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0 }}>
           {target}
         </span>
         <span style={{ flex: 1 }} />
         {item.out && (
-          <span style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%" }}>
             {item.out}
           </span>
         )}
@@ -203,10 +194,10 @@ export function ToolCard({
               {s.kind === "tool" ? (
                 <>
                   {stepMark(s.status)}
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{s.title}</span>
+                  <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{s.title}</span>
                 </>
               ) : (
-                <span style={{ color: "var(--t5)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                <span className="ellipsis" style={{ color: "var(--t5)", flex: 1, minWidth: 0 }}>
                   {s.text}
                 </span>
               )}
@@ -307,7 +298,7 @@ function PermCard({
           <div
             className="hv-errbg"
             onClick={() => onAnswer(item.id, "deny")}
-            style={{ ...btn, background: "transparent", border: "1px solid rgba(194,80,62,.3)", color: "var(--err)" }}
+            style={{ ...btn, background: "transparent", border: "1px solid var(--errBd)", color: "var(--err)" }}
           >
             拒绝
           </div>
@@ -406,7 +397,7 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
                 }}
               >
                 📄
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span className="ellipsis">
                   {p.split("/").pop()}
                 </span>
               </span>
@@ -420,7 +411,7 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(20,30,25,.55)",
+            background: "var(--scrim3)",
             zIndex: 50,
             display: "flex",
             alignItems: "center",
@@ -431,7 +422,7 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
           <img
             src={uploadUrl!(zoom)}
             alt={zoom}
-            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "0 24px 70px rgba(0,0,0,.4)" }}
+            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "var(--shadowLg)" }}
           />
         </div>
       )}

@@ -73,25 +73,13 @@ export function NewTaskView({
     padding: "0 10px",
     borderRadius: 11,
     background: active ? "var(--card)" : "transparent",
-    boxShadow: active ? "0 1px 3px rgba(0,0,0,.1)" : "none",
+    boxShadow: active ? "var(--segSh)" : "none",
     fontSize: 11.5,
     fontWeight: 700,
     color: active ? fg : "var(--t5)",
     cursor: "pointer",
     userSelect: "none",
   });
-
-  const dropdownItem: CSSProperties = {
-    border: "none",
-    background: "transparent",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: 9,
-    padding: "6px 9px",
-    borderRadius: 6,
-    textAlign: "left",
-  };
 
   return (
     <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -104,10 +92,10 @@ export function NewTaskView({
 
         <div
           style={{
-            background: "rgba(255,255,255,.94)",
+            background: "var(--panel)",
             border: "1px solid var(--line)",
             borderRadius: 16,
-            boxShadow: "0 10px 36px rgba(30,45,38,.12)",
+            boxShadow: "var(--panelShLg)",
             display: "flex",
             flexDirection: "column",
             position: "relative",
@@ -144,7 +132,7 @@ export function NewTaskView({
                 >
                   <IconFolder />
                   <span style={{ fontSize: 12, color: "var(--t5)", flex: "none" }}>在</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span className="ellipsis" style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)" }}>
                     {basename(dir)}
                   </span>
                   <span style={{ fontSize: 12, color: "var(--t5)", flex: "none" }}>文件夹里工作</span>
@@ -152,35 +140,19 @@ export function NewTaskView({
                 </button>
                 {folderOpen && (
                   <>
-                    <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setFolderOpen(false)} />
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 34,
-                        left: 8,
-                        zIndex: 30,
-                        background: "var(--pop)",
-                        border: "1px solid var(--line)",
-                        borderRadius: 10,
-                        boxShadow: "var(--shadow)",
-                        padding: 4,
-                        display: "flex",
-                        flexDirection: "column",
-                        minWidth: 280,
-                        maxWidth: 380,
-                      }}
-                    >
+                    <div className="backdrop" onClick={() => setFolderOpen(false)} />
+                    <div className="pop" style={{ position: "absolute", top: 34, left: 8, borderRadius: 10, minWidth: 280, maxWidth: 380 }}>
                       <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: "var(--t6)", padding: "5px 9px 3px" }}>
                         最近用过的文件夹
                       </span>
                       {recentDirs.map((p) => (
-                        <button key={p} className="hv" onClick={() => pick(p)} style={dropdownItem}>
+                        <button key={p} className="hv menu-item" onClick={() => pick(p)} style={{ gap: 9 }}>
                           <IconFolder color="var(--t5)" />
                           <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-                            <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span className="ellipsis" style={{ fontSize: 12.5, fontWeight: 500, color: "var(--t2)" }}>
                               {basename(p)}
                             </span>
-                            <span style={{ fontSize: 10.5, fontFamily: MONO, color: "var(--t6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span className="ellipsis" style={{ fontSize: 10.5, fontFamily: MONO, color: "var(--t6)" }}>
                               {p}
                             </span>
                           </span>
@@ -189,7 +161,7 @@ export function NewTaskView({
                       ))}
                       <span style={{ height: 1, background: "var(--line2)", margin: "4px 6px" }} />
                       {inDesktopShell() && (
-                        <button className="hv" onClick={() => void browse()} style={dropdownItem}>
+                        <button className="hv menu-item" onClick={() => void browse()} style={{ gap: 9 }}>
                           <IconPlus size={12} color="var(--t3)" />
                           <span style={{ fontSize: 12, color: "var(--t3)" }}>选择其他文件夹…</span>
                         </button>
@@ -253,7 +225,7 @@ export function NewTaskView({
           />
 
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 11px" }}>
-            <span style={{ display: "flex", background: "rgba(120,130,125,.1)", borderRadius: 13, padding: 2, flex: "none" }}>
+            <span style={{ display: "flex", background: "var(--segBg)", borderRadius: 13, padding: 2, flex: "none" }}>
               <span onClick={() => setMode("local")} title="跑在这台电脑上,直接读写本地文件,每步权限逐一确认" style={segItem(mode === "local", "var(--acc)")}>
                 <IconMonitor size={11} color={mode === "local" ? "var(--acc)" : "var(--t5)"} strokeWidth={1.4} />
                 本地
@@ -282,7 +254,7 @@ export function NewTaskView({
                 gap: 6,
                 padding: "0 15px",
                 flex: "none",
-                boxShadow: "0 2px 8px rgba(31,138,91,.25)",
+                boxShadow: "var(--accSh)",
                 opacity: busy ? 0.6 : 1,
               }}
             >
@@ -292,9 +264,9 @@ export function NewTaskView({
           </div>
 
           {mode === "cloud" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 10px 10px", padding: "8px 11px", borderRadius: 9, background: "rgba(232,193,90,.13)", border: "1px solid rgba(161,98,7,.18)" }}>
-              <IconInfo color="#a16207" />
-              <span style={{ fontSize: 12, color: "#7c5210", lineHeight: 1.5 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 10px 10px", padding: "8px 11px", borderRadius: 9, background: "var(--warnBg)", border: "1px solid var(--warnBd2)" }}>
+              <IconInfo color="var(--warn)" />
+              <span style={{ fontSize: 12, color: "var(--warnT)", lineHeight: 1.5 }}>
                 云端运行还在准备中,预计下个版本上线。这个任务会先在本地跑,之后可以随时切换。
               </span>
             </div>

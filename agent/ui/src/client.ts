@@ -1,28 +1,10 @@
 // 内核连接层:REST(会话管理)+ WS(帧双向流,含 call/call-response 同步查询)。
+// 帧载荷编解码在 codec.ts(纯函数,归约层与单测直接依赖那边)。
+import { b64encode, frameData } from "./codec";
 import type { Frame, HostConfig, ModelInfo, SessionMeta } from "./types";
 
 export const token: string =
   location.hash.slice(1) || window.prompt("访问令牌(serve 启动时打印)") || "";
-
-export function b64decode(s: string): string {
-  return new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
-}
-
-export function b64encode(s: string): string {
-  let bin = "";
-  for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
-
-/** 解开帧 data(base64(JSON)) */
-export function frameData<T = Record<string, unknown>>(f: Frame): T | null {
-  if (!f.data) return null;
-  try {
-    return JSON.parse(b64decode(f.data)) as T;
-  } catch {
-    return null;
-  }
-}
 
 async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const r = await fetch(path, {
@@ -279,7 +261,8 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
         if (p) {
           pending.delete(f.kind);
           clearTimeout(p.timer);
-          p.resolve(f.data ? JSON.parse(b64decode(f.data)) : {});
+          // 坏载荷不能抛出:异常会让 pending 悬到 15s 超时,降级为空结果
+          p.resolve(frameData(f) ?? {});
           return;
         }
       }

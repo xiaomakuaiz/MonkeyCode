@@ -123,6 +123,15 @@ export interface FileChange {
   path: string;
 }
 
+/** 待发送附件(已上传到会话工作区) */
+export interface Attachment {
+  path: string;
+  name: string;
+  isImage: boolean;
+  /** 图片的本地预览(dataURL);非图片无 */
+  preview?: string;
+}
+
 export interface Usage {
   used: number;
   size: number;

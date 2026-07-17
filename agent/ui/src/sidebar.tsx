@@ -55,20 +55,6 @@ const sectionHeader: CSSProperties = {
   letterSpacing: 0.4,
 };
 
-const iconBtn: CSSProperties = {
-  width: 20,
-  height: 20,
-  border: "none",
-  background: "transparent",
-  cursor: "pointer",
-  padding: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  borderRadius: 5,
-  flex: "none",
-};
-
 /** 会话行状态文案(时间无信息量,不展示) */
 function rowStatus(meta: SessionMeta): { text: string; color: string } {
   switch (meta.status) {
@@ -106,24 +92,9 @@ function SessionRow({
   const running = meta.status === "running";
   const showActions = hover || menu !== "closed";
   const st = rowStatus(meta);
-  const bg = active ? (archived ? "var(--hov3)" : "rgba(31,138,91,.85)") : "transparent";
-  const fg = active && !archived ? "#fff" : "var(--t2)";
+  const bg = active ? (archived ? "var(--hov3)" : "var(--accSel)") : "transparent";
+  const fg = active && !archived ? "var(--onAcc)" : "var(--t2)";
   const closeMenu = () => setMenu("closed");
-
-  const menuItem: CSSProperties = {
-    border: "none",
-    background: "transparent",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 9px",
-    borderRadius: 6,
-    fontSize: 12.5,
-    color: "var(--t1)",
-    textAlign: "left",
-    whiteSpace: "nowrap",
-  };
 
   return (
     <div
@@ -151,7 +122,7 @@ function SessionRow({
           minWidth: 0,
         }}
       >
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{meta.title || "新任务"}</span>
+        <span className="ellipsis" style={{ flex: 1 }}>{meta.title || "新任务"}</span>
         {meta.worktree && !showActions && (
           <span
             title="隔离 worktree 会话"
@@ -159,8 +130,8 @@ function SessionRow({
               flex: "none",
               fontSize: 10,
               fontWeight: 600,
-              color: active ? "rgba(255,255,255,.85)" : "var(--acc)",
-              background: active ? "rgba(255,255,255,.18)" : "var(--accBg)",
+              color: active ? "var(--onAccDim)" : "var(--acc)",
+              background: active ? "var(--onAccBg)" : "var(--accBg)",
               borderRadius: 5,
               padding: "1px 6px",
               marginRight: 3,
@@ -187,49 +158,31 @@ function SessionRow({
               });
               setMenu("open");
             }}
-            style={{
-              ...iconBtn,
-              background: menu !== "closed" ? "var(--hov3)" : "transparent",
-            }}
-            className="hv3"
+            className="hv3 icon-btn"
+            style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent" }}
           >
-            <IconDots color={active && !archived ? "rgba(255,255,255,.85)" : "var(--t3)"} />
+            <IconDots color={active && !archived ? "var(--onAccDim)" : "var(--t3)"} />
           </button>
         )}
       </div>
       {menu !== "closed" && (
         <>
           <div
-            style={{ position: "fixed", inset: 0, zIndex: 29 }}
+            className="backdrop"
             onClick={(e) => {
               e.stopPropagation();
               closeMenu();
             }}
           />
           <div
-            style={{
-              position: "fixed",
-              left: pos.left,
-              top: pos.top,
-              bottom: pos.bottom,
-              zIndex: 30,
-              background: "var(--pop)",
-              border: "1px solid var(--line)",
-              borderRadius: 9,
-              boxShadow: "var(--shadow)",
-              padding: 4,
-              display: "flex",
-              flexDirection: "column",
-              minWidth: 118,
-              animation: "mcin .15s ease",
-            }}
+            className="pop"
+            style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: 118 }}
             onClick={(e) => e.stopPropagation()}
           >
             {menu === "open" ? (
               <>
                 <button
-                  className="hv"
-                  style={menuItem}
+                  className="hv menu-item"
                   onClick={() => {
                     closeMenu();
                     onArchive();
@@ -239,12 +192,12 @@ function SessionRow({
                   {meta.archived ? "取消归档" : "归档"}
                 </button>
                 {running ? (
-                  <button style={{ ...menuItem, cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
+                  <button className="menu-item" style={{ cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
                     <IconTrash color="var(--t5)" />
                     删除
                   </button>
                 ) : (
-                  <button className="hv-errbg" style={{ ...menuItem, color: "var(--err)" }} onClick={() => setMenu("confirm")}>
+                  <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
                     <IconTrash />
                     删除
                   </button>
@@ -258,8 +211,8 @@ function SessionRow({
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button
-                    className="hv-errbg"
-                    style={{ ...menuItem, color: "var(--err)", fontWeight: 600 }}
+                    className="hv-errbg menu-item"
+                    style={{ color: "var(--err)", fontWeight: 600 }}
                     onClick={() => {
                       closeMenu();
                       onDelete();
@@ -267,7 +220,7 @@ function SessionRow({
                   >
                     确认删除
                   </button>
-                  <button className="hv" style={menuItem} onClick={closeMenu}>
+                  <button className="hv menu-item" onClick={closeMenu}>
                     取消
                   </button>
                 </div>
@@ -319,18 +272,18 @@ function Group({
         <span style={{ width: 12, height: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <IconChevronRight style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
         </span>
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: nameColor ?? "var(--t1)" }}>
+        <span className="ellipsis" style={{ flex: 1, color: nameColor ?? "var(--t1)" }}>
           {name}
         </span>
         {onNewTask && hover && (
           <button
-            className="hv3"
+            className="hv3 icon-btn"
             title="在此文件夹新建任务"
             onClick={(e) => {
               e.stopPropagation();
               onNewTask();
             }}
-            style={iconBtn}
+            style={{ width: 20, height: 20, borderRadius: 5 }}
           >
             <IconPlus size={10} color="var(--t3)" />
           </button>
@@ -458,7 +411,7 @@ export function Sidebar({
         <div
           style={{
             borderRadius: 8,
-            border: "1px dashed rgba(30,40,35,.22)",
+            border: "1px dashed var(--dashBd)",
             padding: "9px 11px",
             fontSize: 11.5,
             color: "var(--t4)",
@@ -472,7 +425,7 @@ export function Sidebar({
         <div style={sectionHeader}>
           <IconMonitor style={{ marginTop: -1 }} />
           <span style={{ flex: 1 }}>本地会话</span>
-          <button className="hv2" title="新建任务" onClick={() => onNewTask()} style={iconBtn}>
+          <button className="hv2 icon-btn" title="新建任务" onClick={() => onNewTask()} style={{ width: 20, height: 20, borderRadius: 5 }}>
             <IconPlus color="var(--t4)" />
           </button>
         </div>
@@ -481,7 +434,7 @@ export function Sidebar({
           <div
             style={{
               borderRadius: 8,
-              border: "1px dashed rgba(30,40,35,.22)",
+              border: "1px dashed var(--dashBd)",
               padding: "9px 11px",
               fontSize: 11.5,
               color: "var(--t4)",
@@ -505,13 +458,13 @@ export function Sidebar({
         ))}
 
         {archived.length > 0 && (
-          <Group name="已归档" nameColor="#9aa19b" expanded={archivedOpen} onToggle={toggleArchived}>
+          <Group name="已归档" nameColor="var(--t5)" expanded={archivedOpen} onToggle={toggleArchived}>
             {archived.map((m) => row(m, true))}
           </Group>
         )}
       </div>
 
-      <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 7, padding: "0 14px", borderTop: "1px solid rgba(30,40,35,.1)" }}>
+      <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 7, padding: "0 14px", borderTop: "1px solid var(--line)" }}>
         <span
           style={{
             width: 7,
@@ -521,27 +474,14 @@ export function Sidebar({
             flex: "none",
           }}
         />
-        <span title={status} style={{ fontSize: 12, color: "var(--t3)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span title={status} className="ellipsis" style={{ fontSize: 12, color: "var(--t3)", flex: 1 }}>
           {status}
         </span>
         <button
-          className="hv2"
+          className="hv2 icon-btn"
           title="设置"
           onClick={onOpenSettings}
-          style={{
-            position: "relative",
-            width: 26,
-            height: 26,
-            border: "none",
-            borderRadius: 7,
-            background: settingsActive ? "rgba(31,138,91,.15)" : "transparent",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            flex: "none",
-          }}
+          style={{ position: "relative", width: 26, height: 26, borderRadius: 7, background: settingsActive ? "var(--accBg2)" : "transparent" }}
         >
           {updateAvailable && (
             <span
@@ -552,7 +492,7 @@ export function Sidebar({
                 width: 7,
                 height: 7,
                 borderRadius: "50%",
-                background: "#e8913a",
+                background: "var(--notice)",
                 border: "1.5px solid var(--side)",
               }}
             />

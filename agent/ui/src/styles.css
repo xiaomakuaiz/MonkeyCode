@@ -1,6 +1,10 @@
 /* 设计令牌与全局样式,取自「MonkeyCode 桌面应用设计」(浅色绿调):
- * 布局与间距以内联样式写在组件里,数值与设计稿逐一对应;
- * 这里只放变量、hover 工具类、keyframes、滚动条与 markdown 渲染产物。 */
+ * 一次性布局与间距仍以内联样式写在组件里,数值与设计稿逐一对应;
+ * 这里放变量、跨组件复用原语、hover 工具类、keyframes、滚动条与 markdown 渲染产物。
+ *
+ * 兼容红线:Win7 上 WebView2 停在 Chromium 109。颜色一律经 :root 令牌 +
+ * var() 引用,禁止 color-mix()/相对颜色语法/CSS 嵌套/light-dark()(均 >109);
+ * 透明变体各开独立令牌,不做运行时颜色计算。主题切换 = 根节点换 data-theme。 */
 :root {
   --bg: #fcfdfc;            /* 主区底色 */
   --side: #eef1ee;          /* 侧栏底色 */
@@ -12,10 +16,13 @@
   --t4: #7b827c;            /* 分组标题/弱文字 */
   --t5: #8a918b;            /* 更弱 */
   --t6: #a8afa9;            /* 最弱/占位 */
+  --t7: #c4c9c3;            /* 装饰性符号(分隔点) */
+  --tDis: #b3b9b2;          /* 禁用态文字 */
   --acc: #1f8a5b;           /* 品牌绿 */
   --accH: #25a06b;          /* 品牌绿 hover */
   --accBg: rgba(31, 138, 91, 0.12);
   --accBd: rgba(31, 138, 91, 0.2);
+  --accBg2: rgba(31, 138, 91, 0.15); /* 激活底(比 --accBg 深一档,设置齿轮) */
   --onAcc: #fff;
   --ok: #28a866;
   --err: #c2503e;
@@ -37,6 +44,41 @@
   --addT: #1c7a4b;
   --delBg: rgba(194, 80, 62, 0.08);
   --delT: #a63d2e;
+  /* -- 以下为组件内联字面量收敛的语义令牌 -- */
+  --scrim: rgba(20, 30, 25, 0.25);        /* 抽屉遮罩 */
+  --scrim2: rgba(20, 30, 25, 0.35);       /* 弹窗遮罩 */
+  --scrim3: rgba(20, 30, 25, 0.55);       /* 图片查看遮罩 */
+  --panel: rgba(255, 255, 255, 0.92);     /* 浮起面板(composer/新任务卡) */
+  --panel2: rgba(255, 255, 255, 0.7);     /* 次级浮面(排队 chip) */
+  --panelSh: 0 4px 20px rgba(30, 45, 38, 0.08);
+  --panelShLg: 0 10px 36px rgba(30, 45, 38, 0.12);
+  --shadowLg: 0 24px 70px rgba(30, 45, 38, 0.3);   /* 模态弹窗/大图查看 */
+  --inputBg: #fdfdfc;
+  --inputBd: rgba(30, 40, 35, 0.13);
+  --btnBd: rgba(30, 40, 35, 0.15);        /* 白底按钮/pill 描边 */
+  --dashBd: rgba(30, 40, 35, 0.22);       /* 空态虚线框 */
+  --errBd: rgba(194, 80, 62, 0.3);        /* 危险动作描边 */
+  --accBd2: rgba(31, 138, 91, 0.3);       /* 强调描边(加号按钮) */
+  --accBgSoft: rgba(31, 138, 91, 0.07);   /* 极浅强调底(拖放区/hover) */
+  --accSel: rgba(31, 138, 91, 0.85);      /* 侧栏选中行底 */
+  --accSh: 0 2px 8px rgba(31, 138, 91, 0.25); /* 主按钮投影 */
+  --onAccDim: rgba(255, 255, 255, 0.85);  /* 选中行上的次级前景 */
+  --onAccBg: rgba(255, 255, 255, 0.18);   /* 选中行上的徽标底 */
+  --warnBd2: rgba(161, 98, 7, 0.18);      /* 软警示描边(云端提示条) */
+  --warnT: #7c5210;                       /* 警示正文 */
+  --notice: #e8913a;                      /* 更新提醒圆点 */
+  --track: var(--hov3);                   /* 用量圆环底轨(缺省跟随中性灰刻度) */
+  --segBg: var(--hov);                    /* 分段控件槽底(缺省跟随中性灰刻度) */
+  --segSh: 0 1px 3px rgba(0, 0, 0, 0.12); /* 分段控件滑块投影 */
+  --linkH: #166b46;                       /* 链接 hover */
+  --sbThumb: rgba(110, 120, 115, 0.22);   /* 滚动条 */
+  --sbThumbH: rgba(110, 120, 115, 0.38);
+}
+
+/* 深色主题:落地时只填这里的令牌值,组件零改动。
+ * 切换方式:document.documentElement.dataset.theme = "dark" | ""。 */
+[data-theme="dark"] {
+  /* TODO(深色模式):按设计稿填全部令牌 */
 }
 
 * { box-sizing: border-box; }
@@ -52,9 +94,73 @@ body {
 }
 
 a { color: var(--acc); text-decoration: none; }
-a:hover { color: #166b46; text-decoration: underline; }
+a:hover { color: var(--linkH); text-decoration: underline; }
 input, textarea, select, button { font-family: inherit; }
 textarea::placeholder, input::placeholder { color: var(--t6); }
+
+/* ---- 复用原语(重复内联样式的收敛点;尺寸/定位等实例差异由使用处内联覆写) ---- */
+
+/* 单行截断 */
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 图标按钮底座(宽高/圆角随使用处) */
+.icon-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  flex: none;
+}
+/* 点击外部关闭弹层的透明遮罩 */
+.backdrop { position: fixed; inset: 0; z-index: 29; }
+/* 弹出面板(菜单/下拉/气泡;定位由使用处给出) */
+.pop {
+  background: var(--pop);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+  animation: mcin 0.15s ease;
+}
+/* 弹出菜单项 */
+.menu-item {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--t1);
+  text-align: left;
+  white-space: nowrap;
+}
+/* 白卡底座(工具/计划卡 padding 11px 14px 在使用处;设置卡用 .card-lg) */
+.card {
+  background: var(--card);
+  border: 1px solid var(--cardBd);
+  border-radius: 10px;
+  box-shadow: var(--cardSh);
+}
+.card-lg { border-radius: 11px; padding: 16px; }
+/* 运行中加载圆环 */
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--acc);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: mcspin 0.9s linear infinite;
+  flex: none;
+}
 
 @keyframes mcspin { to { transform: rotate(360deg); } }
 @keyframes mcpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -64,13 +170,13 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(110, 120, 115, 0.22);
+  background: var(--sbThumb);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(110, 120, 115, 0.38); background-clip: content-box; }
-* { scrollbar-width: thin; scrollbar-color: rgba(110, 120, 115, 0.22) transparent; }
+::-webkit-scrollbar-thumb:hover { background: var(--sbThumbH); background-clip: content-box; }
+* { scrollbar-width: thin; scrollbar-color: var(--sbThumb) transparent; }
 
 /* hover 态(设计稿经 style-hover 表达,这里等价成工具类;
  * WKWebView 下组件对关键交互仍以状态控制 hover,类是浏览器模式的补充) */
@@ -82,7 +188,7 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .hv-errbg:hover { background: var(--errBg) !important; }
 .hv-op:hover { filter: brightness(0.97); }
 .hv-acc:hover { background: var(--accH) !important; }
-.hv-accbg:hover { background: rgba(31, 138, 91, 0.07) !important; }
+.hv-accbg:hover { background: var(--accBgSoft) !important; }
 .hv-bd:hover { border-color: var(--acc) !important; }
 /* Windows 自绘标题栏的关闭按钮:hover 红底白字(系统惯例,明暗主题同色) */
 .hv-caption-close:hover { background: #e81123 !important; color: #fff !important; }

@@ -715,3 +715,46 @@
 - [x] 设置 UI:模型卡"支持图片"勾选框
 - [x] 测试:vision 模型图片块进下次请求(原集成测试加标记);非 vision 模型
       得到占位文本且无图片块;全量 go test + tsc + 构建通过
+
+# 偿债:agent/ui 架构三项(2026-07-16)
+
+> 评审结论:reduce.ts 零测试、App.tsx→ChatView 22 个 props 钻透、
+> 重复内联样式无复用机制。三项全做,协议层行为不变。
+
+- [x] 1. reduce.ts 补单测(vitest)
+  - [x] b64/frameData 纯函数从 client.ts 抽到 codec.ts(client.ts 顶层有
+        location/prompt 副作用,node 环境不可导入;分层也更干净)
+  - [x] vitest 装入 devDependencies + test script
+  - [x] reduce.test.ts:24 例——流式聚合、工具生命周期、进度窗口(MAX_FEED)、
+        计划卡原地更新、审批状态机、user-input 解码、task-error、
+        usage/model/permMode 回写、批量归约、未知帧透传
+- [x] 2. 会话状态收进 useSession hook,解掉 ChatView props 钻透
+  - [x] src/useSession.ts:WS 连接、chat 归约、composer(input/queued/atts)、
+        模型/权限切换、改动查询统一收口(SessionHandle 句柄)
+  - [x] ChatView 22 props → 8(meta/session/models/currentModel + 4 个布局回调)
+  - [x] App.tsx 只留布局切换、App 级浮层、新任务表单(652 → ~450 行)
+- [x] 3. 重复内联样式抽 CSS class(styles.css)
+  - [x] .ellipsis/.icon-btn/.backdrop/.pop/.menu-item/.card(-lg)/.spinner;
+        chat/sidebar/newtask/settings/components/App 六文件替换使用点,
+        删掉 menuItem×2/iconBtn/dropdownItem/cardStyle/card 六个重复常量
+  - [x] 一次性数值仍内联(不破坏"数值对应设计稿"的约定)
+- [x] 4. 验证:vitest 24/24 绿;tsc + vite build 过(uidist 已更新);
+        go build ./... 过;serve 冒烟(healthz / 内嵌 UI / REST 会话列表)正常
+
+## Review(偿债三项)
+
+- 新增 codec.ts(纯编解码)、useSession.ts(会话句柄)、reduce.test.ts;
+  行为不变的收口重构,协议层 client/reduce 未动逻辑。
+- 遗留:newtask 文件夹下拉原先无入场动画,统一 .pop 后带 mcin .15s(视觉
+  微调,与其余菜单一致);设置页 input/select/whiteBtn 本就是单点常量,未动。
+- 追加(2026-07-17):颜色令牌化收尾——46 处内联字面量并入 :root 语义令牌,
+  预埋 [data-theme="dark"] 空壳与 Chromium 109/Win7 兼容红线注释(禁
+  color-mix/相对颜色/嵌套/light-dark,透明变体独立令牌)。
+- 提交前 8 视角 review:3 个正确性视角零 bug;修掉 10 项——call-response
+  坏载荷挂 15s、connected 字符串推导误翻断线、lastSession 键两处硬编码、
+  齿轮激活底/分隔点/禁用态三处设计稿色值保真(--accBg2/--t7/--tDis)、
+  --track/--segBg 改 var() 引用、--shadowZoom 并入 --shadowLg、侧栏分隔
+  线归 --line、openSession 去掉无谓 useCallback+eslint-disable。
+- 后续可选:SessionViewer 复用只读帧流核(useFrameStream 方向);
+  useSession 的 model/yolo 镜像 state 可派生化;basename 三处同型逻辑
+  下沉公共模块(注意 Windows 反斜杠路径);深色模式落地时样式原语已就位。

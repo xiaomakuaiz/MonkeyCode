@@ -83,13 +83,6 @@ function serversToMcps(servers: Record<string, unknown>): McpEntry[] {
 
 // ---- 样式原语(设计稿 Settings 的卡片/输入/按钮) ----
 
-const card: CSSProperties = {
-  background: "var(--card)",
-  border: "1px solid var(--cardBd)",
-  borderRadius: 11,
-  padding: 16,
-  boxShadow: "var(--cardSh)",
-};
 const sectionLabel: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
@@ -99,9 +92,9 @@ const sectionLabel: CSSProperties = {
 const input: CSSProperties = {
   width: "100%",
   height: 30,
-  border: "1px solid rgba(30,40,35,.13)",
+  border: "1px solid var(--inputBd)",
   borderRadius: 7,
-  background: "#fdfdfc",
+  background: "var(--inputBg)",
   color: "var(--t1)",
   padding: "0 10px",
   fontSize: 12,
@@ -112,9 +105,9 @@ const input: CSSProperties = {
 const select: CSSProperties = {
   width: "100%",
   height: 30,
-  border: "1px solid rgba(30,40,35,.13)",
+  border: "1px solid var(--inputBd)",
   borderRadius: 7,
-  background: "#fdfdfc",
+  background: "var(--inputBg)",
   color: "var(--t1)",
   padding: "0 6px",
   fontSize: 12,
@@ -123,7 +116,7 @@ const select: CSSProperties = {
 };
 const whiteBtn: CSSProperties = {
   height: 28,
-  border: "1px solid rgba(30,40,35,.15)",
+  border: "1px solid var(--btnBd)",
   background: "var(--card)",
   color: "var(--t1)",
   borderRadius: 8,
@@ -205,13 +198,13 @@ function AboutCard({
   const green = found && phase !== "checking";
 
   return (
-    <div style={{ ...card, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
       <div style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accBg)", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
         <img src={logoUrl} alt="" draggable={false} style={{ width: 22, height: 22, borderRadius: 5 }} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
         <span style={{ fontWeight: 700, fontSize: 13 }}>MonkeyCode</span>
-        <span style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>
           {found ? `${update?.current ?? version} → ${update?.latest} 可用` : version}
         </span>
       </div>
@@ -333,7 +326,7 @@ export function SettingsView({
       onClick={onClick}
       style={{
         height: 26,
-        border: "1px solid rgba(31,138,91,.3)",
+        border: "1px solid var(--accBd2)",
         background: "transparent",
         color: "var(--acc)",
         borderRadius: 8,
@@ -365,8 +358,8 @@ export function SettingsView({
 
         {/* ==== 外观 ==== */}
         <Section label="外观">
-          <div style={{ ...card, padding: "14px 16px", display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ display: "flex", background: "rgba(120,130,125,.13)", borderRadius: 8, padding: 3, gap: 2 }}>
+          <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ display: "flex", background: "var(--segBg)", borderRadius: 8, padding: 3, gap: 2 }}>
               <button
                 style={{
                   border: "none",
@@ -378,7 +371,7 @@ export function SettingsView({
                   cursor: "pointer",
                   background: "var(--card)",
                   color: "var(--t1)",
-                  boxShadow: "0 1px 3px rgba(0,0,0,.12)",
+                  boxShadow: "var(--segSh)",
                 }}
               >
                 浅色
@@ -394,7 +387,7 @@ export function SettingsView({
                   fontWeight: 600,
                   cursor: "not-allowed",
                   background: "transparent",
-                  color: "#b3b9b2",
+                  color: "var(--tDis)",
                 }}
               >
                 深色
@@ -412,7 +405,7 @@ export function SettingsView({
         )}
 
         {!desktop && (
-          <div style={{ ...card, color: "var(--t4)", fontSize: 12.5, lineHeight: 1.7 }}>
+          <div className="card card-lg" style={{ color: "var(--t4)", fontSize: 12.5, lineHeight: 1.7 }}>
             浏览器模式下配置只读:模型与 MCP 由启动 mc-agent 的宿主(桌面应用或环境变量)管理。
           </div>
         )}
@@ -424,12 +417,12 @@ export function SettingsView({
             {/* ==== 模型 ==== */}
             <Section label="模型" action={addBtn("添加模型", () => setModels((ms) => [...ms, emptyModel()]))}>
               {models.length === 0 && (
-                <div style={{ ...card, color: "var(--t5)", fontSize: 12.5, borderStyle: "dashed" }}>
+                <div className="card card-lg" style={{ color: "var(--t5)", fontSize: 12.5, borderStyle: "dashed" }}>
                   还没有模型。保存后应用可运行,但需要添加模型才能开始任务。
                 </div>
               )}
               {models.map((m, i) => (
-                <div key={i} style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div key={i} className="card card-lg" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: 12 }}>
                     <Field label="名称">
                       <input style={input} value={m.name} placeholder="如: 主力模型" onChange={(e) => patchModel(i, { name: e.target.value })} className="hv-bd" />
@@ -533,12 +526,12 @@ export function SettingsView({
             {/* ==== MCP 服务器 ==== */}
             <Section label="MCP 服务器" action={addBtn("添加 MCP", () => setMcps((ms) => [...ms, emptyMcp()]))}>
               {mcps.length === 0 && (
-                <div style={{ ...card, color: "var(--t5)", fontSize: 12.5, borderStyle: "dashed" }}>
+                <div className="card card-lg" style={{ color: "var(--t5)", fontSize: 12.5, borderStyle: "dashed" }}>
                   未配置 MCP 服务器(可选)。项目级 .mc-agent/mcp.json 仍随仓库生效。
                 </div>
               )}
               {mcps.map((m, i) => (
-                <div key={i} style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div key={i} className="card card-lg" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: 12 }}>
                     <Field label="名称">
                       <input style={input} value={m.name} placeholder="如: context7" onChange={(e) => patchMcp(i, { name: e.target.value })} className="hv-bd" />
@@ -598,7 +591,7 @@ export function SettingsView({
                   padding: "0 22px",
                   cursor: "pointer",
                   opacity: saving ? 0.6 : 1,
-                  boxShadow: "0 2px 8px rgba(31,138,91,.25)",
+                  boxShadow: "var(--accSh)",
                 }}
               >
                 {saving ? "保存并重启内核中…" : "保存"}

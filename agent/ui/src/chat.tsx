@@ -1,11 +1,11 @@
 // 会话视图:标题栏 / 对话流 / 运行条 / 排队 chip / composer。
-// 布局与数值取自设计稿 Chat 屏;协议交互(发送/审批/切模型等)经 props 回调 App。
+// 布局与数值取自设计稿 Chat 屏;协议交互(发送/审批/切模型等)统一走 session 句柄
+// (useSession),App 只注入布局级回调(抽屉/子会话/归档/删除)。
 import {
   useEffect,
   useRef,
   useState,
   type ClipboardEvent,
-  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
 } from "react";
@@ -24,7 +24,7 @@ import {
   IconX,
 } from "./icons";
 import logoUrl from "./logo.png";
-import type { ChatState } from "./reduce";
+import type { SessionHandle } from "./useSession";
 import type { LogItem, ModelInfo, SessionMeta, Usage } from "./types";
 
 const fmtK = (n: number) =>
@@ -34,15 +34,6 @@ const fmtK = (n: number) =>
 const COL_MAX = "clamp(680px, 55vw, 860px)";
 
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
-
-/** 待发送附件(已上传到工作区) */
-export interface Attachment {
-  path: string;
-  name: string;
-  isImage: boolean;
-  /** 图片的本地预览(dataURL);非图片无 */
-  preview?: string;
-}
 
 // 输入法(IME)组合态的 Enter 只是确认候选词,不能当作提交。Chromium 上该 keydown
 // 的 isComposing 为 true 即可拦截;但 WebKit(macOS 壳的 WKWebView)顺序相反:
@@ -69,7 +60,7 @@ function ContextRing({ usage }: { usage: Usage | null }) {
       style={{ position: "relative", display: "flex", flex: "none", cursor: "default" }}
     >
       <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
-        <circle cx="9" cy="9" r="7" stroke="rgba(120,130,125,.25)" strokeWidth="2" />
+        <circle cx="9" cy="9" r="7" stroke="var(--track)" strokeWidth="2" />
         <circle
           cx="9"
           cy="9"
@@ -83,18 +74,13 @@ function ContextRing({ usage }: { usage: Usage | null }) {
       </svg>
       {hover && (
         <span
+          className="pop"
           style={{
             position: "absolute",
             bottom: 26,
             right: -6,
-            zIndex: 30,
-            background: "var(--pop)",
-            border: "1px solid var(--line)",
             borderRadius: 8,
-            boxShadow: "var(--shadow)",
             padding: "7px 11px",
-            display: "flex",
-            flexDirection: "column",
             gap: 3,
             whiteSpace: "nowrap",
             animation: "mcin .12s ease",
@@ -134,7 +120,7 @@ function PermPill({ yolo, onToggle }: { yolo: boolean; onToggle: () => void }) {
         gap: 5,
         padding: "0 9px",
         borderRadius: 12,
-        border: `1px solid ${yolo ? "var(--warnBd)" : "rgba(30,40,35,.16)"}`,
+        border: `1px solid ${yolo ? "var(--warnBd)" : "var(--btnBd)"}`,
         background: yolo ? "var(--warnBg)" : "transparent",
         color: fg,
         fontSize: 11.5,
@@ -188,46 +174,20 @@ export function ModelPicker({
       </button>
       {open && (
         <>
-          <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setOpen(false)} />
-          <div
-            style={{
-              position: "absolute",
-              bottom: 30,
-              right: 0,
-              zIndex: 30,
-              background: "var(--pop)",
-              border: "1px solid var(--line)",
-              borderRadius: 9,
-              boxShadow: "var(--shadow)",
-              padding: 4,
-              minWidth: 200,
-              display: "flex",
-              flexDirection: "column",
-              animation: "mcin .15s ease",
-            }}
-          >
+          <div className="backdrop" onClick={() => setOpen(false)} />
+          <div className="pop" style={{ position: "absolute", bottom: 30, right: 0, minWidth: 200 }}>
             {models.map((m) => (
               <button
                 key={m.name}
-                className="hv"
+                className="hv menu-item"
                 onClick={() => {
                   setOpen(false);
                   onPick(m.name);
                 }}
                 style={{
-                  border: "none",
-                  background: "transparent",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
                   padding: "7px 10px",
-                  borderRadius: 6,
-                  fontSize: 12.5,
                   color: m.name === current ? "var(--acc)" : "var(--t2)",
                   fontWeight: m.name === current ? 600 : 400,
-                  textAlign: "left",
-                  whiteSpace: "nowrap",
                 }}
               >
                 {m.name}
@@ -245,54 +205,27 @@ export function ModelPicker({
 
 export function ChatView({
   meta,
-  chat,
-  changesCount,
-  input,
-  setInput,
-  queued,
+  session,
   models,
   currentModel,
-  yolo,
-  atts,
-  onAddFiles,
-  onRemoveAtt,
-  uploadUrl,
-  onSend,
-  onStop,
-  onClearQueued,
-  onToggleYolo,
-  onSwitchModel,
   onOpenDrawer,
-  onPermAnswer,
   onOpenChild,
   onArchive,
   onDelete,
 }: {
   meta: SessionMeta | undefined;
-  chat: ChatState;
-  changesCount: number;
-  input: string;
-  setInput: (v: string) => void;
-  queued: string | null;
+  /** 会话句柄(协议状态与动作,useSession) */
+  session: SessionHandle;
   models: ModelInfo[];
+  /** 展示用模型名(session.model 为空时 App 已回退默认) */
   currentModel: string;
-  yolo: boolean;
-  /** 待发送附件(已上传到工作区) */
-  atts: Attachment[];
-  onAddFiles: (files: File[]) => void;
-  onRemoveAtt: (i: number) => void;
-  uploadUrl?: (path: string) => string;
-  onSend: () => void;
-  onStop: () => void;
-  onClearQueued: () => void;
-  onToggleYolo: () => void;
-  onSwitchModel: (name: string) => void;
   onOpenDrawer: () => void;
-  onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
   onOpenChild: (id: string) => void;
   onArchive: () => void;
   onDelete: () => void;
 }) {
+  const { chat, input, queued, atts, yolo } = session;
+  const changesCount = session.changes?.length ?? 0;
   const logRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
@@ -323,7 +256,7 @@ export function ChatView({
     // 输入法组合态(选字/确认候选)的 Enter 不发送
     if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
       e.preventDefault();
-      onSend();
+      session.send();
     }
   };
 
@@ -338,7 +271,7 @@ export function ChatView({
     }
     if (files.length) {
       e.preventDefault();
-      onAddFiles(files);
+      void session.addFiles(files);
     }
   };
 
@@ -361,7 +294,7 @@ export function ChatView({
     dragDepth.current = 0;
     setDragging(false);
     const files = [...e.dataTransfer.files];
-    if (files.length) onAddFiles(files);
+    if (files.length) void session.addFiles(files);
   };
 
   const workdir = meta?.workdir ?? "";
@@ -373,21 +306,6 @@ export function ChatView({
   const runningLabel = openPerm ? "等待权限确认" : anyToolRunning ? "执行中" : "思考中";
   const roundNo = Math.max(1, chat.items.filter((it) => it.kind === "user").length);
   const usage = chat.usage;
-
-  const menuItem: CSSProperties = {
-    border: "none",
-    background: "transparent",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 9px",
-    borderRadius: 6,
-    fontSize: 12.5,
-    color: "var(--t1)",
-    textAlign: "left",
-    whiteSpace: "nowrap",
-  };
 
   return (
     <div
@@ -405,7 +323,7 @@ export function ChatView({
             zIndex: 20,
             border: "2px dashed var(--acc)",
             borderRadius: 14,
-            background: "rgba(31,138,91,.06)",
+            background: "var(--accBgSoft)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -421,14 +339,14 @@ export function ChatView({
       {/* ==== 标题栏(空白区可拖拽窗口,macOS 常规行为)==== */}
       <div data-tauri-drag-region="" style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-          <span style={{ fontWeight: 700, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span className="ellipsis" style={{ fontWeight: 700, fontSize: 13.5 }}>
             {meta?.title || "新任务"}
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
             <IconFolder size={11} color="var(--t6)" />
             <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>{basename(workdir)}</span>
-            <span style={{ color: "#c4c9c3", flex: "none" }}>·</span>
-            <span style={{ fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{workdir}</span>
+            <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+            <span className="ellipsis" style={{ fontFamily: MONO }}>{workdir}</span>
           </span>
         </div>
         <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
@@ -477,49 +395,21 @@ export function ChatView({
         </button>
         <div style={{ position: "relative", flex: "none" }}>
           <button
-            className="hv"
+            className="hv icon-btn"
             title="更多"
             onClick={() => setMenu(menu === "closed" ? "open" : "closed")}
-            style={{
-              width: 28,
-              height: 28,
-              border: "none",
-              borderRadius: 8,
-              background: menu !== "closed" ? "var(--hov)" : "transparent",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-            }}
+            style={{ width: 28, height: 28, borderRadius: 8, background: menu !== "closed" ? "var(--hov)" : "transparent" }}
           >
             <IconDots size={14} color="var(--t5)" />
           </button>
           {menu !== "closed" && (
             <>
-              <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setMenu("closed")} />
-              <div
-                style={{
-                  position: "absolute",
-                  top: 32,
-                  right: 0,
-                  zIndex: 30,
-                  background: "var(--pop)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 9,
-                  boxShadow: "var(--shadow)",
-                  padding: 4,
-                  display: "flex",
-                  flexDirection: "column",
-                  minWidth: 118,
-                  animation: "mcin .15s ease",
-                }}
-              >
+              <div className="backdrop" onClick={() => setMenu("closed")} />
+              <div className="pop" style={{ position: "absolute", top: 32, right: 0, minWidth: 118 }}>
                 {menu === "open" ? (
                   <>
                     <button
-                      className="hv"
-                      style={menuItem}
+                      className="hv menu-item"
                       onClick={() => {
                         setMenu("closed");
                         onArchive();
@@ -529,12 +419,12 @@ export function ChatView({
                       {meta?.archived ? "取消归档" : "归档"}
                     </button>
                     {chat.running ? (
-                      <button style={{ ...menuItem, cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
+                      <button className="menu-item" style={{ cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
                         <IconTrash color="var(--t5)" />
                         删除
                       </button>
                     ) : (
-                      <button className="hv-errbg" style={{ ...menuItem, color: "var(--err)" }} onClick={() => setMenu("confirm")}>
+                      <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
                         <IconTrash />
                         删除
                       </button>
@@ -548,8 +438,8 @@ export function ChatView({
                     </div>
                     <div style={{ display: "flex", gap: 4 }}>
                       <button
-                        className="hv-errbg"
-                        style={{ ...menuItem, color: "var(--err)", fontWeight: 600 }}
+                        className="hv-errbg menu-item"
+                        style={{ color: "var(--err)", fontWeight: 600 }}
                         onClick={() => {
                           setMenu("closed");
                           onDelete();
@@ -557,7 +447,7 @@ export function ChatView({
                       >
                         确认删除
                       </button>
-                      <button className="hv" style={menuItem} onClick={() => setMenu("closed")}>
+                      <button className="hv menu-item" onClick={() => setMenu("closed")}>
                         取消
                       </button>
                     </div>
@@ -585,7 +475,7 @@ export function ChatView({
       ) : (
         <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
-            <LogList items={chat.items} onPermAnswer={onPermAnswer} onOpenChild={onOpenChild} uploadUrl={uploadUrl} />
+            <LogList items={chat.items} onPermAnswer={session.answerPerm} onOpenChild={onOpenChild} uploadUrl={session.uploadUrl} />
           </div>
         </div>
       )}
@@ -594,17 +484,7 @@ export function ChatView({
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "100%", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {chat.running && (
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <span
-              style={{
-                width: 13,
-                height: 13,
-                border: "2px solid var(--acc)",
-                borderTopColor: "transparent",
-                borderRadius: "50%",
-                animation: "mcspin .9s linear infinite",
-                flex: "none",
-              }}
-            />
+            <span className="spinner" />
             <span style={{ fontWeight: 600, fontSize: 12.5 }}>{runningLabel}</span>
             <span style={{ fontSize: 12, color: "var(--t5)" }}>
               第 {roundNo} 轮{usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}
@@ -612,10 +492,10 @@ export function ChatView({
             <span style={{ flex: 1 }} />
             <button
               className="hv-errbg"
-              onClick={onStop}
+              onClick={session.stop}
               style={{
                 height: 26,
-                border: "1px solid rgba(194,80,62,.3)",
+                border: "1px solid var(--errBd)",
                 background: "transparent",
                 color: "var(--err)",
                 borderRadius: 13,
@@ -640,7 +520,7 @@ export function ChatView({
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "rgba(255,255,255,.7)",
+              background: "var(--panel2)",
               border: "1px solid var(--cardBd)",
               borderRadius: 10,
               padding: "7px 12px",
@@ -649,9 +529,9 @@ export function ChatView({
           >
             <IconClock />
             <span style={{ color: "var(--t3)", flex: "none" }}>已排队</span>
-            <span style={{ fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{queued}</span>
+            <span className="ellipsis" style={{ fontWeight: 600, flex: 1 }}>{queued}</span>
             <span style={{ color: "var(--t6)", flex: "none", fontSize: 11.5 }}>运行结束后自动发送</span>
-            <button className="hv2" title="取消排队" onClick={onClearQueued} style={{ width: 20, height: 20, border: "none", background: "transparent", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 5, flex: "none" }}>
+            <button className="hv2 icon-btn" title="取消排队" onClick={session.clearQueued} style={{ width: 20, height: 20, borderRadius: 5 }}>
               <IconX />
             </button>
           </div>
@@ -659,10 +539,10 @@ export function ChatView({
 
         <div
           style={{
-            background: "rgba(255,255,255,.92)",
-            border: "1px solid rgba(30,40,35,.13)",
+            background: "var(--panel)",
+            border: "1px solid var(--inputBd)",
             borderRadius: 12,
-            boxShadow: "0 4px 20px rgba(30,45,38,.08)",
+            boxShadow: "var(--panelSh)",
             display: "flex",
             flexDirection: "column",
           }}
@@ -696,12 +576,13 @@ export function ChatView({
                       }}
                     >
                       <IconFolder size={12} color="var(--t4)" />
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                      <span className="ellipsis">{a.name}</span>
                     </span>
                   )}
                   <button
+                    className="icon-btn"
                     title="移除"
-                    onClick={() => onRemoveAtt(i)}
+                    onClick={() => session.removeAtt(i)}
                     style={{
                       position: "absolute",
                       top: -5,
@@ -712,11 +593,6 @@ export function ChatView({
                       borderRadius: "50%",
                       background: "var(--card)",
                       boxShadow: "var(--cardSh)",
-                      cursor: "pointer",
-                      padding: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
                     }}
                   >
                     <IconX size={8} color="var(--t3)" />
@@ -730,7 +606,7 @@ export function ChatView({
             rows={2}
             value={input}
             placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片/文件可作为附件"}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => session.setInput(e.target.value)}
             onCompositionEnd={markImeEnd}
             onKeyDown={onKey}
             onPaste={onPaste}
@@ -749,27 +625,15 @@ export function ChatView({
             }}
           />
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 10px" }}>
-            <PermPill yolo={yolo} onToggle={onToggleYolo} />
+            <PermPill yolo={yolo} onToggle={() => void session.toggleYolo()} />
             <span style={{ flex: 1 }} />
-            <ModelPicker models={models} current={currentModel} disabled={chat.running} onPick={onSwitchModel} />
+            <ModelPicker models={models} current={currentModel} disabled={chat.running} onPick={(name) => void session.switchModel(name)} />
             <ContextRing usage={usage} />
             <button
-              className="hv-acc"
+              className="hv-acc icon-btn"
               title="发送 ↩ · 换行 ⇧↩"
-              onClick={onSend}
-              style={{
-                width: 27,
-                height: 27,
-                border: "none",
-                borderRadius: 8,
-                background: "var(--acc)",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flex: "none",
-                opacity: input.trim() || atts.length > 0 ? 1 : 0.45,
-              }}
+              onClick={session.send}
+              style={{ width: 27, height: 27, borderRadius: 8, background: "var(--acc)", opacity: input.trim() || atts.length > 0 ? 1 : 0.45 }}
             >
               <IconSend />
             </button>

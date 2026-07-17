@@ -1,7 +1,6 @@
 // 帧 → 对话流渲染项的归约:流式文本聚合、工具状态回写、审批卡片终态等。
 // 纯函数,不触 DOM。
-import { frameData } from "./client";
-import { b64decode } from "./client";
+import { b64decode, frameData } from "./codec";
 import type { AcpUpdate, Frame, LogItem, PermOutcome, SubEntry, ToolProgress, Usage } from "./types";
 
 export interface ChatState {

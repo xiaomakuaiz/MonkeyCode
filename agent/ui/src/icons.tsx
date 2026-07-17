@@ -158,7 +158,7 @@ export function IconX({ size = 9, color = "var(--t5)", style }: IconProps) {
 }
 
 /** 发送(上箭头) */
-export function IconSend({ size = 13, color = "#fff", style }: IconProps) {
+export function IconSend({ size = 13, color = "var(--onAcc)", style }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
       <path d="M7 11.5V2.8M3.2 6.3 7 2.5l3.8 3.8" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
