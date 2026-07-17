@@ -477,7 +477,8 @@ export function ChatView({
           </div>
         </div>
       ) : (
-        <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0 }}>
+        // scrollbar-gutter 两侧对称预留(Chromium 94+):滚动条出现时内容列不再被挤得比 composer 偏左
+        <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}>
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
             <LogList items={chat.items} onPermAnswer={session.answerPerm} onOpenChild={onOpenChild} uploadUrl={session.uploadUrl} />
           </div>
