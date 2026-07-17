@@ -399,7 +399,7 @@ export default function App() {
             )}
           </span>
           {en.is_dir ? <IconFolder size={14} color="var(--acc)" /> : <IconFile color={kind ? kind.fg : "var(--t4)"} />}
-          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t1)", fontWeight: en.is_dir ? 600 : 400 }}>
+          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t1)" }}>
             {en.name}
           </span>
           {en.is_dir && subCount > 0 && (
