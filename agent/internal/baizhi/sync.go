@@ -42,6 +42,8 @@ type SyncResult struct {
 	MCP    map[string]map[string]any `json:"mcp_servers"` // name → {url, headers}
 	// KeyCreated 本次是否在网关新建了密钥(false = 复用了已有密钥)
 	KeyCreated bool `json:"key_created"`
+	// KeyName 使用的密钥在网关里的名字(同名被占时新建的是 MonkeyCode-N)
+	KeyName string `json:"key_name,omitempty"`
 	// Notes 非致命提示(如 MCP 为空、部分模型不健康),UI 可展示
 	Notes []string `json:"notes,omitempty"`
 }
@@ -55,11 +57,12 @@ const syncKeyName = "MonkeyCode"
 func (s *Service) Sync(ctx context.Context, knownKeys []string) (*SyncResult, error) {
 	res := &SyncResult{MCP: map[string]map[string]any{}}
 
-	key, created, err := s.ensureAPIKey(ctx, knownKeys)
+	key, keyName, created, err := s.ensureAPIKey(ctx, knownKeys)
 	if err != nil {
 		return nil, err
 	}
 	res.KeyCreated = created
+	res.KeyName = keyName
 
 	models, notes, err := s.gatewayModels(ctx, key)
 	if err != nil {
@@ -128,13 +131,13 @@ type apiKeyItem struct {
 }
 
 // ensureAPIKey 确保拿到一把可用(存在且启用)的明文推理密钥。
-// 返回 (key, 是否本次新建, err)。
-func (s *Service) ensureAPIKey(ctx context.Context, knownKeys []string) (string, bool, error) {
+// 返回 (key, 网关里的密钥名, 是否本次新建, err)。
+func (s *Service) ensureAPIKey(ctx context.Context, knownKeys []string) (string, string, bool, error) {
 	var list struct {
 		Items []apiKeyItem `json:"items"`
 	}
 	if err := s.getJSON(ctx, "/api/console/api-keys?page=1&pageSize=200", &list); err != nil {
-		return "", false, fmt.Errorf("获取密钥列表失败: %w", err)
+		return "", "", false, fmt.Errorf("获取密钥列表失败: %w", err)
 	}
 
 	// 已持有的明文密钥能对上网关掩码 → 复用(停用的先重新启用)
@@ -149,26 +152,49 @@ func (s *Service) ensureAPIKey(ctx context.Context, knownKeys []string) (string,
 			}
 			if !it.Enabled {
 				if err := s.enableAPIKey(ctx, it); err != nil {
-					return "", false, fmt.Errorf("重新启用密钥「%s」失败: %w", it.Name, err)
+					return "", "", false, fmt.Errorf("重新启用密钥「%s」失败: %w", it.Name, err)
 				}
 			}
-			return k, false, nil
+			return k, it.Name, false, nil
 		}
 	}
 
-	// 新建 + 启用(新建的密钥默认停用)
+	// 新建 + 启用(新建的密钥默认停用)。密钥名全局唯一(真机 409"名称已存在"),
+	// 且列表无明文、无 reveal:同名旧 key 的明文已不可恢复,只能换名新建
+	// (不能动旧 key——它的明文可能正被别的设备使用)。
+	name, err := s.pickKeyName(list.Items)
+	if err != nil {
+		return "", "", false, err
+	}
 	var created apiKeyItem
 	if err := s.consoleCall(ctx, http.MethodPost, "/api/console/api-keys",
-		map[string]string{"name": syncKeyName}, &created); err != nil {
-		return "", false, fmt.Errorf("创建密钥失败: %w", err)
+		map[string]string{"name": name}, &created); err != nil {
+		return "", "", false, fmt.Errorf("创建密钥失败: %w", err)
 	}
 	if created.Key == "" {
-		return "", false, fmt.Errorf("创建密钥成功但响应未含明文密钥")
+		return "", "", false, fmt.Errorf("创建密钥成功但响应未含明文密钥")
 	}
 	if err := s.enableAPIKey(ctx, created); err != nil {
-		return "", false, fmt.Errorf("启用新建密钥失败: %w", err)
+		return "", "", false, fmt.Errorf("启用新建密钥失败: %w", err)
 	}
-	return created.Key, true, nil
+	return created.Key, name, true, nil
+}
+
+// pickKeyName 选一个与现有密钥不撞名的名字:MonkeyCode、MonkeyCode-2、…
+func (s *Service) pickKeyName(existing []apiKeyItem) (string, error) {
+	taken := map[string]bool{}
+	for _, it := range existing {
+		taken[it.Name] = true
+	}
+	if !taken[syncKeyName] {
+		return syncKeyName, nil
+	}
+	for i := 2; i <= 99; i++ {
+		if name := fmt.Sprintf("%s-%d", syncKeyName, i); !taken[name] {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("网关中 %s 系列密钥过多,请在百智云控制台清理后重试", syncKeyName)
 }
 
 // enableAPIKey 启用密钥。PATCH 要求 name 必填(真机 400 实测)。
@@ -242,9 +268,198 @@ func (s *Service) gatewayModels(ctx context.Context, key string) ([]SyncedModel,
 	return models, notes, nil
 }
 
-// mcpServers 拉 MCP 服务并映射为 mcp.json 的 http 条目。
-// agent-toolkit 网关的 API 契约尚未测绘(全路径回 SPA HTML,前缀未知),
-// 暂不同步,仅记 note;契约到手后在此实现,SyncResult 结构不变。
-func (s *Service) mcpServers(_ context.Context) (map[string]map[string]any, []string) {
-	return map[string]map[string]any{}, []string{"MCP 同步暂未开放(agent-toolkit 网关接口测绘中)"}
+// ==================== MCP(agent-toolkit)====================
+//
+// 契约(2026-07-17 从前端 bundle 测绘;账号未开通,响应结构待真实数据复核):
+//   - 管理 API 同源 /api/v1/*,cookie 鉴权;包壳 {code,message,data},
+//     code 为字符串 "ok"(或 0/200)表成功
+//   - 每个 host 独立 sl-session:先 GET / 让服务端 set-cookie,再调 API
+//   - 团队未开通 Agent 工具包时 /api/v1/* 一律 302 → 权限申请页
+//   - GET  /api/v1/services → items[{name,description,catalog_code,…}]
+//   - GET  /api/v1/api-keys → items[{id,name,masked_key,status,tool_codes}]
+//   - GET  /api/v1/api-keys/{id}/reveal → {key}(明文可随时取回)
+//   - POST /api/v1/api-keys {name,tool_codes} → 新建(响应含明文 key)
+//   - POST /api/v1/api-keys/{id}/enable 启用
+//   - 运行时:<MCP 网关>/mcp,Streamable HTTP,Authorization: Bearer <key>
+//     (单端点承载全部服务,一把 key 即一个 mcp.json 条目)
+
+// mcpEntryName 同步产出的 mcp.json 条目名(工具命名空间前缀 mcp__<name>__)。
+const mcpEntryName = "baizhi-toolkit"
+
+// errMCPNoAccess 团队未开通 Agent 工具包(管理 API 302 到权限申请页)。
+var errMCPNoAccess = fmt.Errorf("当前团队未开通 Agent 工具包")
+
+// mcpURL MCP 网关绝对地址。
+func (s *Service) mcpURL(path string) string { return s.ep.MCPGateway + path }
+
+// mcpCall agent-toolkit 管理 API 请求。与 consoleCall 的差异:
+// code 可能是字符串 "ok";3xx 视为未开通(不跟随重定向,首响应即 302)。
+func (s *Service) mcpCall(ctx context.Context, method, path string, body, out any) error {
+	data, status, err := s.do(ctx, method, s.mcpURL(path), body)
+	if err != nil {
+		return err
+	}
+	if status >= 300 && status < 400 {
+		return errMCPNoAccess
+	}
+	var env struct {
+		Code    json.RawMessage `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(data, &env) != nil {
+		if is2xx(status) {
+			return nil
+		}
+		return httpError(status, string(data))
+	}
+	if !is2xx(status) || !mcpCodeOK(env.Code) {
+		msg := cleanMessage(env.Message)
+		if msg == "" {
+			return httpError(status, "")
+		}
+		if status == http.StatusUnauthorized {
+			return &unauthorizedError{msg}
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	if out != nil && len(env.Data) > 0 {
+		if err := json.Unmarshal(env.Data, out); err != nil {
+			return fmt.Errorf("MCP 网关响应解析失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// mcpCodeOK 包壳 code 是否表示成功(缺省/"ok"/0/200)。
+func mcpCodeOK(raw json.RawMessage) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", `"ok"`, "0", "200":
+		return true
+	}
+	return false
+}
+
+// mcpService 服务目录项。
+type mcpService struct {
+	Name        string `json:"name"`
+	CatalogCode string `json:"catalog_code"`
+}
+
+// mcpKeyItem MCP 访问密钥条目。id 类型未实测(数字或字符串),原样保留。
+type mcpKeyItem struct {
+	ID     json.RawMessage `json:"id"`
+	Name   string          `json:"name"`
+	Key    string          `json:"key"` // 仅 create/reveal 响应有
+	Status string          `json:"status"`
+}
+
+func (k mcpKeyItem) idPath() string {
+	return strings.Trim(strings.TrimSpace(string(k.ID)), `"`)
+}
+
+// mcpServers 拉 Agent 工具包服务并确保一把 MCP 密钥,映射为单个
+// streamable-http 条目(运行时是单端点 /mcp)。
+// 非致命:任何一步失败仅记 note,不阻断模型同步。
+func (s *Service) mcpServers(ctx context.Context) (map[string]map[string]any, []string) {
+	out := map[string]map[string]any{}
+
+	// 握手:agent-toolkit 的 sl-session 按 host 独立,先 GET / 领取
+	_, _, _ = s.do(ctx, http.MethodGet, s.mcpURL("/"), nil)
+
+	var svc struct {
+		Items []mcpService `json:"items"`
+	}
+	if err := s.mcpCall(ctx, http.MethodGet, "/api/v1/services", nil, &svc); err != nil {
+		if err == errMCPNoAccess {
+			return out, []string{"当前团队未开通 Agent 工具包,已跳过 MCP 同步(可在百智云控制台申请开通)"}
+		}
+		return out, []string{"获取 MCP 服务失败: " + err.Error()}
+	}
+	if len(svc.Items) == 0 {
+		return out, []string{"Agent 工具包下没有可用的 MCP 服务"}
+	}
+	codes := make([]string, 0, len(svc.Items))
+	names := make([]string, 0, len(svc.Items))
+	for _, it := range svc.Items {
+		if it.CatalogCode != "" {
+			codes = append(codes, it.CatalogCode)
+		}
+		if it.Name != "" {
+			names = append(names, it.Name)
+		}
+	}
+
+	key, note := s.ensureMCPKey(ctx, codes)
+	if key == "" {
+		return out, []string{note}
+	}
+	out[mcpEntryName] = map[string]any{
+		"url":     s.mcpURL("/mcp"),
+		"headers": map[string]string{"Authorization": "Bearer " + key},
+	}
+	notes := []string{fmt.Sprintf("MCP 已同步(含 %d 个服务: %s)", len(svc.Items), strings.Join(names, "、"))}
+	if note != "" {
+		notes = append(notes, note)
+	}
+	return out, notes
+}
+
+// ensureMCPKey 确保拿到一把可用的 MCP 明文密钥;返回 (key, note)。
+// 与模型网关不同,这里明文可经 reveal 随时取回,无需调用方回传候选。
+func (s *Service) ensureMCPKey(ctx context.Context, toolCodes []string) (string, string) {
+	var list struct {
+		Items []mcpKeyItem `json:"items"`
+	}
+	if err := s.mcpCall(ctx, http.MethodGet, "/api/v1/api-keys", nil, &list); err != nil {
+		return "", "获取 MCP 密钥列表失败: " + err.Error()
+	}
+
+	// 已有可用密钥(优先同名)→ reveal 取明文;停用的同名密钥先启用
+	pick := -1
+	for i, it := range list.Items {
+		if it.Status == "enabled" && (pick < 0 || it.Name == syncKeyName) {
+			pick = i
+		}
+	}
+	if pick < 0 {
+		for i, it := range list.Items {
+			if it.Name == syncKeyName { // 只碰自家条目,不动用户手工停用的密钥
+				if err := s.mcpCall(ctx, http.MethodPost, "/api/v1/api-keys/"+it.idPath()+"/enable", nil, nil); err != nil {
+					return "", "重新启用 MCP 密钥失败: " + err.Error()
+				}
+				pick = i
+				break
+			}
+		}
+	}
+	if pick >= 0 {
+		it := list.Items[pick]
+		var rev struct {
+			Key string `json:"key"`
+		}
+		if err := s.mcpCall(ctx, http.MethodGet, "/api/v1/api-keys/"+it.idPath()+"/reveal", nil, &rev); err != nil {
+			return "", "获取 MCP 密钥明文失败: " + err.Error()
+		}
+		if rev.Key == "" {
+			return "", "MCP 密钥明文响应为空"
+		}
+		return rev.Key, ""
+	}
+
+	// 没有任何可用密钥 → 新建(授权全部服务)
+	var created mcpKeyItem
+	if err := s.mcpCall(ctx, http.MethodPost, "/api/v1/api-keys",
+		map[string]any{"name": syncKeyName, "tool_codes": toolCodes}, &created); err != nil {
+		return "", "创建 MCP 密钥失败: " + err.Error()
+	}
+	if created.Key == "" {
+		return "", "创建 MCP 密钥成功但响应未含明文"
+	}
+	if created.Status != "" && created.Status != "enabled" {
+		if err := s.mcpCall(ctx, http.MethodPost, "/api/v1/api-keys/"+created.idPath()+"/enable", nil, nil); err != nil {
+			return "", "启用新建 MCP 密钥失败: " + err.Error()
+		}
+	}
+	return created.Key, ""
 }

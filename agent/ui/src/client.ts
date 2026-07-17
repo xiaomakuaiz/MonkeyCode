@@ -112,6 +112,7 @@ export interface BaizhiSyncResult {
   models: BaizhiSyncedModel[];
   mcp_servers: Record<string, Record<string, unknown>>;
   key_created: boolean; // 本次是否在网关新建了密钥(false=复用已有)
+  key_name?: string; // 使用的密钥在网关里的名字(撞名时是 MonkeyCode-N)
   notes?: string[];
 }
 

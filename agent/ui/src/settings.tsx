@@ -268,9 +268,11 @@ type WxState = "loading" | "waiting" | "scanned" | "expired" | "canceled" | "err
 function BaizhiCard({
   onSynced,
   knownKeys,
+  existingNames,
 }: {
   onSynced: (r: BaizhiSyncResult) => void;
   knownKeys: () => string[];
+  existingNames: () => string[];
 }) {
   const [status, setStatus] = useState<BaizhiStatus | null>(null);
   const [statusErr, setStatusErr] = useState("");
@@ -285,6 +287,10 @@ function BaizhiCard({
   const [wxState, setWxState] = useState<WxState>("loading");
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<{ text: string; color: string } | null>(null);
+  // 同步结果先进挑选面板,用户勾选后才合并进设置表单
+  const [pending, setPending] = useState<BaizhiSyncResult | null>(null);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [withMcp, setWithMcp] = useState(true);
   const mounted = useRef(true);
   const wxGen = useRef(0); // 代号:模式切换/重新获取/卸载时作废旧轮询循环
 
@@ -405,23 +411,40 @@ function BaizhiCard({
 
   const doSync = async () => {
     setSyncMsg(null);
+    setPending(null);
     setSyncing(true);
     try {
       const r = await baizhiSync(knownKeys());
-      onSynced(r); // 合并进设置表单(交由用户复核后保存)
-      if (mounted.current) {
-        const parts = [`已拉取 ${r.models.length} 个模型`];
-        const mcpN = Object.keys(r.mcp_servers ?? {}).length;
-        if (mcpN) parts.push(`${mcpN} 个 MCP`);
-        if (r.key_created) parts.push("已在网关新建密钥「MonkeyCode」");
-        parts.push("已填入下方,请核对后点保存");
-        setSyncMsg({ text: parts.join("、") + (r.notes?.length ? `(${r.notes.join(";")})` : ""), color: "var(--ok)" });
+      if (!mounted.current) return;
+      if (!r.models.length && !Object.keys(r.mcp_servers ?? {}).length) {
+        setSyncMsg({ text: "没有拉取到可用的模型" + (r.notes?.length ? `(${r.notes.join(";")})` : ""), color: "var(--err)" });
+        return;
       }
+      // 已在表单里的同名条目默认勾选(重同步=刷新已有),新条目由用户挑选
+      const have = new Set(existingNames());
+      const init: Record<string, boolean> = {};
+      for (const m of r.models) init[m.name] = have.has(m.name);
+      setChecked(init);
+      setWithMcp(true);
+      setPending(r);
     } catch (e) {
       if (mounted.current) setSyncMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
     } finally {
       if (mounted.current) setSyncing(false);
     }
+  };
+
+  const importSelected = () => {
+    if (!pending) return;
+    const models = pending.models.filter((m) => checked[m.name]);
+    const mcp = withMcp ? pending.mcp_servers : {};
+    onSynced({ ...pending, models, mcp_servers: mcp }); // 合并进设置表单(交由用户复核后保存)
+    const parts = [`已填入 ${models.length} 个模型`];
+    if (Object.keys(mcp ?? {}).length) parts.push("MCP 条目");
+    if (pending.key_created) parts.push(`已在网关新建密钥「${pending.key_name || "MonkeyCode"}」`);
+    parts.push("请核对下方配置后点保存");
+    setSyncMsg({ text: parts.join("、"), color: "var(--ok)" });
+    setPending(null);
   };
 
   if (statusErr) {
@@ -460,8 +483,82 @@ function BaizhiCard({
           </button>
         </div>
         {syncMsg && <span style={{ fontSize: 12, color: syncMsg.color, lineHeight: 1.6 }}>{syncMsg.text}</span>}
+        {pending && (() => {
+          const selCount = pending.models.filter((m) => checked[m.name]).length;
+          const mcpN = Object.keys(pending.mcp_servers ?? {}).length;
+          const setAll = (v: boolean) => {
+            const next: Record<string, boolean> = {};
+            for (const m of pending.models) next[m.name] = v;
+            setChecked(next);
+          };
+          const linkBtn: React.CSSProperties = {
+            background: "none", border: "none", padding: "2px 4px", fontSize: 12,
+            color: "var(--acc)", cursor: "pointer", flex: "none",
+          };
+          return (
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid var(--line)" }}>
+                <span style={{ fontWeight: 700, fontSize: 12.5 }}>选择要导入的模型</span>
+                <span style={{ fontSize: 12, color: "var(--t5)" }}>{selCount}/{pending.models.length}</span>
+                <span style={{ flex: 1 }} />
+                <button className="hv" style={linkBtn} onClick={() => setAll(true)}>全选</button>
+                <button className="hv" style={linkBtn} onClick={() => setAll(false)}>清空</button>
+              </div>
+              <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                {pending.models.map((m) => (
+                  <label
+                    key={m.name}
+                    className="hv"
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", cursor: "pointer" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!checked[m.name]}
+                      onChange={(e) => setChecked((c) => ({ ...c, [m.name]: e.target.checked }))}
+                      style={{ flex: "none", accentColor: "var(--acc)" }}
+                    />
+                    <span className="ellipsis" style={{ fontSize: 12.5, fontFamily: MONO }}>{m.name}</span>
+                    <span style={{ marginLeft: "auto", flex: "none", fontSize: 11, color: "var(--t5)" }}>{m.provider}</span>
+                  </label>
+                ))}
+              </div>
+              {mcpN > 0 && (
+                <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderTop: "1px solid var(--line)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={withMcp}
+                    onChange={(e) => setWithMcp(e.target.checked)}
+                    style={{ flex: "none", accentColor: "var(--acc)" }}
+                  />
+                  <span style={{ fontSize: 12.5 }}>同时导入 MCP 条目({Object.keys(pending.mcp_servers).join("、")})</span>
+                </label>
+              )}
+              {!!pending.notes?.length && (
+                <div style={{ padding: "6px 12px", borderTop: "1px solid var(--line)", fontSize: 11.5, color: "var(--t5)", lineHeight: 1.6 }}>
+                  {pending.notes.join(";")}
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--line)" }}>
+                <button
+                  className="hv-acc"
+                  onClick={importSelected}
+                  disabled={selCount === 0 && !(withMcp && mcpN > 0)}
+                  style={{
+                    ...whiteBtn, flex: "none", background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)",
+                    opacity: selCount === 0 && !(withMcp && mcpN > 0) ? 0.5 : 1,
+                  }}
+                >
+                  导入所选
+                </button>
+                <button className="hv" onClick={() => setPending(null)} style={{ ...whiteBtn, flex: "none" }}>
+                  取消
+                </button>
+              </div>
+            </div>
+          );
+        })()}
         <span style={{ fontSize: 11.5, color: "var(--t5)", lineHeight: 1.6 }}>
-          同步会短暂切换到你的个人空间读取,随后切回;若你正开着百智云网页,空间会短暂跳动属正常。
+          同步从模型网关拉取模型清单;推理密钥优先复用现有条目,必要时自动新建并启用「MonkeyCode」密钥。
         </span>
       </div>
     );
@@ -479,7 +576,7 @@ function BaizhiCard({
     const needRetry = wxState === "expired" || wxState === "canceled" || wxState === "error";
     return (
       <div className="card card-lg" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "18px 16px" }}>
-        <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,可一键同步个人空间的模型与 MCP 配置。</span>
+        <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,可同步账号下的模型与 MCP 配置。</span>
         <div style={{ position: "relative", width: 168, height: 168, borderRadius: 10, border: "1px solid var(--inputBd)", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
           {qr && <img src={qr} alt="微信扫码登录" draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain", filter: needRetry ? "blur(3px) opacity(.35)" : "none" }} />}
           {!qr && !needRetry && <span style={{ fontSize: 12, color: "var(--t5)" }}>加载中…</span>}
@@ -770,6 +867,7 @@ export function SettingsView({
           <BaizhiCard
             onSynced={applySynced}
             knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
+            existingNames={() => models.map((m) => m.name.trim()).filter(Boolean)}
           />
         </Section>
 

@@ -801,9 +801,9 @@
 
 - [x] 账号域可配 + 两网关地址可配(私有化)
 - [x] ai-api-gateway REST 端点路径与分页形态测绘
-- [ ] **需真实 cookie**:api-keys 响应是否含明文 sk-(还是要 POST 建/rotate 才给);
-      models 响应字段名;SSO 是否需从账号会话换网关会话
-- [ ] agent-toolkit MCP 端点与响应结构(真机抓包)
+- [x] ~~需真实 cookie~~ 已实测(见阶段 2):api-keys 列表仅掩码、POST 创建才给明文;
+      models 字段确认;登录 cookie 直接可用于网关(baizhi_session 域 cookie + 网关自发 sl-session)
+- [x] agent-toolkit MCP 端点与响应结构(bundle 测绘完成;真实响应待团队开通权限)
 
 ## 阶段 1:内核 baizhi 客户端 ✅
 
@@ -821,33 +821,53 @@
 - 侦察发现(误连真实 baizhi.cloud 顺带确认):challenge 端点返回 **HTTP 201**
   (已按 2xx 判成功,对齐移动端 res.ok);匿名会话 cookie 名 `sl-session`(host-only+secure)
 
-## 阶段 2:同步(逻辑完成 + in-process 验证;真机 e2e 待桌面点按)
+## 阶段 2:同步 ✅(2026-07-17 真机测绘重写 + 真机 e2e 通过)
 
-真机测绘(带真实 cookie)拿到的完整契约:
-- 账号有多个 space:团队(member)+ 个人(owner)。`GET /api/console/spaces` 列全,
-  `POST /api/console/spaces/current/switch` 切当前(服务端会话态,无 header/query 版)。
-- **团队 space 的 proxy-key 返回 null**(member 无个人 key)→ 必须切到个人 space(owner)。
-- 个人 space 资源(切过去后):
-  - `GET /spaces/current` → apiEndpoints{anthropic,openai}(base_url)
-  - `GET /spaces/current/proxy-key` → 稳定代理密钥(走该 space 全部模型)
-  - `GET /spaces/current/models` → {name,interfaceType,enabled,healthStatus}(已确认字段)
-  - `GET /spaces/current/mcp-services` / `/mcp-keys` → 个人 MCP
-- access-guide 无独立后端(纯展示页),数据源即上面这些。
+> 推翻此前"切个人 space"方案:真机 `GET /api/console/spaces` → 404,console API
+> 是**扁平**的,团队 space 会话可直接列模型/管密钥,无切换概念。
 
-- [x] `internal/baizhi/sync.go`:Sync() 切个人 space→读 proxy-key/models/mcp→切回原 space;
-      模型映射(multi/anthropic→anthropic 端点,openai→openai 端点)、MCP→streamable-http 条目带密钥头
-- [x] proxy-key/switch-payload/mcp-key 字段名容错解析(真机只确认了 models 字段,
-      余下靠多字段名 + sk- 前缀扫描兜底)
-- [x] `POST /api/baizhi/sync` 路由 + in-process 假网关测试(切换轨迹/协议映射/密钥/MCP 全覆盖)
-- [x] UI:登录态"同步模型与 MCP"按钮 → 结果按名合并进设置表单(不删手工条目)→ 用户核对后保存
-- [ ] **真机 e2e**(桌面应用里点"同步";内核真的切个人 space):验证 proxy-key 明文可用、
-      switch payload 字段、mcp-key 结构——这几项在被篡改的 shell 里没法可信验证,交桌面端跑
+模型网关(ai-api-gateway)真机契约(全部带真实 cookie 实测):
+- `GET /api/console/models?page&pageSize` → items{name,interfaceType,enabled,healthStatus,…}
+- `GET /api/console/api-keys` → 仅 maskedKey 掩码;**明文只在创建时返回一次**
+- `POST /api/console/api-keys {name}` → data{id,key(明文),enabled:**false**(默认停用)}
+- `PATCH /api/console/api-keys/{id} {name,enabled}` 启用(name 必填,否则 400)
+- 推理 base_url:`<网关>/api/anthropic`(x-api-key)/ `<网关>/api/openai`(Bearer),
+  双协议真机推理冒烟 200;`/api/console/me` 返回 spaceId/isTeam
+- 探测所建临时 key 均已删除(DELETE /api/console/api-keys/{id} 可用)
+
+MCP 网关(agent-toolkit)契约(子代理挖前端 bundle;本账号团队未开通 app_id=39,
+`/api/v1/*` 一律 302 权限申请页,响应结构待有权限账号复核):
+- 管理 API 同源 `/api/v1/*`,cookie 鉴权;包壳 code 为字符串 "ok";
+  **每 host 独立 sl-session**(先 GET / 领取)
+- `GET /api/v1/services`(catalog_code)/ `GET /api/v1/api-keys`(masked_key,status)/
+  `GET /api/v1/api-keys/{id}/reveal` → **明文可随时取回** / `POST /api/v1/api-keys
+  {name,tool_codes}` / `POST /api/v1/api-keys/{id}/enable`
+- 运行时**单端点** `<MCP 网关>/mcp`(Streamable HTTP,Authorization: Bearer)→
+  mcp.json 只产出一个条目(baizhi-toolkit)
+
+- [x] `sync.go` 重写:扁平 API;密钥策略=known_keys 掩码前后缀匹配复用(停用先
+      PATCH 重启用)→ 都对不上才新建"MonkeyCode"并启用;MCP=握手→services→
+      ensureMCPKey(reveal 优先/只重启用自家同名/新建授权全部 tool_codes)→单条目
+- [x] 密钥名全局唯一(真机 409"名称已存在",用户桌面同步已建 MonkeyCode 后
+      浏览器端撞名 502 复现):pickKeyName 从列表选不冲突名(MonkeyCode-N),
+      不动同名旧 key(明文可能在别的设备用);SyncResult 带 key_name 供 UI 展示
+- [x] `POST /api/baizhi/sync` 收 {known_keys};UI 传设置表单现有 sk- 密钥,
+      结果按名合并(不删手工条目),key_created/key_name 提示新建
+- [x] 单测 8 例:新建+启用(PATCH 带 name)/复用/停用重启用/撞名换名/掩码匹配/
+      MCP reveal/MCP 新建 tool_codes/未开通 302 优雅降级
+- [x] **真机 e2e**(真实 cookie + 真内核 serve):46 模型拉回、known_keys 复用不新建、
+      base_url/协议映射正确、MCP 未开通降级 note;账号零残留
+- [ ] MCP 真实数据复核(阻塞:团队需开通 Agent 工具包,或换已开通账号跑一次同步)
 - [ ] 源标记:HostModel 无 source 字段,当前按"同名覆盖"合并;若要"重同步清理旧条目"需加 source
 
 ## 阶段 3:UI(agent/ui 设置视图)
 
 - [x] 百智云账号卡片:微信扫码(默认,自动拉码 + 状态提示 + 过期重取)/
       手机验证码(60s 倒计时)双模式;已登录态展示 + 登出;设置视图新增「百智云账号」段
+- [x] 同步结果挑选面板(2026-07-17,用户反馈"不能选"):同步结果先进勾选列表
+      (已在表单的同名条目默认勾选=重同步刷新,新条目手动挑;全选/清空;MCP 独立
+      开关;notes 面板内展示)→「导入所选」才合并进表单;无头 Chromium 实测
+      (46 模型面板/勾选计数/导入文案含实际密钥名)
 - [ ] 登录成功 → 自动 sync → 同步结果预览 → 确认合并 → save_config 保存重启(等阶段 0/2)
 
 ## 阶段 4:验证
