@@ -13,6 +13,7 @@ import {
   listSessions,
   onHostEvent,
   setSessionArchived,
+  setSessionTitle,
   updateCheck,
   type UpdateStatus,
 } from "./client";
@@ -139,6 +140,16 @@ export default function App() {
       await refreshSessions();
     } catch (e) {
       session.notify("⚠ 归档失败: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  // 重命名会话(标题非空;当前打开的会话头部随 sessions 刷新自动更新)
+  const renameSession = async (m: SessionMeta, title: string) => {
+    try {
+      await setSessionTitle(m.id, title);
+      await refreshSessions();
+    } catch (e) {
+      session.notify("⚠ 重命名失败: " + (e instanceof Error ? e.message : String(e)));
     }
   };
 
@@ -522,6 +533,7 @@ export default function App() {
         onOpenSettings={() => setView("settings")}
         onArchive={(m) => void archiveSession(m)}
         onDelete={(m) => void removeSession(m)}
+        onRename={(m, title) => void renameSession(m, title)}
       />
 
       {/* ============ 主区 ============ */}

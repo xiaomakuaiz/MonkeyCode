@@ -39,6 +39,20 @@ export function IconFile({ size = 13, color = "var(--t4)", style }: IconProps) {
   );
 }
 
+/** 铅笔(重命名) */
+export function IconPencil({ size = 12, color = "var(--t3)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <path
+        d="M2.3 9.7 9.2 2.8a1.25 1.25 0 0 1 1.77 0l.23.23a1.25 1.25 0 0 1 0 1.77L4.3 11.7l-2.6.6.6-2.6z"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** 云(云端任务) */
 export function IconCloud({ size = 14, color = "var(--t5)", style }: IconProps) {
   return (

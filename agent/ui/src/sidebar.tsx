@@ -1,6 +1,7 @@
 // 侧栏:云端任务空态 + 本地会话分组列表 + 连接状态/设置入口。
 // 布局与数值取自设计稿 Sidebar 区块;macOS 壳内顶部为红绿灯预留拖拽区。
 import { useState, type CSSProperties } from "react";
+import { isImeEnter, markImeEnd } from "./chat";
 import { isMacShell } from "./client";
 import {
   IconArchive,
@@ -9,6 +10,7 @@ import {
   IconDots,
   IconGear,
   IconMonitor,
+  IconPencil,
   IconPlus,
   IconTrash,
 } from "./icons";
@@ -76,6 +78,7 @@ function SessionRow({
   onClick,
   onArchive,
   onDelete,
+  onRename,
 }: {
   meta: SessionMeta;
   active: boolean;
@@ -83,9 +86,18 @@ function SessionRow({
   onClick: () => void;
   onArchive: () => void;
   onDelete: () => void;
+  onRename: (title: string) => void;
 }) {
   const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
   const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  // 行内重命名:Enter 确认 / Esc 取消 / 失焦确认;空值或未变则放弃
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const commitRename = () => {
+    setEditing(false);
+    const t = draft.trim();
+    if (t && t !== (meta.title || "")) onRename(t);
+  };
   // 菜单以 fixed 定位(脱离侧栏滚动容器的裁剪),按 ⋯ 的视口位置计算;
   // 底部空间不足时向上弹,避免被视口遮住
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
@@ -122,7 +134,34 @@ function SessionRow({
           minWidth: 0,
         }}
       >
-        <span className="ellipsis" style={{ flex: 1 }}>{meta.title || "新任务"}</span>
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onCompositionEnd={markImeEnd}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              e.stopPropagation(); // 不触发全局快捷键(⏎ 审批/esc 关浮层)
+              if (e.key === "Enter" && !isImeEnter(e)) commitRename();
+              else if (e.key === "Escape") setEditing(false);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: "1px solid var(--accBd)",
+              borderRadius: 5,
+              padding: "2px 6px",
+              fontSize: 12.5,
+              background: "var(--card)",
+              color: "var(--t1)",
+              outline: "none",
+            }}
+          />
+        ) : (
+          <span className="ellipsis" style={{ flex: 1 }}>{meta.title || "新任务"}</span>
+        )}
         {meta.worktree && !showActions && (
           <span
             title="隔离 worktree 会话"
@@ -181,6 +220,17 @@ function SessionRow({
           >
             {menu === "open" ? (
               <>
+                <button
+                  className="hv menu-item"
+                  onClick={() => {
+                    closeMenu();
+                    setDraft(meta.title || "");
+                    setEditing(true);
+                  }}
+                >
+                  <IconPencil />
+                  重命名
+                </button>
                 <button
                   className="hv menu-item"
                   onClick={() => {
@@ -307,6 +357,7 @@ export function Sidebar({
   onOpenSettings,
   onArchive,
   onDelete,
+  onRename,
 }: {
   sessions: SessionMeta[];
   currentId: string | null;
@@ -321,6 +372,7 @@ export function Sidebar({
   onOpenSettings: () => void;
   onArchive: (m: SessionMeta) => void;
   onDelete: (m: SessionMeta) => void;
+  onRename: (m: SessionMeta, title: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
@@ -361,6 +413,7 @@ export function Sidebar({
       onClick={() => onSelect(m)}
       onArchive={() => onArchive(m)}
       onDelete={() => onDelete(m)}
+      onRename={(title) => onRename(m, title)}
     />
   );
 

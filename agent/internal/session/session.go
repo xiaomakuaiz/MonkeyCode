@@ -133,11 +133,16 @@ func Delete(root, id string) error {
 // SetArchived 设置归档标记(非 live 会话的磁盘直写路径;live 会话须经
 // 其内存副本修改后 SaveMeta,否则会被轮次收尾的落盘覆写)。
 func SetArchived(root, id string, archived bool) (Meta, error) {
+	return PatchMeta(root, id, func(m *Meta) { m.Archived = archived })
+}
+
+// PatchMeta 读-改-写会话元信息(原子落盘);apply 就地修改字段。
+func PatchMeta(root, id string, apply func(*Meta)) (Meta, error) {
 	meta, err := ReadMeta(root, id)
 	if err != nil {
 		return meta, err
 	}
-	meta.Archived = archived
+	apply(&meta)
 	meta.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {

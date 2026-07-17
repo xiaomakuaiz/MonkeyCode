@@ -42,6 +42,13 @@ export const createSession = (workdir: string, model: string, createDir = false)
 export const deleteSession = (id: string) =>
   api<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" });
 
+/** 重命名会话(标题非空,内核截断到 80 字符)。 */
+export const setSessionTitle = (id: string, title: string) =>
+  api<SessionMeta>(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+
 /** 归档/取消归档会话。 */
 export const setSessionArchived = (id: string, archived: boolean) =>
   api<SessionMeta>(`/api/sessions/${id}`, {

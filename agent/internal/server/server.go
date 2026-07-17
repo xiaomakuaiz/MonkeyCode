@@ -448,11 +448,32 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
-		Archived *bool `json:"archived"`
+		Archived *bool   `json:"archived"`
+		Title    *string `json:"title"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Archived == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 archived 字段"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Archived == nil && req.Title == nil) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少可更新字段(archived/title)"})
 		return
+	}
+	if req.Title != nil {
+		t := strings.TrimSpace(*req.Title)
+		if t == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "标题不能为空"})
+			return
+		}
+		// 与 firstLine 生成的标题同一上限,超长静默截断
+		if rs := []rune(t); len(rs) > 80 {
+			t = string(rs[:80])
+		}
+		req.Title = &t
+	}
+	apply := func(m *session.Meta) {
+		if req.Archived != nil {
+			m.Archived = *req.Archived
+		}
+		if req.Title != nil {
+			m.Title = *req.Title
+		}
 	}
 	// live 会话以内存副本为准:磁盘直写会被轮次收尾的 SaveMeta 覆掉
 	s.mu.Lock()
@@ -460,7 +481,7 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	if ls != nil {
 		ls.mu.Lock()
-		ls.sess.Meta.Archived = *req.Archived
+		apply(&ls.sess.Meta)
 		err := ls.sess.SaveMeta()
 		meta := ls.sess.Meta
 		ls.mu.Unlock()
@@ -471,7 +492,7 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, meta)
 		return
 	}
-	meta, err := session.SetArchived(s.opts.SessionRoot, id, *req.Archived)
+	meta, err := session.PatchMeta(s.opts.SessionRoot, id, apply)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return

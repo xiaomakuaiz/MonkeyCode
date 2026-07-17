@@ -1214,6 +1214,37 @@ func TestArchiveSession(t *testing.T) {
 	}
 }
 
+// 重命名:PATCH title 非 live 直写磁盘;live 走内存副本且轮次收尾不覆写;
+// 首轮自动命名(Title=="" 才取首行)不会盖掉用户手动改的名。
+func TestRenameSession(t *testing.T) {
+	stub := &stubProvider{results: []*provider.Result{textResult("好的")}}
+	srv, ts := newTestServer(t, stub)
+
+	idle := createSession(t, ts, t.TempDir())
+	resp, body := apiReq(t, ts, "PATCH", "/api/sessions/"+idle, "test-token", `{"title":"  我的任务  "}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"title":"我的任务"`) {
+		t.Fatalf("重命名失败(应去首尾空白): %d %s", resp.StatusCode, body)
+	}
+	resp, _ = apiReq(t, ts, "PATCH", "/api/sessions/"+idle, "test-token", `{"title":"   "}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("空标题应 400,得 %d", resp.StatusCode)
+	}
+
+	// live:改名后跑一轮,收尾 SaveMeta 不得覆写,首轮自动命名不得抢占
+	live := createSession(t, ts, t.TempDir())
+	conn := dialWS(t, ts, live)
+	resp, _ = apiReq(t, ts, "PATCH", "/api/sessions/"+live, "test-token", `{"title":"改过的名字"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("live 重命名失败: %d", resp.StatusCode)
+	}
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("首条输入不该变成标题")})
+	wsCollect(t, conn, func(fs []frame.Frame) bool { return hasType(fs, frame.TypeTaskEnded) })
+	meta, err := session.ReadMeta(srv.opts.SessionRoot, live)
+	if err != nil || meta.Title != "改过的名字" {
+		t.Fatalf("轮次收尾后标题应保留手动值: %+v err=%v", meta, err)
+	}
+}
+
 // ==================== 图片上传(对话粘贴/拖拽) ====================
 
 func TestUploadAndFetchImage(t *testing.T) {
