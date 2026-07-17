@@ -83,6 +83,12 @@ const drawerTabStyle = (active: boolean): CSSProperties => ({
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [view, setView] = useState<"new" | "session" | "settings">("new");
+  // 页内设置视图的脏状态(浏览器回退模式;桌面走独立设置窗口):离开前确认
+  const settingsDirty = useRef(false);
+  const closeSettings = () => {
+    if (settingsDirty.current && !window.confirm("有未保存的更改,确定离开设置?")) return;
+    setView(session.id ? "session" : "new");
+  };
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [hostVersion, setHostVersion] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
@@ -512,7 +518,7 @@ export default function App() {
         const typing = !!t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT");
         if (view === "settings") {
           if (typing) return t.blur();
-          return setView(session.id ? "session" : "new");
+          return closeSettings();
         }
         if (typing) return t.blur();
         // !isNewView:新任务视图不误拒背景会话的审批(Enter 分支同守卫,保持对称)
@@ -581,7 +587,10 @@ export default function App() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
         {view === "settings" ? (
           <SettingsView
-            onClose={() => setView(session.id ? "session" : "new")}
+            onClose={closeSettings}
+            onDirtyChange={(d) => {
+              settingsDirty.current = d;
+            }}
             hostVersion={hostVersion}
             update={update}
             onUpdateStatus={setUpdate}

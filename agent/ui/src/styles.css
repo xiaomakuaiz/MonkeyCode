@@ -208,6 +208,10 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 /* Windows 自绘标题栏的关闭按钮:hover 红底白字(系统惯例,明暗主题同色) */
 .hv-caption-close:hover { background: #e81123 !important; color: #fff !important; }
 
+/* 列表行的悬停操作区(设置页紧凑行:平时隐藏,悬停行时浮现) */
+.hrow .row-acts { opacity: 0; transition: opacity 0.12s ease; }
+.hrow:hover .row-acts { opacity: 1; }
+
 /* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */
 .hl .hljs-comment, .hl .hljs-quote { color: var(--t5); font-style: italic; }
 .hl .hljs-keyword, .hl .hljs-selector-tag, .hl .hljs-meta, .hl .hljs-doctag { color: var(--hlKw); }

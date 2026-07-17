@@ -407,7 +407,8 @@ fn open_settings(app: &AppHandle) {
     let opener = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::External(parsed))
         .title("MonkeyCode 设置")
-        .inner_size(760.0, 720.0)
+        .inner_size(900.0, 660.0)
+        .min_inner_size(760.0, 560.0)
         .on_navigation(move |url| {
             let internal = is_internal_url(url);
             if !internal {
