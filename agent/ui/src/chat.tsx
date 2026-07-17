@@ -485,8 +485,10 @@ export function ChatView({
         </div>
       )}
 
-      {/* ==== 运行条 + 排队 + composer(680 列,钉在底部)==== */}
-      <div style={{ flex: "none", maxWidth: COL_MAX, width: "100%", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* ==== 运行条 + 排队 + composer(680 列,钉在底部)====
+          width 扣掉 16px:对话列在滚动容器内被 scrollbar-gutter 双侧各让 8px,
+          composer 在容器外,同步扣减后两列在任意窗口宽度下公式一致、像素对齐 */}
+      <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {chat.running && (
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span className="spinner" />
@@ -530,6 +532,7 @@ export function ChatView({
               borderRadius: 10,
               padding: "7px 12px",
               fontSize: 12,
+              margin: "0 -12px",
             }}
           >
             <IconClock />
@@ -550,6 +553,9 @@ export function ChatView({
             boxShadow: "var(--panelSh)",
             display: "flex",
             flexDirection: "column",
+            // 光学对齐:硬边卡片向两侧出血 12px,卡内文字(textarea 左内距 15px)
+            // 与对话文字左缘几乎重合,消除"输入框显窄"的错觉
+            margin: "0 -12px",
           }}
         >
           {atts.length > 0 && (
