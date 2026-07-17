@@ -256,7 +256,26 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
   let queue: Frame[] = [];
   let flushScheduled = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const pending = new Map<string, { resolve: (v: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
+  // 同 kind 并发排 FIFO(协议无请求 ID;服务端按帧序处理,应答与队列顺序一致)。
+  // 双击文件夹/连点文件这类同 kind 并发若共用单槽会互相顶掉,悬到超时。
+  interface PendingCall {
+    resolve: (v: unknown) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+    dead?: boolean; // 已超时:留作墓碑吞掉对应应答,防止后续应答错位
+  }
+  const pending = new Map<string, PendingCall[]>();
+
+  /** 断线/关闭时拒绝全部在途 call(应答不会再来,干等只会 15s 超时) */
+  function failPending(msg: string) {
+    for (const [, q] of pending) {
+      for (const p of q) {
+        clearTimeout(p.timer);
+        if (!p.dead) p.reject(new Error(msg));
+      }
+    }
+    pending.clear();
+  }
 
   function flush() {
     flushScheduled = false;
@@ -280,6 +299,7 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
     sock.onopen = () => h.onStatus("已连接", true);
     sock.onclose = () => {
       if (ws !== sock || closed) return;
+      failPending("连接断开,请重试");
       h.onStatus("⚠ 连接断开,2 秒后自动重连…", false);
       reconnectTimer = setTimeout(open, RECONNECT_DELAY_MS);
     };
@@ -291,12 +311,13 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
         return;
       }
       if (f.type === "call-response" && f.kind) {
-        const p = pending.get(f.kind);
+        const q = pending.get(f.kind);
+        const p = q?.shift();
+        if (q && q.length === 0) pending.delete(f.kind);
         if (p) {
-          pending.delete(f.kind);
           clearTimeout(p.timer);
-          // 坏载荷不能抛出:异常会让 pending 悬到 15s 超时,降级为空结果
-          p.resolve(frameData(f) ?? {});
+          // 墓碑(已超时者)只吞应答不回调;坏载荷不能抛出,降级为空结果
+          if (!p.dead) p.resolve(frameData(f) ?? {});
           return;
         }
       }
@@ -321,11 +342,18 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
           reject(new Error("未连接"));
           return;
         }
-        const timer = setTimeout(() => {
-          pending.delete(kind);
-          reject(new Error("call 超时"));
-        }, CALL_TIMEOUT_MS);
-        pending.set(kind, { resolve: resolve as (v: unknown) => void, timer });
+        const entry: PendingCall = {
+          resolve: resolve as (v: unknown) => void,
+          reject,
+          // 超时不出队:应答仍会按序到达,置墓碑让它被吞掉,后续应答才不错位
+          timer: setTimeout(() => {
+            entry.dead = true;
+            reject(new Error("call 超时"));
+          }, CALL_TIMEOUT_MS),
+        };
+        const q = pending.get(kind);
+        if (q) q.push(entry);
+        else pending.set(kind, [entry]);
         ws.send(
           JSON.stringify({ type: "call", kind, data: b64encode(JSON.stringify(payload)), timestamp: Date.now() }),
         );
@@ -334,8 +362,7 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
     close() {
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      for (const [, p] of pending) clearTimeout(p.timer);
-      pending.clear();
+      failPending("连接已关闭");
       if (ws) {
         ws.onclose = null;
         ws.close();
