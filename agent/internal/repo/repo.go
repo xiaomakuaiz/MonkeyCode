@@ -111,12 +111,17 @@ type Change struct {
 }
 
 // FileChanges 相对 HEAD 的变更列表(含未跟踪文件)。非 git 仓库返回空。
+// 路径统一为相对 workdir:porcelain 输出的是仓库根相对路径,workdir 位于
+// 仓库子目录时直接拿去当 pathspec 会永远匹配不上(diff 恒空);
+// quotepath 关闭,否则非 ASCII 文件名(中文)被转成八进制转义乱码。
 func (b *Browser) FileChanges() ([]Change, error) {
 	if !b.isGitRepo() {
 		return nil, nil
 	}
-	// 已跟踪的改动
-	out, _ := b.git("status", "--porcelain=v1", "--untracked-files=all")
+	prefix, _ := b.git("rev-parse", "--show-prefix")
+	prefix = strings.TrimSpace(prefix)
+	// pathspec "." 限定 workdir 子树:子目录会话不该看到仓库其他地方的改动
+	out, _ := b.git("-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all", "--", ".")
 	var changes []Change
 	for line := range strings.SplitSeq(out, "\n") {
 		if len(line) < 4 {
@@ -129,6 +134,13 @@ func (b *Browser) FileChanges() ([]Change, error) {
 			path = path[i+4:]
 		}
 		path = strings.Trim(path, `"`)
+		// 仓库根相对 → workdir 相对(前缀之外的条目丢弃,双保险)
+		if prefix != "" {
+			if !strings.HasPrefix(path, prefix) {
+				continue
+			}
+			path = strings.TrimPrefix(path, prefix)
+		}
 		status := "M"
 		switch {
 		case strings.Contains(code, "?"), strings.Contains(code, "A"):
@@ -150,14 +162,14 @@ func (b *Browser) FileDiff(rel string) (string, error) {
 	if !b.isGitRepo() {
 		return "", fmt.Errorf("非 git 仓库,无法生成 diff")
 	}
-	// 已跟踪文件:直接 diff HEAD
-	out, err := b.git("diff", "HEAD", "--", rel)
+	// 已跟踪文件:直接 diff HEAD(rel 为 workdir 相对,与 FileChanges 一致)
+	out, err := b.git("-c", "core.quotepath=false", "diff", "HEAD", "--", rel)
 	if err == nil && strings.TrimSpace(out) != "" {
 		return out, nil
 	}
 	// 未跟踪文件:git diff --no-index 生成新增 diff
 	if untracked, _ := b.git("ls-files", "--others", "--exclude-standard", "--", rel); strings.TrimSpace(untracked) != "" {
-		d, _ := b.gitAllowFail("diff", "--no-index", "--", os.DevNull, rel)
+		d, _ := b.gitAllowFail("-c", "core.quotepath=false", "diff", "--no-index", "--", os.DevNull, rel)
 		return d, nil
 	}
 	return out, nil

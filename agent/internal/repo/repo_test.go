@@ -116,3 +116,49 @@ func TestNonGitRepo(t *testing.T) {
 		t.Fatal("非 git 仓库 diff 应报错")
 	}
 }
+
+// workdir 位于仓库子目录:porcelain 的仓库根相对路径必须转成 workdir 相对,
+// 否则 FileDiff 的 pathspec 永远匹配不上(回归:全部文件显示"无差异")。
+// 同时覆盖非 ASCII 文件名(quotepath 转义)与子树外改动的排除。
+func TestFileChangesInSubdirWorkdir(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	os.MkdirAll(filepath.Join(root, "sub"), 0o755)
+	commitFile(t, root, "sub/a.txt", "v1\n")
+	commitFile(t, root, "outside.txt", "v1\n")
+
+	// 子目录内改一个、新增一个中文名文件;子目录外也改一个(应被排除)
+	os.WriteFile(filepath.Join(root, "sub", "a.txt"), []byte("v2\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "sub", "中文文件.txt"), []byte("新内容\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "outside.txt"), []byte("v2\n"), 0o644)
+
+	b := New(filepath.Join(root, "sub"))
+	changes, err := b.FileChanges()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, c := range changes {
+		got[c.Path] = c.Status
+	}
+	if got["a.txt"] != "M" {
+		t.Fatalf("期望 a.txt=M(workdir 相对路径),实际 %v", got)
+	}
+	if got["中文文件.txt"] != "A" {
+		t.Fatalf("期望 中文文件.txt=A(原样 UTF-8,非八进制转义),实际 %v", got)
+	}
+	if _, ok := got["outside.txt"]; ok {
+		t.Fatalf("子树外的改动不应出现: %v", got)
+	}
+
+	// 列表里的每个路径都必须能出非空 diff(回归断言)
+	for path := range got {
+		d, err := b.FileDiff(path)
+		if err != nil {
+			t.Fatalf("FileDiff(%s): %v", path, err)
+		}
+		if strings.TrimSpace(d) == "" {
+			t.Fatalf("FileDiff(%s) 为空(pathspec 未命中)", path)
+		}
+	}
+}
