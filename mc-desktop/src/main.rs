@@ -117,9 +117,12 @@ struct TrayReady(AtomicBool);
 /// 托盘句柄(系统明暗主题切换时换图标)。
 struct Tray(Mutex<Option<TrayIcon>>);
 
-/// 托盘图标:透明背景的图形版(adaptive-icon,无白色圆角底板),
-/// 彩色图形在明暗菜单栏下均可辨,两种主题共用。
+/// 托盘图标:macOS 用模板剪影(黑 + alpha,紧裁占满菜单栏高度;配合
+/// icon_as_template 由系统按菜单栏明暗自动反色),其余平台用彩色透明图形。
 fn tray_icon_for(_theme: Theme) -> Image<'static> {
+    #[cfg(target_os = "macos")]
+    return Image::from_bytes(include_bytes!("../icons/tray-mac.png")).expect("托盘图标解码失败");
+    #[cfg(not(target_os = "macos"))]
     Image::from_bytes(include_bytes!("../icons/tray.png")).expect("托盘图标解码失败")
 }
 
@@ -537,6 +540,8 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let tray = TrayIconBuilder::with_id("main")
         .icon(tray_icon_for(Theme::Light))
+        // macOS 模板渲染(系统按菜单栏明暗反色);其余平台此标记为空操作
+        .icon_as_template(true)
         .tooltip("MonkeyCode")
         .menu(&menu)
         .show_menu_on_left_click(false)
