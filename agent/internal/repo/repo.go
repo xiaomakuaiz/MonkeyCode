@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -173,6 +174,38 @@ func (b *Browser) FileDiff(rel string) (string, error) {
 		return d, nil
 	}
 	return out, nil
+}
+
+// Reveal 在系统文件管理器中定位路径:目录直接打开,文件在父目录中选中。
+// 内核与浏览器同机(serve 仅绑 loopback),浏览器模式也因此可用。
+// Start 不等退出:explorer.exe 成功也返回非零码,Run 会误报错误。
+func (b *Browser) Reveal(rel string) error {
+	p, err := b.resolve(rel)
+	if err != nil {
+		return err
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return fmt.Errorf("路径不存在: %w", err)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		if st.IsDir() {
+			return exec.Command("open", p).Start()
+		}
+		return exec.Command("open", "-R", p).Start()
+	case "windows":
+		if st.IsDir() {
+			return exec.Command("explorer", p).Start()
+		}
+		return exec.Command("explorer", "/select,"+p).Start()
+	default:
+		dir := p
+		if !st.IsDir() {
+			dir = filepath.Dir(p)
+		}
+		return exec.Command("xdg-open", dir).Start()
+	}
 }
 
 func (b *Browser) isGitRepo() bool {

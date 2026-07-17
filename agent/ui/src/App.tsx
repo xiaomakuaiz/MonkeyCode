@@ -31,6 +31,9 @@ import type { FileChange, FileEntry, LogItem, ModelInfo, SessionMeta } from "./t
 /** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
 const DEFAULT_DIR = "~/MonkeyCode";
 
+/** 内核与页面同机(serve 仅绑 loopback),浏览器 UA 即宿主平台 */
+const IS_MAC = /Mac/.test(navigator.userAgent);
+
 /** 改动状态 → 普通用户可读的中文标签与配色(git 的 A/M/D 不外显) */
 const CHANGE_KIND: Record<FileChange["status"], { text: string; fg: string; bg: string }> = {
   A: { text: "新增", fg: "var(--addT)", bg: "var(--addBg)" },
@@ -315,6 +318,32 @@ export default function App() {
         });
       },
     );
+  };
+
+  // 工作区相对路径 → 绝对路径(Windows workdir 为反斜杠时统一分隔符)
+  const absPath = (rel: string) => {
+    const wd = currentMeta?.workdir ?? "";
+    if (!rel) return wd;
+    const sep = wd.includes("\\") ? "\\" : "/";
+    const tail = sep === "\\" ? rel.split("/").join(sep) : rel;
+    return wd.endsWith(sep) ? wd + tail : wd + sep + tail;
+  };
+
+  // 在系统文件管理器中定位:内核在本机执行(open/explorer/xdg-open),
+  // 壳内与浏览器模式行为一致;失败时复制绝对路径兜底
+  const revealPath = async (rel: string) => {
+    try {
+      const r = await session.reveal(rel);
+      if (r.error) throw new Error(r.error);
+    } catch (e) {
+      const p = absPath(rel);
+      try {
+        await navigator.clipboard.writeText(p);
+        session.notify("⚠ 无法打开文件夹,已复制路径: " + p);
+      } catch {
+        session.notify("⚠ 无法打开文件夹: " + (e instanceof Error ? e.message : String(e)));
+      }
+    }
   };
 
   // 打开抽屉(可指定视角:聊天区徽标直达「改动」);两个 tab 的数据并行刷新
@@ -710,7 +739,16 @@ export default function App() {
                       {CHANGE_KIND[changeMap.get(viewer.path)!].text}
                     </span>
                   )}
-                  <button className="hv2 icon-btn" title="关闭,回到文件列表 (esc)" onClick={() => setViewer(null)} style={{ marginLeft: "auto", width: 22, height: 22 }}>
+                  <button
+                    className="hv"
+                    title="在系统文件管理器中定位此文件(浏览器模式复制路径)"
+                    onClick={() => void revealPath(viewer.path)}
+                    style={{ marginLeft: "auto", flex: "none", height: 22, display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", borderRadius: 6, padding: "0 8px", fontSize: 11.5, fontWeight: 600, color: "var(--t3)", cursor: "pointer" }}
+                  >
+                    <IconFolder size={11} color="var(--t4)" />
+                    {IS_MAC ? "在访达中显示" : "打开所在文件夹"}
+                  </button>
+                  <button className="hv2 icon-btn" title="关闭,回到文件列表 (esc)" onClick={() => setViewer(null)} style={{ width: 22, height: 22 }}>
                     <IconX size={10} color="var(--t4)" />
                   </button>
                 </div>
@@ -727,6 +765,23 @@ export default function App() {
                 </div>
               </>
             )}
+
+            {/* 底部动作栏:不给普通用户看路径(不认识),给任务语言 + 平台母语按钮;
+                完整路径留在按钮悬停提示里给开发者 */}
+            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px 9px 16px", borderTop: "1px solid var(--line2)", whiteSpace: "nowrap" }}>
+              <span className="ellipsis" style={{ flex: 1, fontSize: 11.5, color: "var(--t5)" }}>
+                这个任务的文件都保存在这台电脑上
+              </span>
+              <button
+                className="hv-acc"
+                title={currentMeta?.workdir ?? ""}
+                onClick={() => void revealPath("")}
+                style={{ flex: "none", height: 26, border: "none", background: "var(--acc)", color: "var(--onAcc)", borderRadius: 8, padding: "0 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "var(--accSh)" }}
+              >
+                <IconFolder size={12} color="var(--onAcc)" />
+                {IS_MAC ? "在访达中打开" : "打开文件夹"}
+              </button>
+            </div>
           </div>
         </>
       )}

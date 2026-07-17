@@ -48,6 +48,7 @@ const (
 	KindRepoReadFile    = "repo_read_file"
 	KindRepoFileChanges = "repo_file_changes"
 	KindRepoFileDiff    = "repo_file_diff"
+	KindRepoReveal      = "repo_reveal"
 	// KindSessionSetModel 切换会话模型(轮次间生效;执行中拒绝)。
 	// 成功后另发 model_update 帧进事件日志,回放可见。
 	KindSessionSetModel = "session_set_model"

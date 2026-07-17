@@ -162,3 +162,15 @@ func TestFileChangesInSubdirWorkdir(t *testing.T) {
 		}
 	}
 }
+
+// Reveal 的守卫路径:越界拒绝、不存在报错(真实唤起文件管理器不在单测覆盖)。
+func TestRevealGuards(t *testing.T) {
+	dir := t.TempDir()
+	b := New(dir)
+	if err := b.Reveal("../etc"); err == nil {
+		t.Fatal("越界路径应被拒绝")
+	}
+	if err := b.Reveal("no-such-file"); err == nil {
+		t.Fatal("不存在的路径应报错")
+	}
+}

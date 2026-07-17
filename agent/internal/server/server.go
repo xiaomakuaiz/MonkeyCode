@@ -1121,6 +1121,13 @@ func (ls *liveSession) handleCall(c *wsClient, f *frame.Frame) {
 		result = map[string]string{"path": p.Path, "content": content}
 	case frame.KindRepoFileChanges:
 		result, callErr = browser.FileChanges()
+	case frame.KindRepoReveal:
+		var p struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(f.Data, &p)
+		callErr = browser.Reveal(p.Path)
+		result = map[string]bool{"ok": callErr == nil}
 	case frame.KindRepoFileDiff:
 		var p struct {
 			Path string `json:"path"`

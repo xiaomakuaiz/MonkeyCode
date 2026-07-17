@@ -52,6 +52,8 @@ export interface SessionHandle {
   listFiles(dir: string): Promise<{ result?: FileEntry[]; error?: string }>;
   /** repo_read_file 同步查询(文件抽屉:读文件内容,内核限 1MB) */
   readFile(path: string): Promise<{ result?: { content?: string }; error?: string }>;
+  /** repo_reveal:在系统文件管理器中定位(内核本机执行,浏览器模式同样可用) */
+  reveal(path: string): Promise<{ result?: { ok?: boolean }; error?: string }>;
   /** 在状态行外显一条告警(App 级操作失败与连接状态同渠道展示) */
   notify(text: string): void;
 }
@@ -286,6 +288,12 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     return conn.call<{ result?: { content?: string }; error?: string }>("repo_read_file", { path });
   };
 
+  const reveal = (path: string) => {
+    const conn = connRef.current;
+    if (!conn) return Promise.reject(new Error("未连接"));
+    return conn.call<{ result?: { ok?: boolean }; error?: string }>("repo_reveal", { path });
+  };
+
   return {
     id,
     chat,
@@ -314,6 +322,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     fileDiff,
     listFiles,
     readFile,
+    reveal,
     notify: setStatus,
   };
 }
