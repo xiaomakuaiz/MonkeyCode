@@ -758,3 +758,66 @@
 - 后续可选:SessionViewer 复用只读帧流核(useFrameStream 方向);
   useSession 的 model/yolo 镜像 state 可派生化;basename 三处同型逻辑
   下沉公共模块(注意 Windows 反斜杠路径);深色模式落地时样式原语已就位。
+
+# 功能:百智云登录 + 模型/MCP 自动同步(2026-07-17)
+
+## 背景与结论
+
+- 不改 MonkeyCode 后端,桌面直接对接 baizhi.cloud(移动端同源方案)。
+- 登录协议移动端已完整逆好:Cap.js PoW 验证码(`mobile/src/api/captcha.ts`,算法与服务端 go-cap 对齐)
+  + 手机验证码登录(`mobile/src/api/baizhi.ts`:challenge/redeem → phone_code → login/phone → cookie 会话)。
+- 拿到 cookie 后可访问 `ai-api-gateway.app.baizhi.cloud`(模型)与
+  `agent-toolkit.app.baizhi.cloud`(MCP),自动同步模型与 MCP 配置。
+- 两服务 API 形态未测绘(无 cookie 时全 401,仓库内无对接痕迹)→ 阶段 0 先侦察。
+
+## 架构决策
+
+- **壳零改动**:配置所有权仍在壳;登录与同步全部落在内核 + 内核 UI。
+- **内核代理一切 baizhi 流量**:UI 跑在 127.0.0.1 origin,对 baizhi.cloud 带凭证跨域会被 CORS 拦;
+  Go 客户端无此约束。内核在本地 HTTP 上暴露 /api/baizhi/*。
+- **同步产物写入 models.json/mcp.json**:UI 拿内核返回的清单合并进设置表单,
+  走现有 save_config → 壳落盘 → 重启内核。条目打来源标记(source=baizhi),
+  再次同步只增量更新/清理自家条目,不碰手工条目。
+- **产品形态:一次性向导**:登录一次换出长期凭证进配置,之后不依赖登录态;
+  cookie 持久化(0600)仅供"重新同步",过期引导重登。
+
+## 阶段 0:API 侦察(需真实会话,阻塞项)
+
+- [ ] 拿到登录 cookie(用户浏览器导出或测试账号)
+- [ ] 验证 baizhi.cloud 会话对两个 app 子域是否直接生效(还是有 SSO 跳转链)
+- [ ] 测绘 ai-api-gateway:API token 获取/签发接口 + 模型列表接口
+- [ ] 测绘 agent-toolkit:MCP 清单接口(远端 streamable-http 直连?还是下发本地 stdio 配置?)
+- [ ] curl + cookie jar 复现全链路,沉淀接口文档
+
+## 阶段 1:内核 baizhi 客户端 ✅
+
+- [x] `agent/internal/baizhi`:Cap.js PoW 求解器(黄金值由移动端 JS 实现生成,钉住跨实现一致性)
+- [x] 登录客户端:challenge/redeem → phone_code → login/phone;cookie 存储自实现
+      (RFC 6265 域后缀/路径匹配,Domain 不匹配请求 host 时降级 host-only),0600 落盘、重启恢复
+- [x] serve 本地路由:/api/baizhi/send-code /login /status /logout;
+      server 经 Options.AuthRoutes 钩子挂载,对业务零知识
+- [x] 假服务端 e2e:发码→登录→status(profile)→内核重启恢复→登出全链路验证
+- [x] 微信扫码登录:内核扮演 qrconnect 页面(网页版微信同款协议)——
+      oauth/login?platform=wechat → 解析授权页二维码 uuid → 长轮询
+      lp.open.weixin.qq.com(408 待扫/404 已扫/403 取消/402|500 过期/405 出码)
+      → 带 cookie jar 走百智云回调换会话;/api/baizhi/wechat/{start,poll};
+      真实环境无头冒烟通过(真二维码 + waiting),仅"扫码确认→回调"待真机验证
+- 侦察发现(误连真实 baizhi.cloud 顺带确认):challenge 端点返回 **HTTP 201**
+  (已按 2xx 判成功,对齐移动端 res.ok);匿名会话 cookie 名 `sl-session`(host-only+secure)
+
+## 阶段 2:同步
+
+- [ ] /api/baizhi/sync:拉模型(token + 模型列表)+ MCP 清单,返回结构化结果
+- [ ] 字段映射:模型 → ModelProfile(provider/base_url/api_key/model/context_window/vision);
+      MCP → mcp.json 条目
+
+## 阶段 3:UI(agent/ui 设置视图)
+
+- [x] 百智云账号卡片:微信扫码(默认,自动拉码 + 状态提示 + 过期重取)/
+      手机验证码(60s 倒计时)双模式;已登录态展示 + 登出;设置视图新增「百智云账号」段
+- [ ] 登录成功 → 自动 sync → 同步结果预览 → 确认合并 → save_config 保存重启(等阶段 0/2)
+
+## 阶段 4:验证
+
+- [ ] 真机全链路:登录 → 同步 → 用同步模型建会话跑任务;MCP 工具会话内可用
+- [ ] 坏路径:验证码错误、cookie 过期、同步 401、风控拦截 → 明确报错可重试,不致死

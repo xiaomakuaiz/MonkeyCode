@@ -123,6 +123,15 @@ export interface FileChange {
   path: string;
 }
 
+/** repo_file_list 返回的目录项(单层,目录在前已排序) */
+export interface FileEntry {
+  name: string;
+  /** 相对工作区路径(正斜杠) */
+  path: string;
+  is_dir: boolean;
+  size: number;
+}
+
 /** 待发送附件(已上传到会话工作区) */
 export interface Attachment {
   path: string;

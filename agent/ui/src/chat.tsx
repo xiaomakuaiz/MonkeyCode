@@ -12,7 +12,6 @@ import {
 import { LogList, MONO } from "./components";
 import {
   IconArchive,
-  IconBranch,
   IconChevronDown,
   IconClock,
   IconDots,
@@ -219,7 +218,7 @@ export function ChatView({
   models: ModelInfo[];
   /** 展示用模型名(session.model 为空时 App 已回退默认) */
   currentModel: string;
-  onOpenDrawer: () => void;
+  onOpenDrawer: (tab?: "files" | "changes") => void;
   onOpenChild: (id: string) => void;
   onArchive: () => void;
   onDelete: () => void;
@@ -352,8 +351,8 @@ export function ChatView({
         <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
         <button
           className="hv"
-          title="查看本轮文件改动"
-          onClick={onOpenDrawer}
+          title="浏览工作区文件(标注本轮改动)"
+          onClick={() => onOpenDrawer()}
           style={{
             height: 28,
             border: "1px solid var(--line)",
@@ -371,10 +370,15 @@ export function ChatView({
             flex: "none",
           }}
         >
-          <IconBranch />
-          改动
+          <IconFolder size={12} />
+          文件
           {changesCount > 0 && (
             <span
+              title="查看本轮改动"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDrawer("changes");
+              }}
               style={{
                 minWidth: 16,
                 height: 16,

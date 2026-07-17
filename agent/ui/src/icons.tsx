@@ -24,6 +24,21 @@ export function IconFolder({ size = 13, color = "var(--t3)", style }: IconProps)
   );
 }
 
+/** 文件(改动列表的文档图标,右上折角) */
+export function IconFile({ size = 13, color = "var(--t4)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <path
+        d="M3.5 2.8A1.3 1.3 0 0 1 4.8 1.5h3.4l2.3 2.3v7.4a1.3 1.3 0 0 1-1.3 1.3H4.8a1.3 1.3 0 0 1-1.3-1.3V2.8z"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M8 1.7v2.5h2.4" stroke={color} strokeWidth="1.1" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** 云(云端任务) */
 export function IconCloud({ size = 14, color = "var(--t5)", style }: IconProps) {
   return (

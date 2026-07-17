@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { connect, uploadFile, uploadFileURL, type Conn } from "./client";
 import { b64encode } from "./codec";
 import { answerPerm as applyPermAnswer, initialChat, reduceBatch, type ChatState } from "./reduce";
-import type { Attachment, FileChange, Frame } from "./types";
+import type { Attachment, FileChange, FileEntry, Frame } from "./types";
 
 export type PermAction = "allow" | "always" | "persist" | "deny";
 
@@ -46,8 +46,12 @@ export interface SessionHandle {
   switchModel(name: string): Promise<void>;
   toggleYolo(): Promise<void>;
   refreshChanges(): Promise<FileChange[]>;
-  /** repo_file_diff 同步查询(改动抽屉) */
+  /** repo_file_diff 同步查询(文件抽屉:改动文件的 diff) */
   fileDiff(path: string): Promise<{ result?: { diff?: string }; error?: string }>;
+  /** repo_file_list 同步查询(文件抽屉:列目录,单层) */
+  listFiles(dir: string): Promise<{ result?: FileEntry[]; error?: string }>;
+  /** repo_read_file 同步查询(文件抽屉:读文件内容,内核限 1MB) */
+  readFile(path: string): Promise<{ result?: { content?: string }; error?: string }>;
   /** 在状态行外显一条告警(App 级操作失败与连接状态同渠道展示) */
   notify(text: string): void;
 }
@@ -270,6 +274,18 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     return conn.call<{ result?: { diff?: string }; error?: string }>("repo_file_diff", { path });
   };
 
+  const listFiles = (dir: string) => {
+    const conn = connRef.current;
+    if (!conn) return Promise.reject(new Error("未连接"));
+    return conn.call<{ result?: FileEntry[]; error?: string }>("repo_file_list", { path: dir });
+  };
+
+  const readFile = (path: string) => {
+    const conn = connRef.current;
+    if (!conn) return Promise.reject(new Error("未连接"));
+    return conn.call<{ result?: { content?: string }; error?: string }>("repo_read_file", { path });
+  };
+
   return {
     id,
     chat,
@@ -296,6 +312,8 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     toggleYolo,
     refreshChanges,
     fileDiff,
+    listFiles,
+    readFile,
     notify: setStatus,
   };
 }

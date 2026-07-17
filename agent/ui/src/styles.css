@@ -73,6 +73,12 @@
   --linkH: #166b46;                       /* 链接 hover */
   --sbThumb: rgba(110, 120, 115, 0.22);   /* 滚动条 */
   --sbThumbH: rgba(110, 120, 115, 0.38);
+  /* 代码高亮配色(GitHub Light 系;深色主题在 data-theme 块重定义) */
+  --hlKw: #cf222e;   /* 关键字 */
+  --hlStr: #0a3069;  /* 字符串/正则 */
+  --hlNum: #0550ae;  /* 数字/字面量/内建 */
+  --hlFn: #8250df;   /* 函数/类型/标题 */
+  --hlAttr: #953800; /* 属性/标签名 */
 }
 
 /* 深色主题:落地时只填这里的令牌值,组件零改动。
@@ -151,6 +157,16 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   box-shadow: var(--cardSh);
 }
 .card-lg { border-radius: 11px; padding: 16px; }
+/* 路径条(资源管理器地址栏):可横向滚动但不显示滚动条 */
+.pathbar { scrollbar-width: none; }
+.pathbar::-webkit-scrollbar { display: none; }
+/* 骨架屏占位块(加载态;宽高由使用处内联) */
+.skeleton {
+  background: var(--hov);
+  border-radius: 6px;
+  animation: mcpulse 1.4s ease infinite;
+  flex: none;
+}
 /* 运行中加载圆环 */
 .spinner {
   width: 13px;
@@ -193,6 +209,34 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 /* Windows 自绘标题栏的关闭按钮:hover 红底白字(系统惯例,明暗主题同色) */
 .hv-caption-close:hover { background: #e81123 !important; color: #fff !important; }
 
+/* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */
+.hl .hljs-comment, .hl .hljs-quote { color: var(--t5); font-style: italic; }
+.hl .hljs-keyword, .hl .hljs-selector-tag, .hl .hljs-meta, .hl .hljs-doctag { color: var(--hlKw); }
+.hl .hljs-string, .hl .hljs-regexp, .hl .hljs-addition { color: var(--hlStr); }
+.hl .hljs-number, .hl .hljs-literal, .hl .hljs-symbol, .hl .hljs-bullet,
+.hl .hljs-built_in, .hl .hljs-variable, .hl .hljs-template-variable { color: var(--hlNum); }
+.hl .hljs-title, .hl .hljs-section, .hl .hljs-type, .hl .hljs-function { color: var(--hlFn); }
+.hl .hljs-attr, .hl .hljs-attribute, .hl .hljs-name, .hl .hljs-selector-id,
+.hl .hljs-selector-class, .hl .hljs-tag { color: var(--hlAttr); }
+.hl .hljs-emphasis { font-style: italic; }
+.hl .hljs-strong { font-weight: 700; }
+.hl .hljs-deletion { color: var(--delT); background: var(--delBg); }
+
+/* 抽屉左缘拖拽把手:悬停/拖动中显示强调色细条 */
+.resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.resize-handle:hover, .resize-handle.dragging { background: var(--accBd); }
+/* 列表/预览分隔的横向拖拽把手 */
+.resize-handle-h { height: 5px; flex: none; cursor: row-resize; }
+.resize-handle-h:hover, .resize-handle-h.dragging { background: var(--accBd); }
+
 /* markdown 渲染产物(无法内联) */
 .md { font-size: 13.5px; line-height: 1.8; color: var(--t2); }
 .md > :first-child { margin-top: 0; }
@@ -217,5 +261,6 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .md table { border-collapse: collapse; }
 .md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
 .md blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 12px; color: var(--t4); }
+.md img { max-width: 100%; height: auto; border-radius: 9px; }
 
 select option { background: var(--pop); color: var(--t1); }
