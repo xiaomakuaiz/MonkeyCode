@@ -80,7 +80,7 @@ func serveCmd() *cobra.Command {
 				opts.ListModels = func() []server.ModelInfo {
 					out := make([]server.ModelInfo, len(profiles))
 					for i, p := range profiles {
-						out[i] = server.ModelInfo{Name: p.Name, Default: p.Default}
+						out[i] = server.ModelInfo{Name: p.Name, Default: p.Default, Source: p.Source}
 					}
 					return out
 				}

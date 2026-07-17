@@ -51,6 +51,10 @@ type SyncResult struct {
 // syncKeyName 同步新建密钥的名字(网关控制台里用户可见)。
 const syncKeyName = "MonkeyCode"
 
+// sourceBaizhi 同步条目的 source 标记(UI 按它分组/整组替换)。
+// UI 侧对应常量:agent/ui/src/types.ts 的 SOURCE_BAIZHI,两侧改动需同步。
+const sourceBaizhi = "baizhi"
+
 // Sync 拉模型清单 + 确保推理密钥。要求已登录(有 cookie)。
 // knownKeys 是调用方已持有的候选明文密钥(如设置表单里现有条目的 api_key),
 // 能对上网关掩码列表就复用,避免每次同步都新建密钥。
@@ -256,7 +260,7 @@ func (s *Service) gatewayModels(ctx context.Context, key string) ([]SyncedModel,
 			BaseURL:  baseURL,
 			APIKey:   key,
 			Model:    m.Name,
-			Source:   "baizhi",
+			Source:   sourceBaizhi,
 		})
 	}
 	if len(models) == 0 {

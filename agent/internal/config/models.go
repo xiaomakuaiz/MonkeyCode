@@ -24,6 +24,9 @@ type ModelProfile struct {
 	// SkipTLSVerify 跳过 TLS 证书校验(不安全,仅自签名内网网关;
 	// 公网证书因系统根证书库过旧验不过的场景由内置 Mozilla 根兜底,无需开启)。
 	SkipTLSVerify bool `json:"skip_tls_verify,omitempty"`
+	// Source 条目来源(如 "baizhi" 表示百智云同步)。纯展示分组维度,
+	// 内核不解释;会话绑定与 provider 解析仍只按 Name。
+	Source string `json:"source,omitempty"`
 }
 
 // LoadModels 加载模型清单:MC_AGENT_MODELS 指向 JSON 数组文件。

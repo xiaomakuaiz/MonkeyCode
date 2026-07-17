@@ -173,6 +173,24 @@ export async function saveHostConfig(config: HostConfig): Promise<void> {
   await tauri.core.invoke("save_config", { config });
 }
 
+/** 打开壳的独立设置窗口(加载同一内核 UI 的 view=settings 路由)。
+ * 返回是否成功交给壳处理;非壳环境返回 false(调用方回退页内设置视图)。 */
+export async function openHostSettings(): Promise<boolean> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return false;
+  try {
+    await tauri.core.invoke("open_settings_window");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 当前页面是否为独立设置窗口路由(壳开设置窗口时 URL 带 view=settings)。 */
+export function isSettingsWindow(): boolean {
+  return new URLSearchParams(location.search).get("view") === "settings";
+}
+
 /** 是否 macOS 桌面壳(标题栏为 Overlay,侧栏顶部须为红绿灯预留拖拽区)。 */
 export function isMacShell(): boolean {
   return inDesktopShell() && /Mac/.test(navigator.userAgent);
@@ -255,17 +273,6 @@ export function openExternal(url: string): void {
   } else {
     window.open(url, "_blank", "noopener,noreferrer");
   }
-}
-
-/** 订阅壳事件(如托盘"设置"),返回退订函数;非壳环境为空操作。 */
-export function onHostEvent(name: string, cb: () => void): () => void {
-  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
-  const listen = tauri?.event?.listen;
-  if (!listen) return () => {};
-  const un = listen(name, cb);
-  return () => {
-    un.then((f) => f()).catch(() => {});
-  };
 }
 
 export interface Conn {

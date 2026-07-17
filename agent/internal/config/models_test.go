@@ -50,6 +50,21 @@ func TestLoadModelsValid(t *testing.T) {
 	}
 }
 
+// source 是纯展示分组字段:透传保留、不参与校验,缺省为空(手工条目)。
+func TestLoadModelsSourcePassthrough(t *testing.T) {
+	writeModels(t, `[
+		{"name":"手工","base_url":"u","api_key":"k","model":"m1"},
+		{"name":"云","base_url":"u","api_key":"k","model":"m2","source":"baizhi"}
+	]`)
+	profiles, err := LoadModels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profiles[0].Source != "" || profiles[1].Source != "baizhi" {
+		t.Fatalf("source 透传错误: %+v", profiles)
+	}
+}
+
 func TestLoadModelsNoDefaultTakesFirst(t *testing.T) {
 	writeModels(t, `[
 		{"name":"a","base_url":"u","api_key":"k","model":"m1"},

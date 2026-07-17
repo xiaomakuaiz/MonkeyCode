@@ -9,9 +9,9 @@ import {
   inDesktopShell,
   isWindowsShell,
   getHostInfo,
+  openHostSettings,
   listModels,
   listSessions,
-  onHostEvent,
   setSessionArchived,
   setSessionTitle,
   updateCheck,
@@ -174,9 +174,8 @@ export default function App() {
   };
 
   // 启动:拉模型清单 + 恢复上次会话;桌面壳内无模型(首启/被清空)直接进设置向导。
-  // 另订阅壳的托盘"设置"事件,静默检查一次应用更新(齿轮上的小圆点)。
+  // 另静默检查一次应用更新(齿轮上的小圆点)。
   useEffect(() => {
-    const offSettings = onHostEvent("open-settings", () => setView("settings"));
     Promise.all([listModels().catch(() => [] as ModelInfo[]), refreshSessions()])
       .then(([ms, metas]) => {
         setModels(ms);
@@ -193,7 +192,6 @@ export default function App() {
         .then(setUpdate)
         .catch(() => {}); // 静默:自动检查失败不打扰
     }
-    return () => offSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -385,7 +383,7 @@ export default function App() {
   const currentModel = session.model || models.find((m) => m.default)?.name || "";
   const menuModels: ModelInfo[] =
     session.model && !models.some((m) => m.name === session.model)
-      ? [...models, { name: session.model, default: false }]
+      ? [...models, { name: session.model, default: false }] // 下线模型兜底,无 source 归「自定义」组
       : models;
   const openPerm = [...session.chat.items].reverse().find((it) => it.kind === "perm" && it.state === "open") as
     | Extract<LogItem, { kind: "perm" }>
@@ -508,8 +506,17 @@ export default function App() {
           if (viewer) return setViewer(null); // 先关文件查看器,再关抽屉
           return setDrawerOpen(false);
         }
-        if (view === "settings") return setView(session.id ? "session" : "new");
-        if (openPerm) session.answerPerm(openPerm.id, "deny");
+        // 输入态 Esc(清空/取消输入法/关自动补全)只收敛焦点,不触发视图级动作
+        // ——尤其不能当作审批拒绝(deny 不可逆);先 blur,想应答再按一次
+        const t = e.target as HTMLElement | null;
+        const typing = !!t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT");
+        if (view === "settings") {
+          if (typing) return t.blur();
+          return setView(session.id ? "session" : "new");
+        }
+        if (typing) return t.blur();
+        // !isNewView:新任务视图不误拒背景会话的审批(Enter 分支同守卫,保持对称)
+        if (openPerm && !isNewView && !e.isComposing) session.answerPerm(openPerm.id, "deny");
         return;
       }
       if (e.key === "Enter" && !e.isComposing && openPerm && !isNewView) {
@@ -559,7 +566,12 @@ export default function App() {
           setOfferCreate(false);
           setView("new");
         }}
-        onOpenSettings={() => setView("settings")}
+        onOpenSettings={() => {
+          // 桌面壳:独立设置窗口;浏览器模式回退页内设置视图
+          void openHostSettings().then((ok) => {
+            if (!ok) setView("settings");
+          });
+        }}
         onArchive={(m) => void archiveSession(m)}
         onDelete={(m) => void removeSession(m)}
         onRename={(m, title) => void renameSession(m, title)}

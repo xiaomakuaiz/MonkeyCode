@@ -723,7 +723,7 @@ func TestPerSessionModelAndSwitch(t *testing.T) {
 			return s, nil
 		},
 		ListModels: func() []ModelInfo {
-			return []ModelInfo{{Name: "a", Default: true}, {Name: "b"}}
+			return []ModelInfo{{Name: "a", Default: true}, {Name: "b", Source: "baizhi"}}
 		},
 		AskTimeout: 5 * time.Second,
 	})
@@ -733,10 +733,13 @@ func TestPerSessionModelAndSwitch(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	// 模型清单端点
+	// 模型清单端点(source 透传给 UI 分组;手工条目 omitempty 不带该字段)
 	resp, data := apiReq(t, ts, "GET", "/api/models", "test-token", "")
 	if resp.StatusCode != 200 || !strings.Contains(string(data), `"a"`) || !strings.Contains(string(data), `"b"`) {
 		t.Fatalf("models: %s", data)
+	}
+	if !strings.Contains(string(data), `"source":"baizhi"`) {
+		t.Fatalf("models 应带 source 字段: %s", data)
 	}
 
 	// 未知模型建会话应 400

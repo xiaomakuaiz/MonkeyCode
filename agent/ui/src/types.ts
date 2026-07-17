@@ -1,9 +1,21 @@
 // 与内核帧协议(internal/frame)对齐的类型定义。
 
+/** 百智云同步条目的 source 值。单一事实来源:内核侧赋值在
+ * agent/internal/baizhi/sync.go(sourceBaizhi 常量),两侧改动需同步。 */
+export const SOURCE_BAIZHI = "baizhi";
+
+/** source → 分组展示名(未知来源兜底显示原值)。 */
+export function modelSourceLabel(source?: string): string {
+  if (!source) return "自定义";
+  return source === SOURCE_BAIZHI ? "百智云" : source;
+}
+
 /** GET /api/models 返回的可选模型 */
 export interface ModelInfo {
   name: string;
   default: boolean;
+  /** 条目来源("baizhi"=百智云同步);缺省=手工添加,UI 按它分组 */
+  source?: string;
 }
 
 /** 壳持有的应用配置里的一个模型条目(设置视图编辑,壳原样写盘、内核消费)。 */
@@ -20,6 +32,8 @@ export interface HostModel {
   vision?: boolean;
   /** 跳过 TLS 证书校验(不安全,仅自签名内网网关),高级项 */
   skip_tls_verify?: boolean;
+  /** 条目来源("baizhi"=百智云同步);缺省=手工添加。重同步时按它整组替换 */
+  source?: string;
 }
 
 /** 壳持有的应用配置(经 Tauri IPC get_config/save_config 读写)。 */

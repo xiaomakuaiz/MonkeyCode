@@ -13,10 +13,12 @@ import {
   baizhiWechatPoll,
   baizhiWechatStart,
   getHostConfig,
+  getHostInfo,
   inDesktopShell,
   saveHostConfig,
   updateCheck,
   updateInstall,
+  windowClose,
   type BaizhiStatus,
   type BaizhiSyncResult,
   type UpdateStatus,
@@ -24,7 +26,7 @@ import {
 import { MONO } from "./components";
 import { IconBack, IconPlus } from "./icons";
 import logoUrl from "./logo.png";
-import type { HostModel } from "./types";
+import { SOURCE_BAIZHI, modelSourceLabel, type HostModel } from "./types";
 
 // ---- MCP 编辑模型与序列化(与内核 mcp.json 的 mcpServers 同构,壳不解释) ----
 
@@ -268,11 +270,14 @@ type WxState = "loading" | "waiting" | "scanned" | "expired" | "canceled" | "err
 function BaizhiCard({
   onSynced,
   knownKeys,
-  existingNames,
+  preselectNames,
 }: {
   onSynced: (r: BaizhiSyncResult) => void;
   knownKeys: () => string[];
-  existingNames: () => string[];
+  /** 挑选面板预勾选的候选名(重同步=刷新这些):表单里百智云来源的条目,
+   * 加上无 source 的条目(旧版同步落盘的存量没有 source 字段,同名即视同)。
+   * 实际预勾选取它与本次同步结果名字的交集。 */
+  preselectNames: () => string[];
 }) {
   const [status, setStatus] = useState<BaizhiStatus | null>(null);
   const [statusErr, setStatusErr] = useState("");
@@ -293,6 +298,20 @@ function BaizhiCard({
   const [withMcp, setWithMcp] = useState(true);
   const mounted = useRef(true);
   const wxGen = useRef(0); // 代号:模式切换/重新获取/卸载时作废旧轮询循环
+
+  // 挑选面板开着时捕获相消费 Esc:只关面板,不冒泡到宿主的
+  // "Esc 退出设置/关闭设置窗口"(否则一键连同未保存表单一起丢)
+  useEffect(() => {
+    if (!pending) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPending(null);
+    };
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
+  }, [pending]);
 
   useEffect(() => {
     mounted.current = true;
@@ -420,8 +439,8 @@ function BaizhiCard({
         setSyncMsg({ text: "没有拉取到可用的模型" + (r.notes?.length ? `(${r.notes.join(";")})` : ""), color: "var(--err)" });
         return;
       }
-      // 已在表单里的同名条目默认勾选(重同步=刷新已有),新条目由用户挑选
-      const have = new Set(existingNames());
+      // 表单里已同步过的条目默认勾选(重同步=刷新已有),新条目由用户挑选
+      const have = new Set(preselectNames());
       const init: Record<string, boolean> = {};
       for (const m of r.models) init[m.name] = have.has(m.name);
       setChecked(init);
@@ -699,6 +718,7 @@ export function SettingsView({
   const [models, setModels] = useState<HostModel[]>([]);
   const [defaultIdx, setDefaultIdx] = useState(0);
   const [advOpen, setAdvOpen] = useState<Record<number, boolean>>({});
+  const [baizhiOpen, setBaizhiOpen] = useState(false); // 百智云分节折叠(默认收起)
   const [mcps, setMcps] = useState<McpEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
@@ -710,7 +730,10 @@ export function SettingsView({
       .then((cfg) => {
         const ms = cfg?.models ?? [];
         setModels(ms.length ? ms : [emptyModel()]);
-        setDefaultIdx(Math.max(0, ms.findIndex((m) => m.default)));
+        const di = Math.max(0, ms.findIndex((m) => m.default));
+        setDefaultIdx(di);
+        // 默认模型在同步组里时初始展开分节,否则「✓ 默认模型」标记零可见
+        if (ms[di]?.source === SOURCE_BAIZHI) setBaizhiOpen(true);
         setMcps(serversToMcps(cfg?.mcp_servers ?? {}));
         setLoaded(true);
       })
@@ -722,11 +745,16 @@ export function SettingsView({
   const patchMcp = (i: number, patch: Partial<McpEntry>) =>
     setMcps((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
-  // 同步结果合并进表单:按名字覆盖同名条目、新增其余;丢掉空白占位行。
-  // 不删用户手工条目(仅按名覆盖),用户复核后点保存生效。
+  // 同步导入:手工条目(无 source)原样保留;百智云组**整体替换**为勾选集合——
+  // 取消勾选的旧同步条目随之移除(重同步清理)。同名手工条目被同步值覆盖并归组。
+  // 用户复核后点保存才生效。
   const applySynced = (r: BaizhiSyncResult) => {
-    setModels((ms) => {
-      const byName = new Map(ms.filter((m) => m.name.trim()).map((m) => [m.name.trim(), m]));
+    // 只导入 MCP(勾选 0 个模型)时不触碰模型组:空选集不视为"清空百智云组"
+    // (逐卡删除已能做到;此处静默整组删除没有正当用例)
+    if (r.models.length) {
+      const defaultName = models[defaultIdx]?.name?.trim() ?? "";
+      const kept = models.filter((m) => m.name.trim() && m.source !== SOURCE_BAIZHI);
+      const byName = new Map(kept.map((m) => [m.name.trim(), m]));
       for (const sm of r.models) {
         byName.set(sm.name, {
           name: sm.name,
@@ -736,17 +764,126 @@ export function SettingsView({
           model: sm.model,
           context_window: sm.context_window,
           vision: sm.vision,
+          source: sm.source,
         });
       }
-      const merged = [...byName.values()];
-      return merged.length ? merged : [emptyModel()];
-    });
+      const next = [...byName.values()];
+      setModels(next.length ? next : [emptyModel()]);
+      // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位
+      const di = next.findIndex((m) => m.name.trim() === defaultName);
+      setDefaultIdx(di >= 0 ? di : 0);
+      setAdvOpen({});
+      setBaizhiOpen(true); // 导入后展开给用户核对
+    }
     setMcps((cur) => {
       const byName = new Map(cur.filter((m) => m.name.trim()).map((m) => [m.name.trim(), m]));
       for (const e of serversToMcps(r.mcp_servers)) byName.set(e.name.trim(), e);
       return [...byName.values()];
     });
   };
+
+  // 单张模型卡。i 恒为 models 数组的真实索引——删除/设默认/advOpen 的回调都
+  // 按平铺索引工作,分组渲染时不能用组内索引。
+  const modelCard = (m: HostModel, i: number) => (
+    <div key={i} className="card card-lg" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: 12 }}>
+        <Field label="名称">
+          <input style={input} value={m.name} placeholder="如: 主力模型" onChange={(e) => patchModel(i, { name: e.target.value })} className="hv-bd" />
+        </Field>
+        <Field label="协议">
+          <select style={select} value={m.provider || "anthropic"} onChange={(e) => patchModel(i, { provider: e.target.value })}>
+            <option value="anthropic">anthropic</option>
+            <option value="openai">openai(Chat Completions)</option>
+            <option value="openai_responses">openai_responses(Responses)</option>
+          </select>
+        </Field>
+      </div>
+      <Field label="接口地址">
+        <input style={input} value={m.base_url} placeholder="https://api.example.com" onChange={(e) => patchModel(i, { base_url: e.target.value })} className="hv-bd" />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="API Key">
+          <input style={input} type="password" value={m.api_key} placeholder="sk-..." onChange={(e) => patchModel(i, { api_key: e.target.value })} className="hv-bd" />
+        </Field>
+        <Field label="模型标识">
+          <input style={input} value={m.model} placeholder="请求中的 model 字段" onChange={(e) => patchModel(i, { model: e.target.value })} className="hv-bd" />
+        </Field>
+      </div>
+      {advOpen[i] && (
+        <>
+          <Field label="上下文窗口(token)">
+            <input
+              style={input}
+              type="number"
+              min={1}
+              value={m.context_window ?? ""}
+              placeholder="200000(默认)"
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                patchModel(i, { context_window: Number.isFinite(n) && n > 0 ? n : undefined });
+              }}
+              className="hv-bd"
+            />
+          </Field>
+          <label
+            title="跳过 HTTPS 证书校验,连接可被窃听或篡改。仅用于自签名证书的内网网关;公网接口在老系统(如 Win7)验不过时内核会自动用内置根证书兜底,无需开启"
+            style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontSize: 12, userSelect: "none" }}
+          >
+            <input
+              type="checkbox"
+              checked={!!m.skip_tls_verify}
+              onChange={(e) => patchModel(i, { skip_tls_verify: e.target.checked || undefined })}
+              style={{ accentColor: "var(--err)", margin: 0 }}
+            />
+            跳过 TLS 证书校验
+            {m.skip_tls_verify && <span style={{ color: "var(--err)", fontWeight: 600 }}>(不安全,仅限内网自签名网关)</span>}
+          </label>
+        </>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 2, fontSize: 12 }}>
+        <span
+          className="hv-t1"
+          onClick={() => setAdvOpen((o) => ({ ...o, [i]: !o[i] }))}
+          style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--t5)", cursor: "pointer", userSelect: "none" }}
+        >
+          <span style={{ display: "inline-block", transform: advOpen[i] ? "rotate(90deg)" : "none", transition: "transform .15s ease", fontSize: 9 }}>▸</span>
+          高级选项
+          {!advOpen[i] && m.context_window ? `(上下文窗口 ${m.context_window.toLocaleString()})` : ""}
+        </span>
+        <label
+          title="模型支持图片输入(视觉)。未勾选时对话里的图片以文件路径提供,模型不会收到图片内容"
+          style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontWeight: 600, userSelect: "none" }}
+        >
+          <input
+            type="checkbox"
+            checked={!!m.vision}
+            onChange={(e) => patchModel(i, { vision: e.target.checked })}
+            style={{ accentColor: "var(--acc)", margin: 0 }}
+          />
+          支持图片
+        </label>
+        {i === defaultIdx ? (
+          <span style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 700, color: "var(--acc)" }}>✓ 默认模型</span>
+        ) : (
+          <span className="hv-t1" onClick={() => setDefaultIdx(i)} style={{ color: "var(--t3)", cursor: "pointer", fontWeight: 600 }}>
+            设为默认
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span
+          className="hv-err"
+          style={{ color: "var(--t5)", cursor: "pointer" }}
+          onClick={() => {
+            setModels((ms) => ms.filter((_, j) => j !== i));
+            setDefaultIdx((d) => (i < d ? d - 1 : i === d ? 0 : d));
+            setAdvOpen({}); // 按索引记忆,删除后索引移位,全部复位折叠
+          }}
+        >
+          删除
+        </span>
+      </div>
+    </div>
+  );
 
   const save = async () => {
     // UX 前置校验;权威校验在内核 LoadModels(重复名/provider 白名单等)
@@ -867,7 +1004,9 @@ export function SettingsView({
           <BaizhiCard
             onSynced={applySynced}
             knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
-            existingNames={() => models.map((m) => m.name.trim()).filter(Boolean)}
+            preselectNames={() =>
+              models.filter((m) => m.source === SOURCE_BAIZHI || !m.source).map((m) => m.name.trim())
+            }
           />
         </Section>
 
@@ -888,106 +1027,22 @@ export function SettingsView({
                   还没有模型。保存后应用可运行,但需要添加模型才能开始任务。
                 </div>
               )}
-              {models.map((m, i) => (
-                <div key={i} className="card card-lg" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: 12 }}>
-                    <Field label="名称">
-                      <input style={input} value={m.name} placeholder="如: 主力模型" onChange={(e) => patchModel(i, { name: e.target.value })} className="hv-bd" />
-                    </Field>
-                    <Field label="协议">
-                      <select style={select} value={m.provider || "anthropic"} onChange={(e) => patchModel(i, { provider: e.target.value })}>
-                        <option value="anthropic">anthropic</option>
-                        <option value="openai">openai(Chat Completions)</option>
-                        <option value="openai_responses">openai_responses(Responses)</option>
-                      </select>
-                    </Field>
+              {/* 手工条目平铺;百智云同步条目归入折叠分节(i 恒为真实索引) */}
+              {models.map((m, i) => (m.source === SOURCE_BAIZHI ? null : modelCard(m, i)))}
+              {models.some((m) => m.source === SOURCE_BAIZHI) && (
+                <>
+                  <div
+                    className="hv-t1"
+                    onClick={() => setBaizhiOpen((v) => !v)}
+                    style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", fontSize: 12.5, fontWeight: 700, color: "var(--t4)", padding: "2px 2px" }}
+                  >
+                    <span style={{ display: "inline-block", transform: baizhiOpen ? "rotate(90deg)" : "none", transition: "transform .15s ease", fontSize: 9 }}>▸</span>
+                    {modelSourceLabel(SOURCE_BAIZHI)}({models.filter((m) => m.source === SOURCE_BAIZHI).length})
+                    <span style={{ fontWeight: 400, color: "var(--t5)" }}>来自账号同步,重新同步时整组更新</span>
                   </div>
-                  <Field label="接口地址">
-                    <input style={input} value={m.base_url} placeholder="https://api.example.com" onChange={(e) => patchModel(i, { base_url: e.target.value })} className="hv-bd" />
-                  </Field>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <Field label="API Key">
-                      <input style={input} type="password" value={m.api_key} placeholder="sk-..." onChange={(e) => patchModel(i, { api_key: e.target.value })} className="hv-bd" />
-                    </Field>
-                    <Field label="模型标识">
-                      <input style={input} value={m.model} placeholder="请求中的 model 字段" onChange={(e) => patchModel(i, { model: e.target.value })} className="hv-bd" />
-                    </Field>
-                  </div>
-                  {advOpen[i] && (
-                    <>
-                      <Field label="上下文窗口(token)">
-                        <input
-                          style={input}
-                          type="number"
-                          min={1}
-                          value={m.context_window ?? ""}
-                          placeholder="200000(默认)"
-                          onChange={(e) => {
-                            const n = parseInt(e.target.value, 10);
-                            patchModel(i, { context_window: Number.isFinite(n) && n > 0 ? n : undefined });
-                          }}
-                          className="hv-bd"
-                        />
-                      </Field>
-                      <label
-                        title="跳过 HTTPS 证书校验,连接可被窃听或篡改。仅用于自签名证书的内网网关;公网接口在老系统(如 Win7)验不过时内核会自动用内置根证书兜底,无需开启"
-                        style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontSize: 12, userSelect: "none" }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!!m.skip_tls_verify}
-                          onChange={(e) => patchModel(i, { skip_tls_verify: e.target.checked || undefined })}
-                          style={{ accentColor: "var(--err)", margin: 0 }}
-                        />
-                        跳过 TLS 证书校验
-                        {m.skip_tls_verify && <span style={{ color: "var(--err)", fontWeight: 600 }}>(不安全,仅限内网自签名网关)</span>}
-                      </label>
-                    </>
-                  )}
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 2, fontSize: 12 }}>
-                    <span
-                      className="hv-t1"
-                      onClick={() => setAdvOpen((o) => ({ ...o, [i]: !o[i] }))}
-                      style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--t5)", cursor: "pointer", userSelect: "none" }}
-                    >
-                      <span style={{ display: "inline-block", transform: advOpen[i] ? "rotate(90deg)" : "none", transition: "transform .15s ease", fontSize: 9 }}>▸</span>
-                      高级选项
-                      {!advOpen[i] && m.context_window ? `(上下文窗口 ${m.context_window.toLocaleString()})` : ""}
-                    </span>
-                    <label
-                      title="模型支持图片输入(视觉)。未勾选时对话里的图片以文件路径提供,模型不会收到图片内容"
-                      style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontWeight: 600, userSelect: "none" }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={!!m.vision}
-                        onChange={(e) => patchModel(i, { vision: e.target.checked })}
-                        style={{ accentColor: "var(--acc)", margin: 0 }}
-                      />
-                      支持图片
-                    </label>
-                    {i === defaultIdx ? (
-                      <span style={{ display: "flex", alignItems: "center", gap: 5, fontWeight: 700, color: "var(--acc)" }}>✓ 默认模型</span>
-                    ) : (
-                      <span className="hv-t1" onClick={() => setDefaultIdx(i)} style={{ color: "var(--t3)", cursor: "pointer", fontWeight: 600 }}>
-                        设为默认
-                      </span>
-                    )}
-                    <span style={{ flex: 1 }} />
-                    <span
-                      className="hv-err"
-                      style={{ color: "var(--t5)", cursor: "pointer" }}
-                      onClick={() => {
-                        setModels((ms) => ms.filter((_, j) => j !== i));
-                        setDefaultIdx((d) => (i < d ? d - 1 : i === d ? 0 : d));
-                        setAdvOpen({}); // 按索引记忆,删除后索引移位,全部复位折叠
-                      }}
-                    >
-                      删除
-                    </span>
-                  </div>
-                </div>
-              ))}
+                  {baizhiOpen && models.map((m, i) => (m.source === SOURCE_BAIZHI ? modelCard(m, i) : null))}
+                </>
+              )}
             </Section>
 
             {/* ==== MCP 服务器 ==== */}
@@ -1070,6 +1125,42 @@ export function SettingsView({
 
         {err && <div style={{ fontSize: 12.5, color: "var(--err)" }}>{err}</div>}
       </div>
+    </div>
+  );
+}
+
+// ---- 独立设置窗口(壳开的第二个窗口,URL 带 view=settings)----
+
+/** 独立设置窗口根组件:全屏渲染设置视图,不建 WS、不恢复会话。
+ * 「返回」与 Esc(非输入态)都关闭本窗口;保存后壳会把本窗口导航到新内核 URL。 */
+export function SettingsWindow() {
+  const [hostVersion, setHostVersion] = useState<string | null>(null);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
+  useEffect(() => {
+    void getHostInfo().then((info) => setHostVersion(info?.version ?? null));
+    // 不自动 updateCheck:壳启动自检 + 主窗口挂载已各查过,发现新版壳会弹原生
+    // 对话框;本窗口"关闭即销毁",每开自动查一次是纯冗余网络请求。
+    // AboutCard 的"检查更新"按钮仍可手动查。
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // 输入框/下拉里的 Esc(清空/取消输入法)只收敛焦点,不关窗口
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT")) return t.blur();
+      void windowClose();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      <SettingsView
+        onClose={() => void windowClose()}
+        hostVersion={hostVersion}
+        update={update}
+        onUpdateStatus={setUpdate}
+      />
     </div>
   );
 }

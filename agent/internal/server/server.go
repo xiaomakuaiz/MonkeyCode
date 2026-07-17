@@ -279,6 +279,8 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 type ModelInfo struct {
 	Name    string `json:"name"`
 	Default bool   `json:"default"`
+	// Source 条目来源(如 "baizhi"),UI 按它分组展示;空 = 手工添加。
+	Source string `json:"source,omitempty"`
 }
 
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {

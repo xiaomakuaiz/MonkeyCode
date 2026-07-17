@@ -24,7 +24,7 @@ import {
 } from "./icons";
 import logoUrl from "./logo.png";
 import type { SessionHandle } from "./useSession";
-import type { LogItem, ModelInfo, SessionMeta, Usage } from "./types";
+import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type Usage } from "./types";
 
 const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
@@ -134,7 +134,7 @@ function PermPill({ yolo, onToggle }: { yolo: boolean; onToggle: () => void }) {
   );
 }
 
-/** 模型选择按钮 + 上弹菜单 */
+/** 模型选择按钮 + 上弹菜单(按来源分组;模型多时带过滤框) */
 export function ModelPicker({
   models,
   current,
@@ -147,12 +147,34 @@ export function ModelPicker({
   onPick: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const q = filter.trim().toLowerCase();
+  const shown = q ? models.filter((m) => m.name.toLowerCase().includes(q)) : models;
+  // 按来源分桶:「自定义」(无 source)恒在前,其余组按首次出现顺序
+  const groups: { label: string; items: ModelInfo[] }[] = [];
+  for (const m of shown) {
+    const label = modelSourceLabel(m.source);
+    let g = groups.find((x) => x.label === label);
+    if (!g) {
+      g = { label, items: [] };
+      if (!m.source) groups.unshift(g);
+      else groups.push(g);
+    }
+    g.items.push(m);
+  }
+  const showFilter = models.length > 10;
+
   return (
     <div style={{ position: "relative", flex: "none" }}>
       <button
         className={disabled ? undefined : "hv"}
         title={disabled ? "轮次执行中,结束后可切换" : "切换模型(下一轮生效)"}
-        onClick={() => !disabled && setOpen(!open)}
+        onClick={() => {
+          if (disabled) return;
+          setFilter("");
+          setOpen(!open);
+        }}
         style={{
           height: 24,
           display: "flex",
@@ -174,27 +196,63 @@ export function ModelPicker({
       {open && (
         <>
           <div className="backdrop" onClick={() => setOpen(false)} />
-          <div className="pop" style={{ position: "absolute", bottom: 30, right: 0, minWidth: 200 }}>
-            {models.map((m) => (
-              <button
-                key={m.name}
-                className="hv menu-item"
-                onClick={() => {
-                  setOpen(false);
-                  onPick(m.name);
-                }}
-                style={{
-                  padding: "7px 10px",
-                  color: m.name === current ? "var(--acc)" : "var(--t2)",
-                  fontWeight: m.name === current ? 600 : 400,
-                }}
-              >
-                {m.name}
-                <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>
-                  {m.default ? "默认" : ""}
-                </span>
-              </button>
-            ))}
+          <div className="pop" style={{ position: "absolute", bottom: 30, right: 0, minWidth: 220 }}>
+            {showFilter && (
+              <div style={{ padding: "6px 8px 4px" }}>
+                <input
+                  autoFocus
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  placeholder="过滤模型…"
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    height: 26,
+                    padding: "0 8px",
+                    fontSize: 12,
+                    border: "1px solid var(--inputBd)",
+                    borderRadius: 6,
+                    background: "var(--bg)",
+                    color: "var(--t2)",
+                    outline: "none",
+                  }}
+                />
+              </div>
+            )}
+            <div style={{ maxHeight: 320, overflowY: "auto" }}>
+              {groups.length === 0 && (
+                <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--t5)" }}>无匹配模型</div>
+              )}
+              {groups.map((g) => (
+                <div key={g.label}>
+                  {(groups.length > 1 || g.label !== "自定义") && (
+                    <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
+                      {g.label}
+                    </div>
+                  )}
+                  {g.items.map((m) => (
+                    <button
+                      key={m.name}
+                      className="hv menu-item"
+                      onClick={() => {
+                        setOpen(false);
+                        onPick(m.name);
+                      }}
+                      style={{
+                        padding: "7px 10px",
+                        color: m.name === current ? "var(--acc)" : "var(--t2)",
+                        fontWeight: m.name === current ? 600 : 400,
+                      }}
+                    >
+                      {m.name}
+                      <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>
+                        {m.default ? "默认" : ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
           </div>
         </>
       )}
