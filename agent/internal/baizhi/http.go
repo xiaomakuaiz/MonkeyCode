@@ -23,6 +23,7 @@ func (s *Service) Routes(mux *http.ServeMux, auth func(http.HandlerFunc) http.Ha
 	mux.HandleFunc("POST /api/baizhi/logout", auth(s.handleLogout))
 	mux.HandleFunc("POST /api/baizhi/wechat/start", auth(s.handleWechatStart))
 	mux.HandleFunc("GET /api/baizhi/wechat/poll", auth(s.handleWechatPoll))
+	mux.HandleFunc("POST /api/baizhi/sync", auth(s.handleSync))
 }
 
 // 发码含 PoW 求解 + 外网请求;登录同。给足超时但别无限等。
@@ -81,6 +82,28 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.Logout()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleSync 同步模型网关的模型清单与推理密钥。需已登录。
+// 请求体可选 {known_keys:[…]}:UI 已持有的明文密钥,能对上网关就复用不新建。
+func (s *Service) handleSync(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		KnownKeys []string `json:"known_keys"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // 空体/坏体等同无候选密钥
+	// 多次网关往返,给足时间
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	res, err := s.Sync(ctx, req.KnownKeys)
+	if err != nil {
+		status := http.StatusBadGateway
+		if isUnauthorized(err) {
+			status = http.StatusUnauthorized
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

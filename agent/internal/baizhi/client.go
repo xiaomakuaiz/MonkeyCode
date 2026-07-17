@@ -9,21 +9,21 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-// DefaultBaseURL 百智云官方地址。
-const DefaultBaseURL = "https://baizhi.cloud"
+// DefaultBaseURL 百智云官方账号域(向后兼容导出;新代码用 Endpoints)。
+const DefaultBaseURL = defaultAccount
 
-// Service 百智云账号服务:验证码、手机号/微信扫码登录、会话探测。
-// 全部请求走内核(UI 在 127.0.0.1 origin 上带凭证跨域会被 CORS 拦),
-// cookie 会话由 store 持久化。
+// Service 百智云账号服务:验证码、手机号/微信扫码登录、会话探测、
+// 登录后同步模型与 MCP。全部请求走内核(UI 在 127.0.0.1 origin 上带凭证
+// 跨域会被 CORS 拦),cookie 会话由 store 持久化。
 type Service struct {
-	base  string
+	ep    Endpoints
+	base  string       // = ep.Account,账号域;绝大多数登录请求打这里
 	http  *http.Client // API 短请求
 	lp    *http.Client // 微信授权页/二维码/长轮询(长轮询最长挂 ~25s)
 	store *cookieStore
@@ -33,20 +33,21 @@ type Service struct {
 	lpOverride string       // 测试注入长轮询基址
 }
 
-// NewService 创建服务。baseURL 空用官方地址(MC_AGENT_BAIZHI_URL 可覆盖,
-// 联调假服务用);cookiePath 空则会话仅存内存。
+// NewService 创建服务(账号域可配,模型/MCP 网关取默认或环境变量)。
+// baseURL 空用官方账号域;cookiePath 空则会话仅存内存。
 func NewService(baseURL, cookiePath string) *Service {
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
-	if v := os.Getenv("MC_AGENT_BAIZHI_URL"); v != "" {
-		baseURL = v
-	}
+	return NewServiceWithEndpoints(Endpoints{Account: baseURL}, cookiePath)
+}
+
+// NewServiceWithEndpoints 三地址均可配(私有化部署入口)。
+func NewServiceWithEndpoints(ep Endpoints, cookiePath string) *Service {
+	ep = resolveEndpoints(ep)
 	// 不自动跟随重定向:微信回调等 302 的 Set-Cookie 要在首响应就吸收,
 	// 跟随会丢中间响应的 cookie(现有 API 端点均为 2xx JSON,不受影响)
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Service{
-		base:  strings.TrimRight(baseURL, "/"),
+		ep:    ep,
+		base:  ep.Account,
 		http:  &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect},
 		lp:    &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
 		store: newCookieStore(cookiePath),

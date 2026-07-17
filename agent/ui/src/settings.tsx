@@ -9,6 +9,7 @@ import {
   baizhiLogout,
   baizhiSendCode,
   baizhiStatus,
+  baizhiSync,
   baizhiWechatPoll,
   baizhiWechatStart,
   getHostConfig,
@@ -17,6 +18,7 @@ import {
   updateCheck,
   updateInstall,
   type BaizhiStatus,
+  type BaizhiSyncResult,
   type UpdateStatus,
 } from "./client";
 import { MONO } from "./components";
@@ -263,7 +265,13 @@ function profileName(p?: Record<string, unknown>): string {
 
 type WxState = "loading" | "waiting" | "scanned" | "expired" | "canceled" | "error";
 
-function BaizhiCard() {
+function BaizhiCard({
+  onSynced,
+  knownKeys,
+}: {
+  onSynced: (r: BaizhiSyncResult) => void;
+  knownKeys: () => string[];
+}) {
   const [status, setStatus] = useState<BaizhiStatus | null>(null);
   const [statusErr, setStatusErr] = useState("");
   const [mode, setMode] = useState<"wechat" | "phone">("wechat");
@@ -275,6 +283,8 @@ function BaizhiCard() {
   const [err, setErr] = useState("");
   const [qr, setQr] = useState("");
   const [wxState, setWxState] = useState<WxState>("loading");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ text: string; color: string } | null>(null);
   const mounted = useRef(true);
   const wxGen = useRef(0); // 代号:模式切换/重新获取/卸载时作废旧轮询循环
 
@@ -393,6 +403,27 @@ function BaizhiCard() {
     }
   };
 
+  const doSync = async () => {
+    setSyncMsg(null);
+    setSyncing(true);
+    try {
+      const r = await baizhiSync(knownKeys());
+      onSynced(r); // 合并进设置表单(交由用户复核后保存)
+      if (mounted.current) {
+        const parts = [`已拉取 ${r.models.length} 个模型`];
+        const mcpN = Object.keys(r.mcp_servers ?? {}).length;
+        if (mcpN) parts.push(`${mcpN} 个 MCP`);
+        if (r.key_created) parts.push("已在网关新建密钥「MonkeyCode」");
+        parts.push("已填入下方,请核对后点保存");
+        setSyncMsg({ text: parts.join("、") + (r.notes?.length ? `(${r.notes.join(";")})` : ""), color: "var(--ok)" });
+      }
+    } catch (e) {
+      if (mounted.current) setSyncMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
+    } finally {
+      if (mounted.current) setSyncing(false);
+    }
+  };
+
   if (statusErr) {
     return (
       <div className="card card-lg" style={{ color: "var(--err)", fontSize: 12.5 }}>
@@ -406,16 +437,32 @@ function BaizhiCard() {
 
   if (status.logged_in) {
     return (
-      <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-          <span className="ellipsis" style={{ fontWeight: 700, fontSize: 13 }}>{profileName(status.profile)}</span>
-          <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>{status.host}</span>
+      <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+            <span className="ellipsis" style={{ fontWeight: 700, fontSize: 13 }}>{profileName(status.profile)}</span>
+            <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>{status.host}</span>
+          </div>
+          <span style={{ flex: 1 }} />
+          {err && <span style={{ fontSize: 12, color: "var(--err)", flex: "none" }}>{err}</span>}
+          <button
+            className="hv-acc"
+            onClick={() => !syncing && void doSync()}
+            style={{ ...whiteBtn, flex: "none", gap: 6, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)", opacity: syncing ? 0.7 : 1, cursor: syncing ? "default" : "pointer" }}
+          >
+            {syncing && (
+              <span style={{ width: 11, height: 11, border: "1.5px solid var(--onAcc)", borderTopColor: "transparent", borderRadius: "50%", animation: "mcspin .9s linear infinite", display: "inline-block" }} />
+            )}
+            {syncing ? "同步中…" : "同步模型与 MCP"}
+          </button>
+          <button className="hv" onClick={() => void logout()} style={{ ...whiteBtn, flex: "none" }}>
+            退出登录
+          </button>
         </div>
-        <span style={{ flex: 1 }} />
-        {err && <span style={{ fontSize: 12, color: "var(--err)", flex: "none" }}>{err}</span>}
-        <button className="hv" onClick={() => void logout()} style={{ ...whiteBtn, flex: "none" }}>
-          退出登录
-        </button>
+        {syncMsg && <span style={{ fontSize: 12, color: syncMsg.color, lineHeight: 1.6 }}>{syncMsg.text}</span>}
+        <span style={{ fontSize: 11.5, color: "var(--t5)", lineHeight: 1.6 }}>
+          同步会短暂切换到你的个人空间读取,随后切回;若你正开着百智云网页,空间会短暂跳动属正常。
+        </span>
       </div>
     );
   }
@@ -432,7 +479,7 @@ function BaizhiCard() {
     const needRetry = wxState === "expired" || wxState === "canceled" || wxState === "error";
     return (
       <div className="card card-lg" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "18px 16px" }}>
-        <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,可自动同步模型与 MCP 配置(即将支持)。</span>
+        <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,可一键同步个人空间的模型与 MCP 配置。</span>
         <div style={{ position: "relative", width: 168, height: 168, borderRadius: 10, border: "1px solid var(--inputBd)", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
           {qr && <img src={qr} alt="微信扫码登录" draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain", filter: needRetry ? "blur(3px) opacity(.35)" : "none" }} />}
           {!qr && !needRetry && <span style={{ fontSize: 12, color: "var(--t5)" }}>加载中…</span>}
@@ -458,7 +505,7 @@ function BaizhiCard() {
   return (
     <div className="card card-lg" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <span style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.6 }}>
-        登录百智云账号后,可自动同步模型与 MCP 配置(即将支持)。
+        登录百智云账号后,可一键同步个人空间的模型与 MCP 配置。
       </span>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="手机号">
@@ -578,6 +625,32 @@ export function SettingsView({
   const patchMcp = (i: number, patch: Partial<McpEntry>) =>
     setMcps((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
+  // 同步结果合并进表单:按名字覆盖同名条目、新增其余;丢掉空白占位行。
+  // 不删用户手工条目(仅按名覆盖),用户复核后点保存生效。
+  const applySynced = (r: BaizhiSyncResult) => {
+    setModels((ms) => {
+      const byName = new Map(ms.filter((m) => m.name.trim()).map((m) => [m.name.trim(), m]));
+      for (const sm of r.models) {
+        byName.set(sm.name, {
+          name: sm.name,
+          provider: sm.provider,
+          base_url: sm.base_url,
+          api_key: sm.api_key,
+          model: sm.model,
+          context_window: sm.context_window,
+          vision: sm.vision,
+        });
+      }
+      const merged = [...byName.values()];
+      return merged.length ? merged : [emptyModel()];
+    });
+    setMcps((cur) => {
+      const byName = new Map(cur.filter((m) => m.name.trim()).map((m) => [m.name.trim(), m]));
+      for (const e of serversToMcps(r.mcp_servers)) byName.set(e.name.trim(), e);
+      return [...byName.values()];
+    });
+  };
+
   const save = async () => {
     // UX 前置校验;权威校验在内核 LoadModels(重复名/provider 白名单等)
     for (const m of models) {
@@ -694,7 +767,10 @@ export function SettingsView({
 
         {/* ==== 百智云账号(登录由内核代理,壳与浏览器模式都可用)==== */}
         <Section label="百智云账号">
-          <BaizhiCard />
+          <BaizhiCard
+            onSynced={applySynced}
+            knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
+          />
         </Section>
 
         {!desktop && (

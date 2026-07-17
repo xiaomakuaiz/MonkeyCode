@@ -157,9 +157,6 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   box-shadow: var(--cardSh);
 }
 .card-lg { border-radius: 11px; padding: 16px; }
-/* 路径条(资源管理器地址栏):可横向滚动但不显示滚动条 */
-.pathbar { scrollbar-width: none; }
-.pathbar::-webkit-scrollbar { display: none; }
 /* 骨架屏占位块(加载态;宽高由使用处内联) */
 .skeleton {
   background: var(--hov);

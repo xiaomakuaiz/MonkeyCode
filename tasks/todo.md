@@ -781,13 +781,29 @@
 - **产品形态:一次性向导**:登录一次换出长期凭证进配置,之后不依赖登录态;
   cookie 持久化(0600)仅供"重新同步",过期引导重登。
 
-## 阶段 0:API 侦察(需真实会话,阻塞项)
+## 阶段 0:API 侦察(部分完成;字段结构待真实 cookie)
 
-- [ ] 拿到登录 cookie(用户浏览器导出或测试账号)
-- [ ] 验证 baizhi.cloud 会话对两个 app 子域是否直接生效(还是有 SSO 跳转链)
-- [ ] 测绘 ai-api-gateway:API token 获取/签发接口 + 模型列表接口
-- [ ] 测绘 agent-toolkit:MCP 清单接口(远端 streamable-http 直连?还是下发本地 stdio 配置?)
-- [ ] curl + cookie jar 复现全链路,沉淀接口文档
+三地址私有化可配(用户纠正):账号域 / 模型网关 / MCP 网关独立配置,
+默认官方云,已落 `internal/baizhi/endpoints.go`
+(环境变量 MC_AGENT_BAIZHI_URL / _MODEL_GATEWAY / _MCP_GATEWAY)。
+
+无 cookie 侦察结论(从公开前端 bundle + 状态码探测):
+- 两网关都是长亭自研 SPA,与 baizhi.cloud 共享 `sl-session`(SameSite=None),
+  疑似统一 SSO;**网关层统一 401**(连不存在路径也 401),端点存在性无法靠探测区分
+- **ai-api-gateway(模型)REST 契约已从 bundle 挖到**:
+  - `GET /api/console/api-keys?page&pageSize` 列 key;`POST /api/console/api-keys` 建 key;
+    `POST /api/console/api-keys/{id}/rotate` 轮换(暗示密钥可能仅建/轮换时明文返回)
+  - `GET /api/console/models?…` 列模型;`GET /api/console/providers`;`GET /api/console/me`
+  - 推理 base_url = `<网关>/api/openai`(chat/completions、responses)与 `/api/anthropic`(v1/messages),
+    与移动端 ai-models.app.baizhi.cloud、Web model-square 同构
+- **agent-toolkit(MCP)契约未知**:bundle 深度 minify,API 路径运行时拼接、
+  前端路由仅见 apps/services/api-keys/usage;需真实 cookie 抓包
+
+- [x] 账号域可配 + 两网关地址可配(私有化)
+- [x] ai-api-gateway REST 端点路径与分页形态测绘
+- [ ] **需真实 cookie**:api-keys 响应是否含明文 sk-(还是要 POST 建/rotate 才给);
+      models 响应字段名;SSO 是否需从账号会话换网关会话
+- [ ] agent-toolkit MCP 端点与响应结构(真机抓包)
 
 ## 阶段 1:内核 baizhi 客户端 ✅
 
@@ -805,11 +821,28 @@
 - 侦察发现(误连真实 baizhi.cloud 顺带确认):challenge 端点返回 **HTTP 201**
   (已按 2xx 判成功,对齐移动端 res.ok);匿名会话 cookie 名 `sl-session`(host-only+secure)
 
-## 阶段 2:同步
+## 阶段 2:同步(逻辑完成 + in-process 验证;真机 e2e 待桌面点按)
 
-- [ ] /api/baizhi/sync:拉模型(token + 模型列表)+ MCP 清单,返回结构化结果
-- [ ] 字段映射:模型 → ModelProfile(provider/base_url/api_key/model/context_window/vision);
-      MCP → mcp.json 条目
+真机测绘(带真实 cookie)拿到的完整契约:
+- 账号有多个 space:团队(member)+ 个人(owner)。`GET /api/console/spaces` 列全,
+  `POST /api/console/spaces/current/switch` 切当前(服务端会话态,无 header/query 版)。
+- **团队 space 的 proxy-key 返回 null**(member 无个人 key)→ 必须切到个人 space(owner)。
+- 个人 space 资源(切过去后):
+  - `GET /spaces/current` → apiEndpoints{anthropic,openai}(base_url)
+  - `GET /spaces/current/proxy-key` → 稳定代理密钥(走该 space 全部模型)
+  - `GET /spaces/current/models` → {name,interfaceType,enabled,healthStatus}(已确认字段)
+  - `GET /spaces/current/mcp-services` / `/mcp-keys` → 个人 MCP
+- access-guide 无独立后端(纯展示页),数据源即上面这些。
+
+- [x] `internal/baizhi/sync.go`:Sync() 切个人 space→读 proxy-key/models/mcp→切回原 space;
+      模型映射(multi/anthropic→anthropic 端点,openai→openai 端点)、MCP→streamable-http 条目带密钥头
+- [x] proxy-key/switch-payload/mcp-key 字段名容错解析(真机只确认了 models 字段,
+      余下靠多字段名 + sk- 前缀扫描兜底)
+- [x] `POST /api/baizhi/sync` 路由 + in-process 假网关测试(切换轨迹/协议映射/密钥/MCP 全覆盖)
+- [x] UI:登录态"同步模型与 MCP"按钮 → 结果按名合并进设置表单(不删手工条目)→ 用户核对后保存
+- [ ] **真机 e2e**(桌面应用里点"同步";内核真的切个人 space):验证 proxy-key 明文可用、
+      switch payload 字段、mcp-key 结构——这几项在被篡改的 shell 里没法可信验证,交桌面端跑
+- [ ] 源标记:HostModel 无 source 字段,当前按"同名覆盖"合并;若要"重同步清理旧条目"需加 source
 
 ## 阶段 3:UI(agent/ui 设置视图)
 

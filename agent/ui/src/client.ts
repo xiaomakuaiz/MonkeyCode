@@ -97,6 +97,34 @@ export const baizhiWechatStart = () =>
 export const baizhiWechatPoll = () =>
   api<{ status: "waiting" | "scanned" | "canceled" | "expired" | "ok" }>("/api/baizhi/wechat/poll");
 
+export interface BaizhiSyncedModel {
+  name: string;
+  provider: string;
+  base_url: string;
+  api_key: string;
+  model: string;
+  context_window?: number;
+  vision?: boolean;
+  source: string; // "baizhi"
+}
+
+export interface BaizhiSyncResult {
+  models: BaizhiSyncedModel[];
+  mcp_servers: Record<string, Record<string, unknown>>;
+  key_created: boolean; // 本次是否在网关新建了密钥(false=复用已有)
+  notes?: string[];
+}
+
+/** 同步模型网关的模型清单与推理密钥。knownKeys 传设置表单里已有的
+ * api_key(能对上网关掩码就复用,避免每次同步都新建密钥)。
+ * 返回结构供 UI 展示并合并进设置表单,由用户确认后保存。 */
+export const baizhiSync = (knownKeys: string[]) =>
+  api<BaizhiSyncResult>("/api/baizhi/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ known_keys: knownKeys }),
+  });
+
 // ==================== 宿主(桌面壳)集成 ====================
 
 interface TauriGlobal {

@@ -1,7 +1,7 @@
 // 布局切换 + App 级浮层(改动抽屉/子会话回放/设置):侧栏常驻,主区在
 // Chat / New Task / Settings 三屏间切换。会话协议状态(WS/帧归约/composer)
 // 收口在 useSession 句柄里;视觉对照「MonkeyCode 桌面应用设计」。
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   connect,
   createSession,
@@ -18,7 +18,7 @@ import {
 } from "./client";
 import { basename, ChatView } from "./chat";
 import { CodeView, DiffPanel, LogList, MONO } from "./components";
-import { IconBack, IconChevronRight, IconFile, IconFolder, IconX } from "./icons";
+import { IconChevronRight, IconFile, IconFolder, IconX } from "./icons";
 import { NewTaskView } from "./newtask";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
 import { groupByProject, Sidebar } from "./sidebar";
@@ -76,22 +76,6 @@ const drawerTabStyle = (active: boolean): CSSProperties => ({
   gap: 6,
   flex: "none",
 });
-const crumbStyle = (active: boolean): CSSProperties => ({
-  border: "none",
-  background: "transparent",
-  cursor: active ? "default" : "pointer",
-  borderRadius: 6,
-  padding: "3px 6px",
-  fontSize: 11.5,
-  fontWeight: active ? 700 : 500,
-  color: active ? "var(--t1)" : "var(--t4)",
-  whiteSpace: "nowrap",
-  flex: "none",
-  display: "flex",
-  alignItems: "center",
-  gap: 5,
-});
-
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [view, setView] = useState<"new" | "session" | "settings">("new");
@@ -102,8 +86,10 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   // 两个视角共用同一预览窗格:文件(资源管理器) / 改动(本轮平铺列表)
   const [drawerTab, setDrawerTab] = useState<"files" | "changes">("files");
-  const [cwd, setCwd] = useState("");
-  const [entries, setEntries] = useState<FileEntry[] | null>(null);
+  // 树形浏览:目录 → 子项缓存("" = 工作区根),展开集合,按目录粒度的加载中标记
+  const [tree, setTree] = useState<Map<string, FileEntry[]>>(new Map());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [fsErr, setFsErr] = useState("");
   const [viewer, setViewer] = useState<{ path: string; kind: "diff" | "code" | "plain"; text: string } | null>(null);
   // 抽屉宽度可拖拽调整(记忆);拖动中置 dragging 显示把手强调色
@@ -129,7 +115,6 @@ export default function App() {
   const [busy, setBusy] = useState(false);
 
   const dirTouchedRef = useRef(false); // 用户改过工作目录后不再跟随默认值
-  const pathbarRef = useRef<HTMLDivElement>(null); // 路径条:进入深层后滚到末尾
 
   const refreshSessions = useCallback(async () => {
     const metas = await listSessions();
@@ -233,29 +218,36 @@ export default function App() {
     }
   };
 
-  // 路径条滚到末尾:当前层级始终可见(深路径时头部被裁,面包屑仍可回跳)
-  useEffect(() => {
-    pathbarRef.current?.scrollTo({ left: pathbarRef.current.scrollWidth });
-  }, [cwd]);
-
-  // 进入目录(空串 = 工作区根);列表由内核排好(目录在前,按名)
-  const loadDir = async (dir: string) => {
-    setCwd(dir);
-    setEntries(null);
-    setFsErr("");
-    setViewer(null);
+  // 拉取目录子项(空串 = 工作区根,内核已按目录在前排好);已缓存/在途则跳过
+  const loadChildren = async (dir: string, force = false) => {
+    if (!force && (tree.has(dir) || loadingDirs.has(dir))) return;
+    setLoadingDirs((s) => new Set(s).add(dir));
     try {
       const r = await session.listFiles(dir);
-      if (r.error) {
-        setFsErr(r.error);
-        setEntries([]);
-        return;
-      }
-      setEntries(r.result ?? []);
+      if (r.error) setFsErr(r.error);
+      else setTree((m) => new Map(m).set(dir, r.result ?? []));
     } catch (e) {
       setFsErr(e instanceof Error ? e.message : String(e));
-      setEntries([]);
+    } finally {
+      setLoadingDirs((s) => {
+        const n = new Set(s);
+        n.delete(dir);
+        return n;
+      });
     }
+  };
+
+  // 展开/收起文件夹(展开时懒加载子项,已缓存的即时展开)
+  const toggleDir = (dir: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else {
+        next.add(dir);
+        void loadChildren(dir);
+      }
+      return next;
+    });
   };
 
   // 拖拽跟踪:mousedown 后接管 move/up,期间锁定光标与选区,松手时收尾
@@ -319,8 +311,11 @@ export default function App() {
     setDrawerOpen(true);
     setDrawerTab(tab);
     setViewer(null);
+    setTree(new Map());
+    setExpanded(new Set());
+    setFsErr("");
     void session.refreshChanges();
-    void loadDir("");
+    void loadChildren("", true);
   };
 
   const createTask = async (createDir = false) => {
@@ -360,6 +355,99 @@ export default function App() {
   // 文件抽屉的改动标注:路径 → 状态;目录行显示其下改动计数
   const changeMap = new Map((changes ?? []).map((c) => [c.path, c.status] as const));
   const changedUnder = (dir: string) => (changes ?? []).filter((c) => c.path.startsWith(dir + "/")).length;
+
+  // 树形文件列表:展开的文件夹原地铺开子项,层级用缩进表达(每层 16px)。
+  // 本层已删除的文件以划线幽灵行缀在末尾;子项懒加载,加载中给骨架行。
+  const renderTree = (dir: string, depth: number): ReactNode[] => {
+    const pad = 10 + depth * 16;
+    const rows: ReactNode[] = [];
+    const items = tree.get(dir);
+    if (!items) {
+      if (loadingDirs.has(dir)) {
+        for (let i = 0; i < (dir === "" ? 4 : 1); i++) {
+          rows.push(
+            <div key={`ld:${dir}:${i}`} style={{ ...fileRow, cursor: "default", paddingLeft: pad + 21 }}>
+              <span className="skeleton" style={{ width: 14, height: 14, borderRadius: 4 }} />
+              <span className="skeleton" style={{ height: 10, width: 110 + (i % 3) * 52 }} />
+            </div>,
+          );
+        }
+      }
+      return rows;
+    }
+    for (const en of items) {
+      const st = en.is_dir ? undefined : changeMap.get(en.path);
+      const kind = st ? CHANGE_KIND[st] : undefined;
+      const subCount = en.is_dir ? changedUnder(en.path) : 0;
+      const open = en.is_dir && expanded.has(en.path);
+      const active = viewer?.path === en.path;
+      rows.push(
+        <div
+          key={en.path}
+          className={active ? undefined : "hv"}
+          title={en.path}
+          onClick={() => (en.is_dir ? toggleDir(en.path) : kind ? void showDiff(en.path) : void showFile(en.path))}
+          style={{ ...fileRow, paddingLeft: pad, background: active ? "var(--hov)" : "transparent" }}
+        >
+          <span style={{ width: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {en.is_dir && (
+              <IconChevronRight
+                size={8}
+                color="var(--t5)"
+                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
+              />
+            )}
+          </span>
+          {en.is_dir ? <IconFolder size={14} color="var(--acc)" /> : <IconFile color={kind ? kind.fg : "var(--t4)"} />}
+          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t1)", fontWeight: en.is_dir ? 600 : 400 }}>
+            {en.name}
+          </span>
+          {en.is_dir && subCount > 0 && (
+            <span style={{ ...changeTag, color: "var(--acc)", background: "var(--accBg)" }}>{subCount} 处改动</span>
+          )}
+          {!en.is_dir && kind && <span style={{ ...changeTag, color: kind.fg, background: kind.bg }}>{kind.text}</span>}
+          {!en.is_dir && !kind && (
+            <span style={{ flex: "none", width: 60, textAlign: "right", font: "10.5px " + MONO, color: "var(--t6)" }}>
+              {fmtSize(en.size)}
+            </span>
+          )}
+        </div>,
+      );
+      if (open) rows.push(...renderTree(en.path, depth + 1));
+    }
+    const ghosts = (changes ?? []).filter(
+      (c) => c.status === "D" && (c.path.includes("/") ? c.path.slice(0, c.path.lastIndexOf("/")) : "") === dir,
+    );
+    for (const c of ghosts) {
+      rows.push(
+        <div key={"del:" + c.path} className="hv" title={c.path} onClick={() => void showDiff(c.path)} style={{ ...fileRow, paddingLeft: pad }}>
+          <span style={{ width: 12, flex: "none" }} />
+          <IconFile color={CHANGE_KIND.D.fg} />
+          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t5)", textDecoration: "line-through" }}>
+            {basename(c.path)}
+          </span>
+          <span style={{ ...changeTag, color: CHANGE_KIND.D.fg, background: CHANGE_KIND.D.bg }}>{CHANGE_KIND.D.text}</span>
+        </div>,
+      );
+    }
+    if (items.length === 0 && ghosts.length === 0) {
+      if (dir === "") {
+        rows.push(
+          <div key="empty-root" style={{ padding: "36px 0 28px", display: "flex", flexDirection: "column", alignItems: "center", gap: 9 }}>
+            <IconFolder size={22} color="var(--t6)" />
+            <span style={{ fontSize: 12, color: "var(--t5)" }}>工作区是空的</span>
+          </div>,
+        );
+      } else {
+        rows.push(
+          <div key={"empty:" + dir} style={{ ...fileRow, cursor: "default", paddingLeft: pad + 21 }}>
+            <span style={{ fontSize: 11.5, color: "var(--t6)" }}>(空)</span>
+          </div>,
+        );
+      }
+    }
+    return rows;
+  };
   const recentDirs = (() => {
     const dirs = groupByProject(sessions.filter((m) => !m.archived)).map((g) => g.dir);
     if (!dirs.includes(newDir)) dirs.unshift(newDir);
@@ -519,57 +607,11 @@ export default function App() {
               </button>
             </div>
 
-            {/* 导航条:上一级 + 路径条(资源管理器式,面包屑点击跳级;仅文件视角) */}
-            {drawerTab === "files" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "8px 16px 6px", flex: "none", minWidth: 0 }}>
-              <button
-                className={cwd ? "hv2 icon-btn" : "icon-btn"}
-                title="上一级"
-                onClick={() => cwd && void loadDir(cwd.includes("/") ? cwd.slice(0, cwd.lastIndexOf("/")) : "")}
-                style={{ width: 28, height: 28, borderRadius: 7, opacity: cwd ? 1 : 0.35, cursor: cwd ? "pointer" : "default" }}
-              >
-                <IconBack size={11} color="var(--t3)" />
-              </button>
-              <div
-                ref={pathbarRef}
-                className="pathbar"
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  height: 28,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1,
-                  overflowX: "auto",
-                }}
-              >
-                <button className={cwd ? "hv" : undefined} onClick={() => cwd && void loadDir("")} style={crumbStyle(cwd === "")}>
-                  <IconFolder size={11} color={cwd === "" ? "var(--acc)" : "var(--t5)"} />
-                  {basename(currentMeta?.workdir ?? "") || "工作区"}
-                </button>
-                {cwd &&
-                  cwd.split("/").map((seg, i, arr) => {
-                    const target = arr.slice(0, i + 1).join("/");
-                    const last = i === arr.length - 1;
-                    return (
-                      <span key={target} style={{ display: "flex", alignItems: "center", flex: "none" }}>
-                        <IconChevronRight size={7} color="var(--t6)" />
-                        <button className={last ? undefined : "hv"} onClick={() => !last && void loadDir(target)} style={crumbStyle(last)}>
-                          {seg}
-                        </button>
-                      </span>
-                    );
-                  })}
-              </div>
-            </div>
-            )}
-
             {(fsErr || session.changesErr) && (
               <div style={{ padding: "0 20px 8px", fontSize: 12, color: "var(--err)", flex: "none" }}>{fsErr || session.changesErr}</div>
             )}
 
-            {/* 目录列表:文件夹在前(内核已排序,品牌绿图标);改动文件带中文状态标签,
-                本层已删除的文件以划线幽灵行保留入口;查看器打开时列表收拢 */}
+            {/* 文件树 / 改动平铺:查看器打开时列表收拢为上方窗口 */}
             <div
               ref={listRef}
               style={{
@@ -626,64 +668,7 @@ export default function App() {
                   )}
                 </>
               ) : (
-                <>
-              {entries === null &&
-                [0, 1, 2, 3].map((i) => (
-                  <div key={i} style={{ ...fileRow, cursor: "default" }}>
-                    <span className="skeleton" style={{ width: 14, height: 14, borderRadius: 4 }} />
-                    <span className="skeleton" style={{ height: 10, width: 120 + (i % 3) * 52 }} />
-                  </div>
-                ))}
-              {entries?.map((en) => {
-                const st = en.is_dir ? undefined : changeMap.get(en.path);
-                const kind = st ? CHANGE_KIND[st] : undefined;
-                const subCount = en.is_dir ? changedUnder(en.path) : 0;
-                const active = viewer?.path === en.path;
-                return (
-                  <div
-                    key={en.path}
-                    className={active ? undefined : "hv"}
-                    title={en.path}
-                    onClick={() => (en.is_dir ? void loadDir(en.path) : kind ? void showDiff(en.path) : void showFile(en.path))}
-                    style={{ ...fileRow, background: active ? "var(--hov)" : "transparent" }}
-                  >
-                    {en.is_dir ? <IconFolder size={14} color="var(--acc)" /> : <IconFile color={kind ? kind.fg : "var(--t4)"} />}
-                    <span
-                      className="ellipsis"
-                      style={{ flex: 1, fontSize: 12.5, color: "var(--t1)", fontWeight: en.is_dir ? 600 : 400 }}
-                    >
-                      {en.name}
-                    </span>
-                    {en.is_dir && subCount > 0 && (
-                      <span style={{ ...changeTag, color: "var(--acc)", background: "var(--accBg)" }}>{subCount} 处改动</span>
-                    )}
-                    {!en.is_dir && kind && <span style={{ ...changeTag, color: kind.fg, background: kind.bg }}>{kind.text}</span>}
-                    {!en.is_dir && !kind && (
-                      <span style={{ flex: "none", width: 60, textAlign: "right", font: "10.5px " + MONO, color: "var(--t6)" }}>
-                        {fmtSize(en.size)}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-              {(changes ?? [])
-                .filter((c) => c.status === "D" && (c.path.includes("/") ? c.path.slice(0, c.path.lastIndexOf("/")) : "") === cwd)
-                .map((c) => (
-                  <div key={"del:" + c.path} className="hv" title={c.path} onClick={() => void showDiff(c.path)} style={fileRow}>
-                    <IconFile color={CHANGE_KIND.D.fg} />
-                    <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t5)", textDecoration: "line-through" }}>
-                      {basename(c.path)}
-                    </span>
-                    <span style={{ ...changeTag, color: CHANGE_KIND.D.fg, background: CHANGE_KIND.D.bg }}>{CHANGE_KIND.D.text}</span>
-                  </div>
-                ))}
-              {entries && entries.length === 0 && (
-                <div style={{ padding: "36px 0 28px", display: "flex", flexDirection: "column", alignItems: "center", gap: 9 }}>
-                  <IconFolder size={22} color="var(--t6)" />
-                  <span style={{ fontSize: 12, color: "var(--t5)" }}>这个文件夹是空的</span>
-                </div>
-              )}
-                </>
+                <>{renderTree("", 0)}</>
               )}
             </div>
 
