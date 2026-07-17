@@ -126,8 +126,14 @@ fn tray_icon_for(_theme: Theme) -> Image<'static> {
     Image::from_bytes(include_bytes!("../icons/tray.png")).expect("托盘图标解码失败")
 }
 
-/// 主题变化时更新托盘图标。
+/// 主题变化时更新托盘图标(仅非 macOS)。
+/// macOS 必须跳过:模板图标由系统按菜单栏明暗自动反色,无需换图;
+/// 且 tray-icon 0.24.1 的 set_icon 会把模板标记硬编码重置为 false,
+/// 一旦换图,黑色剪影在深色菜单栏按字面渲染 = 图标"消失"。
 fn sync_tray_theme(app: &AppHandle, theme: Theme) {
+    #[cfg(target_os = "macos")]
+    let _ = (app, theme);
+    #[cfg(not(target_os = "macos"))]
     if let Some(tray) = app.state::<Tray>().0.lock().unwrap().as_ref() {
         let _ = tray.set_icon(Some(tray_icon_for(theme)));
     }
