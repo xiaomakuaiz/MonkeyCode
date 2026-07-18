@@ -40,21 +40,25 @@
   #bubble.err { background:rgba(185,52,52,.92); color:#ffecec; }
   #bubble.err::after { border-top-color:rgba(185,52,52,.92); }
 
-  /* ---- 吉祥物精灵图:8 帧横条,steps 逐帧 ---- */
+  /* ---- 吉祥物精灵图:7 帧横条(1-2 敲键盘 / 3-4 过渡 / 5-6 叉腰休息 /
+         7 睡着,来自旧"点头打盹"组),steps 逐帧 ---- */
   #wrap { width:88px; height:88px; }
   #sprite {
     width:88px; height:88px;
-    background:url(pet-sprite.webp) 0 0 / 704px 88px no-repeat;
+    background:url(pet-sprite.webp) 0 0 / 616px 88px no-repeat;
   }
-  @keyframes nod   { to { background-position-x:-704px; } }
+  /* 敲键盘:第 1-2 帧交替 */
+  @keyframes work { from { background-position-x:0; } to { background-position-x:-176px; } }
+  /* 叉腰休息:第 5-6 帧慢速交替 */
+  @keyframes rest { from { background-position-x:-352px; } to { background-position-x:-528px; } }
   @keyframes shake { 0%,100% { transform:rotate(-4deg); } 50% { transform:rotate(4deg); } }
 
-  body.st-idle    #sprite { animation:nod 2.6s steps(8) infinite; }
-  body.st-running #sprite { animation:nod .85s steps(8) infinite; }
-  body.st-waiting #sprite { background-position-x:0; }
+  body.st-idle    #sprite { animation:rest 1.8s steps(2) infinite; }
+  body.st-running #sprite { animation:work .5s steps(2) infinite; }
+  body.st-waiting #sprite { background-position-x:-352px; } /* 叉腰定格:不耐烦地等 */
   body.st-waiting #wrap   { animation:shake .5s ease-in-out infinite; transform-origin:50% 90%; }
   body.st-offline #sprite {
-    background-position-x:-264px; /* 第 4 帧:完全低头睡着 */
+    background-position-x:-528px; /* 第 7 帧:完全低头睡着 */
     filter:grayscale(.7) brightness(.92); opacity:.85;
   }
 </style>
