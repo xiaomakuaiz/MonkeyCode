@@ -67,17 +67,39 @@
   const invoke = window.__TAURI__.core.invoke;
   const bubble = document.getElementById('bubble');
 
-  // 完成提示音:桌宠窗口隐藏时 webview 仍在运行,所以无论猴子是否可见、
-  // 主窗口是否在前台都会响。并发完成 2s 内只响一次,避免叠音。
-  const ding = new Audio('pet-ding.mp3');
-  ding.volume = 0.7;
-  let lastDing = 0;
-  function playDing() {
+  // 事件音效:桌宠窗口隐藏时 webview 仍在运行,所以无论猴子是否可见、
+  // 主窗口是否在前台都会响。同一音效 2s 内只响一次,避免并发叠音。
+  const sounds = {
+    start: new Audio('sound-app-start.mp3'),      // 应用启动(首次连上内核)
+    end: new Audio('sound-task-end.mp3'),         // 轮次完成
+    error: new Audio('sound-task-error.mp3'),     // 任务出错
+    ask: new Audio('sound-permission.mp3'),       // 请求审批
+    idle: new Audio('sound-idle.mp3'),            // 持续空闲满 10 分钟
+  };
+  for (const a of Object.values(sounds)) a.volume = 0.7;
+  const lastPlay = {};
+  function play(key) {
     const now = Date.now();
-    if (now - lastDing < 2000) return;
-    lastDing = now;
-    ding.currentTime = 0;
-    ding.play().catch(() => {}); // 自动播放被平台策略拦下时静默放弃
+    if (now - (lastPlay[key] || 0) < 2000) return;
+    lastPlay[key] = now;
+    const a = sounds[key];
+    a.currentTime = 0;
+    a.play().catch(() => {}); // 自动播放被平台策略拦下时静默放弃
+  }
+  let startPlayed = false; // 启动音只在首次连上时响,内核重启重连不再响
+
+  // 空闲提醒:完全空闲(无运行/无待审批且在线)持续满 10 分钟响一次;
+  // 任何内核事件都会走 render 重置计时,持续空闲则每 10 分钟再响
+  const IDLE_MS = 10 * 60 * 1000;
+  let idleTimer = null;
+  function armIdle(idle) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    if (!idle) return;
+    idleTimer = setTimeout(() => {
+      play('idle');
+      armIdle(true);
+    }, IDLE_MS);
   }
 
   // ---- 聚合状态:会话表(快照 + 事件增量) ----
@@ -95,6 +117,7 @@
 
   function render(offline) {
     if (offline) {
+      armIdle(false);
       document.body.className = 'st-offline';
       setBubble('', '内核休息中 Zzz');
       return;
@@ -104,6 +127,7 @@
       if (s.waiting) waiting++;
       else if (s.status === 'running') running++;
     }
+    armIdle(running === 0 && waiting === 0);
     document.body.className = waiting ? 'st-waiting' : running ? 'st-running' : 'st-idle';
     if (flash) setBubble(flash.tone, flash.text);
     else if (waiting) setBubble('warn', '等你审批!');
@@ -145,6 +169,10 @@
       return retry();
     }
     render(false);
+    if (!startPlayed) {
+      startPlayed = true;
+      play('start');
+    }
     es = new EventSource(base + '/api/events?token=' + tk);
     es.onmessage = (m) => {
       let e;
@@ -154,12 +182,14 @@
         s.status = e.status;
         if (e.status === 'finished') {
           showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓');
-          playDing();
+          play('end');
         } else if (e.status === 'error') {
           showFlash('err', '「' + (e.title || '任务') + '」出错 ✗');
+          play('error');
         }
       } else if (e.type === 'session-ask') {
         s.waiting = !!e.open;
+        if (e.open) play('ask');
       } else {
         return;
       }
