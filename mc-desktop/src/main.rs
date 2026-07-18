@@ -117,6 +117,11 @@ struct TrayReady(AtomicBool);
 /// 托盘句柄(系统明暗主题切换时换图标)。
 struct Tray(Mutex<Option<TrayIcon>>);
 
+/// 壳→UI 的待处理意图(如托盘"设置")。事件是发后不管的:webview 未就绪
+/// (内核启动中/保存后整页导航间隙/错误页)时监听器不存在,事件静默丢失。
+/// 意图同时落在这里,UI 启动完成后经 take_ui_intent 取走补处理,两路兜底。
+struct UiIntent(Mutex<Option<String>>);
+
 /// 托盘图标:macOS 用模板剪影(黑 + alpha,紧裁占满菜单栏高度;配合
 /// icon_as_template 由系统按菜单栏明暗自动反色),其余平台用彩色透明图形。
 fn tray_icon_for(_theme: Theme) -> Image<'static> {
@@ -196,6 +201,13 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// 取走(消费)待处理的壳→UI 意图。UI 两处调用:启动完成后补处理错过的
+/// 事件;open-settings 事件处理器里消费掉副本,防止下次整页加载时重放。
+#[tauri::command]
+fn take_ui_intent(app: AppHandle) -> Option<String> {
+    app.state::<UiIntent>().0.lock().unwrap().take()
 }
 
 /// 宿主信息(内核 UI 的设置视图"关于"卡片展示)。
@@ -376,6 +388,9 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
         let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
             .title("MonkeyCode")
             .inner_size(1200.0, 800.0)
+            // 布局下限:设置视图(168px 导航 + 内容列 + 保存条)在极窄窗口下
+            // 保存按钮会被挤出可视区;原独立设置窗口的 min_inner_size 由此接棒
+            .min_inner_size(640.0, 480.0)
             // Tauri 默认的原生拖放处理器会在窗口层吞掉文件拖拽,HTML5 的
             // drag/drop 事件到不了页面(对话区拖入图片/文件依赖 DOM 事件);
             // 禁用后由 UI 侧统一处理
@@ -426,6 +441,14 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
                        } else { report('reload-after-save-ok'); } \
                      }) \
                      .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
+                   /* 托盘设置入口链路的运行期 ACL:take_ui_intent 命令 + event.listen \
+                      (capability 配置只能运行期验证——bb1574e 教训) */ \
+                   window.__TAURI__.core.invoke('take_ui_intent') \
+                     .then(() => report('take-intent-ok')) \
+                     .catch((e) => report('take-intent-err:' + String(e).slice(0, 80))); \
+                   window.__TAURI__.event.listen('mc-probe-evt', () => {}) \
+                     .then(() => report('listen-ok')) \
+                     .catch((e) => report('listen-err:' + String(e).slice(0, 80))); \
                    /* opener 全链路(命令 ACL + URL scope):无头环境以 BROWSER=/bin/true 承接 */ \
                    window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
                      .then(() => report('opener-ok')) \
@@ -466,9 +489,11 @@ fn main() {
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(Tray(Mutex::new(None)))
+        .manage(UiIntent(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
+            take_ui_intent,
             host_info,
             update_check,
             update_install
@@ -561,9 +586,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_any_window(app),
-            // 设置在内核 UI 页内:恢复主窗口后发事件让 React 切到设置视图
+            // 设置在内核 UI 页内:恢复主窗口后发事件让 React 切到设置视图;
+            // 意图同时落待取状态,webview 未就绪丢事件时由 UI 启动后补取
             "settings" => {
                 show_any_window(app);
+                app.state::<UiIntent>().0.lock().unwrap().replace("open-settings".into());
                 let _ = app.emit_to("main", "open-settings", ());
             }
             "check-update" => {

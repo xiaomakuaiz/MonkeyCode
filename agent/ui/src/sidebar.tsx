@@ -2,7 +2,7 @@
 // 布局与数值取自设计稿 Sidebar 区块;macOS 壳内顶部为红绿灯预留拖拽区。
 import { useState, type CSSProperties } from "react";
 import { isImeEnter, markImeEnd } from "./chat";
-import { isMacShell } from "./client";
+import { MacDragSpacer } from "./titlebar";
 import {
   IconArchive,
   IconChevronRight,
@@ -427,13 +427,8 @@ export function Sidebar({
         minHeight: 0,
       }}
     >
-      {/* macOS 壳:标题栏 Overlay,红绿灯落在此区,整条可拖拽窗口
-          (Tauri 的拖拽区机制是 data-tauri-drag-region 属性,不是 CSS app-region) */}
-      {isMacShell() ? (
-        <div data-tauri-drag-region="" style={{ height: 50, flex: "none" }} />
-      ) : (
-        <div style={{ height: 12, flex: "none" }} />
-      )}
+      {/* macOS 壳:标题栏 Overlay,红绿灯落在此区,整条可拖拽窗口 */}
+      <MacDragSpacer />
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "2px 16px 14px" }}>
         <img src={logoUrl} alt="" draggable={false} style={{ width: 30, height: 30, borderRadius: 8, flex: "none" }} />
         <span style={{ fontWeight: 700, fontSize: 14 }}>MonkeyCode</span>

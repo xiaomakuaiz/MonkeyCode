@@ -6,6 +6,7 @@ fn main() {
             tauri_build::AppManifest::new().commands(&[
                 "get_config",
                 "save_config",
+                "take_ui_intent",
                 "host_info",
                 "update_check",
                 "update_install",

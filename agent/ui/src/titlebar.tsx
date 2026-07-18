@@ -3,12 +3,24 @@
 // 仅 isWindowsShell() 时由 App 渲染;mac 壳走 Overlay 红绿灯,浏览器模式无此栏。
 import { useEffect, useState, type CSSProperties } from "react";
 import {
+  isMacShell,
   onWindowResized,
   windowClose,
   windowIsMaximized,
   windowMinimize,
   windowToggleMaximize,
 } from "./client";
+
+/** macOS 壳最左栏顶部的红绿灯落区:50px 拖拽区(Tauri 的拖拽区机制是
+ * data-tauri-drag-region 属性,不是 CSS app-region);非 mac 壳 12px 普通留白。
+ * 主侧栏与设置页左导航共用,保证两态顶部对齐不跳动。 */
+export function MacDragSpacer() {
+  return isMacShell() ? (
+    <div data-tauri-drag-region="" style={{ height: 50, flex: "none" }} />
+  ) : (
+    <div style={{ height: 12, flex: "none" }} />
+  );
+}
 
 const btn: CSSProperties = {
   width: 46,

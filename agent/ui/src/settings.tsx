@@ -10,7 +10,6 @@ import {
   baizhiStatus,
   getHostConfig,
   inDesktopShell,
-  isMacShell,
   saveHostConfig,
   updateCheck,
   updateInstall,
@@ -22,6 +21,7 @@ import { MONO } from "./components";
 import { IconBack, IconCloud, IconGear, IconMonitor, IconPlus, IconSpark } from "./icons";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
+import { MacDragSpacer } from "./titlebar";
 import { SOURCE_BAIZHI, modelSourceLabel, type HostConfig, type HostModel } from "./types";
 
 // ---- MCP 编辑模型与序列化(与内核 mcp.json 的 mcpServers 同构,壳不解释) ----
@@ -34,7 +34,12 @@ interface McpEntry {
   args: string; // 空格分隔
   kv: string; // 每行 KEY=VALUE;http→headers,stdio→env
   source?: string; // "baizhi"=百智云同步;缺省=手工。随 mcp.json 落盘(内核忽略)
+  /** 表单未呈现的其余字段(如 disabled):原样携带,保存时透传回 mcp.json 不丢失 */
+  extra?: Record<string, unknown>;
 }
+
+/** serversToMcps 拆进表单字段的键;其余键进 extra 原样往返 */
+const MCP_FORM_KEYS = new Set(["url", "command", "args", "env", "headers", "source"]);
 
 export function parseKV(text: string): Record<string, string> | undefined {
   const out: Record<string, string> = {};
@@ -62,15 +67,16 @@ export function mcpsToServers(mcps: McpEntry[]): Record<string, unknown> {
   for (const m of mcps) {
     const name = m.name.trim();
     if (!name) continue;
+    // extra 先铺底(disabled 等表单外字段透传),表单字段覆盖;
     // source 随条目落盘(内核 mcp.json 解析忽略;omitempty 语义,手工条目不带)
     const src = m.source ? { source: m.source } : {};
     if (m.type === "stdio") {
       if (!m.command.trim()) continue;
       const args = m.args.trim() ? m.args.trim().split(/\s+/) : undefined;
-      out[name] = { command: m.command.trim(), args, env: parseKV(m.kv), ...src };
+      out[name] = { ...m.extra, command: m.command.trim(), args, env: parseKV(m.kv), ...src };
     } else {
       if (!m.url.trim()) continue;
-      out[name] = { url: m.url.trim(), headers: parseKV(m.kv), ...src };
+      out[name] = { ...m.extra, url: m.url.trim(), headers: parseKV(m.kv), ...src };
     }
   }
   return out;
@@ -80,6 +86,7 @@ function serversToMcps(servers: Record<string, unknown>): McpEntry[] {
   return Object.entries(servers).map(([name, c]) => {
     const cfg = (c ?? {}) as Record<string, unknown>;
     const stdio = typeof cfg.command === "string" && cfg.command !== "";
+    const extra = Object.fromEntries(Object.entries(cfg).filter(([k]) => !MCP_FORM_KEYS.has(k)));
     return {
       name,
       type: stdio ? "stdio" : "http",
@@ -88,6 +95,7 @@ function serversToMcps(servers: Record<string, unknown>): McpEntry[] {
       args: Array.isArray(cfg.args) ? cfg.args.map(String).join(" ") : "",
       kv: stringifyKV(stdio ? cfg.env : cfg.headers),
       source: typeof cfg.source === "string" ? cfg.source : undefined,
+      extra: Object.keys(extra).length ? extra : undefined,
     };
   });
 }
@@ -188,6 +196,27 @@ const emptyModel = (): HostModel => ({
   model: "",
 });
 const emptyMcp = (): McpEntry => ({ name: "", type: "http", url: "", command: "", args: "", kv: "" });
+
+/** 百智云组整组替换(模型与 MCP 共用语义):手工条目(无 source)原样保留,
+ * 百智云组替换为本次同步集合——取消勾选的旧同步条目随之移除(重同步清理)。
+ * keepManualOnCollision:同名手工条目是否保留——MCP 导入是全有全无的单个勾选,
+ * 用户无法逐条排除,不能静默吞掉手工配置(一旦被覆盖归组,下次重同步会连带删除);
+ * 模型导入经逐条勾选确认,同名手工条目按用户选择被同步值覆盖并归组。 */
+function replaceBaizhiGroup<T extends { name: string; source?: string }>(
+  cur: T[],
+  synced: T[],
+  keepManualOnCollision: boolean,
+): T[] {
+  const kept = cur.filter((m) => m.name.trim() && m.source !== SOURCE_BAIZHI);
+  const byName = new Map(kept.map((m) => [m.name.trim(), m]));
+  const manualNames = new Set(byName.keys());
+  for (const e of synced) {
+    const name = e.name.trim();
+    if (keepManualOnCollision && manualNames.has(name)) continue;
+    byName.set(name, e);
+  }
+  return [...byName.values()];
+}
 
 // ---- 分类导航 ----
 
@@ -332,28 +361,23 @@ export function SettingsView({
   const patchMcp = (i: number, patch: Partial<McpEntry>) =>
     setMcps((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
-  // 同步导入:手工条目(无 source)原样保留;百智云组**整体替换**为勾选集合——
-  // 取消勾选的旧同步条目随之移除(重同步清理)。同名手工条目被同步值覆盖并归组。
-  // 导入即进脏态,保存条浮现;自动切到模型页供核对。
+  // 同步导入:整组替换语义见 replaceBaizhiGroup。导入即进脏态,保存条浮现;
+  // 自动切到模型页供核对。
   const applySynced = (r: BaizhiSyncResult) => {
     // 只导入 MCP(勾选 0 个模型)时不触碰模型组:空选集不视为"清空百智云组"
     if (r.models.length) {
       const defaultName = models[defaultIdx]?.name?.trim() ?? "";
-      const kept = models.filter((m) => m.name.trim() && m.source !== SOURCE_BAIZHI);
-      const byName = new Map(kept.map((m) => [m.name.trim(), m]));
-      for (const sm of r.models) {
-        byName.set(sm.name, {
-          name: sm.name,
-          provider: sm.provider,
-          base_url: sm.base_url,
-          api_key: sm.api_key,
-          model: sm.model,
-          context_window: sm.context_window,
-          vision: sm.vision,
-          source: sm.source,
-        });
-      }
-      const next = [...byName.values()];
+      const synced = r.models.map((sm) => ({
+        name: sm.name,
+        provider: sm.provider,
+        base_url: sm.base_url,
+        api_key: sm.api_key,
+        model: sm.model,
+        context_window: sm.context_window,
+        vision: sm.vision,
+        source: sm.source,
+      }));
+      const next = replaceBaizhiGroup(models, synced, false);
       setModels(next);
       // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位
       const di = next.findIndex((m) => m.name.trim() === defaultName);
@@ -362,16 +386,11 @@ export function SettingsView({
       setExpanded(null);
       setBaizhiOpen(true);
     }
-    // MCP 同款整组替换:手工条目(无 source)保留,百智云组整体替换为本次同步结果;
-    // 本次无 MCP 条目(如网关未开通)则不触碰(空集不清组,对齐模型语义)
+    // MCP:本次无条目(如网关未开通)则不触碰(空集不清组,对齐模型语义);
+    // 同步条目已带 source=baizhi
     const syncedMcps = serversToMcps(r.mcp_servers);
     if (syncedMcps.length) {
-      setMcps((cur) => {
-        const kept = cur.filter((m) => m.name.trim() && m.source !== SOURCE_BAIZHI);
-        const byName = new Map(kept.map((m) => [m.name.trim(), m]));
-        for (const e of syncedMcps) byName.set(e.name.trim(), e); // 同步条目已带 source=baizhi
-        return [...byName.values()];
-      });
+      setMcps((cur) => replaceBaizhiGroup(cur, syncedMcps, true));
       setMcpExpanded(null);
     }
     setActive("models"); // 导入后直接看结果
@@ -553,15 +572,26 @@ export function SettingsView({
     </div>
   );
 
-  /** 一组模型行装进一张卡(行间分隔线;j 为组内序,i 用真实索引) */
-  const modelGroupCard = (entries: { m: HostModel; i: number }[]) => (
+  /** 一组条目行装进一张卡(行间分隔线;j 为组内序,i 用真实索引);模型/MCP 共用 */
+  const groupCard = <T,>(entries: { m: T; i: number }[], row: (m: T, i: number) => JSX.Element) => (
     <div className="card" style={{ overflow: "hidden" }}>
       {entries.map(({ m, i }, j) => (
         <div key={i} style={{ borderTop: j > 0 ? "1px solid var(--line2)" : "none" }}>
-          {modelRow(m, i)}
+          {row(m, i)}
         </div>
       ))}
     </div>
+  );
+
+  /** 分组头右侧的收起/展开开关(百智云模型组与 MCP 组共用) */
+  const collapseToggle = (open: boolean, toggle: () => void) => (
+    <span
+      className="hv-t1"
+      onClick={toggle}
+      style={{ fontSize: 11.5, color: "var(--t5)", cursor: "pointer", userSelect: "none" }}
+    >
+      {open ? "收起" : "展开"}
+    </span>
   );
 
   // 未登录引导条(模型/MCP 页顶部;账号是主路径)
@@ -597,17 +627,7 @@ export function SettingsView({
         {/* 百智云组在前(主路径) */}
         <Section
           label={`${modelSourceLabel(SOURCE_BAIZHI)}${baizhi.length ? `(${baizhi.length})` : ""}`}
-          action={
-            baizhi.length > 0 ? (
-              <span
-                className="hv-t1"
-                onClick={() => setBaizhiOpen((v) => !v)}
-                style={{ fontSize: 11.5, color: "var(--t5)", cursor: "pointer", userSelect: "none" }}
-              >
-                {baizhiOpen ? "收起" : "展开"}
-              </span>
-            ) : undefined
-          }
+          action={baizhi.length > 0 ? collapseToggle(baizhiOpen, () => setBaizhiOpen((v) => !v)) : undefined}
         >
           {baizhi.length === 0 ? (
             <div style={emptyCard}>
@@ -624,7 +644,7 @@ export function SettingsView({
               )}
             </div>
           ) : (
-            baizhiOpen && modelGroupCard(baizhi)
+            baizhiOpen && groupCard(baizhi, modelRow)
           )}
         </Section>
         {/* 自定义组(高级路径) */}
@@ -635,7 +655,7 @@ export function SettingsView({
           {custom.length === 0 ? (
             <div style={emptyCard}>手工接入其他服务商的模型(高级)。需要名称、接口地址、API Key 与模型标识。</div>
           ) : (
-            modelGroupCard(custom)
+            groupCard(custom, modelRow)
           )}
         </Section>
       </>
@@ -725,16 +745,6 @@ export function SettingsView({
     );
   };
 
-  const mcpGroupCard = (entries: { m: McpEntry; i: number }[]) => (
-    <div className="card" style={{ overflow: "hidden" }}>
-      {entries.map(({ m, i }, j) => (
-        <div key={i} style={{ borderTop: j > 0 ? "1px solid var(--line2)" : "none" }}>
-          {mcpRow(m, i)}
-        </div>
-      ))}
-    </div>
-  );
-
   const mcpSection = () => {
     if (!desktop) {
       return (
@@ -754,17 +764,9 @@ export function SettingsView({
         {baizhi.length > 0 && (
           <Section
             label={`${modelSourceLabel(SOURCE_BAIZHI)} MCP(${baizhi.length})`}
-            action={
-              <span
-                className="hv-t1"
-                onClick={() => setBaizhiMcpOpen((v) => !v)}
-                style={{ fontSize: 11.5, color: "var(--t5)", cursor: "pointer", userSelect: "none" }}
-              >
-                {baizhiMcpOpen ? "收起" : "展开"}
-              </span>
-            }
+            action={collapseToggle(baizhiMcpOpen, () => setBaizhiMcpOpen((v) => !v))}
           >
-            {baizhiMcpOpen && mcpGroupCard(baizhi)}
+            {baizhiMcpOpen && groupCard(baizhi, mcpRow)}
           </Section>
         )}
         {/* 自定义 MCP 组 */}
@@ -775,7 +777,7 @@ export function SettingsView({
           {custom.length === 0 ? (
             <div style={emptyCard}>未配置自定义 MCP 服务器(可选)。项目级 .mc-agent/mcp.json 仍随仓库生效。</div>
           ) : (
-            mcpGroupCard(custom)
+            groupCard(custom, mcpRow)
           )}
         </Section>
       </>
@@ -850,8 +852,8 @@ export function SettingsView({
     <div style={{ flex: 1, display: "flex", minHeight: 0, animation: "mcin .25s ease" }}>
       {/* 左侧分类导航(设置态占满主窗口,此为最左栏) */}
       <div style={{ width: 168, flex: "none", background: "var(--side)", borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 2, padding: "0 10px 12px" }}>
-        {/* macOS 壳:红绿灯落在最左栏顶部,预留拖拽区(对齐主侧栏) */}
-        {isMacShell() ? <div data-tauri-drag-region="" style={{ height: 40, flex: "none" }} /> : <div style={{ height: 12, flex: "none" }} />}
+        {/* macOS 壳:红绿灯落在最左栏顶部,预留拖拽区(与主侧栏同一组件,切换不跳动) */}
+        <MacDragSpacer />
         <div
           className="hv"
           onClick={onClose}

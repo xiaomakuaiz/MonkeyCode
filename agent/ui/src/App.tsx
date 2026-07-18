@@ -10,6 +10,7 @@ import {
   isWindowsShell,
   getHostInfo,
   onHostEvent,
+  takeUiIntent,
   listModels,
   listSessions,
   setSessionArchived,
@@ -179,10 +180,23 @@ export default function App() {
     void refreshSessions();
   };
 
+  // 打开设置视图:先复位 App 级浮层(文件抽屉的遮罩不能盖在设置页上),
+  // 与 openSession/removeSession 的复位语义对齐。侧栏齿轮与托盘事件共用。
+  const settingsRequestedRef = useRef(false); // 托盘请求过设置:启动恢复会话不得覆盖
+  const openSettings = () => {
+    setDrawerOpen(false);
+    setViewer(null);
+    setView("settings");
+  };
+
   // 启动:拉模型清单 + 恢复上次会话;桌面壳内无模型(首启/被清空)直接进设置向导。
   // 订阅壳的托盘"设置"事件(唤起页内设置视图),静默检查一次应用更新(齿轮小圆点)。
   useEffect(() => {
-    const offSettings = onHostEvent("open-settings", () => setView("settings"));
+    const offSettings = onHostEvent("open-settings", () => {
+      settingsRequestedRef.current = true;
+      void takeUiIntent(); // 事件已送达:消费壳的待取副本,防下次整页加载重放
+      openSettings();
+    });
     Promise.all([listModels().catch(() => [] as ModelInfo[]), refreshSessions()])
       .then(([ms, metas]) => {
         setModels(ms);
@@ -191,6 +205,11 @@ export default function App() {
         const meta = metas.find((m) => m.id === last);
         if (meta) openSession(meta);
         if (ms.length === 0 && inDesktopShell()) setView("settings");
+        // 托盘"设置"兜底:页面未就绪时事件会丢(壳侧发后不管),意图落在壳的
+        // 待取状态,这里补取;启动期间事件先到、又被上面恢复会话覆盖的同理。
+        void takeUiIntent().then((intent) => {
+          if (intent === "open-settings" || settingsRequestedRef.current) openSettings();
+        });
       })
       .catch((e) => session.notify("无法连接服务: " + (e instanceof Error ? e.message : e)));
     if (inDesktopShell()) {
@@ -575,7 +594,7 @@ export default function App() {
             setOfferCreate(false);
             setView("new");
           }}
-          onOpenSettings={() => setView("settings")}
+          onOpenSettings={openSettings}
           onArchive={(m) => void archiveSession(m)}
           onDelete={(m) => void removeSession(m)}
           onRename={(m, title) => void renameSession(m, title)}
