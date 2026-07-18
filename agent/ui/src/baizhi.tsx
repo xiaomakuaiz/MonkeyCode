@@ -14,6 +14,20 @@ import {
 } from "./client";
 import { MONO } from "./components";
 import { Field, input, whiteBtn } from "./settings-ui";
+import baizhiLogoUrl from "./baizhi-logo.png";
+
+/** 百智云品牌标(官方位图去白边紧裁;不随导航态染色,当徽标用)。
+ * 签名对齐导航图标组件({size, color}),color 忽略。 */
+export function BaizhiLogo({ size = 14 }: { size?: number; color?: string }) {
+  return (
+    <img
+      src={baizhiLogoUrl}
+      alt=""
+      draggable={false}
+      style={{ width: size, height: size, flex: "none", display: "block" }}
+    />
+  );
+}
 
 const phoneValid = (v: string) => /^1[3-9]\d{9}$/.test(v.trim());
 
@@ -241,6 +255,7 @@ export function BaizhiCard({
     return (
       <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <BaizhiLogo size={30} />
           <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
             <span className="ellipsis" style={{ fontWeight: 700, fontSize: 13 }}>{profileName(status.profile)}</span>
             <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>{status.host}</span>
@@ -355,6 +370,7 @@ export function BaizhiCard({
     const needRetry = wxState === "expired" || wxState === "canceled" || wxState === "error";
     return (
       <div className="card card-lg" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "18px 16px" }}>
+        <BaizhiLogo size={36} />
         <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,可同步账号下的模型与 MCP 配置。</span>
         <div style={{ position: "relative", width: 168, height: 168, borderRadius: 10, border: "1px solid var(--inputBd)", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
           {qr && <img src={qr} alt="微信扫码登录" draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain", filter: needRetry ? "blur(3px) opacity(.35)" : "none" }} />}

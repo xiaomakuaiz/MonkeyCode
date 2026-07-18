@@ -18,7 +18,8 @@ import {
   type UpdateStatus,
 } from "./client";
 import { MONO } from "./components";
-import { IconBack, IconCloud, IconGear, IconMonitor, IconPlus, IconSpark } from "./icons";
+import { IconBack, IconGear, IconMonitor, IconPlus, IconSpark } from "./icons";
+import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
 import { MacDragSpacer } from "./titlebar";
@@ -223,7 +224,7 @@ function replaceBaizhiGroup<T extends { name: string; source?: string }>(
 type SectionKey = "account" | "models" | "mcp" | "general";
 
 const NAV: { key: SectionKey; label: string; icon: (p: { size?: number; color?: string }) => JSX.Element }[] = [
-  { key: "account", label: "百智云账号", icon: IconCloud },
+  { key: "account", label: "百智云账号", icon: BaizhiLogo },
   { key: "models", label: "模型", icon: IconSpark },
   { key: "mcp", label: "MCP 服务器", icon: IconMonitor },
   { key: "general", label: "通用", icon: IconGear },
@@ -597,7 +598,7 @@ export function SettingsView({
   // 未登录引导条(模型/MCP 页顶部;账号是主路径)
   const loginHint = bzStatus && !loggedIn && (
     <div className="card card-lg" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
-      <IconCloud size={16} color="var(--acc)" />
+      <BaizhiLogo size={16} />
       <span style={{ fontSize: 12.5, color: "var(--t3)", flex: 1 }}>登录百智云后可自动同步账号下的模型与 MCP,无需手工配置。</span>
       <button
         className="hv-acc"
