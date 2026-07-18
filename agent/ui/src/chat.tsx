@@ -28,9 +28,11 @@ import type { SessionHandle } from "./useSession";
 import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type Usage } from "./types";
 
 // 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
-// 切换时 chat 清空会让滚动容器整个卸载重挂(scrollTop 归零),且 ChatView 本身
-// 也会因设置页等视图切换而重挂,位置只能存在模块级
-const scrollMemo = new Map<string, { top: number; pinned: boolean }>();
+// 记「视口顶部的条目序号 + 条目内偏移」而非 scrollTop 像素:历史分批回放、
+// 工具结果合并进先前条目、折叠态重置都会改变上方内容高度,像素值会漂,
+// 锚点跟着条目走才对得上"看到哪了"。切换时滚动容器随 chat 清空整个卸载重挂,
+// 且 ChatView 本身也会因设置页等视图切换而重挂,记忆只能存在模块级
+const scrollMemo = new Map<string, { anchor: number; offset: number; pinned: boolean }>();
 
 const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
@@ -292,7 +294,8 @@ export function ChatView({
   const logRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
-  const restoreRef = useRef<number | null>(null); // 待恢复的 scrollTop(历史分批回放,内容够高前逐批逼近)
+  // 待恢复的锚点;回放期间每批都重新对齐(上方内容变高也不漂),用户主动滚动后交还控制权
+  const restoreRef = useRef<{ anchor: number; offset: number } | null>(null);
   const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0); // dragenter/leave 在子元素间反复触发,计数配对
@@ -302,18 +305,21 @@ export function ChatView({
   useLayoutEffect(() => {
     const saved = session.id ? scrollMemo.get(session.id) : undefined;
     pinnedRef.current = saved ? saved.pinned : true; // 首次打开默认贴底
-    restoreRef.current = saved && !saved.pinned ? saved.top : null;
+    restoreRef.current = saved && !saved.pinned ? { anchor: saved.anchor, offset: saved.offset } : null;
   }, [session.id]);
 
-  // 自动滚动:优先恢复记忆位置,否则贴底跟随
+  // 自动滚动:优先对齐记忆锚点,否则贴底跟随
   useEffect(() => {
     const el = logRef.current;
     if (!el) return;
-    const want = restoreRef.current;
-    if (want != null) {
-      el.scrollTop = want;
-      // 内容还不够高时被浏览器钳位,留给下一批回放继续;够到目标即恢复完成
-      if (el.scrollHeight - el.clientHeight >= want) restoreRef.current = null;
+    const a = restoreRef.current;
+    if (a) {
+      const kids = el.firstElementChild?.children;
+      // 锚点条目还没回放出来时先不动(停在已回放内容的开头),出来后逐批对齐
+      if (kids && a.anchor < kids.length) {
+        const r = kids[a.anchor].getBoundingClientRect();
+        el.scrollTop += r.top - el.getBoundingClientRect().top + a.offset;
+      }
     } else if (pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
@@ -331,10 +337,27 @@ export function ChatView({
     const el = logRef.current;
     if (!el) return;
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    // 恢复进行中的钳位滚动不写记忆,避免中途切走时目标位置被半成品覆盖
-    if (session.id && restoreRef.current == null) {
-      scrollMemo.set(session.id, { top: el.scrollTop, pinned: pinnedRef.current });
+    // 恢复进行中的程序滚动不写记忆,避免中途切走时锚点被半成品覆盖
+    if (!session.id || restoreRef.current) return;
+    const elTop = el.getBoundingClientRect().top;
+    let anchor = 0;
+    let offset = 0;
+    const kids = el.firstElementChild?.children ?? [];
+    for (let i = 0; i < kids.length; i++) {
+      const r = kids[i].getBoundingClientRect();
+      if (r.bottom > elTop) {
+        // 视口顶部所在的条目:offset 为条目顶到视口顶的已滚过距离
+        anchor = i;
+        offset = elTop - r.top;
+        break;
+      }
     }
+    scrollMemo.set(session.id, { anchor, offset, pinned: pinnedRef.current });
+  };
+
+  // 用户主动介入(滚轮/触摸/点击含拖滚动条)即终止锚点恢复,交还滚动控制权
+  const cancelRestore = () => {
+    restoreRef.current = null;
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -564,7 +587,14 @@ export function ChatView({
         </div>
       ) : (
         // scrollbar-gutter 两侧对称预留(Chromium 94+):滚动条出现时内容列不再被挤得比 composer 偏左
-        <div ref={logRef} onScroll={onLogScroll} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}>
+        <div
+          ref={logRef}
+          onScroll={onLogScroll}
+          onWheel={cancelRestore}
+          onTouchStart={cancelRestore}
+          onMouseDown={cancelRestore}
+          style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
+        >
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
             <LogList items={chat.items} onPermAnswer={session.answerPerm} onOpenChild={onOpenChild} uploadUrl={session.uploadUrl} workdir={workdir} />
           </div>
