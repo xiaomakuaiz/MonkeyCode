@@ -40,25 +40,28 @@
   #bubble.err { background:rgba(185,52,52,.92); color:#ffecec; }
   #bubble.err::after { border-top-color:rgba(185,52,52,.92); }
 
-  /* ---- 吉祥物精灵图:7 帧横条(1-2 敲键盘 / 3-4 过渡 / 5-6 叉腰休息 /
-         7 睡着,来自旧"点头打盹"组),steps 逐帧 ---- */
+  /* ---- 吉祥物精灵图:31 帧横条("多状态表演长动画"四阶段 + 旧组睡着帧)。
+         帧段:1-7 无所事事 / 8-16 写代码 / 17-23 看通知 / 24-30 庆祝 / 31 睡着。
+         各状态在自己的帧段内 steps 循环;庆祝只播一遍后定格末姿势 ---- */
   #wrap { width:88px; height:88px; }
   #sprite {
     width:88px; height:88px;
-    background:url(pet-sprite.webp) 0 0 / 616px 88px no-repeat;
+    background:url(pet-sprite.webp) 0 0 / 2728px 88px no-repeat;
   }
-  /* 敲键盘:第 1-2 帧交替 */
-  @keyframes work { from { background-position-x:0; } to { background-position-x:-176px; } }
-  /* 叉腰休息:第 5-6 帧慢速交替 */
-  @keyframes rest { from { background-position-x:-352px; } to { background-position-x:-528px; } }
-  @keyframes shake { 0%,100% { transform:rotate(-4deg); } 50% { transform:rotate(4deg); } }
+  @keyframes idle-loop   { from { background-position-x:0; }       to { background-position-x:-616px; } }
+  @keyframes work-loop   { from { background-position-x:-616px; }  to { background-position-x:-1408px; } }
+  @keyframes notify-loop { from { background-position-x:-1408px; } to { background-position-x:-2024px; } }
+  @keyframes cheer-once  { from { background-position-x:-2024px; } to { background-position-x:-2640px; } }
 
-  body.st-idle    #sprite { animation:rest 1.8s steps(2) infinite; }
-  body.st-running #sprite { animation:work .5s steps(2) infinite; }
-  body.st-waiting #sprite { background-position-x:-352px; } /* 叉腰定格:不耐烦地等 */
-  body.st-waiting #wrap   { animation:shake .5s ease-in-out infinite; transform-origin:50% 90%; }
-  body.st-offline #sprite {
-    background-position-x:-528px; /* 第 7 帧:完全低头睡着 */
+  /* 空闲 7 帧全是独立姿势(非补间)。桌宠挂在余光位,动作越频繁越抢注意力,
+     而空闲正是最不该抢注意力的状态:2.5s/姿势 ≈ 人发呆时的小动作节奏 */
+  body.st-idle      #sprite { animation:idle-loop 17.5s steps(7) infinite; }
+  body.st-running   #sprite { animation:work-loop 1.2s steps(9) infinite; }
+  body.st-waiting   #sprite { animation:notify-loop 1.6s steps(7) infinite; }
+  /* 庆祝:播一遍(帧 24-30),动画结束回落到基准位 = 末帧叉腰挺胸,撑满气泡时长 */
+  body.st-celebrate #sprite { background-position-x:-2552px; animation:cheer-once 1.4s steps(7); }
+  body.st-offline   #sprite {
+    background-position-x:-2640px; /* 第 31 帧:完全低头睡着 */
     filter:grayscale(.7) brightness(.92); opacity:.85;
   }
 </style>
@@ -132,15 +135,18 @@
       else if (s.status === 'running') running++;
     }
     armIdle(running === 0 && waiting === 0);
-    document.body.className = waiting ? 'st-waiting' : running ? 'st-running' : 'st-idle';
+    document.body.className = flash && flash.cheer
+      ? 'st-celebrate'
+      : waiting ? 'st-waiting' : running ? 'st-running' : 'st-idle';
     if (flash) setBubble(flash.tone, flash.text);
     else if (waiting) setBubble('warn', '等你审批!');
     else if (running) setBubble('ok', running + ' 个任务运行中');
     else setBubble('', '');
   }
 
-  function showFlash(tone, text) {
-    flash = { tone, text };
+  /** cheer=true 时闪现期间播庆祝动作(仅任务完成用) */
+  function showFlash(tone, text, cheer) {
+    flash = { tone, text, cheer };
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => { flash = null; render(false); }, 4000);
     render(false);
@@ -185,7 +191,7 @@
       if (e.type === 'session-status') {
         s.status = e.status;
         if (e.status === 'finished') {
-          showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓');
+          showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓', true);
           play('end');
         } else if (e.status === 'error') {
           showFlash('err', '「' + (e.title || '任务') + '」出错 ✗');
