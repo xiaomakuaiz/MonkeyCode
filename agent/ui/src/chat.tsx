@@ -3,6 +3,7 @@
 // (useSession),App 只注入布局级回调(抽屉/子会话/归档/删除)。
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ClipboardEvent,
@@ -25,6 +26,11 @@ import {
 import logoUrl from "./logo.png";
 import type { SessionHandle } from "./useSession";
 import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type Usage } from "./types";
+
+// 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
+// 切换时 chat 清空会让滚动容器整个卸载重挂(scrollTop 归零),且 ChatView 本身
+// 也会因设置页等视图切换而重挂,位置只能存在模块级
+const scrollMemo = new Map<string, { top: number; pinned: boolean }>();
 
 const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
@@ -286,14 +292,31 @@ export function ChatView({
   const logRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
+  const restoreRef = useRef<number | null>(null); // 待恢复的 scrollTop(历史分批回放,内容够高前逐批逼近)
   const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0); // dragenter/leave 在子元素间反复触发,计数配对
 
-  // 自动滚动(仅当用户停留在底部)
+  // 会话切换:复位跟随状态并取出记忆位置。ChatView 不按会话重挂载,
+  // 不显式复位的话 pinnedRef 会带着上一会话的值进入新会话(切过来停在顶部的根因)
+  useLayoutEffect(() => {
+    const saved = session.id ? scrollMemo.get(session.id) : undefined;
+    pinnedRef.current = saved ? saved.pinned : true; // 首次打开默认贴底
+    restoreRef.current = saved && !saved.pinned ? saved.top : null;
+  }, [session.id]);
+
+  // 自动滚动:优先恢复记忆位置,否则贴底跟随
   useEffect(() => {
     const el = logRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const want = restoreRef.current;
+    if (want != null) {
+      el.scrollTop = want;
+      // 内容还不够高时被浏览器钳位,留给下一批回放继续;够到目标即恢复完成
+      if (el.scrollHeight - el.clientHeight >= want) restoreRef.current = null;
+    } else if (pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [chat.items, chat.running]);
 
   // 输入框随内容自适应高度
@@ -306,7 +329,12 @@ export function ChatView({
 
   const onLogScroll = () => {
     const el = logRef.current;
-    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (!el) return;
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    // 恢复进行中的钳位滚动不写记忆,避免中途切走时目标位置被半成品覆盖
+    if (session.id && restoreRef.current == null) {
+      scrollMemo.set(session.id, { top: el.scrollTop, pinned: pinnedRef.current });
+    }
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
