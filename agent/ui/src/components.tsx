@@ -33,6 +33,35 @@ import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
 
+// 代码块包一层容器并附复制按钮;按钮点击走 .md 容器的事件代理
+// (innerHTML 注入的 DOM 挂不了 React handler)
+const baseRenderer = new marked.Renderer();
+marked.use({
+  renderer: {
+    code(token) {
+      return `<div class="mdcode">${baseRenderer.code(token)}<button class="mdcopy" type="button">复制</button></div>`;
+    },
+  },
+});
+
+/** 复制到剪贴板:异步 API 不可用/被拒时回退 execCommand(Win7 WebView2 无 clipboard API) */
+function copyText(text: string) {
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
 // 等宽栈:JetBrains Mono 经 webfont 随应用加载(latin 子集),中文回退 HarmonyOS Sans SC;
 // 其后仍显式列出各平台字体,Windows 上不能只留 monospace 泛型——
 // Win7 WebView2 对泛型的解析不可靠(显示乱码),中文回退也会掉进宋体位图
@@ -41,7 +70,19 @@ export const MONO = '"JetBrains Mono","HarmonyOS Sans SC",ui-monospace,Menlo,Con
 /** 正文里的链接一律不走 webview 导航(WKWebView 里点 <a> 会把应用页面跳走):
  * http(s) 交系统浏览器/新标签页,其余协议直接拦下。 */
 function onMarkdownClick(e: ReactMouseEvent<HTMLDivElement>) {
-  const a = (e.target as HTMLElement).closest("a");
+  const target = e.target as HTMLElement;
+  const copy = target.closest<HTMLButtonElement>("button.mdcopy");
+  if (copy) {
+    copyText(copy.parentElement?.querySelector("pre")?.textContent ?? "");
+    copy.textContent = "已复制";
+    copy.classList.add("ok");
+    window.setTimeout(() => {
+      copy.textContent = "复制";
+      copy.classList.remove("ok");
+    }, 1500);
+    return;
+  }
+  const a = target.closest("a");
   if (!a) return;
   e.preventDefault();
   const href = a.getAttribute("href") || "";

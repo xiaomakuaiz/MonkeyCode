@@ -261,6 +261,25 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   font-size: 12px;
 }
 .md pre code { background: transparent; padding: 0; }
+/* 代码块容器:接管 pre 的默认外边距(:first/:last-child 归零规则落在容器上),复制按钮悬停浮现 */
+.mdcode { position: relative; margin: 1em 0; }
+.mdcode pre { margin: 0; }
+.mdcode .mdcopy {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  padding: 2px 9px;
+  font-size: 11px;
+  color: var(--t4);
+  background: var(--pop);
+  border: 1px solid var(--btnBd);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.mdcode:hover .mdcopy, .mdcode .mdcopy.ok { opacity: 1; }
+.mdcode .mdcopy.ok { color: var(--acc); border-color: var(--acc); }
 .md table { border-collapse: collapse; }
 .md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
 .md blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 12px; color: var(--t4); }
