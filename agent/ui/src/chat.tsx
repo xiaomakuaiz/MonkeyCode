@@ -9,6 +9,8 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { LogList, MONO } from "./components";
 import {
@@ -306,10 +308,18 @@ export function ChatView({
     const saved = session.id ? scrollMemo.get(session.id) : undefined;
     pinnedRef.current = saved ? saved.pinned : true; // 首次打开默认贴底
     restoreRef.current = saved && !saved.pinned ? { anchor: saved.anchor, offset: saved.offset } : null;
+    if (!restoreRef.current) return;
+    // 渲染后布局还会无事件地微调一次(实测 ~6px,RO 也抓不到这种再分配):
+    // 恢复期间低频轮询对齐兜底,对齐到位后是零修正的空转,用户接管即停
+    const iv = window.setInterval(() => {
+      if (restoreRef.current) alignLog();
+      else clearInterval(iv);
+    }, 200);
+    return () => clearInterval(iv);
   }, [session.id]);
 
   // 自动滚动:优先对齐记忆锚点,否则贴底跟随
-  useEffect(() => {
+  const alignLog = () => {
     const el = logRef.current;
     if (!el) return;
     const a = restoreRef.current;
@@ -323,7 +333,21 @@ export function ChatView({
     } else if (pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [chat.items, chat.running]);
+  };
+  useEffect(alignLog, [chat.items, chat.running]);
+
+  // 图片解码/字体加载等异步高度变化不经过 items,回放结束后仍会把位置顶漂
+  // (实测漂 6px):监听内容列高度做兜底重对齐。用户接管后(restore 清空且
+  // 未贴底)此路径自然不动作
+  const hasLog = chat.items.length > 0;
+  useEffect(() => {
+    const col = logRef.current?.firstElementChild;
+    if (!col) return;
+    const ro = new ResizeObserver(alignLog);
+    ro.observe(col);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasLog]);
 
   // 输入框随内容自适应高度
   useEffect(() => {
@@ -333,12 +357,10 @@ export function ChatView({
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }, [input]);
 
-  const onLogScroll = () => {
+  const saveAnchor = () => {
     const el = logRef.current;
-    if (!el) return;
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     // 恢复进行中的程序滚动不写记忆,避免中途切走时锚点被半成品覆盖
-    if (!session.id || restoreRef.current) return;
+    if (!el || !session.id || restoreRef.current) return;
     const elTop = el.getBoundingClientRect().top;
     let anchor = 0;
     let offset = 0;
@@ -354,10 +376,34 @@ export function ChatView({
     }
     scrollMemo.set(session.id, { anchor, offset, pinned: pinnedRef.current });
   };
+  const saveTimer = useRef(0);
 
-  // 用户主动介入(滚轮/触摸/点击含拖滚动条)即终止锚点恢复,交还滚动控制权
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    // scroll 事件只做"贴底→跟随"的单向判定,离底不在这里判:程序滚动同样发
+    // scroll 事件,回放中一批内容长高 >40px 就会把跟随误判成用户离底(实测
+    // 卡在中途)。离底判定只认用户真实输入(onWheel/滚动条拖拽)
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinnedRef.current = true;
+    saveAnchor();
+    // 滚动停止后布局仍会微调一次(实测 ~6px,不发 scroll 事件),停稳后补一次校准
+    clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(saveAnchor, 600);
+  };
+
+  // 用户主动介入即终止锚点恢复,交还滚动控制权;向上意图同时解除贴底跟随
   const cancelRestore = () => {
     restoreRef.current = null;
+  };
+  const onLogWheel = (e: ReactWheelEvent) => {
+    cancelRestore();
+    if (e.deltaY < 0) pinnedRef.current = false; // 向上滚 = 离开底部去看历史
+  };
+  const onLogMouseDown = (e: ReactMouseEvent) => {
+    cancelRestore();
+    // 按在右缘滚动条带上 = 准备拖动定位,解除跟随(拖回底部会经 scroll 事件重新贴上)
+    const el = logRef.current;
+    if (el && e.clientX > el.getBoundingClientRect().right - 20) pinnedRef.current = false;
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -590,9 +636,9 @@ export function ChatView({
         <div
           ref={logRef}
           onScroll={onLogScroll}
-          onWheel={cancelRestore}
+          onWheel={onLogWheel}
           onTouchStart={cancelRestore}
-          onMouseDown={cancelRestore}
+          onMouseDown={onLogMouseDown}
           style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
         >
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
