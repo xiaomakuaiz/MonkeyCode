@@ -137,13 +137,24 @@ describe("执行期进度(in_progress progress)", () => {
 });
 
 describe("计划卡片", () => {
-  it("首个 plan 新建,后续 plan 原地更新最近卡片", () => {
+  it("连续 plan 帧合并进末尾卡片", () => {
     const s = run([
       acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "pending" }] }),
       acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "completed" }] }),
     ]);
     const plans = s.items.filter((it) => it.kind === "plan");
     expect(plans).toEqual([{ kind: "plan", entries: [{ content: "步骤一", status: "completed" }] }]);
+  });
+
+  it("中间隔了其他内容后,plan 在当前位置新建卡片,旧卡片保留原快照", () => {
+    const s = run([
+      acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "pending" }] }),
+      acp({ sessionUpdate: "agent_message_chunk", content: { text: "开始干活" } }),
+      acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "completed" }] }),
+    ]);
+    expect(s.items.map((it) => it.kind)).toEqual(["plan", "agent", "plan"]);
+    expect(s.items[0]).toEqual({ kind: "plan", entries: [{ content: "步骤一", status: "pending" }] });
+    expect(s.items[2]).toEqual({ kind: "plan", entries: [{ content: "步骤一", status: "completed" }] });
   });
 });
 

@@ -147,13 +147,13 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       return { ...s, items };
     }
     case "plan": {
-      // 更新最近的计划卡片而非无限追加;没有则新建
+      // 计划卡片跟随对话流:仅当卡片仍在流末尾时原地更新(合并连续的状态翻转),
+      // 中间隔了其他内容则在当前位置追加新卡片,旧卡片留作当时的快照
       const items = s.items.slice();
-      for (let i = items.length - 1; i >= 0; i--) {
-        if (items[i].kind === "plan") {
-          items[i] = { kind: "plan", entries: u.entries ?? [] };
-          return { ...s, items, streamKind: "" };
-        }
+      const last = items[items.length - 1];
+      if (last && last.kind === "plan") {
+        items[items.length - 1] = { kind: "plan", entries: u.entries ?? [] };
+        return { ...s, items, streamKind: "" };
       }
       return push(s, { kind: "plan", entries: u.entries ?? [] });
     }
