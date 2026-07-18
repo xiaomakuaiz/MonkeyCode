@@ -341,6 +341,9 @@ func TestSyncMCPRevealsExistingKey(t *testing.T) {
 	if hdr["Authorization"] != "Bearer atk-plain-777" {
 		t.Errorf("应带 reveal 出的明文 Bearer 头,实际: %v", entry["headers"])
 	}
+	if entry["source"] != sourceBaizhi {
+		t.Errorf("MCP 条目应带 source 标记(UI 分组/整组替换),实际: %v", entry["source"])
+	}
 	if len(tk.createLog) != 0 {
 		t.Errorf("已有启用密钥不应新建,实际创建了 %d 次", len(tk.createLog))
 	}

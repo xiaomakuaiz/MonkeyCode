@@ -350,7 +350,6 @@ export function Sidebar({
   sessionActive,
   connected,
   status,
-  settingsActive,
   updateAvailable,
   onSelect,
   onNewTask,
@@ -365,7 +364,6 @@ export function Sidebar({
   sessionActive: boolean;
   connected: boolean;
   status: string;
-  settingsActive: boolean;
   updateAvailable: boolean;
   onSelect: (m: SessionMeta) => void;
   onNewTask: (dir?: string) => void;
@@ -534,7 +532,7 @@ export function Sidebar({
           className="hv2 icon-btn"
           title="设置"
           onClick={onOpenSettings}
-          style={{ position: "relative", width: 26, height: 26, borderRadius: 7, background: settingsActive ? "var(--accBg2)" : "transparent" }}
+          style={{ position: "relative", width: 26, height: 26, borderRadius: 7, background: "transparent" }}
         >
           {updateAvailable && (
             <span

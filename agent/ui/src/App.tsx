@@ -9,7 +9,7 @@ import {
   inDesktopShell,
   isWindowsShell,
   getHostInfo,
-  openHostSettings,
+  onHostEvent,
   listModels,
   listSessions,
   setSessionArchived,
@@ -180,8 +180,9 @@ export default function App() {
   };
 
   // 启动:拉模型清单 + 恢复上次会话;桌面壳内无模型(首启/被清空)直接进设置向导。
-  // 另静默检查一次应用更新(齿轮上的小圆点)。
+  // 订阅壳的托盘"设置"事件(唤起页内设置视图),静默检查一次应用更新(齿轮小圆点)。
   useEffect(() => {
+    const offSettings = onHostEvent("open-settings", () => setView("settings"));
     Promise.all([listModels().catch(() => [] as ModelInfo[]), refreshSessions()])
       .then(([ms, metas]) => {
         setModels(ms);
@@ -198,6 +199,7 @@ export default function App() {
         .then(setUpdate)
         .catch(() => {}); // 静默:自动检查失败不打扰
     }
+    return () => offSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -554,34 +556,31 @@ export default function App() {
       {isWindowsShell() && <TitleBar />}
       {/* 原根容器降级为内容行:改动抽屉的 absolute 以此为锚,始终盖在标题栏之下 */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
-      <Sidebar
-        sessions={sessions}
-        currentId={session.id}
-        sessionActive={view === "session"}
-        connected={session.connected}
-        status={session.status}
-        settingsActive={view === "settings"}
-        updateAvailable={!!update?.available}
-        onSelect={(m) => openSession(m)}
-        onNewTask={(dir) => {
-          if (dir) {
-            dirTouchedRef.current = true;
-            setNewDir(dir);
-          }
-          setNewErr("");
-          setOfferCreate(false);
-          setView("new");
-        }}
-        onOpenSettings={() => {
-          // 桌面壳:独立设置窗口;浏览器模式回退页内设置视图
-          void openHostSettings().then((ok) => {
-            if (!ok) setView("settings");
-          });
-        }}
-        onArchive={(m) => void archiveSession(m)}
-        onDelete={(m) => void removeSession(m)}
-        onRename={(m, title) => void renameSession(m, title)}
-      />
+      {/* 设置态:设置视图自带左导航,主侧栏隐藏,设置占满主窗口(单侧栏) */}
+      {view !== "settings" && (
+        <Sidebar
+          sessions={sessions}
+          currentId={session.id}
+          sessionActive={view === "session"}
+          connected={session.connected}
+          status={session.status}
+          updateAvailable={!!update?.available}
+          onSelect={(m) => openSession(m)}
+          onNewTask={(dir) => {
+            if (dir) {
+              dirTouchedRef.current = true;
+              setNewDir(dir);
+            }
+            setNewErr("");
+            setOfferCreate(false);
+            setView("new");
+          }}
+          onOpenSettings={() => setView("settings")}
+          onArchive={(m) => void archiveSession(m)}
+          onDelete={(m) => void removeSession(m)}
+          onRename={(m, title) => void renameSession(m, title)}
+        />
+      )}
 
       {/* ============ 主区 ============ */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>

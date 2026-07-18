@@ -23,10 +23,9 @@
         },
         {
           "identifier": "kernel-ui",
-          "description": "内核 UI(127.0.0.1 remote,主窗口与设置窗口):读写壳持有的配置、原生目录选择",
+          "description": "主窗口加载的内核 UI(127.0.0.1 remote):读写壳持有的配置、原生目录选择",
           "windows": [
-            "main",
-            "settings"
+            "main"
           ],
           "remote": {
             "urls": [
@@ -43,7 +42,6 @@
             "core:window:allow-close",
             "allow-get-config",
             "allow-save-config",
-            "allow-open-settings-window",
             "allow-host-info",
             "allow-update-check",
             "allow-update-install",

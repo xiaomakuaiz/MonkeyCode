@@ -401,6 +401,7 @@ func (s *Service) mcpServers(ctx context.Context) (map[string]map[string]any, []
 	out[mcpEntryName] = map[string]any{
 		"url":     s.mcpURL("/mcp"),
 		"headers": map[string]string{"Authorization": "Bearer " + key},
+		"source":  sourceBaizhi, // UI 按来源分组/整组替换;内核 mcp.json 解析忽略
 	}
 	notes := []string{fmt.Sprintf("MCP 已同步(含 %d 个服务: %s)", len(svc.Items), strings.Join(names, "、"))}
 	if note != "" {

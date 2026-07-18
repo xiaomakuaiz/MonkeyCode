@@ -37,6 +37,26 @@ func TestLoadConfigMerge(t *testing.T) {
 	}
 }
 
+// source 是 UI 的分组标记(百智云同步条目随 mcp.json 落盘):内核解析保留但不消费,
+// 未知字段也不报错(向前兼容)。
+func TestLoadConfigSourcePassthrough(t *testing.T) {
+	dir := t.TempDir()
+	global := filepath.Join(dir, "global.json")
+	os.WriteFile(global, []byte(`{"mcpServers":{
+		"bz":{"url":"http://gw/mcp","source":"baizhi"},
+		"manual":{"command":"x","unknown_field":123}
+	}}`), 0o644)
+	t.Setenv("MC_AGENT_MCP_CONFIG", global)
+
+	cfg, err := LoadConfig(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Servers["bz"].Source != "baizhi" || cfg.Servers["manual"].Source != "" {
+		t.Fatalf("source 透传错误: %+v", cfg.Servers)
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	if _, err := (ServerConfig{}).transport(); err == nil {
 		t.Fatal("空配置应报错")

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 // ==================== 应用配置(壳持有) ====================
 
@@ -117,10 +117,6 @@ struct TrayReady(AtomicBool);
 /// 托盘句柄(系统明暗主题切换时换图标)。
 struct Tray(Mutex<Option<TrayIcon>>);
 
-/// 当前内核 UI URL(端口+令牌随内核重启轮换)。设置窗口按需创建,
-/// 创建时必须拿到当前活的 URL(含 #token 鉴权)。
-struct KernelUrl(Mutex<Option<String>>);
-
 /// 托盘图标:macOS 用模板剪影(黑 + alpha,紧裁占满菜单栏高度;配合
 /// icon_as_template 由系统按菜单栏明暗自动反色),其余平台用彩色透明图形。
 fn tray_icon_for(_theme: Theme) -> Image<'static> {
@@ -183,12 +179,9 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     if let Some(old) = app.state::<Kernel>().0.lock().unwrap().take() {
         stop_kernel(old);
     }
-    // 旧 URL 随旧内核作废:若下面重启失败,设置窗口走 None 回退而不是打开死端口白屏
-    app.state::<KernelUrl>().0.lock().unwrap().take();
     let (child, port, token) = start_kernel(&app, &files)?;
     app.state::<Kernel>().0.lock().unwrap().replace(child);
     let url = kernel_ui_url(port, &token);
-    app.state::<KernelUrl>().0.lock().unwrap().replace(url.clone());
     // 导航延后到本命令返回之后:WebKitGTK 会重放"页面导航走时响应尚未送达"
     // 的 IPC 请求(实测同一 invoke 二次进入本命令→内核被重启两次)。
     // 先让响应落地,再整页导航到新内核 URL。
@@ -198,29 +191,11 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(200));
             let _ = app.run_on_main_thread({
                 let app = app.clone();
-                move || {
-                    show_kernel_ui(&app, &url);
-                    // 设置窗口(若开着)一并换到新令牌 URL,并夺回焦点
-                    // (保存动作发生在设置窗口,show_kernel_ui 会聚焦 main)
-                    if let Some(win) = app.get_webview_window("settings") {
-                        if let Ok(u) = settings_ui_url(&url).parse::<Url>() {
-                            let _ = win.navigate(u);
-                            let _ = win.set_focus();
-                        }
-                    }
-                }
+                move || show_kernel_ui(&app, &url)
             });
         }
     });
     Ok(())
-}
-
-/// 打开独立设置窗口(内核 UI 的 ⚙ 按钮与托盘「设置」调用)。
-/// 必须是 async 命令:同步命令里创建 webview 窗口在 Windows 上死锁
-/// (tauri WebviewWindowBuilder 文档 Known issues / wry#583)。
-#[tauri::command]
-async fn open_settings_window(app: AppHandle) {
-    open_settings(&app);
 }
 
 /// 宿主信息(内核 UI 的设置视图"关于"卡片展示)。
@@ -383,57 +358,6 @@ fn is_internal_url(url: &Url) -> bool {
     }
 }
 
-/// 打开(或聚焦)独立设置窗口:加载同一内核 React UI,URL 带 view=settings。
-fn open_settings(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
-        return;
-    }
-    let Some(kernel_url) = app.state::<KernelUrl>().0.lock().unwrap().clone() else {
-        // 内核没起来(错误页状态):设置视图无从加载,回落主窗口的错误指引
-        show_any_window(app);
-        return;
-    };
-    let parsed: Url = match settings_ui_url(&kernel_url).parse() {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("[mc-desktop] 设置窗口 URL 无效: {e}");
-            return;
-        }
-    };
-    // 工具窗口:各平台保留原生装饰(不做 overlay/自绘标题栏),关闭即销毁
-    let opener = app.clone();
-    let mut builder = WebviewWindowBuilder::new(app, "settings", WebviewUrl::External(parsed))
-        .title("MonkeyCode 设置")
-        .inner_size(900.0, 660.0)
-        .min_inner_size(760.0, 560.0)
-        .on_navigation(move |url| {
-            let internal = is_internal_url(url);
-            if !internal {
-                use tauri_plugin_opener::OpenerExt;
-                let _ = opener.opener().open_url(url.as_str(), None::<&str>);
-            }
-            internal
-        });
-    // 无头冒烟探针:设置窗口的 远程页→IPC ACL 链路(capability windows 配置
-    // 只能运行期验证——bb1574e 教训)
-    if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
-        builder = builder.initialization_script(
-            "const report = (m) => fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
-             report('settings-injected:' + location.search); \
-             setTimeout(() => { \
-               if (!window.__TAURI__ || !window.__TAURI__.core) { report('settings-no-tauri'); return; } \
-               window.__TAURI__.core.invoke('get_config') \
-                 .then(() => report('settings-invoke-ok')) \
-                 .catch((e) => report('settings-invoke-err:' + String(e).slice(0, 80))); \
-             }, 1500);",
-        );
-    }
-    let _ = builder.build();
-}
-
 /// 主窗口显示内核 UI(已存在则导航复用,否则创建)。
 fn show_kernel_ui(app: &AppHandle, url: &str) {
     let parsed: Url = match url.parse() {
@@ -502,10 +426,6 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
                        } else { report('reload-after-save-ok'); } \
                      }) \
                      .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
-                   /* 独立设置窗口:创建 + 其 remote ACL(设置窗口探针另行上报) */ \
-                   window.__TAURI__.core.invoke('open_settings_window') \
-                     .then(() => report('open-settings-invoked')) \
-                     .catch((e) => report('open-settings-err:' + String(e).slice(0, 80))); \
                    /* opener 全链路(命令 ACL + URL scope):无头环境以 BROWSER=/bin/true 承接 */ \
                    window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
                      .then(() => report('opener-ok')) \
@@ -546,11 +466,9 @@ fn main() {
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(Tray(Mutex::new(None)))
-        .manage(KernelUrl(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
-            open_settings_window,
             host_info,
             update_check,
             update_install
@@ -580,9 +498,7 @@ fn main() {
                 Ok((child, port, token)) => {
                     eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
                     app.state::<Kernel>().0.lock().unwrap().replace(child);
-                    let url = kernel_ui_url(port, &token);
-                    app.state::<KernelUrl>().0.lock().unwrap().replace(url.clone());
-                    show_kernel_ui(app.handle(), &url);
+                    show_kernel_ui(app.handle(), &kernel_ui_url(port, &token));
                 }
                 Err(e) => {
                     eprintln!("[mc-desktop] 内核启动失败: {e}");
@@ -645,8 +561,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_any_window(app),
-            // 设置是独立窗口(加载同一内核 UI,URL 带 view=settings)
-            "settings" => open_settings(app),
+            // 设置在内核 UI 页内:恢复主窗口后发事件让 React 切到设置视图
+            "settings" => {
+                show_any_window(app);
+                let _ = app.emit_to("main", "open-settings", ());
+            }
             "check-update" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move { check_update(app, true).await });
@@ -826,15 +745,6 @@ fn kernel_ui_url(port: u16, token: &str) -> String {
     getrandom::getrandom(&mut buf).expect("getrandom");
     let boot: String = buf.iter().map(|b| format!("{b:02x}")).collect();
     format!("http://127.0.0.1:{port}/?boot={boot}#{token}")
-}
-
-/// 设置窗口 URL:同一内核 UI,查询串加 view=settings(React 据此只渲染
-/// 设置视图)。token 仍留在 fragment。
-fn settings_ui_url(kernel_url: &str) -> String {
-    match kernel_url.split_once('#') {
-        Some((base, frag)) => format!("{base}&view=settings#{frag}"),
-        None => format!("{kernel_url}&view=settings"),
-    }
 }
 
 fn urlencode(s: &str) -> String {

@@ -20,6 +20,9 @@ type ServerConfig struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	// Disabled 跳过该 server
 	Disabled bool `json:"disabled,omitempty"`
+	// Source 条目来源(如 "baizhi" 表示百智云同步)。纯展示分组维度,
+	// 内核不解释、manager 不消费;UI 按它区分手工条目与同步条目、整组替换。
+	Source string `json:"source,omitempty"`
 }
 
 // Config mcp.json 顶层结构(mcpServers 键与 Claude Code/opencode 同构)。

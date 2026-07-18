@@ -9,12 +9,11 @@ import { BaizhiCard } from "./baizhi";
 import {
   baizhiStatus,
   getHostConfig,
-  getHostInfo,
   inDesktopShell,
+  isMacShell,
   saveHostConfig,
   updateCheck,
   updateInstall,
-  windowClose,
   type BaizhiStatus,
   type BaizhiSyncResult,
   type UpdateStatus,
@@ -34,6 +33,7 @@ interface McpEntry {
   command: string;
   args: string; // 空格分隔
   kv: string; // 每行 KEY=VALUE;http→headers,stdio→env
+  source?: string; // "baizhi"=百智云同步;缺省=手工。随 mcp.json 落盘(内核忽略)
 }
 
 export function parseKV(text: string): Record<string, string> | undefined {
@@ -62,13 +62,15 @@ export function mcpsToServers(mcps: McpEntry[]): Record<string, unknown> {
   for (const m of mcps) {
     const name = m.name.trim();
     if (!name) continue;
+    // source 随条目落盘(内核 mcp.json 解析忽略;omitempty 语义,手工条目不带)
+    const src = m.source ? { source: m.source } : {};
     if (m.type === "stdio") {
       if (!m.command.trim()) continue;
       const args = m.args.trim() ? m.args.trim().split(/\s+/) : undefined;
-      out[name] = { command: m.command.trim(), args, env: parseKV(m.kv) };
+      out[name] = { command: m.command.trim(), args, env: parseKV(m.kv), ...src };
     } else {
       if (!m.url.trim()) continue;
-      out[name] = { url: m.url.trim(), headers: parseKV(m.kv) };
+      out[name] = { url: m.url.trim(), headers: parseKV(m.kv), ...src };
     }
   }
   return out;
@@ -85,6 +87,7 @@ function serversToMcps(servers: Record<string, unknown>): McpEntry[] {
       command: typeof cfg.command === "string" ? cfg.command : "",
       args: Array.isArray(cfg.args) ? cfg.args.map(String).join(" ") : "",
       kv: stringifyKV(stdio ? cfg.env : cfg.headers),
+      source: typeof cfg.source === "string" ? cfg.source : undefined,
     };
   });
 }
@@ -226,15 +229,12 @@ export function SettingsView({
   hostVersion,
   update,
   onUpdateStatus,
-  standalone,
   onDirtyChange,
 }: {
   onClose: () => void;
   hostVersion: string | null;
   update: UpdateStatus | null;
   onUpdateStatus: (s: UpdateStatus) => void;
-  /** 独立设置窗口内为 true:不渲染「返回」(窗口自带关闭) */
-  standalone?: boolean;
   /** 脏状态上报(宿主据此在关闭前确认);卸载时自动报 false */
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -247,6 +247,7 @@ export function SettingsView({
   const [baizhiOpen, setBaizhiOpen] = useState(true); // 百智云组(账号优先,默认展开)
   const [mcps, setMcps] = useState<McpEntry[]>([]);
   const [mcpExpanded, setMcpExpanded] = useState<number | null>(null);
+  const [baizhiMcpOpen, setBaizhiMcpOpen] = useState(true); // 百智云 MCP 组(默认展开)
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
@@ -361,11 +362,18 @@ export function SettingsView({
       setExpanded(null);
       setBaizhiOpen(true);
     }
-    setMcps((cur) => {
-      const byName = new Map(cur.filter((m) => m.name.trim()).map((m) => [m.name.trim(), m]));
-      for (const e of serversToMcps(r.mcp_servers)) byName.set(e.name.trim(), e);
-      return [...byName.values()];
-    });
+    // MCP 同款整组替换:手工条目(无 source)保留,百智云组整体替换为本次同步结果;
+    // 本次无 MCP 条目(如网关未开通)则不触碰(空集不清组,对齐模型语义)
+    const syncedMcps = serversToMcps(r.mcp_servers);
+    if (syncedMcps.length) {
+      setMcps((cur) => {
+        const kept = cur.filter((m) => m.name.trim() && m.source !== SOURCE_BAIZHI);
+        const byName = new Map(kept.map((m) => [m.name.trim(), m]));
+        for (const e of syncedMcps) byName.set(e.name.trim(), e); // 同步条目已带 source=baizhi
+        return [...byName.values()];
+      });
+      setMcpExpanded(null);
+    }
     setActive("models"); // 导入后直接看结果
   };
 
@@ -638,10 +646,11 @@ export function SettingsView({
 
   const mcpSummary = (m: McpEntry) => (m.type === "http" ? m.url.trim() : `${m.command} ${m.args}`.trim()) || "未配置";
 
+  // MCP 紧凑行(i 恒 mcps 真实索引);fragment 返回,由 mcpGroupCard 包分隔线
   const mcpRow = (m: McpEntry, i: number) => {
     const isOpen = mcpExpanded === i;
     return (
-      <div key={i} style={{ borderTop: i > 0 ? "1px solid var(--line2)" : "none" }}>
+      <>
         <div
           className="hrow hv2"
           onClick={() => setMcpExpanded(isOpen ? null : i)}
@@ -712,9 +721,19 @@ export function SettingsView({
             </Field>
           </div>
         )}
-      </div>
+      </>
     );
   };
+
+  const mcpGroupCard = (entries: { m: McpEntry; i: number }[]) => (
+    <div className="card" style={{ overflow: "hidden" }}>
+      {entries.map(({ m, i }, j) => (
+        <div key={i} style={{ borderTop: j > 0 ? "1px solid var(--line2)" : "none" }}>
+          {mcpRow(m, i)}
+        </div>
+      ))}
+    </div>
+  );
 
   const mcpSection = () => {
     if (!desktop) {
@@ -725,17 +744,38 @@ export function SettingsView({
       );
     }
     if (!loaded) return <div style={{ fontSize: 12.5, color: "var(--t5)" }}>读取配置中…</div>;
+    const entries = mcps.map((m, i) => ({ m, i }));
+    const baizhi = entries.filter((e) => e.m.source === SOURCE_BAIZHI);
+    const custom = entries.filter((e) => e.m.source !== SOURCE_BAIZHI);
     return (
       <>
         {loginHint}
-        <Section label="MCP 服务器" action={addBtn("添加 MCP", () => {
+        {/* 百智云 MCP 组在前(账号优先);当前网关未开通,同步暂不产出,组常为空 */}
+        {baizhi.length > 0 && (
+          <Section
+            label={`${modelSourceLabel(SOURCE_BAIZHI)} MCP(${baizhi.length})`}
+            action={
+              <span
+                className="hv-t1"
+                onClick={() => setBaizhiMcpOpen((v) => !v)}
+                style={{ fontSize: 11.5, color: "var(--t5)", cursor: "pointer", userSelect: "none" }}
+              >
+                {baizhiMcpOpen ? "收起" : "展开"}
+              </span>
+            }
+          >
+            {baizhiMcpOpen && mcpGroupCard(baizhi)}
+          </Section>
+        )}
+        {/* 自定义 MCP 组 */}
+        <Section label="自定义 MCP" action={addBtn("添加 MCP", () => {
           setMcps((ms) => [...ms, emptyMcp()]);
-          setMcpExpanded(mcps.length);
+          setMcpExpanded(mcps.length); // 新行追加末尾,直接展开
         })}>
-          {mcps.length === 0 ? (
-            <div style={emptyCard}>未配置 MCP 服务器(可选)。项目级 .mc-agent/mcp.json 仍随仓库生效。</div>
+          {custom.length === 0 ? (
+            <div style={emptyCard}>未配置自定义 MCP 服务器(可选)。项目级 .mc-agent/mcp.json 仍随仓库生效。</div>
           ) : (
-            <div className="card" style={{ overflow: "hidden" }}>{mcps.map((m, i) => mcpRow(m, i))}</div>
+            mcpGroupCard(custom)
           )}
         </Section>
       </>
@@ -808,21 +848,19 @@ export function SettingsView({
 
   return (
     <div style={{ flex: 1, display: "flex", minHeight: 0, animation: "mcin .25s ease" }}>
-      {/* 左侧分类导航 */}
-      <div style={{ width: 168, flex: "none", background: "var(--side)", borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 2, padding: "12px 10px" }}>
-        {!standalone && (
-          <>
-            <div
-              className="hv"
-              onClick={onClose}
-              style={{ display: "flex", alignItems: "center", gap: 7, height: 30, padding: "0 9px", borderRadius: 6, cursor: "pointer", userSelect: "none", fontSize: 12.5, color: "var(--t3)", fontWeight: 600 }}
-            >
-              <IconBack size={10} color="var(--t3)" />
-              返回
-            </div>
-            <div style={{ height: 6 }} />
-          </>
-        )}
+      {/* 左侧分类导航(设置态占满主窗口,此为最左栏) */}
+      <div style={{ width: 168, flex: "none", background: "var(--side)", borderRight: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 2, padding: "0 10px 12px" }}>
+        {/* macOS 壳:红绿灯落在最左栏顶部,预留拖拽区(对齐主侧栏) */}
+        {isMacShell() ? <div data-tauri-drag-region="" style={{ height: 40, flex: "none" }} /> : <div style={{ height: 12, flex: "none" }} />}
+        <div
+          className="hv"
+          onClick={onClose}
+          style={{ display: "flex", alignItems: "center", gap: 7, height: 30, padding: "0 9px", borderRadius: 6, cursor: "pointer", userSelect: "none", fontSize: 12.5, color: "var(--t3)", fontWeight: 600 }}
+        >
+          <IconBack size={10} color="var(--t3)" />
+          返回
+        </div>
+        <div style={{ height: 6 }} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "var(--t4)", padding: "2px 9px 6px" }}>设置</span>
         {NAV.map((n) => {
           const activeNow = active === n.key;
@@ -903,53 +941,6 @@ export function SettingsView({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ---- 独立设置窗口(壳开的第二个窗口,URL 带 view=settings)----
-
-/** 独立设置窗口根组件:全屏渲染设置视图,不建 WS、不恢复会话。
- * Esc(非输入态)关闭本窗口;有未保存更改时先确认。保存后壳会把本窗口导航到新内核 URL。 */
-export function SettingsWindow() {
-  const [hostVersion, setHostVersion] = useState<string | null>(null);
-  const [update, setUpdate] = useState<UpdateStatus | null>(null);
-  const dirtyRef = useRef(false);
-
-  const requestClose = () => {
-    if (dirtyRef.current && !window.confirm("有未保存的更改,确定关闭设置窗口?")) return;
-    void windowClose();
-  };
-
-  useEffect(() => {
-    void getHostInfo().then((info) => setHostVersion(info?.version ?? null));
-    // 不自动 updateCheck:壳启动自检已覆盖,发现新版壳会弹原生对话框;
-    // 本窗口"关闭即销毁",每开自动查一次是纯冗余网络请求。
-    // 「通用」页的"检查更新"按钮仍可手动查。
-    const h = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // 输入框/下拉里的 Esc(清空/取消输入法)只收敛焦点,不关窗口
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT")) return t.blur();
-      requestClose();
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-      <SettingsView
-        standalone
-        onClose={requestClose}
-        onDirtyChange={(d) => {
-          dirtyRef.current = d;
-        }}
-        hostVersion={hostVersion}
-        update={update}
-        onUpdateStatus={setUpdate}
-      />
     </div>
   );
 }
