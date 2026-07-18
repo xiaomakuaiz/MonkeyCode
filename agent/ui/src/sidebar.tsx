@@ -59,6 +59,8 @@ const sectionHeader: CSSProperties = {
 
 /** 会话行状态文案(时间无信息量,不展示) */
 function rowStatus(meta: SessionMeta): { text: string; color: string } {
+  // 等待审批优先于"运行中":任务卡住在等人,和真在跑必须可区分
+  if (meta.waiting_ask) return { text: "等待审批", color: "var(--warn)" };
   switch (meta.status) {
     case "running":
       return { text: "运行中", color: "var(--acc)" };
@@ -74,6 +76,7 @@ function rowStatus(meta: SessionMeta): { text: string; color: string } {
 function SessionRow({
   meta,
   active,
+  attention,
   archived,
   onClick,
   onArchive,
@@ -82,6 +85,8 @@ function SessionRow({
 }: {
   meta: SessionMeta;
   active: boolean;
+  /** 后台结束未查看:行尾未读点 */
+  attention: boolean;
   archived: boolean;
   onClick: () => void;
   onArchive: () => void;
@@ -180,8 +185,22 @@ function SessionRow({
           </span>
         )}
         {!showActions ? (
-          <span style={{ fontSize: 11, opacity: 0.7, flex: "none", fontWeight: 400, paddingRight: 3, color: st.color === "inherit" ? undefined : st.color }}>
-            {st.text}
+          <span style={{ display: "flex", alignItems: "center", gap: 5, flex: "none", paddingRight: 3 }}>
+            {attention && (
+              <span
+                title="任务已在后台结束"
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: meta.status === "error" ? "var(--err)" : "var(--acc)",
+                  flex: "none",
+                }}
+              />
+            )}
+            <span style={{ fontSize: 11, opacity: 0.7, fontWeight: 400, color: st.color === "inherit" ? undefined : st.color }}>
+              {st.text}
+            </span>
           </span>
         ) : (
           <button
@@ -347,6 +366,7 @@ function Group({
 export function Sidebar({
   sessions,
   currentId,
+  attention,
   sessionActive,
   connected,
   status,
@@ -360,6 +380,8 @@ export function Sidebar({
 }: {
   sessions: SessionMeta[];
   currentId: string | null;
+  /** 后台结束未查看的会话(行尾未读点,打开后消除) */
+  attention: Set<string>;
   /** 当前处于会话视图(选中态只在会话视图下渲染) */
   sessionActive: boolean;
   connected: boolean;
@@ -407,6 +429,7 @@ export function Sidebar({
       key={m.id}
       meta={m}
       active={m.id === currentId && sessionActive}
+      attention={attention.has(m.id)}
       archived={inArchived}
       onClick={() => onSelect(m)}
       onArchive={() => onArchive(m)}

@@ -30,6 +30,31 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const listSessions = () => api<SessionMeta[]>("/api/sessions");
 
+/** /api/events 下行事件:session-status(状态变更)/ session-ask(审批等待) */
+export interface SessionEvent {
+  type: string;
+  id: string;
+  title: string;
+  /** session-status:新状态 */
+  status?: string;
+  /** session-ask:true 进入等待,false 解除 */
+  open?: boolean;
+}
+
+/** 订阅全局事件流(SSE):会话状态变更推送,后台会话结束靠它感知(不轮询)。
+ * EventSource 加不了请求头,token 走查询参数;断线自动重连。返回取消订阅函数。 */
+export function subscribeEvents(onEvent: (e: SessionEvent) => void): () => void {
+  const es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+  es.onmessage = (m) => {
+    try {
+      onEvent(JSON.parse(m.data as string) as SessionEvent);
+    } catch {
+      /* 非 JSON 数据行忽略 */
+    }
+  };
+  return () => es.close();
+}
+
 export const listModels = () => api<ModelInfo[]>("/api/models");
 
 export const createSession = (workdir: string, model: string, createDir = false) =>

@@ -53,6 +53,8 @@ export interface SessionMeta {
   mode?: string;
   turns: number;
   status: string; // created | running | finished | interrupted | error
+  /** 有待答复的审批请求(运行时状态,不落盘;侧栏显示"等待审批") */
+  waiting_ask?: boolean;
   updated_at?: string;
   worktree?: { repo?: string };
   /** 归档标记:移出常规列表,折叠到「已归档」组 */

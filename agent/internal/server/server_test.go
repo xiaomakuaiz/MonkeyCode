@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -240,6 +241,135 @@ func TestWSTurnFlow(t *testing.T) {
 	}
 	if !gotText {
 		t.Fatalf("未收到 agent 文本帧: %v", summary(frames))
+	}
+}
+
+// TestEventsStreamSessionStatus /api/events 推送会话状态变更:
+// 一轮执行应依次广播 running 与 finished(后台会话结束提醒依赖它)。
+func TestEventsStreamSessionStatus(t *testing.T) {
+	stub := &stubProvider{results: []*provider.Result{textResult("好了")}}
+	_, ts := newTestServer(t, stub)
+	id := createSession(t, ts, t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/api/events?token=test-token", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	events := make(chan sessionEvent, 8)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var ev sessionEvent
+			if json.Unmarshal([]byte(line), &ev) == nil {
+				events <- ev
+			}
+		}
+	}()
+
+	conn := dialWS(t, ts, id)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("hi")})
+
+	for _, status := range []string{"running", "finished"} {
+		select {
+		case ev := <-events:
+			if ev.Type != "session-status" || ev.ID != id || ev.Status != status {
+				t.Fatalf("事件 = %+v, want status %s", ev, status)
+			}
+		case <-ctx.Done():
+			t.Fatalf("等待 %s 事件超时", status)
+		}
+	}
+}
+
+// TestEventsStreamAsk 审批等待经 /api/events 广播:请求出现推 open=true,
+// 答复后推 open=false;等待期间 /api/sessions 外显 waiting_ask。
+func TestEventsStreamAsk(t *testing.T) {
+	stub := &stubProvider{results: []*provider.Result{
+		toolUseResult("write_file", `{"path":"a.txt","content":"x"}`),
+		textResult("好的,已停止"),
+	}}
+	_, ts := newTestServer(t, stub)
+	id := createSession(t, ts, t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/api/events?token=test-token", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	asks := make(chan sessionAskEvent, 8)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var ev sessionAskEvent
+			if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "session-ask" {
+				asks <- ev
+			}
+		}
+	}()
+
+	conn := dialWS(t, ts, id)
+	sendFrame(t, conn, frame.TypeUserInput, map[string][]byte{"content": []byte("写个文件")})
+
+	select {
+	case ev := <-asks:
+		if ev.ID != id || !ev.Open {
+			t.Fatalf("首个审批事件 = %+v, want open=true", ev)
+		}
+	case <-ctx.Done():
+		t.Fatal("等待 session-ask open 事件超时")
+	}
+
+	// 等待期间列表外显 waiting_ask
+	listResp, body := apiReq(t, ts, "GET", "/api/sessions", "test-token", "")
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d", listResp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"waiting_ask":true`) {
+		t.Fatalf("列表未外显 waiting_ask: %s", body)
+	}
+
+	// 从 WS 拿审批 id 并拒绝 → 应收到 open=false
+	frames := wsCollect(t, conn, func(fs []frame.Frame) bool {
+		return hasType(fs, frame.TypePermissionReq)
+	})
+	var permReq struct {
+		ID string `json:"id"`
+	}
+	for _, f := range frames {
+		if f.Type == frame.TypePermissionReq {
+			_ = json.Unmarshal(f.Data, &permReq)
+		}
+	}
+	sendFrame(t, conn, frame.TypePermissionResp,
+		map[string]any{"id": permReq.ID, "approved": false, "remember": false})
+
+	select {
+	case ev := <-asks:
+		if ev.ID != id || ev.Open {
+			t.Fatalf("解除事件 = %+v, want open=false", ev)
+		}
+	case <-ctx.Done():
+		t.Fatal("等待 session-ask close 事件超时")
 	}
 }
 

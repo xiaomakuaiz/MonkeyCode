@@ -15,6 +15,7 @@ import {
   listSessions,
   setSessionArchived,
   setSessionTitle,
+  subscribeEvents,
   updateCheck,
   type UpdateStatus,
 } from "./client";
@@ -135,9 +136,40 @@ export default function App() {
 
   const session = useSession({ onSessionsChanged: () => void refreshSessions() });
 
+  // 后台会话结束提醒:内核事件流推送状态变更(不轮询),非当前会话到达终态时
+  // 标记侧栏未读点 + 状态行提示;打开该会话即消除
+  const [attention, setAttention] = useState<Set<string>>(new Set());
+  const sessionIdRef = useRef(session.id);
+  sessionIdRef.current = session.id;
+  const notifyRef = useRef(session.notify);
+  notifyRef.current = session.notify;
+  useEffect(
+    () =>
+      subscribeEvents((e) => {
+        if (e.type !== "session-status" && e.type !== "session-ask") return;
+        void refreshSessions(); // waiting_ask/status 都在列表快照里,任一事件都重拉
+        if (e.id === sessionIdRef.current) return;
+        if (e.type === "session-ask") {
+          if (e.open) notifyRef.current(`「${e.title || "任务"}」等待权限审批`);
+          return;
+        }
+        if (e.status === "running") return;
+        setAttention((prev) => new Set(prev).add(e.id));
+        const label = e.status === "finished" ? "已完成" : e.status === "error" ? "出错了" : "已中断";
+        notifyRef.current(`「${e.title || "任务"}」${label}`);
+      }),
+    [refreshSessions],
+  );
+
   // 打开会话 = 接上句柄 + 复位 App 级浮层(无消费方需要稳定引用,不做 memo)
   const openSession = (m: { id: string; model?: string; mode?: string }, firstMessage?: string) => {
     session.open(m.id, { model: m.model, mode: m.mode, firstMessage });
+    setAttention((prev) => {
+      if (!prev.has(m.id)) return prev;
+      const next = new Set(prev);
+      next.delete(m.id);
+      return next;
+    });
     setView("session");
     setDrawerOpen(false);
     setViewer(null);
@@ -580,6 +612,7 @@ export default function App() {
         <Sidebar
           sessions={sessions}
           currentId={session.id}
+          attention={attention}
           sessionActive={view === "session"}
           connected={session.connected}
           status={session.status}

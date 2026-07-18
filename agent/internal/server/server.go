@@ -99,6 +99,45 @@ type Server struct {
 	// publishChild 实时分发,seq 水位避免"回放 + 实时"缝隙处重帧。
 	childMu    sync.Mutex
 	childWatch map[string]map[*wsClient]uint64
+
+	// 全局事件流(/api/events SSE)订阅者:会话状态变更推送,
+	// 让 UI 不轮询也能感知非当前会话的任务结束。
+	eventMu   sync.Mutex
+	eventSubs map[chan []byte]struct{}
+}
+
+// sessionEvent 会话状态变更事件(/api/events 下行)。
+type sessionEvent struct {
+	Type   string `json:"type"` // 固定 "session-status"
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Title  string `json:"title"`
+}
+
+// sessionAskEvent 审批等待事件(/api/events 下行):会话出现/清空待答复的
+// 审批请求。等待期间 meta 仍是 running,不广播这个 UI 无从区分"在跑"和"卡住"。
+type sessionAskEvent struct {
+	Type  string `json:"type"` // 固定 "session-ask"
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Open  bool   `json:"open"` // true 进入等待;false 全部解除(答复/超时/取消)
+}
+
+// publishEvent 广播全局事件给所有 /api/events 订阅者。
+// 事件只是"去拉快照"的提示,订阅者缓冲满时丢弃不阻塞执行流。
+func (s *Server) publishEvent(v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	for ch := range s.eventSubs {
+		select {
+		case ch <- data:
+		default:
+		}
+	}
 }
 
 // New 创建 Server;token 为空时自动生成。
@@ -133,6 +172,7 @@ func New(opts Options) (*Server, error) {
 		opts:       opts,
 		live:       map[string]*liveSession{},
 		childWatch: map[string]map[*wsClient]uint64{},
+		eventSubs:  map[chan []byte]struct{}{},
 	}, nil
 }
 
@@ -155,6 +195,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/models", s.auth(s.handleListModels))
 	mux.HandleFunc("POST /api/sessions/{id}/uploads", s.auth(s.handleUpload))
 	mux.HandleFunc("GET /api/sessions/{id}/uploads/{name}", s.auth(s.handleGetUpload))
+	mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
 	if s.opts.AuthRoutes != nil {
 		s.opts.AuthRoutes(mux, s.auth)
@@ -251,6 +292,42 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// handleEvents 全局事件流(SSE):会话状态变更推送。
+// 选 SSE 而非 WS:单向下行足够,EventSource 断线自动重连;
+// 它带不了请求头,鉴权走 ?token= 查询参数(auth 已支持)。
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+		return
+	}
+	w.Header().Set("content-type", "text/event-stream")
+	w.Header().Set("cache-control", "no-cache")
+	ch := make(chan []byte, 32)
+	s.eventMu.Lock()
+	s.eventSubs[ch] = struct{}{}
+	s.eventMu.Unlock()
+	defer func() {
+		s.eventMu.Lock()
+		delete(s.eventSubs, ch)
+		s.eventMu.Unlock()
+	}()
+	// 注释行先行:让 EventSource 立即进入 open 态
+	_, _ = io.WriteString(w, ": ok\n\n")
+	fl.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case data := <-ch:
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			fl.Flush()
+		}
+	}
+}
+
 // ==================== REST ====================
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -269,10 +346,30 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		metas = filtered
 	}
-	if metas == nil {
-		metas = []session.Meta{}
+	// 附加运行时状态:等待审批不落盘(重启即失效),从活动会话现场读。
+	// UI 重载后靠它恢复"卡在审批"标记,不依赖恰好在线时收到的事件。
+	type listItem struct {
+		session.Meta
+		WaitingAsk bool `json:"waiting_ask,omitempty"`
 	}
-	writeJSON(w, http.StatusOK, metas)
+	items := make([]listItem, 0, len(metas))
+	for _, m := range metas {
+		items = append(items, listItem{Meta: m, WaitingAsk: s.waitingAsk(m.ID)})
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// waitingAsk 会话当前是否有待答复的审批请求。
+func (s *Server) waitingAsk(id string) bool {
+	s.mu.Lock()
+	ls := s.live[id]
+	s.mu.Unlock()
+	if ls == nil {
+		return false
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return len(ls.asks) > 0
 }
 
 // ModelInfo 对外暴露的可选模型(名称即会话绑定的标识)。
@@ -897,6 +994,7 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 		sess.Meta.Status = "interrupted"
 		_ = sess.SaveMeta()
 		sess.Emit(ls.builder.TaskError("服务已重启,上一轮执行已中断;历史已保留,请重新发送指令继续"))
+		s.publishEvent(sessionEvent{Type: "session-status", ID: sess.Meta.ID, Status: "interrupted", Title: sess.Meta.Title})
 	}
 	return ls, nil
 }
@@ -1188,7 +1286,9 @@ func (ls *liveSession) startTurn(input string) {
 	ls.mu.Lock()
 	ls.sess.Meta.Status = "running"
 	_ = ls.sess.SaveMeta()
+	title := ls.sess.Meta.Title
 	ls.mu.Unlock()
+	ls.srv.publishEvent(sessionEvent{Type: "session-status", ID: ls.sess.Meta.ID, Status: "running", Title: title})
 
 	ls.srv.turns.Add(1)
 	go func() {
@@ -1224,7 +1324,9 @@ func (ls *liveSession) startTurn(input string) {
 			ls.sess.Meta.Title = firstLine(input)
 		}
 		_ = ls.sess.SaveMeta()
+		st, endTitle := ls.sess.Meta.Status, ls.sess.Meta.Title
 		ls.mu.Unlock()
+		ls.srv.publishEvent(sessionEvent{Type: "session-status", ID: ls.sess.Meta.ID, Status: st, Title: endTitle})
 	}()
 }
 
@@ -1235,13 +1337,24 @@ func (ls *liveSession) asker(ctx context.Context, req policy.Request) (policy.Re
 	id := hex.EncodeToString(b)
 	ch := make(chan askResp, 1)
 
+	// 首个/末个待审批请求才广播(并发审批时只报边沿,UI 不用数计数)
 	ls.mu.Lock()
 	ls.asks[id] = ch
+	first := len(ls.asks) == 1
+	title := ls.sess.Meta.Title
 	ls.mu.Unlock()
+	if first {
+		ls.srv.publishEvent(sessionAskEvent{Type: "session-ask", ID: ls.sess.Meta.ID, Title: title, Open: true})
+	}
 	defer func() {
 		ls.mu.Lock()
 		delete(ls.asks, id)
+		last := len(ls.asks) == 0
+		title := ls.sess.Meta.Title
 		ls.mu.Unlock()
+		if last {
+			ls.srv.publishEvent(sessionAskEvent{Type: "session-ask", ID: ls.sess.Meta.ID, Title: title, Open: false})
+		}
 	}()
 
 	ls.emit(ls.builder.PermissionReq(id, req.Tool, req.Title))
