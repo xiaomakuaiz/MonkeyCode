@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<!-- 桌宠页:透明置顶小窗,主窗口不在前台时外显任务聚合状态。
+     数据流:kernel_info 命令取内核地址与令牌 → /api/sessions 快照 →
+     /api/events SSE 持续更新;断流后重取令牌整体重连(保存设置会重启
+     内核并轮换 token,EventSource 自带重连解决不了令牌失效)。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MonkeyCode 桌宠</title>
+<style>
+  * { box-sizing:border-box; user-select:none; -webkit-user-select:none; }
+  html, body { margin:0; background:transparent; overflow:hidden; }
+  body {
+    width:148px; height:168px; display:flex; flex-direction:column;
+    align-items:center; justify-content:flex-end;
+    font:12px/1.5 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    cursor:grab;
+  }
+  body:active { cursor:grabbing; }
+
+  /* ---- 气泡 ---- */
+  #bubble {
+    max-width:140px; padding:5px 10px; border-radius:10px; margin-bottom:6px;
+    background:rgba(19,19,22,.88); color:#d8d8de; text-align:center;
+    font-size:11.5px; white-space:nowrap; position:relative;
+    opacity:0; transform:translateY(4px); transition:opacity .2s, transform .2s;
+  }
+  #bubble::after {  /* 小尾巴 */
+    content:""; position:absolute; left:50%; bottom:-4px; margin-left:-4px;
+    border:4px solid transparent; border-top-color:rgba(19,19,22,.88); border-bottom:0;
+  }
+  body.has-bubble #bubble { opacity:1; transform:none; }
+  #bubble.ok  { background:rgba(5,150,105,.92); color:#eafff5; }
+  #bubble.ok::after { border-top-color:rgba(5,150,105,.92); }
+  #bubble.warn { background:rgba(161,98,7,.92); color:#fff7e0; }
+  #bubble.warn::after { border-top-color:rgba(161,98,7,.92); }
+  #bubble.err { background:rgba(185,52,52,.92); color:#ffecec; }
+  #bubble.err::after { border-top-color:rgba(185,52,52,.92); }
+
+  /* ---- 小猴子 ---- */
+  #monkey { display:block; animation:bob 3.2s ease-in-out infinite; transform-origin:74px 110px; }
+  .eyes { transform-origin:74px 36px; animation:blink 4.4s infinite; }
+  .paw { transform-origin:center; }
+  .led { fill:#71717c; }
+
+  body.st-idle .led { fill:#34d399; opacity:.55; }
+  body.st-running #monkey { animation:bounce .72s ease-in-out infinite; }
+  body.st-running .paw-l { animation:type .36s ease-in-out infinite; }
+  body.st-running .paw-r { animation:type .36s ease-in-out .18s infinite; }
+  body.st-running .led { fill:#34d399; animation:pulse 1.4s infinite; }
+  body.st-waiting #monkey { animation:shake .55s ease-in-out infinite; }
+  body.st-waiting .led { fill:#e8c15a; animation:pulse .9s infinite; }
+  body.st-offline #monkey { filter:grayscale(.85); opacity:.78; animation:bob 4.5s ease-in-out infinite; }
+  body.st-offline .eyes { animation:none; transform:scaleY(.12); }
+
+  @keyframes bob    { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-3px); } }
+  @keyframes bounce { 0%,100% { transform:translateY(0) scaleY(1); } 45% { transform:translateY(-5px) scaleY(1.02); } 60% { transform:translateY(0) scaleY(.97); } }
+  @keyframes shake  { 0%,100% { transform:rotate(-3deg); } 50% { transform:rotate(3deg); } }
+  @keyframes blink  { 0%,93.5%,100% { transform:scaleY(1); } 95.5%,97.5% { transform:scaleY(.1); } }
+  @keyframes type   { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-4px); } }
+  @keyframes pulse  { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+</style>
+</head>
+<body class="st-offline">
+  <div id="bubble"></div>
+  <svg id="monkey" width="148" height="120" viewBox="0 0 148 120" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="hoodie" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#059669"/>
+      </linearGradient>
+    </defs>
+    <!-- 尾巴 -->
+    <path d="M104 96 Q128 92 126 74 Q125 64 116 66" fill="none" stroke="#8a5a44" stroke-width="7" stroke-linecap="round"/>
+    <!-- 身体(连帽衫) -->
+    <rect x="44" y="60" width="60" height="52" rx="24" fill="url(#hoodie)"/>
+    <ellipse cx="74" cy="92" rx="17" ry="14" fill="#eafff5" opacity=".28"/>
+    <circle class="led" cx="74" cy="76" r="4"/>
+    <!-- 耳朵 -->
+    <circle cx="42" cy="34" r="11" fill="#8a5a44"/><circle cx="42" cy="34" r="5.5" fill="#f2e0cc"/>
+    <circle cx="106" cy="34" r="11" fill="#8a5a44"/><circle cx="106" cy="34" r="5.5" fill="#f2e0cc"/>
+    <!-- 头 -->
+    <circle cx="74" cy="36" r="30" fill="#8a5a44"/>
+    <ellipse cx="74" cy="42" rx="21" ry="17" fill="#f2e0cc"/>
+    <ellipse cx="62" cy="30" rx="9" ry="8" fill="#f2e0cc"/>
+    <ellipse cx="86" cy="30" rx="9" ry="8" fill="#f2e0cc"/>
+    <!-- 眼睛(眨眼动画) -->
+    <g class="eyes">
+      <circle cx="65" cy="34" r="3.4" fill="#2d1f18"/>
+      <circle cx="83" cy="34" r="3.4" fill="#2d1f18"/>
+      <circle cx="66.2" cy="32.8" r="1.1" fill="#fff"/>
+      <circle cx="84.2" cy="32.8" r="1.1" fill="#fff"/>
+    </g>
+    <!-- 鼻孔与嘴 -->
+    <circle cx="70.5" cy="44" r="1.4" fill="#6d4534"/>
+    <circle cx="77.5" cy="44" r="1.4" fill="#6d4534"/>
+    <path d="M66 50 Q74 56 82 50" fill="none" stroke="#6d4534" stroke-width="2" stroke-linecap="round"/>
+    <!-- 爪子(运行时敲键盘) -->
+    <circle class="paw paw-l" cx="52" cy="106" r="7.5" fill="#8a5a44"/>
+    <circle class="paw paw-r" cx="96" cy="106" r="7.5" fill="#8a5a44"/>
+  </svg>
+
+<script>
+  const invoke = window.__TAURI__.core.invoke;
+  const bubble = document.getElementById('bubble');
+
+  // ---- 聚合状态:会话表(快照 + 事件增量) ----
+  const sessions = new Map(); // id -> { status, waiting }
+  let es = null;
+  let retryTimer = null;
+  let flash = null; // { tone, text } 终态闪现,几秒后回落
+  let flashTimer = null;
+
+  function setBubble(tone, text) {
+    bubble.className = tone || '';
+    bubble.textContent = text || '';
+    document.body.classList.toggle('has-bubble', !!text);
+  }
+
+  function render(offline) {
+    if (offline) {
+      document.body.className = 'st-offline';
+      setBubble('', '内核休息中 Zzz');
+      return;
+    }
+    let running = 0, waiting = 0;
+    for (const s of sessions.values()) {
+      if (s.waiting) waiting++;
+      else if (s.status === 'running') running++;
+    }
+    const st = waiting ? 'st-waiting' : running ? 'st-running' : 'st-idle';
+    document.body.className = st + (document.body.classList.contains('has-bubble') ? ' has-bubble' : '');
+    if (flash) setBubble(flash.tone, flash.text);
+    else if (waiting) setBubble('warn', '有任务等你审批!');
+    else if (running) setBubble('ok', running + ' 个任务运行中');
+    else setBubble('', '');
+  }
+
+  function showFlash(tone, text) {
+    flash = { tone, text };
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { flash = null; render(false); }, 4000);
+    render(false);
+  }
+
+  function retry() {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connect, 3000);
+  }
+
+  async function connect() {
+    let info;
+    try {
+      info = await invoke('kernel_info');
+    } catch {
+      render(true);
+      return retry();
+    }
+    const base = 'http://127.0.0.1:' + info.port;
+    const tk = encodeURIComponent(info.token);
+    try {
+      const r = await fetch(base + '/api/sessions?token=' + tk);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      sessions.clear();
+      for (const m of await r.json()) {
+        sessions.set(m.id, { status: m.status, waiting: !!m.waiting_ask });
+      }
+    } catch {
+      render(true);
+      return retry();
+    }
+    render(false);
+    es = new EventSource(base + '/api/events?token=' + tk);
+    es.onmessage = (m) => {
+      let e;
+      try { e = JSON.parse(m.data); } catch { return; }
+      const s = sessions.get(e.id) || { status: '', waiting: false };
+      if (e.type === 'session-status') {
+        s.status = e.status;
+        if (e.status === 'finished') showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓');
+        else if (e.status === 'error') showFlash('err', '「' + (e.title || '任务') + '」出错 ✗');
+      } else if (e.type === 'session-ask') {
+        s.waiting = !!e.open;
+      } else {
+        return;
+      }
+      sessions.set(e.id, s);
+      render(false);
+    };
+    // 首个 error 即整体重连:内核重启会轮换 token,自带重连无法恢复
+    es.onerror = () => {
+      es.close();
+      es = null;
+      render(true);
+      retry();
+    };
+  }
+  connect();
+
+  // ---- 交互:拖动(位移阈值)与点击(唤回主窗口) ----
+  let down = null, dragged = false;
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    down = { x: e.screenX, y: e.screenY };
+    dragged = false;
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!down || dragged) return;
+    if (Math.abs(e.screenX - down.x) + Math.abs(e.screenY - down.y) > 4) {
+      dragged = true;
+      down = null; // OS 接管拖动后 mouseup 不可靠,直接终结本次手势
+      window.__TAURI__.window.getCurrentWindow().startDragging();
+    }
+  });
+  document.addEventListener('mouseup', () => {
+    if (down && !dragged) invoke('show_main');
+    down = null;
+  });
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+</script>
+</body>
+</html>

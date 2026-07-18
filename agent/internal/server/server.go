@@ -303,6 +303,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("content-type", "text/event-stream")
 	w.Header().Set("cache-control", "no-cache")
+	// 桌宠页(tauri:// origin)跨源订阅;token 仍必须,仅放开读取
+	w.Header().Set("access-control-allow-origin", "*")
 	ch := make(chan []byte, 32)
 	s.eventMu.Lock()
 	s.eventSubs[ch] = struct{}{}
@@ -331,6 +333,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // ==================== REST ====================
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	// 桌宠页(tauri:// origin)跨源拉快照;token 仍必须,仅放开读取
+	w.Header().Set("access-control-allow-origin", "*")
 	metas, err := session.List(s.opts.SessionRoot)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

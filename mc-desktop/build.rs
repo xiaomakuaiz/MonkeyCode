@@ -8,6 +8,8 @@ fn main() {
                 "save_config",
                 "take_ui_intent",
                 "host_info",
+                "kernel_info",
+                "show_main",
                 "update_check",
                 "update_install",
             ]),

@@ -262,6 +262,10 @@ func TestEventsStreamSessionStatus(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
+	// 桌宠页跨源订阅依赖 CORS 放行
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("access-control-allow-origin = %q, want *", got)
+	}
 
 	events := make(chan sessionEvent, 8)
 	go func() {

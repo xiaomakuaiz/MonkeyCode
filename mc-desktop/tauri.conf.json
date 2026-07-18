@@ -22,6 +22,19 @@
           ]
         },
         {
+          "identifier": "pet-page",
+          "description": "桌宠窗口(壳内静态页):读内核地址与令牌、拖动窗口、唤回主窗口",
+          "windows": [
+            "pet"
+          ],
+          "permissions": [
+            "core:default",
+            "core:window:allow-start-dragging",
+            "allow-kernel-info",
+            "allow-show-main"
+          ]
+        },
+        {
           "identifier": "kernel-ui",
           "description": "主窗口加载的内核 UI(127.0.0.1 remote):读写壳持有的配置、原生目录选择",
           "windows": [

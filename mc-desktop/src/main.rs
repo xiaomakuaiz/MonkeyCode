@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
@@ -35,9 +35,15 @@ fn json_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
-/// 应用配置。壳只认顶层两个 key,内容**原样透传**不做业务校验——
-/// schema 的唯一来源是内核(config.LoadModels)与设置视图表单(agent/ui),
-/// 壳零字段知识;非法内容由内核以零模型模式容忍并经 UI 引导修复。
+fn default_true() -> bool {
+    true
+}
+
+/// 应用配置。壳只认顶层两个业务 key(models/mcp_servers),内容**原样透传**
+/// 不做业务校验——schema 的唯一来源是内核(config.LoadModels)与设置视图
+/// 表单(agent/ui),壳零字段知识;非法内容由内核以零模型模式容忍并经 UI
+/// 引导修复。pet_* 是壳自有偏好:设置视图不感知,save_config 时从磁盘合并
+/// 保留(否则每次保存设置都会被 serde 默认值冲掉)。
 #[derive(Clone, Serialize, Deserialize)]
 struct DesktopConfig {
     #[serde(default = "json_array")]
@@ -45,11 +51,22 @@ struct DesktopConfig {
     /// MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构)
     #[serde(default = "json_object")]
     mcp_servers: serde_json::Value,
+    /// 桌宠开关(托盘菜单切换)
+    #[serde(default = "default_true")]
+    pet_enabled: bool,
+    /// 桌宠窗口位置(物理像素;拖动后记忆)
+    #[serde(default)]
+    pet_pos: Option<(i32, i32)>,
 }
 
 impl Default for DesktopConfig {
     fn default() -> Self {
-        Self { models: json_array(), mcp_servers: json_object() }
+        Self {
+            models: json_array(),
+            mcp_servers: json_object(),
+            pet_enabled: true,
+            pet_pos: None,
+        }
     }
 }
 
@@ -122,6 +139,17 @@ struct Tray(Mutex<Option<TrayIcon>>);
 /// 意图同时落在这里,UI 启动完成后经 take_ui_intent 取走补处理,两路兜底。
 struct UiIntent(Mutex<Option<String>>);
 
+/// 内核连接信息(端口+令牌):桌宠页经 kernel_info 命令取用,直连内核
+/// 事件流。token 每次内核启动轮换,桌宠断流重连时必须重取。
+struct KernelInfo(Mutex<Option<(u16, String)>>);
+
+/// 桌宠开关的运行时缓存(焦点切换高频读,不每次读盘;真值落 config.json)。
+struct PetEnabled(AtomicBool);
+
+/// 桌宠位置暂存:Moved 事件在拖动中高频触发,不能逐次写盘;
+/// 退出与托盘开关切换时经 persist_pet_prefs 落盘。
+struct PetPos(Mutex<Option<(i32, i32)>>);
+
 /// 托盘图标:macOS 用模板剪影(黑 + alpha,紧裁占满菜单栏高度;配合
 /// icon_as_template 由系统按菜单栏明暗自动反色),其余平台用彩色透明图形。
 fn tray_icon_for(_theme: Theme) -> Image<'static> {
@@ -176,16 +204,25 @@ fn get_config(app: AppHandle) -> DesktopConfig {
 /// 内容不做业务校验(壳零字段知识):表单校验在设置视图,权威校验在内核。
 #[tauri::command]
 fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
+    // 设置视图载荷只含业务字段,壳自有偏好(桌宠)从磁盘合并保留
+    let disk = load_config(&app);
+    let config = DesktopConfig {
+        pet_enabled: disk.pet_enabled,
+        pet_pos: disk.pet_pos,
+        ..config
+    };
     let files = save_config_files(&app, &config)?;
 
     // 端口固定复用:必须先停旧内核释放端口,再起新内核(阻塞等就绪,最多 15 秒)。
     // 若新内核启动失败(仅安装级故障:二进制缺失等),设置视图内联展示错误,
     // 重试保存即可再次拉起。
     if let Some(old) = app.state::<Kernel>().0.lock().unwrap().take() {
+        app.state::<KernelInfo>().0.lock().unwrap().take();
         stop_kernel(old);
     }
     let (child, port, token) = start_kernel(&app, &files)?;
     app.state::<Kernel>().0.lock().unwrap().replace(child);
+    app.state::<KernelInfo>().0.lock().unwrap().replace((port, token.clone()));
     let url = kernel_ui_url(port, &token);
     // 导航延后到本命令返回之后:WebKitGTK 会重放"页面导航走时响应尚未送达"
     // 的 IPC 请求(实测同一 invoke 二次进入本命令→内核被重启两次)。
@@ -214,6 +251,22 @@ fn take_ui_intent(app: AppHandle) -> Option<String> {
 #[tauri::command]
 fn host_info(app: AppHandle) -> serde_json::Value {
     serde_json::json!({ "version": display_version(&app.package_info().version.to_string()) })
+}
+
+/// 内核地址与令牌(桌宠页直连内核事件流用)。
+/// 内核未运行时报错,桌宠页按离线态展示并稍后重试。
+#[tauri::command]
+fn kernel_info(app: AppHandle) -> Result<serde_json::Value, String> {
+    match app.state::<KernelInfo>().0.lock().unwrap().as_ref() {
+        Some((port, token)) => Ok(serde_json::json!({ "port": port, "token": token })),
+        None => Err("内核未运行".into()),
+    }
+}
+
+/// 唤回主窗口(桌宠点击)。
+#[tauri::command]
+fn show_main(app: AppHandle) {
+    show_any_window(&app);
 }
 
 /// UI 内检查更新:返回结果而非弹对话框(设置视图内联展示)。
@@ -480,6 +533,100 @@ fn open_error_page(app: &AppHandle, msg: &str) {
         .build();
 }
 
+// ==================== 桌宠 ====================
+
+/// 桌宠窗口尺寸(逻辑像素):气泡 + 身体的画布。
+const PET_W: f64 = 148.0;
+const PET_H: f64 = 168.0;
+
+/// 创建桌宠窗口(初始隐藏,主窗口失焦/隐藏时显示)。
+/// focusable(false):桌宠是状态外显不是交互主体,永不抢焦点;
+/// 鼠标点击与拖动不依赖键盘焦点,不受影响。
+fn ensure_pet_window(app: &AppHandle) {
+    if app.get_webview_window("pet").is_some() {
+        return;
+    }
+    let saved = load_config(app).pet_pos;
+    let win = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("pet.html".into()))
+        .title("MonkeyCode 桌宠")
+        .inner_size(PET_W, PET_H)
+        .transparent(true)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .focusable(false)
+        .focused(false)
+        .visible(false)
+        .build();
+    match win {
+        Ok(win) => {
+            let _ = win.set_position(pet_position(app, saved));
+        }
+        Err(e) => eprintln!("[mc-desktop] 桌宠窗口创建失败: {e}"),
+    }
+}
+
+/// 桌宠位置:记忆位置仍落在任一显示器内则沿用(显示器可能被拔掉),
+/// 否则回主显示器右下角留边(避开任务栏)。
+fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPosition<i32> {
+    if let Some((x, y)) = saved {
+        let on_screen = app.available_monitors().unwrap_or_default().iter().any(|m| {
+            let p = m.position();
+            let s = m.size();
+            x >= p.x && x < p.x + s.width as i32 && y >= p.y && y < p.y + s.height as i32
+        });
+        if on_screen {
+            return tauri::PhysicalPosition::new(x, y);
+        }
+    }
+    let (mx, my, mw, mh, scale) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            (m.position().x, m.position().y, m.size().width as i32, m.size().height as i32, m.scale_factor())
+        })
+        .unwrap_or((0, 0, 1280, 800, 1.0));
+    let w = (PET_W * scale) as i32;
+    let h = (PET_H * scale) as i32;
+    let margin = (24.0 * scale) as i32;
+    let taskbar = (56.0 * scale) as i32;
+    tauri::PhysicalPosition::new(mx + mw - w - margin, my + mh - h - margin - taskbar)
+}
+
+/// 按条件显示/隐藏桌宠:显示要求 开关开 && 内核在跑(内核没起时
+/// 桌宠只会展示"离线",徒增噪音);隐藏无条件执行。
+fn set_pet_visible(app: &AppHandle, show: bool) {
+    let Some(pet) = app.get_webview_window("pet") else {
+        return;
+    };
+    if !show {
+        let _ = pet.hide();
+        return;
+    }
+    let enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
+    let kernel_running = app.state::<Kernel>().0.lock().unwrap().is_some();
+    if enabled && kernel_running {
+        let _ = pet.show();
+    }
+}
+
+/// 桌宠偏好落盘:以磁盘配置为基础只覆写壳自有字段,不动 models/mcp_servers。
+fn persist_pet_prefs(app: &AppHandle) {
+    let mut cfg = load_config(app);
+    cfg.pet_enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
+    if let Some(pos) = *app.state::<PetPos>().0.lock().unwrap() {
+        cfg.pet_pos = Some(pos);
+    }
+    if let Err(e) = save_config_files(app, &cfg) {
+        eprintln!("[mc-desktop] 桌宠偏好保存失败: {e}");
+    }
+}
+
 fn main() {
     eprintln!("[mc-desktop] main 进入");
     tauri::Builder::default()
@@ -490,11 +637,16 @@ fn main() {
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(Tray(Mutex::new(None)))
         .manage(UiIntent(Mutex::new(None)))
+        .manage(KernelInfo(Mutex::new(None)))
+        .manage(PetEnabled(AtomicBool::new(true)))
+        .manage(PetPos(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
             take_ui_intent,
             host_info,
+            kernel_info,
+            show_main,
             update_check,
             update_install
         ])
@@ -518,12 +670,15 @@ fn main() {
             // 无条件拉起内核:无配置时写出空清单,内核以零模型模式启动,
             // 首启向导由内核 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
+            app.state::<PetEnabled>().0.store(cfg.pet_enabled, Ordering::Relaxed);
             let files = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
             match start_kernel(app.handle(), &files) {
                 Ok((child, port, token)) => {
                     eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
                     app.state::<Kernel>().0.lock().unwrap().replace(child);
+                    app.state::<KernelInfo>().0.lock().unwrap().replace((port, token.clone()));
                     show_kernel_ui(app.handle(), &kernel_ui_url(port, &token));
+                    ensure_pet_window(app.handle());
                 }
                 Err(e) => {
                     eprintln!("[mc-desktop] 内核启动失败: {e}");
@@ -536,6 +691,25 @@ fn main() {
             if let WindowEvent::ThemeChanged(theme) = event {
                 sync_tray_theme(window.app_handle(), *theme);
             }
+            // 主窗口前台与否 = 桌宠退场/接棒:在前台看得见状态,桌宠隐藏;
+            // 失焦(切去别的应用)则桌宠出场外显任务状态
+            if let WindowEvent::Focused(focused) = event {
+                if window.label() == "main" {
+                    set_pet_visible(window.app_handle(), !*focused);
+                }
+            }
+            // 桌宠拖动:位置暂存,退出/开关切换时落盘(Moved 高频,不逐次写)
+            if let WindowEvent::Moved(pos) = event {
+                if window.label() == "pet" {
+                    window
+                        .app_handle()
+                        .state::<PetPos>()
+                        .0
+                        .lock()
+                        .unwrap()
+                        .replace((pos.x, pos.y));
+                }
+            }
             // 主窗口:内核在跑且托盘可用时关窗只隐藏;设置/错误页正常关闭
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
@@ -547,6 +721,8 @@ fn main() {
                 if kernel_running && tray_ready {
                     let _ = window.hide();
                     api.prevent_close();
+                    // hide 不保证在所有平台补发 Focused(false),显式接棒
+                    set_pet_visible(app, true);
                 }
             }
         })
@@ -561,6 +737,7 @@ fn main() {
                 api.prevent_exit();
             }
             RunEvent::Exit => {
+                persist_pet_prefs(app); // 拖动位置只在退出/开关切换时落盘
                 if let Some(child) = app.state::<Kernel>().0.lock().unwrap().take() {
                     stop_kernel(child);
                 }
@@ -573,9 +750,10 @@ fn main() {
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let pet = CheckMenuItem::with_id(app, "toggle-pet", "显示桌宠", true, load_config(app).pet_enabled, None::<&str>)?;
     let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &update, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &pet, &update, &quit])?;
 
     let tray = TrayIconBuilder::with_id("main")
         .icon(tray_icon_for(Theme::Light))
@@ -592,6 +770,18 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_any_window(app);
                 app.state::<UiIntent>().0.lock().unwrap().replace("open-settings".into());
                 let _ = app.emit_to("main", "open-settings", ());
+            }
+            // 桌宠开关:CheckMenuItem 点击自翻勾选态,这里同步运行时缓存并落盘;
+            // 开启时仅在主窗口不在前台才立即出场(在前台本就该藏)
+            "toggle-pet" => {
+                let enabled = !app.state::<PetEnabled>().0.load(Ordering::Relaxed);
+                app.state::<PetEnabled>().0.store(enabled, Ordering::Relaxed);
+                persist_pet_prefs(app);
+                let main_focused = app
+                    .get_webview_window("main")
+                    .and_then(|w| w.is_focused().ok())
+                    .unwrap_or(false);
+                set_pet_visible(app, enabled && !main_focused);
             }
             "check-update" => {
                 let app = app.clone();
