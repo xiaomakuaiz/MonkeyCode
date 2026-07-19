@@ -35,6 +35,8 @@ func (s *Service) Routes(mux *http.ServeMux, auth func(http.HandlerFunc) http.Ha
 	mux.HandleFunc("GET /api/mc/tasks/{id}/rounds", auth(s.handleMCTaskRounds))
 	mux.HandleFunc("POST /api/mc/tasks/{id}/stop", auth(s.handleMCTaskStop))
 	mux.HandleFunc("GET /api/mc/tasks/{id}/stream", auth(s.handleMCTaskStream))
+	mux.HandleFunc("GET /api/mc/tasks/{id}/control", auth(s.handleMCTaskControl))
+	mux.HandleFunc("GET /api/mc/vms/{id}/terminal", auth(s.handleMCVMTerminal))
 	mux.HandleFunc("GET /api/mc/task-options", auth(s.handleMCTaskOptions))
 }
 

@@ -46,11 +46,12 @@ type ExtBridge struct {
 	listenErr   string // 监听失败原因(状态页外显)
 	conn        *extConn
 	browser     BrowserInfo
-	onEvent     func(Message) // 活跃 BrowserSession 的事件回调
-	// pendingHandoff 无活跃会话时用户交付的标签页,会话首次取用时消费
-	pendingHandoff *TabInfo
-	// leaseOwner 活跃使用权(简单互斥):同一时刻一个会话操作浏览器
-	leaseOwner string
+
+	// 多会话并行:tab 归属会话,事件按 tabId 路由到属主;
+	// 用户交付(handoff)的标签页进待领队列,会话按需认领
+	sessions        map[string]func(Message) // 会话 ID → 事件回调
+	tabOwner        map[int]string           // tabId → 会话 ID
+	pendingHandoffs []*TabInfo
 }
 
 // extAuth ext-auth.json 落盘结构。
@@ -73,6 +74,8 @@ func NewExtBridge(addr string, fixed bool, dataDir string) (*ExtBridge, error) {
 		prefAddr: addr,
 		fixed:    fixed,
 		authPath: filepath.Join(dataDir, "ext-auth.json"),
+		sessions: map[string]func(Message){},
+		tabOwner: map[int]string{},
 	}
 	if data, err := os.ReadFile(b.authPath); err == nil {
 		var a extAuth
@@ -288,23 +291,24 @@ func (b *ExtBridge) readLoop(c *extConn) {
 	}
 }
 
+// handleEvent 扩展事件分发:带 tabId 的事件路由到属主会话;handoff 进
+// 待领队列(会话在下一次工具调用时认领);无属主的事件丢弃。
 func (b *ExtBridge) handleEvent(msg Message) {
 	switch msg.Event {
 	case EventPong, "":
 		return
 	case EventHandoff:
-		b.mu.Lock()
-		handler := b.onEvent
-		if handler == nil && msg.Info != nil {
-			b.pendingHandoff = msg.Info
-		}
-		b.mu.Unlock()
-		if handler != nil {
-			handler(msg)
+		if msg.Info != nil {
+			b.mu.Lock()
+			b.pendingHandoffs = append(b.pendingHandoffs, msg.Info)
+			b.mu.Unlock()
 		}
 	default:
 		b.mu.Lock()
-		handler := b.onEvent
+		var handler func(Message)
+		if owner, ok := b.tabOwner[msg.TabID]; ok {
+			handler = b.sessions[owner]
+		}
 		b.mu.Unlock()
 		if handler != nil {
 			handler(msg)
@@ -374,40 +378,49 @@ func (b *ExtBridge) call(ctx context.Context, req Request) (json.RawMessage, err
 	}
 }
 
-// SetEventHandler 注册扩展事件回调(活跃会话设置;nil 解除)。
-func (b *ExtBridge) SetEventHandler(fn func(Message)) {
+// RegisterSession 注册会话事件回调(幂等覆盖)。
+func (b *ExtBridge) RegisterSession(id string, fn func(Message)) {
 	b.mu.Lock()
-	b.onEvent = fn
+	b.sessions[id] = fn
 	b.mu.Unlock()
 }
 
-// TakePendingHandoff 取出并清空"无会话时用户交付的标签页"。
+// UnregisterSession 注销会话并释放其全部标签页归属。
+func (b *ExtBridge) UnregisterSession(id string) {
+	b.mu.Lock()
+	delete(b.sessions, id)
+	for tab, owner := range b.tabOwner {
+		if owner == id {
+			delete(b.tabOwner, tab)
+		}
+	}
+	b.mu.Unlock()
+}
+
+// ClaimTab 声明标签页归属(新建/认领交付时调用;后声明者覆盖)。
+func (b *ExtBridge) ClaimTab(tabID int, sessionID string) {
+	b.mu.Lock()
+	b.tabOwner[tabID] = sessionID
+	b.mu.Unlock()
+}
+
+// ReleaseTab 释放标签页归属(关闭/用户收回时调用)。
+func (b *ExtBridge) ReleaseTab(tabID int) {
+	b.mu.Lock()
+	delete(b.tabOwner, tabID)
+	b.mu.Unlock()
+}
+
+// TakePendingHandoff 认领一个用户交付的标签页(队首;无则 nil)。
 func (b *ExtBridge) TakePendingHandoff() *TabInfo {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	t := b.pendingHandoff
-	b.pendingHandoff = nil
-	return t
-}
-
-// Acquire 声明浏览器活跃使用权(简单互斥):无人持有或本人持有时成功。
-func (b *ExtBridge) Acquire(owner string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.leaseOwner == "" || b.leaseOwner == owner {
-		b.leaseOwner = owner
+	if len(b.pendingHandoffs) == 0 {
 		return nil
 	}
-	return errors.New("浏览器正被另一会话使用,请等待其完成或关闭该会话")
-}
-
-// Release 释放使用权(仅持有者可释放)。
-func (b *ExtBridge) Release(owner string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.leaseOwner == owner {
-		b.leaseOwner = ""
-	}
+	t := b.pendingHandoffs[0]
+	b.pendingHandoffs = b.pendingHandoffs[1:]
+	return t
 }
 
 // Status 桥接状态(设置页 /api/browser/status 外显)。

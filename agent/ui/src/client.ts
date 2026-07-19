@@ -1,6 +1,6 @@
 // 内核连接层:REST(会话管理)+ WS(帧双向流,含 call/call-response 同步查询)。
 // 帧载荷编解码在 codec.ts(纯函数,归约层与单测直接依赖那边)。
-import { b64encode, frameData } from "./codec";
+import { b64decode, b64encode, frameData } from "./codec";
 import type { McTaskOptions } from "./cloud";
 import type { Frame, HostConfig, ModelInfo, SessionMeta } from "./types";
 
@@ -380,6 +380,129 @@ export function connectCloudTask(
       }
     },
   };
+}
+
+// ---- 云端控制流(文件树/读文件/改动/diff/端口;call 按 request_id 配对) ----
+
+/** repo_file_list 条目;entry_mode 4=目录 5=子模块(对齐 web task-shared.ts) */
+export interface CloudRepoFile {
+  name: string;
+  path: string;
+  entry_mode: number;
+  size?: number;
+  modified_at?: number;
+}
+
+export interface CloudFileChange {
+  path: string;
+  status: string; // M/A/D/R/RM/??
+  additions?: number;
+  deletions?: number;
+  old_path?: string;
+}
+
+export interface CloudControl {
+  /** 发一次 call(kind + payload),按 request_id 等待应答;失败 reject(error)。 */
+  call<T>(kind: string, payload?: Record<string, unknown>): Promise<T>;
+  close(): void;
+}
+
+const CONTROL_CALL_TIMEOUT_MS = 15_000;
+
+/** 连接云端任务控制流(内核代理)。长生命周期,断线 1.5s 自动重连;
+ * 未连上时发起的 call 排队等 open。 */
+export function connectCloudControl(taskId: string): CloudControl {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  interface Pending {
+    resolve: (v: unknown) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const pending = new Map<string, Pending>();
+  let sendQueue: string[] = []; // open 前排队的上行帧
+
+  function open() {
+    if (closed) return;
+    const sock = new WebSocket(
+      `ws://${location.host}/api/mc/tasks/${encodeURIComponent(taskId)}/control?token=${encodeURIComponent(token)}`,
+    );
+    ws = sock;
+    sock.onopen = () => {
+      const q = sendQueue;
+      sendQueue = [];
+      for (const m of q) sock.send(m);
+    };
+    sock.onclose = () => {
+      if (ws !== sock || closed) return;
+      reconnectTimer = setTimeout(open, 1500);
+    };
+    sock.onmessage = (ev) => {
+      let f: Frame;
+      try {
+        f = JSON.parse(ev.data as string) as Frame;
+      } catch {
+        return;
+      }
+      if (f.type !== "call-response" || !f.data) return;
+      let resp: { request_id?: string; success?: boolean; error?: string } & Record<string, unknown>;
+      try {
+        resp = JSON.parse(b64decode(f.data));
+      } catch {
+        return;
+      }
+      const p = resp.request_id ? pending.get(resp.request_id) : undefined;
+      if (!p) return;
+      pending.delete(resp.request_id!);
+      clearTimeout(p.timer);
+      if (resp.success === false) p.reject(new Error(resp.error || "云端操作失败"));
+      else p.resolve(resp);
+    };
+  }
+
+  open();
+  return {
+    call<T>(kind: string, payload: Record<string, unknown> = {}): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        if (closed) return reject(new Error("连接已关闭"));
+        const requestID = crypto.randomUUID();
+        const msg = JSON.stringify({
+          type: "call",
+          kind,
+          data: b64encode(JSON.stringify({ request_id: requestID, ...payload })),
+        });
+        pending.set(requestID, {
+          resolve: resolve as (v: unknown) => void,
+          reject,
+          timer: setTimeout(() => {
+            pending.delete(requestID);
+            reject(new Error("云端操作超时"));
+          }, CONTROL_CALL_TIMEOUT_MS),
+        });
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+        else sendQueue.push(msg);
+      });
+    },
+    close() {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      for (const [, p] of pending) {
+        clearTimeout(p.timer);
+        p.reject(new Error("连接已关闭"));
+      }
+      pending.clear();
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+    },
+  };
+}
+
+/** 云端 VM 终端 WS 地址(内核代理;协议:文本 JSON 帧 data/resize/ping,payload base64)。 */
+export function cloudTerminalURL(vmId: string, terminalId: string): string {
+  return `ws://${location.host}/api/mc/vms/${encodeURIComponent(vmId)}/terminal?terminal_id=${encodeURIComponent(terminalId)}&token=${encodeURIComponent(token)}`;
 }
 
 // ==================== 宿主(桌面壳)集成 ====================

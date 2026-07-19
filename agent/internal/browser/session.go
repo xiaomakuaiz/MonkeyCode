@@ -15,12 +15,13 @@ type Session struct {
 	bridge *ExtBridge
 	owner  string // 租约持有者标识(agent 会话 ID)
 
-	mu     sync.Mutex
-	tabID  int          // 当前操作的标签页(0=无)
-	tabs   map[int]bool // 本会话控制过的标签页
-	refs   refTable
-	notes  []string // 事件旁白,附注到下一个工具结果
-	closed bool
+	mu         sync.Mutex
+	registered bool         // 已在桥上注册事件回调
+	tabID      int          // 当前操作的标签页(0=无)
+	tabs       map[int]bool // 本会话控制的标签页
+	refs       refTable
+	notes      []string // 事件旁白,附注到下一个工具结果
+	closed     bool
 }
 
 // NewSession 创建浏览器会话现场(不建立任何连接,首次工具调用时惰性激活)。
@@ -29,7 +30,7 @@ func NewSession(b *ExtBridge, owner string) *Session {
 }
 
 // Close 释放会话:剥离本会话标签页的 debugger(标签页保留,用户可能还要看),
-// 解除事件回调与租约。幂等,经 Registry.Close 链自动调用。
+// 注销事件路由与标签页归属。幂等,经 Registry.Close 链自动调用。
 func (s *Session) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -48,30 +49,35 @@ func (s *Session) Close() {
 	for _, id := range tabs {
 		_ = s.bridge.Detach(ctx, id)
 	}
-	s.bridge.SetEventHandler(nil)
-	s.bridge.Release(s.owner)
+	s.bridge.UnregisterSession(s.owner)
 }
 
-// ensure 激活会话:取得浏览器使用权、注册事件回调、认领用户交付的标签页。
+// ensure 激活会话:注册事件路由;无活动标签页时认领用户交付的标签页。
+// 多会话并行:各会话操作各自的标签页,互不阻塞。
 func (s *Session) ensure(_ context.Context) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return fmt.Errorf("浏览器会话已关闭")
 	}
+	needRegister := !s.registered
+	s.registered = true
+	noTab := s.tabID == 0
 	s.mu.Unlock()
-	if err := s.bridge.Acquire(s.owner); err != nil {
-		return err
+	if needRegister {
+		s.bridge.RegisterSession(s.owner, s.handleEvent)
 	}
-	s.bridge.SetEventHandler(s.handleEvent)
-	if tab := s.bridge.TakePendingHandoff(); tab != nil {
-		s.adoptTab(tab)
+	if noTab {
+		if tab := s.bridge.TakePendingHandoff(); tab != nil {
+			s.adoptTab(tab)
+		}
 	}
 	return nil
 }
 
-// adoptTab 认领标签页(用户交付/新建)。
+// adoptTab 认领标签页(用户交付):登记归属,事件从此路由到本会话。
 func (s *Session) adoptTab(t *TabInfo) {
+	s.bridge.ClaimTab(t.TabID, s.owner)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tabs[t.TabID] = true
@@ -101,16 +107,14 @@ func (s *Session) ensureTab(ctx context.Context) (int, error) {
 	return tab, nil
 }
 
-// handleEvent 扩展事件回调(与工具调用并发,注意锁)。
+// handleEvent 本会话标签页的事件回调(桥按 tabId 路由;与工具调用并发,注意锁)。
+// handoff 不经此路(桥的待领队列是唯一入口,避免多会话重复认领)。
 func (s *Session) handleEvent(msg Message) {
 	switch msg.Event {
 	case EventCDP:
 		s.handleCDPEvent(msg)
-	case EventHandoff:
-		if msg.Info != nil {
-			s.adoptTab(msg.Info)
-		}
 	case EventTabRemoved:
+		s.bridge.ReleaseTab(msg.TabID)
 		s.mu.Lock()
 		if s.tabs[msg.TabID] {
 			delete(s.tabs, msg.TabID)
@@ -133,6 +137,9 @@ func (s *Session) handleEvent(msg Message) {
 					s.tabID = 0
 					s.refs.invalidate()
 				}
+				s.mu.Unlock()
+				s.bridge.ReleaseTab(msg.TabID)
+				return
 			default:
 				// 其他原因(如页面崩溃):保留成员资格,下次操作 attach 自愈
 				s.addNoteLocked(fmt.Sprintf("标签页 #%d 的调试连接断开(%s),将自动重连", msg.TabID, msg.Reason))

@@ -24,16 +24,40 @@ const (
 )
 
 // handleMCTaskStream GET /api/mc/tasks/{id}/stream?mode=attach|new。
-// 先拨通云端再升级 UI 连接,拨不通直接回 HTTP 错误(UI 可读错误体)。
 func (s *Service) handleMCTaskStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少任务 ID"})
-		return
-	}
 	mode := r.URL.Query().Get("mode")
 	if mode != "new" {
 		mode = "attach"
+	}
+	s.proxyMCWS(w, r, "/api/v1/users/tasks/stream?id="+url.QueryEscape(r.PathValue("id"))+"&mode="+mode)
+}
+
+// handleMCTaskControl GET /api/mc/tasks/{id}/control。
+// 云端控制流(call/call-response:文件树/读文件/改动/diff/端口等),
+// 独立于任务流的长生命周期连接,任务结束后仍可用(浏览产物)。
+func (s *Service) handleMCTaskControl(w http.ResponseWriter, r *http.Request) {
+	s.proxyMCWS(w, r, "/api/v1/users/tasks/control?id="+url.QueryEscape(r.PathValue("id")))
+}
+
+// handleMCVMTerminal GET /api/mc/vms/{id}/terminal?terminal_id=<uuid>。
+// 云端 VM 终端(xterm 协议:文本 JSON 帧,data/resize/ping,payload base64),
+// 与任务流/控制流独立的第三条 WS。terminal_id 由 UI 生成(uuid,新 tab 即新 id)。
+func (s *Service) handleMCVMTerminal(w http.ResponseWriter, r *http.Request) {
+	tid := r.URL.Query().Get("terminal_id")
+	if tid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 terminal_id"})
+		return
+	}
+	s.proxyMCWS(w, r, "/api/v1/users/hosts/vms/"+url.PathEscape(r.PathValue("id"))+
+		"/terminals/connect?terminal_id="+url.QueryEscape(tid))
+}
+
+// proxyMCWS 拨云端 WS 并与 UI 连接双向对拷(pathAndQuery 拼在云端基址后)。
+// 先拨通云端再升级 UI 连接,拨不通直接回 HTTP 错误(UI 可读错误体)。
+func (s *Service) proxyMCWS(w http.ResponseWriter, r *http.Request, pathAndQuery string) {
+	if r.PathValue("id") == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少资源 ID"})
+		return
 	}
 	if s.mc.empty() {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "MonkeyCode 会话缺失,请先同步云端账号"})
@@ -41,7 +65,7 @@ func (s *Service) handleMCTaskStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 云端 wss 地址;cookie 罐按 https 形态取(Secure cookie 匹配 scheme)
-	httpsURL := s.ep.MonkeyCode + "/api/v1/users/tasks/stream?id=" + url.QueryEscape(id) + "&mode=" + mode
+	httpsURL := s.ep.MonkeyCode + pathAndQuery
 	wsURL := strings.Replace(strings.Replace(httpsURL, "https://", "wss://", 1), "http://", "ws://", 1)
 	header := http.Header{}
 	if u, err := url.Parse(httpsURL); err == nil {

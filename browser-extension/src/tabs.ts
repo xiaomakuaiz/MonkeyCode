@@ -5,6 +5,22 @@ import { isAllowedCreateUrl, mapDebuggerError } from "./core";
 import type { TabInfo } from "./protocol";
 
 const CONTROLLED_KEY = "controlledTabs";
+const AGENT_WINDOW_KEY = "agentWindowId";
+
+/** agent 专属窗口:agent 新建的标签页集中在这里,不聚焦创建、不抢用户
+ * 前台(CDP 键鼠/截图直达渲染进程,无需标签页在前台)。用户关掉后自动重建。 */
+async function agentWindowId(): Promise<number | null> {
+  const got = await chrome.storage.session.get(AGENT_WINDOW_KEY);
+  const id = got[AGENT_WINDOW_KEY] as number | undefined;
+  if (id === undefined) return null;
+  try {
+    await chrome.windows.get(id);
+    return id;
+  } catch {
+    await chrome.storage.session.remove(AGENT_WINDOW_KEY);
+    return null;
+  }
+}
 
 export async function getControlled(): Promise<Set<number>> {
   const got = await chrome.storage.session.get(CONTROLLED_KEY);
@@ -40,14 +56,27 @@ function toOpError(e: unknown): OpError {
   return new OpError(mapDebuggerError(e instanceof Error ? e.message : String(e)));
 }
 
-/** tabs.create:新建 → 纳入受控 → attach,整链成功才返回 */
+/** tabs.create:在 agent 专属窗口新建(不抢用户前台)→ 纳入受控 → attach,
+ * 整链成功才返回 */
 export async function tabsCreate(params?: Record<string, unknown>): Promise<{ tabId: number }> {
   const url = typeof params?.url === "string" ? params.url : "about:blank";
   if (!isAllowedCreateUrl(url)) {
     throw new OpError({ code: "restricted_url", message: `仅允许打开 http/https/about:blank: ${url}` });
   }
-  const tab = await chrome.tabs.create({ url, active: true });
-  const tabId = tab.id;
+  let tabId: number | undefined;
+  const winId = await agentWindowId();
+  if (winId === null) {
+    // 首个 agent 标签页:开专属窗口(不聚焦;最小化会暂停渲染影响截图,用 normal)
+    const win = await chrome.windows.create({ url, focused: false, state: "normal" });
+    tabId = win.tabs?.[0]?.id;
+    if (win.id !== undefined) {
+      await chrome.storage.session.set({ [AGENT_WINDOW_KEY]: win.id });
+    }
+  } else {
+    // active 仅指专属窗口内的前台,不影响用户当前窗口的焦点
+    const tab = await chrome.tabs.create({ url, windowId: winId, active: true });
+    tabId = tab.id;
+  }
   if (tabId === undefined) throw new OpError({ code: "no_tab", message: "标签页创建失败" });
   await addControlled(tabId);
   try {

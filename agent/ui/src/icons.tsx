@@ -10,6 +10,21 @@ interface IconProps {
 
 const base: CSSProperties = { flex: "none", display: "block" };
 
+/** 刷新(顺时针圆弧箭头) */
+export function IconRefresh({ size = 11, color = "var(--t4)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <path
+        d="M11.8 7a4.8 4.8 0 1 1-1.4-3.4M11.8 1.6v2.6H9.2"
+        stroke={color}
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** 文件夹 */
 export function IconFolder({ size = 13, color = "var(--t3)", style }: IconProps) {
   return (

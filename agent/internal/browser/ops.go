@@ -54,6 +54,7 @@ func (s *Session) navigate(ctx context.Context, rawURL string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		s.bridge.ClaimTab(id, s.owner)
 		s.mu.Lock()
 		s.tabs[id] = true
 		s.tabID = id
@@ -260,7 +261,6 @@ func (s *Session) click(ctx context.Context, ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_ = s.bridge.TabsActivate(ctx, tab)
 	rect, err := s.locate(ctx, tab, ref)
 	if err != nil {
 		return "", err
@@ -283,7 +283,6 @@ func (s *Session) typeText(ctx context.Context, ref, text string, clear, submit 
 	if err != nil {
 		return "", err
 	}
-	_ = s.bridge.TabsActivate(ctx, tab)
 	objID, err := s.resolveRef(ref)
 	if err != nil {
 		return "", err
@@ -369,7 +368,6 @@ func (s *Session) pressKey(ctx context.Context, combo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_ = s.bridge.TabsActivate(ctx, tab)
 	def, mods, err := parseKeyCombo(combo)
 	if err != nil {
 		return "", err
@@ -441,7 +439,6 @@ func (s *Session) screenshot(ctx context.Context, fullPage bool) ([]provider.Con
 	if err != nil {
 		return nil, "", err
 	}
-	_ = s.bridge.TabsActivate(ctx, tab)
 	params := map[string]any{"format": "png"}
 	if fullPage {
 		params["captureBeyondViewport"] = true
@@ -489,6 +486,7 @@ func (s *Session) tabsOp(ctx context.Context, action string, tabID int, rawURL s
 		if err != nil {
 			return "", err
 		}
+		s.bridge.ClaimTab(id, s.owner)
 		s.mu.Lock()
 		s.tabs[id] = true
 		s.tabID = id
@@ -505,6 +503,7 @@ func (s *Session) tabsOp(ctx context.Context, action string, tabID int, rawURL s
 		if err := s.bridge.Attach(ctx, tabID); err != nil {
 			return "", err
 		}
+		s.bridge.ClaimTab(tabID, s.owner)
 		s.mu.Lock()
 		s.tabs[tabID] = true
 		s.tabID = tabID
@@ -519,6 +518,7 @@ func (s *Session) tabsOp(ctx context.Context, action string, tabID int, rawURL s
 		if err := s.bridge.TabsClose(ctx, tabID); err != nil {
 			return "", err
 		}
+		s.bridge.ReleaseTab(tabID)
 		s.mu.Lock()
 		delete(s.tabs, tabID)
 		if s.tabID == tabID {

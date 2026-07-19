@@ -12,6 +12,7 @@ import {
   IconMonitor,
   IconPencil,
   IconPlus,
+  IconRefresh,
   IconTrash,
 } from "./icons";
 import logoUrl from "./logo.png";
@@ -382,6 +383,8 @@ export function Sidebar({
   updateAvailable,
   cloudTasks,
   activeCloudId,
+  cloudSyncing,
+  onRefreshCloud,
   onOpenCloudTask,
   onSelect,
   onNewTask,
@@ -403,6 +406,10 @@ export function Sidebar({
   cloudTasks: CloudTask[] | null;
   /** 当前在主区打开的云端任务(行高亮) */
   activeCloudId?: string | null;
+  /** 云端列表同步中(刷新按钮转圈) */
+  cloudSyncing?: boolean;
+  /** 手动刷新云端任务列表 */
+  onRefreshCloud?: () => void;
   /** 点击云端任务:在桌面内打开详情视图 */
   onOpenCloudTask: (t: CloudTask) => void;
   onSelect: (m: SessionMeta) => void;
@@ -501,7 +508,20 @@ export function Sidebar({
             默认只列未结束(排队中/运行中),已结束折叠进"历史任务"按需展开 */}
         <div style={{ ...sectionHeader, marginTop: -1 }}>
           <IconCloud style={{ marginTop: -1 }} />
-          云端任务
+          <span style={{ flex: 1 }}>云端任务</span>
+          {onRefreshCloud && (
+            <button
+              className="hv2 icon-btn"
+              title="刷新云端任务列表"
+              onClick={onRefreshCloud}
+              style={{ width: 20, height: 20, borderRadius: 5 }}
+            >
+              <IconRefresh
+                color="var(--t4)"
+                style={cloudSyncing ? { animation: "mcspin 0.9s linear infinite" } : undefined}
+              />
+            </button>
+          )}
         </div>
         {(() => {
           const taskRow = (t: CloudTask) => {

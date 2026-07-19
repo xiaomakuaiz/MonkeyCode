@@ -138,7 +138,9 @@ export default function App() {
   // null = 未同步(空态给登录引导);已同步后 60s 轮询任务列表
   const [cloudTasks, setCloudTasks] = useState<CloudTask[] | null>(null);
   const [mcHost, setMcHost] = useState("monkeycode-ai.com");
+  const [cloudSyncing, setCloudSyncing] = useState(false);
   const syncCloud = useCallback(async () => {
+    setCloudSyncing(true);
     try {
       const st = await mcStatus();
       if (st.host) setMcHost(st.host);
@@ -156,12 +158,20 @@ export default function App() {
       setCloudTasks(r.tasks ?? []);
     } catch {
       /* 静默:云端同步失败不打扰本地使用,下次轮询/回到主界面再试 */
+    } finally {
+      setCloudSyncing(false);
     }
   }, []);
   // 启动即试同步;离开设置页也再试(用户可能刚在设置里登录了百智云)
   useEffect(() => {
     if (view !== "settings") void syncCloud();
   }, [view, syncCloud]);
+  // 窗口重获焦点即刷新:网页/手机端刚派发的任务切回来就能看到(不等 60s 轮询)
+  useEffect(() => {
+    const onFocus = () => void syncCloud();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [syncCloud]);
   const cloudSynced = cloudTasks !== null;
   useEffect(() => {
     if (!cloudSynced) return;
@@ -674,6 +684,8 @@ export default function App() {
           updateAvailable={!!update?.available}
           cloudTasks={cloudTasks}
           activeCloudId={view === "cloud" ? cloudTask?.id ?? null : null}
+          cloudSyncing={cloudSyncing}
+          onRefreshCloud={() => void syncCloud()}
           onOpenCloudTask={openCloudTask}
           onSelect={(m) => openSession(m)}
           onNewTask={(dir) => {

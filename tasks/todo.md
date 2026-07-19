@@ -1160,3 +1160,17 @@ UI 一卡片一图标两封装。未触碰 loop/provider/session 核心链路;CL
 - [x] cargo check / tsc / vitest / uidist 重建全绿
 - [ ] 后续:Chrome Web Store / Edge Add-ons 上架,设置页改商店直链(载入未打包扩展
       仅作过渡——Chrome 每次启动会提示停用开发者模式扩展)
+
+## 增补:多会话并行 + 后台操作(2026-07-19)
+
+- [x] 桥:全局租约(一次一个会话)→ 会话注册表 + tab 归属表,扩展事件按 tabId
+      路由到属主会话;handoff 进待领队列(FIFO,会话按需认领)
+- [x] 去前台抢占:删除 click/type/press/screenshot 前的 tabs.activate
+      (CDP 键鼠/截图直达渲染进程,无需标签页可见)
+- [x] 扩展:agent 新建标签页进专属窗口(focused:false 创建,用户窗口不被打扰;
+      窗口被用户关掉自动重建)
+- [x] e2e 强化:双会话并行(各自标签页/事件路由互不串扰)+ s1 全部操作在
+      非活动后台标签页上执行;bridge 单测换事件路由/handoff 队列用例
+- [x] go test/vet/gofmt、扩展 tsc+vitest 全绿
+- 已知边界:专属窗口最小化会暂停渲染,截图可能失败(错误如实返回);
+  同一标签页仍应只属一个会话(归属表保证)

@@ -261,7 +261,7 @@ func TestBridge_CallWithoutConn(t *testing.T) {
 	}
 }
 
-func TestBridge_EventDispatchAndPendingHandoff(t *testing.T) {
+func TestBridge_EventRoutingAndHandoffQueue(t *testing.T) {
 	b, addr := startBridge(t)
 	ws, _, err := dialExt(t, addr, HelloAuth{Code: b.Status().PairingCode})
 	if err != nil {
@@ -269,53 +269,65 @@ func TestBridge_EventDispatchAndPendingHandoff(t *testing.T) {
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 
-	// 无活跃会话时 handoff 暂存
-	handoff, _ := json.Marshal(Message{Event: EventHandoff, TabID: 7,
-		Info: &TabInfo{TabID: 7, URL: "https://x.com", Controlled: true}})
-	_ = ws.Write(context.Background(), websocket.MessageText, handoff)
+	// handoff 进待领队列(FIFO),会话按需认领
+	for _, tab := range []int{7, 8} {
+		handoff, _ := json.Marshal(Message{Event: EventHandoff, TabID: tab,
+			Info: &TabInfo{TabID: tab, URL: "https://x.com", Controlled: true}})
+		_ = ws.Write(context.Background(), websocket.MessageText, handoff)
+	}
 	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if tab := b.TakePendingHandoff(); tab != nil {
-			if tab.TabID != 7 {
-				t.Fatalf("暂存 handoff 不对: %+v", tab)
+	var first *TabInfo
+	for first == nil {
+		if first = b.TakePendingHandoff(); first == nil {
+			if time.Now().After(deadline) {
+				t.Fatal("handoff 未入队")
 			}
-			break
+			time.Sleep(10 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("handoff 未暂存")
-		}
-		time.Sleep(10 * time.Millisecond)
+	}
+	second := b.TakePendingHandoff()
+	if first.TabID != 7 || second == nil || second.TabID != 8 {
+		t.Fatalf("队列顺序不对: %+v %+v", first, second)
+	}
+	if b.TakePendingHandoff() != nil {
+		t.Fatal("队列应已取空")
 	}
 
-	// 有回调时事件直达
-	got := make(chan Message, 1)
-	b.SetEventHandler(func(m Message) { got <- m })
-	ev, _ := json.Marshal(Message{Event: EventTabRemoved, TabID: 7})
-	_ = ws.Write(context.Background(), websocket.MessageText, ev)
+	// 事件按 tab 归属路由到对应会话,无归属的事件丢弃
+	s1 := make(chan Message, 4)
+	s2 := make(chan Message, 4)
+	b.RegisterSession("s1", func(m Message) { s1 <- m })
+	b.RegisterSession("s2", func(m Message) { s2 <- m })
+	b.ClaimTab(7, "s1")
+	b.ClaimTab(8, "s2")
+	for _, tab := range []int{7, 8, 9} { // 9 无归属
+		ev, _ := json.Marshal(Message{Event: EventTabUpdated, TabID: tab})
+		_ = ws.Write(context.Background(), websocket.MessageText, ev)
+	}
+	expect := func(ch chan Message, tab int, name string) {
+		select {
+		case m := <-ch:
+			if m.TabID != tab {
+				t.Fatalf("%s 收到错误 tab 的事件: %+v", name, m)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s 未收到事件", name)
+		}
+	}
+	expect(s1, 7, "s1")
+	expect(s2, 8, "s2")
+
+	// 注销会话即释放其全部标签页归属,事件不再派发
+	b.UnregisterSession("s1")
+	ev7, _ := json.Marshal(Message{Event: EventTabUpdated, TabID: 7})
+	_ = ws.Write(context.Background(), websocket.MessageText, ev7)
+	ev8, _ := json.Marshal(Message{Event: EventTabUpdated, TabID: 8})
+	_ = ws.Write(context.Background(), websocket.MessageText, ev8)
+	expect(s2, 8, "s2(栅栏)") // 同连接顺序投递:s2 收到 ev8 时 ev7 必已处理完
 	select {
-	case m := <-got:
-		if m.Event != EventTabRemoved || m.TabID != 7 {
-			t.Fatalf("事件不对: %+v", m)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("事件未派发")
-	}
-}
-
-func TestBridge_LeaseMutex(t *testing.T) {
-	b, _ := startBridge(t)
-	if err := b.Acquire("s1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.Acquire("s1"); err != nil {
-		t.Fatal("同一持有者重入应成功")
-	}
-	if err := b.Acquire("s2"); err == nil {
-		t.Fatal("他人持有时应互斥")
-	}
-	b.Release("s1")
-	if err := b.Acquire("s2"); err != nil {
-		t.Fatal("释放后应可获取")
+	case m := <-s1:
+		t.Fatalf("注销后不应再收到事件: %+v", m)
+	default:
 	}
 }
 

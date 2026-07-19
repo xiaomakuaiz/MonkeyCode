@@ -17,9 +17,9 @@ import {
 } from "./client";
 import { cloudModelLabel } from "./cloud";
 import { b64decode } from "./codec";
-import { isImeEnter, markImeEnd } from "./chat";
+import { COL_MAX, isImeEnter, markImeEnd } from "./chat";
 import { LogList } from "./components";
-import { IconCloud, IconSend, IconX } from "./icons";
+import { IconCloud, IconDots, IconGlobe, IconSend, IconStop, IconX } from "./icons";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Frame } from "./types";
 
@@ -258,10 +258,10 @@ export function CloudTaskView({
     connRef.current?.send("user-cancel");
   };
 
-  // 终止任务(REST stop);确认一次
-  const [confirmStop, setConfirmStop] = useState(false);
+  // 终止任务(REST stop);确认放在 ⋯ 菜单里(与 ChatView 删除会话的交互一致)
+  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
   const stopTask = async () => {
-    setConfirmStop(false);
+    setMenu("closed");
     try {
       await mcTaskStop(id);
       await refreshInfo();
@@ -271,60 +271,116 @@ export function CloudTaskView({
     }
   };
 
+  // 输入框随内容自适应高度(与 ChatView 一致)
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  }, [input]);
+
   const st = STATUS_LABEL[taskStatus] ?? { text: taskStatus, color: "var(--t4)" };
   const running = chat.running && taskStatus === "processing";
+  const roundNo = Math.max(1, chat.items.filter((it) => it.kind === "user").length);
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-      {/* 头部:标题 + 状态 + 模型 + 操作 */}
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 18px", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>
-        <IconCloud size={14} color="var(--warn)" style={{ flex: "none" }} />
-        <span className="ellipsis" title={label} style={{ fontSize: 13.5, fontWeight: 700, minWidth: 0 }}>
-          {label}
-        </span>
-        <span style={{ flex: "none", fontSize: 11, fontWeight: 600, color: st.color }}>{st.text}</span>
-        {meta?.model && (
-          <span className="ellipsis" style={{ flex: "none", maxWidth: 180, fontSize: 11, color: "var(--t5)" }}>
-            {cloudModelLabel(meta.model)}
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, position: "relative" }}>
+      {/* ==== 标题栏:几何与 ChatView 一致(56px 双行,空白区可拖拽窗口)==== */}
+      <div data-tauri-drag-region="" style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+          <span className="ellipsis" title={label} style={{ fontWeight: 700, fontSize: 13.5 }}>
+            {label}
           </span>
-        )}
-        <span style={{ flex: 1 }} />
-        {!ended && (
-          confirmStop ? (
-            <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
-              <span style={{ fontSize: 11.5, color: "var(--t4)" }}>确认终止任务?</span>
-              <button className="hv-errbg" onClick={() => void stopTask()} style={{ border: "none", background: "transparent", color: "var(--err)", fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: "3px 8px", borderRadius: 6 }}>
-                终止
-              </button>
-              <button className="hv" onClick={() => setConfirmStop(false)} style={{ border: "none", background: "transparent", color: "var(--t3)", fontSize: 11.5, cursor: "pointer", padding: "3px 8px", borderRadius: 6 }}>
-                取消
-              </button>
-            </span>
-          ) : (
-            <button
-              className="hv"
-              title="终止云端任务(虚拟机随之回收)"
-              onClick={() => setConfirmStop(true)}
-              style={{ flex: "none", border: "none", background: "transparent", color: "var(--err)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: "3px 9px", borderRadius: 6 }}
-            >
-              终止任务
-            </button>
-          )
-        )}
+          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
+            <IconCloud size={11} color="var(--t6)" />
+            <span style={{ fontWeight: 600, color: st.color, flex: "none" }}>{st.text}</span>
+            {meta?.model && (
+              <>
+                <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+                <span className="ellipsis">{cloudModelLabel(meta.model)}</span>
+              </>
+            )}
+            <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+            <span style={{ flex: "none" }}>云端任务</span>
+          </span>
+        </div>
+        <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
         <button
           className="hv"
-          title="在浏览器中打开(完整功能:文件/终端/预览)"
+          title="在浏览器中打开完整控制台(文件/终端/预览)"
           onClick={() => openExternal(`https://${mcHost}/console/task/${id}`)}
-          style={{ flex: "none", border: "none", background: "transparent", color: "var(--t4)", fontSize: 11.5, cursor: "pointer", padding: "3px 9px", borderRadius: 6 }}
+          style={{
+            height: 28,
+            border: "1px solid var(--line)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "0 12px",
+            borderRadius: 8,
+            background: "var(--card)",
+            fontSize: 12,
+            color: "var(--t2)",
+            cursor: "pointer",
+            fontWeight: 600,
+            boxShadow: "var(--cardSh)",
+            flex: "none",
+          }}
         >
+          <IconGlobe size={12} color="var(--t3)" />
           网页打开
         </button>
-        <button className="hv2 icon-btn" title="关闭 (esc)" onClick={onClose} style={{ flex: "none", width: 24, height: 24 }}>
+        <div style={{ position: "relative", flex: "none" }}>
+          <button
+            className="hv icon-btn"
+            title="更多"
+            onClick={() => setMenu(menu === "closed" ? "open" : "closed")}
+            style={{ width: 28, height: 28, borderRadius: 8, background: menu !== "closed" ? "var(--hov)" : "transparent" }}
+          >
+            <IconDots size={14} color="var(--t5)" />
+          </button>
+          {menu !== "closed" && (
+            <>
+              <div className="backdrop" onClick={() => setMenu("closed")} />
+              <div className="pop" style={{ position: "absolute", top: 32, right: 0, minWidth: 130 }}>
+                {menu === "open" ? (
+                  ended ? (
+                    <div style={{ padding: "6px 9px", fontSize: 11.5, color: "var(--t5)" }}>任务已结束</div>
+                  ) : (
+                    <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
+                      <IconStop color="var(--err)" />
+                      终止任务
+                    </button>
+                  )
+                ) : (
+                  <>
+                    <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
+                      终止后云端虚拟机将回收,任务不可继续。
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button
+                        className="hv-errbg menu-item"
+                        style={{ color: "var(--err)", fontWeight: 600 }}
+                        onClick={() => void stopTask()}
+                      >
+                        确认终止
+                      </button>
+                      <button className="hv menu-item" onClick={() => setMenu("closed")}>
+                        取消
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <button className="hv2 icon-btn" title="关闭 (esc)" onClick={onClose} style={{ flex: "none", width: 28, height: 28, borderRadius: 8 }}>
           <IconX size={11} color="var(--t4)" />
         </button>
       </div>
 
-      {/* 对话流 */}
+      {/* ==== 对话流:列宽/内距/滚动条预留与 ChatView 一致 ==== */}
       <div
         ref={scrollRef}
         onWheel={(e) => {
@@ -334,14 +390,14 @@ export function CloudTaskView({
           const el = scrollRef.current;
           if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinnedRef.current = true;
         }}
-        style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "14px 24px 20px" }}
+        style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
       >
-        <div style={{ maxWidth: 780, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14, lineHeight: 1.8 }}>
+        <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
           {cursor && (
             <button
               className="hv"
               onClick={() => void loadEarlier()}
-              style={{ alignSelf: "center", border: "1px solid var(--line)", background: "var(--card)", color: "var(--t3)", fontSize: 11.5, borderRadius: 8, padding: "4px 14px", cursor: "pointer" }}
+              style={{ alignSelf: "center", border: "1px solid var(--line)", background: "var(--card)", color: "var(--t3)", fontSize: 11.5, borderRadius: 8, padding: "4px 14px", cursor: "pointer", boxShadow: "var(--cardSh)" }}
             >
               {loadingEarlier ? "加载中…" : "加载更早的对话"}
             </button>
@@ -361,73 +417,107 @@ export function CloudTaskView({
         </div>
       </div>
 
-      {err && (
-        <div style={{ padding: "6px 24px", fontSize: 12, color: "var(--err)", flex: "none" }}>{err}</div>
-      )}
+      {/* ==== 运行条 + composer:与 ChatView 同列宽同出血 ==== */}
+      <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {err && <div style={{ fontSize: 12, color: "var(--err)" }}>{err}</div>}
+        {running && (
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            <span className="spinner" />
+            <span style={{ fontWeight: 600, fontSize: 12.5 }}>云端执行中</span>
+            <span style={{ fontSize: 12, color: "var(--t5)" }}>第 {roundNo} 轮</span>
+            <span style={{ flex: 1 }} />
+            <button
+              className="hv-errbg"
+              title="中断当前执行(任务保留,可继续对话)"
+              onClick={cancelRun}
+              style={{
+                height: 26,
+                border: "1px solid var(--errBd)",
+                background: "transparent",
+                color: "var(--err)",
+                borderRadius: 13,
+                padding: "0 12px",
+                fontSize: 11.5,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+              }}
+            >
+              <IconStop />
+              停止
+            </button>
+          </div>
+        )}
 
-      {/* 底部:composer(运行中/排队中可发;结束态提示只读) */}
-      <div style={{ flex: "none", padding: "10px 24px 14px", borderTop: "1px solid var(--line)" }}>
-        <div style={{ maxWidth: 780, margin: "0 auto" }}>
-          {ended ? (
-            <div style={{ fontSize: 12, color: "var(--t5)", textAlign: "center", padding: "4px 0" }}>
-              任务已结束,只读回放。需要继续可在网页端重新派发。
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 8, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "8px 10px" }}>
-              <textarea
-                value={input}
-                rows={1}
-                disabled={taskStatus === "pending"}
-                onChange={(e) => setInput(e.target.value)}
-                onCompositionEnd={markImeEnd}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
-                    e.preventDefault();
-                    sendMsg();
-                  }
-                }}
-                placeholder={taskStatus === "pending" ? "云端环境启动中,就绪后可对话…" : "继续对话…(Enter 发送)"}
-                style={{ flex: 1, border: "none", outline: "none", resize: "none", background: "transparent", color: "var(--t1)", fontSize: 13, lineHeight: 1.6, maxHeight: 120, minWidth: 0 }}
-              />
-              {running && (
-                <button
-                  className="hv"
-                  title="中断当前执行(任务保留,可继续对话)"
-                  onClick={cancelRun}
-                  style={{ flex: "none", border: "1px solid var(--line)", background: "var(--card)", color: "var(--t3)", fontSize: 11.5, borderRadius: 8, padding: "5px 10px", cursor: "pointer" }}
-                >
-                  停止
-                </button>
-              )}
+        {ended ? (
+          <div style={{ fontSize: 12, color: "var(--t5)", textAlign: "center", padding: "4px 0" }}>
+            任务已结束,只读回放。需要继续可新建云端任务。
+          </div>
+        ) : (
+          <div
+            style={{
+              background: "var(--panel)",
+              border: "1px solid var(--inputBd)",
+              borderRadius: 12,
+              boxShadow: "var(--panelSh)",
+              display: "flex",
+              flexDirection: "column",
+              margin: "0 -12px", // 光学对齐出血,与 ChatView composer 一致
+            }}
+          >
+            <textarea
+              ref={taRef}
+              rows={2}
+              value={input}
+              disabled={taskStatus === "pending"}
+              onChange={(e) => setInput(e.target.value)}
+              onCompositionEnd={markImeEnd}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
+                  e.preventDefault();
+                  sendMsg();
+                }
+              }}
+              placeholder={taskStatus === "pending" ? "云端环境启动中,就绪后可对话…" : "继续对话…"}
+              style={{
+                border: "none",
+                outline: "none",
+                resize: "none",
+                background: "transparent",
+                color: "var(--t1)",
+                padding: "12px 15px 2px",
+                fontSize: 13,
+                lineHeight: 1.5,
+                maxHeight: 160,
+                display: "block",
+                width: "100%",
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 10px" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--ok)" : "var(--t6)", flex: "none" }} />
+                <span className="ellipsis">{status} · 运行在云端,关掉客户端也会继续</span>
+              </span>
+              <span style={{ flex: 1 }} />
               <button
-                className="hv-acc"
-                title="发送"
+                className="hv-acc icon-btn"
+                title="发送 ↩ · 换行 ⇧↩"
                 onClick={sendMsg}
-                disabled={taskStatus === "pending" || !input.trim()}
                 style={{
-                  flex: "none",
-                  width: 30,
-                  height: 30,
-                  border: "none",
+                  width: 27,
+                  height: 27,
                   borderRadius: 8,
                   background: "var(--acc)",
-                  color: "var(--onAcc)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: taskStatus === "pending" || !input.trim() ? 0.45 : 1,
+                  opacity: taskStatus !== "pending" && input.trim() ? 1 : 0.45,
                 }}
               >
-                <IconSend size={12} />
+                <IconSend />
               </button>
             </div>
-          )}
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--t5)" }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--ok)" : "var(--t6)", flex: "none" }} />
-            <span className="ellipsis">{ended ? "任务已结束" : status} · 运行在云端服务器,关掉客户端也会继续</span>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -40,7 +40,8 @@ const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
 
 /** 对话/composer 共用列宽:680 起随窗口加宽,宽屏封顶 860(保持可读行长) */
-const COL_MAX = "clamp(680px, 55vw, 860px)";
+/** 对话列宽(ChatView 与云端任务视图共用,两处几何保持一致) */
+export const COL_MAX = "clamp(680px, 55vw, 860px)";
 
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
 

@@ -335,6 +335,19 @@ func TestE2E_ChromiumExtension(t *testing.T) {
 		t.Fatalf("navigate 结果缺少标题/正文: %s", out)
 	}
 
+	// 多会话并行:第二个会话开自己的标签页,同窗口内 s1 的标签页随之转入
+	// 后台——后续 s1 的快照/点击/输入/截图全部在非活动标签页上执行,
+	// 即"不抢前台"的真实覆盖(CDP 直达渲染进程,无需标签页可见)。
+	s2 := NewSession(b, "e2e-2")
+	defer s2.Close()
+	out2, err := s2.navigate(ctx, page.URL+"?session=2")
+	if err != nil {
+		t.Fatalf("s2 navigate(多会话并行): %v", err)
+	}
+	if !strings.Contains(out2, "E2E 测试页") {
+		t.Fatalf("s2 navigate 结果不对: %s", out2)
+	}
+
 	snap, err := s.snapshot(ctx)
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
@@ -390,13 +403,25 @@ func TestE2E_ChromiumExtension(t *testing.T) {
 		t.Fatalf("截图应为 [image, text] 块: display=%q", display)
 	}
 
-	// tabs:列表应含受控的当前标签页
+	// tabs:列表应含受控的当前标签页(两个会话各有一个受控标签页)
 	tabsOut, err := s.tabsOp(ctx, "list", 0, "")
 	if err != nil {
 		t.Fatalf("tabs list: %v", err)
 	}
 	if !strings.Contains(tabsOut, "[受控]") || !strings.Contains(tabsOut, "[当前]") {
 		t.Fatalf("标签页列表缺少受控/当前标注:\n%s", tabsOut)
+	}
+	if strings.Count(tabsOut, "[受控]") < 2 {
+		t.Fatalf("应有两个受控标签页(多会话并行):\n%s", tabsOut)
+	}
+
+	// s2 在自己的标签页上独立操作(事件路由互不串扰)
+	snap2, err := s2.snapshot(ctx)
+	if err != nil {
+		t.Fatalf("s2 snapshot: %v", err)
+	}
+	if !strings.Contains(snap2, "session=2") && !strings.Contains(snap2, "点我") {
+		t.Fatalf("s2 快照不对:\n%s", snap2)
 	}
 
 	// ref 失效闭环:导航后旧 ref 应报错引导重新 snapshot
