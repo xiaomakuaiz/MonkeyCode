@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 )
 
@@ -111,10 +112,34 @@ func (t *agentTool) Title(input json.RawMessage) string {
 }
 
 func (t *agentTool) Execute(ctx context.Context, _ *tools.Env, input json.RawMessage) (string, error) {
+	res, err := t.call(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	text := renderResult(res)
+	if strings.TrimSpace(text) == "" {
+		text = "(无输出)"
+	}
+	return truncateOutput(text, 48*1024), nil
+}
+
+// ExecuteBlocks 富内容路径:图片内容转为模型可见的图片块(浏览器类 MCP 的
+// 截图工具依赖它),纯文本结果退化为单文本块(loop 压平,历史形状不变)。
+func (t *agentTool) ExecuteBlocks(ctx context.Context, _ *tools.Env, input json.RawMessage) ([]provider.ContentBlock, string, error) {
+	res, err := t.call(ctx, input)
+	if err != nil {
+		return nil, "", err
+	}
+	blocks, display := resultToBlocks(res)
+	return blocks, display, nil
+}
+
+// call 调用 MCP 工具:参数解析、超时、IsError 统一处理。
+func (t *agentTool) call(ctx context.Context, input json.RawMessage) (*sdk.CallToolResult, error) {
 	var args map[string]any
 	if len(input) > 0 {
 		if err := json.Unmarshal(input, &args); err != nil {
-			return "", fmt.Errorf("工具参数 JSON 解析失败: %v。请修正参数后重试", err)
+			return nil, fmt.Errorf("工具参数 JSON 解析失败: %v。请修正参数后重试", err)
 		}
 	}
 
@@ -126,19 +151,68 @@ func (t *agentTool) Execute(ctx context.Context, _ *tools.Env, input json.RawMes
 	})
 	if err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("MCP 工具调用超时(%s)", callTimeout)
+			return nil, fmt.Errorf("MCP 工具调用超时(%s)", callTimeout)
 		}
-		return "", fmt.Errorf("MCP 工具调用失败: %w", err)
+		return nil, fmt.Errorf("MCP 工具调用失败: %w", err)
 	}
-
-	text := renderResult(res)
 	if res.IsError {
-		return "", fmt.Errorf("MCP 工具返回错误: %s", truncateStr(text, 2000))
+		return nil, fmt.Errorf("MCP 工具返回错误: %s", truncateStr(renderResult(res), 2000))
 	}
+	return res, nil
+}
+
+// resultToBlocks 把 MCP 结果转为内容块:图片经规范化为图片块(在前),
+// 文本合并截断为单块(在后)。无图片时仅返回单文本块。
+func resultToBlocks(res *sdk.CallToolResult) ([]provider.ContentBlock, string) {
+	var images []provider.ContentBlock
+	var texts []string
+	imgNote := ""
+	for _, c := range res.Content {
+		switch v := c.(type) {
+		case *sdk.TextContent:
+			texts = append(texts, v.Text)
+		case *sdk.ImageContent:
+			block, dims, err := tools.ImageBlockFromBytes(v.Data, v.MIMEType)
+			if err != nil {
+				texts = append(texts, fmt.Sprintf("[图片处理失败: %v]", err))
+				continue
+			}
+			images = append(images, block)
+			imgNote = dims
+		default:
+			texts = append(texts, fmt.Sprintf("[不支持的内容类型 %T]", c))
+		}
+	}
+	text := strings.Join(texts, "\n")
+	if strings.TrimSpace(text) == "" && res.StructuredContent != nil {
+		if data, err := json.Marshal(res.StructuredContent); err == nil {
+			text = string(data)
+		}
+	}
+	text = truncateOutput(text, 48*1024)
+
+	if len(images) == 0 {
+		if strings.TrimSpace(text) == "" {
+			text = "(无输出)"
+		}
+		return []provider.ContentBlock{{Type: provider.BlockText, Text: text}}, firstLine(text)
+	}
+	display := fmt.Sprintf("%d 张图片(%s)", len(images), imgNote)
 	if strings.TrimSpace(text) == "" {
-		text = "(无输出)"
+		text = display
+	} else {
+		display += " " + firstLine(text)
 	}
-	return truncateOutput(text, 48*1024), nil
+	blocks := append(images, provider.ContentBlock{Type: provider.BlockText, Text: text})
+	return blocks, truncateStr(display, 80)
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return truncateStr(s, 80)
 }
 
 // renderResult 拼接结果内容:text 块优先,空则回退 structuredContent。

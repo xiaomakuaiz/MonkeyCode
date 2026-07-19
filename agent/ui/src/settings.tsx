@@ -8,17 +8,20 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { BaizhiCard } from "./baizhi";
 import {
   baizhiStatus,
+  getBrowserExtStatus,
   getHostConfig,
   inDesktopShell,
+  repairBrowserExt,
   saveHostConfig,
   updateCheck,
   updateInstall,
   type BaizhiStatus,
   type BaizhiSyncResult,
+  type BrowserExtStatus,
   type UpdateStatus,
 } from "./client";
 import { MONO } from "./components";
-import { IconBack, IconGear, IconMonitor, IconPlus, IconSpark } from "./icons";
+import { IconBack, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
@@ -189,6 +192,115 @@ function AboutCard({
   );
 }
 
+// ---- 浏览器扩展卡(扩展桥状态/配对;内核 HTTP 状态端点,桌面与浏览器模式通用) ----
+
+function BrowserExtCard() {
+  const [st, setSt] = useState<BrowserExtStatus | null>(null);
+  const [fetchErr, setFetchErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const refresh = async () => {
+    try {
+      setSt(await getBrowserExtStatus());
+      setFetchErr("");
+    } catch (e) {
+      setFetchErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  // 挂载即拉取 + 5s 轮询(仅本分类页挂载期间;配对/连接状态变化靠它反映)
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  const repair = async () => {
+    setBusy(true);
+    try {
+      setSt(await repairBrowserExt());
+      setFetchErr("");
+    } catch (e) {
+      setFetchErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const code = st?.pairing_code ?? "";
+  const codeShown = code ? `${code.slice(0, 4)}-${code.slice(4)}` : "";
+  const copyCode = () => {
+    void navigator.clipboard?.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  const dot = (color: string) => (
+    <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, flex: "none", display: "inline-block" }} />
+  );
+
+  let statusLine: JSX.Element;
+  if (fetchErr) {
+    statusLine = <>{dot("var(--err)")}<span>状态读取失败: {fetchErr}</span></>;
+  } else if (!st) {
+    statusLine = <>{dot("var(--t5)")}<span>读取状态中…</span></>;
+  } else if (!st.enabled) {
+    statusLine = <>{dot("var(--err)")}<span>扩展桥未启用{st.error ? `: ${st.error}` : ""}</span></>;
+  } else if (st.connected) {
+    statusLine = (
+      <>
+        {dot("var(--ok)")}
+        <span>
+          已连接 · {st.browser_name || "浏览器"}
+          {st.browser_version ? ` ${st.browser_version}` : ""}
+        </span>
+      </>
+    );
+  } else if (st.paired) {
+    statusLine = <>{dot("var(--warn)")}<span>已配对,等待扩展连接(浏览器未开或扩展未启用)</span></>;
+  } else {
+    statusLine = <>{dot("var(--warn)")}<span>未配对</span></>;
+  }
+
+  return (
+    <>
+      <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--t2)", fontWeight: 600 }}>
+          {statusLine}
+          <span style={{ flex: 1 }} />
+          {st?.enabled && st.paired && (
+            <button className="hv" onClick={() => !busy && void repair()} style={{ ...whiteBtn, flex: "none", opacity: busy ? 0.7 : 1 }}>
+              重新配对
+            </button>
+          )}
+        </div>
+        {st?.enabled && !st.paired && code && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 12, color: "var(--t4)", flex: "none" }}>配对码</span>
+            <span style={{ fontFamily: MONO, fontSize: 18, fontWeight: 700, letterSpacing: 2, color: "var(--t1)" }}>{codeShown}</span>
+            <button className="hv" onClick={copyCode} style={{ ...whiteBtn, height: 24, padding: "0 9px", fontSize: 11.5, flex: "none" }}>
+              {copied ? "已复制" : "复制"}
+            </button>
+          </div>
+        )}
+        {st?.enabled && st.addr && (
+          <span style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>桥接地址: {st.addr}</span>
+        )}
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--t4)", lineHeight: 1.8 }}>
+        安装 MonkeyCode 浏览器扩展后,agent 可以在你的浏览器里打开网页、点击、输入、截图(共享登录态,操作前会请求授权):
+        <ol style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+          <li>在 Chrome/Edge 打开扩展管理页(chrome://extensions),开启「开发者模式」,「加载已解压的扩展程序」选择仓库的 browser-extension/dist 目录(构建见其 README);</li>
+          <li>点击扩展图标 → 选项,填入上方配对码完成配对;</li>
+          <li>状态变为「已连接」即可在对话中使用;操作标签页顶部会显示浏览器自带的调试提示条,点击其「取消」即收回控制。</li>
+        </ol>
+        操作你已打开的页面:点扩展图标 →「把此标签页交给 agent 操作」。
+      </div>
+    </>
+  );
+}
+
 const emptyModel = (): HostModel => ({
   name: "",
   provider: "anthropic",
@@ -221,12 +333,13 @@ function replaceBaizhiGroup<T extends { name: string; source?: string }>(
 
 // ---- 分类导航 ----
 
-type SectionKey = "account" | "models" | "mcp" | "general";
+type SectionKey = "account" | "models" | "mcp" | "browser" | "general";
 
 const NAV: { key: SectionKey; label: string; icon: (p: { size?: number; color?: string }) => JSX.Element }[] = [
   { key: "account", label: "百智云账号", icon: BaizhiLogo },
   { key: "models", label: "模型", icon: IconSpark },
   { key: "mcp", label: "MCP 服务器", icon: IconMonitor },
+  { key: "browser", label: "浏览器", icon: IconGlobe },
   { key: "general", label: "通用", icon: IconGear },
 ];
 
@@ -903,6 +1016,7 @@ export function SettingsView({
             {active === "account" && accountSection()}
             {active === "models" && modelsSection()}
             {active === "mcp" && mcpSection()}
+            {active === "browser" && <BrowserExtCard />}
             {active === "general" && generalSection()}
             {err && !dirty && <div style={{ fontSize: 12.5, color: "var(--err)" }}>{err}</div>}
           </div>

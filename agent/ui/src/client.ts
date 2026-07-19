@@ -95,6 +95,27 @@ export function uploadFileURL(sessionId: string, path: string): string {
   return `/api/sessions/${sessionId}/uploads/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
 }
 
+// ==================== 浏览器扩展桥(内核进程级状态) ====================
+
+/** /api/browser/status 应答:扩展桥监听/配对/连接状态(设置页展示)。 */
+export interface BrowserExtStatus {
+  enabled: boolean;
+  addr?: string;
+  error?: string;
+  paired: boolean;
+  connected: boolean;
+  browser_name?: string;
+  browser_version?: string;
+  /** 未配对时的一次性配对码(用户填进扩展 options 完成配对) */
+  pairing_code?: string;
+}
+
+export const getBrowserExtStatus = () => api<BrowserExtStatus>("/api/browser/status");
+
+/** 重置配对:吊销扩展长期凭据并生成新配对码(扩展侧需重新配对)。 */
+export const repairBrowserExt = () =>
+  api<BrowserExtStatus>("/api/browser/repair", { method: "POST" });
+
 // ==================== 百智云账号(内核代理;凭证 cookie 不出内核) ====================
 
 export interface BaizhiStatus {

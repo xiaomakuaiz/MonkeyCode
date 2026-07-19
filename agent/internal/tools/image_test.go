@@ -111,3 +111,60 @@ func TestReadFile_MissingImage(t *testing.T) {
 	}
 }
 
+// ==================== ImageBlockFromBytes:内存字节入口(MCP/浏览器截图共用) ====================
+
+func encodeTestPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestImageBlockFromBytes_ScaleDown(t *testing.T) {
+	block, dims, err := ImageBlockFromBytes(encodeTestPNG(t, 3136, 1568), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block.Type != provider.BlockImage || block.Source == nil {
+		t.Fatalf("应为图片块: %+v", block)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(block.Source.Data)
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Dx() != 1568 || img.Bounds().Dy() != 784 {
+		t.Fatalf("应缩放到 1568×784,实际 %dx%d", img.Bounds().Dx(), img.Bounds().Dy())
+	}
+	if dims != "1568×784,已缩放以适配模型" {
+		t.Fatalf("dims 摘要不对: %q", dims)
+	}
+}
+
+func TestImageBlockFromBytes_PassthroughAndMediaTypeInfer(t *testing.T) {
+	src := encodeTestPNG(t, 80, 40)
+	// mediaType 留空:按解码格式推断
+	block, dims, err := ImageBlockFromBytes(src, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block.Source.MediaType != "image/png" {
+		t.Fatalf("应推断为 image/png: %q", block.Source.MediaType)
+	}
+	got, _ := base64.StdEncoding.DecodeString(block.Source.Data)
+	if !bytes.Equal(got, src) {
+		t.Fatal("合规小图应原始字节直传")
+	}
+	if dims != "80×40" {
+		t.Fatalf("dims 摘要不对: %q", dims)
+	}
+}
+
+func TestImageBlockFromBytes_BadBytes(t *testing.T) {
+	if _, _, err := ImageBlockFromBytes([]byte("not an image"), "image/png"); err == nil {
+		t.Fatal("坏字节应报错")
+	}
+}

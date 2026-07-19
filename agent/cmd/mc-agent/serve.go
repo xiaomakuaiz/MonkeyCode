@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chaitin/MonkeyCode/agent/internal/baizhi"
+	"github.com/chaitin/MonkeyCode/agent/internal/browser"
 	"github.com/chaitin/MonkeyCode/agent/internal/config"
 	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
@@ -27,8 +28,8 @@ import (
 var uiFS embed.FS
 
 func serveCmd() *cobra.Command {
-	var addr, token string
-	var noUI, watchStdin bool
+	var addr, token, extAddr string
+	var noUI, watchStdin, noBrowser bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "启动 localhost WS 宿主(桌面/浏览器 UI 通过帧协议直连)",
@@ -135,6 +136,25 @@ func serveCmd() *cobra.Command {
 			bz := baizhi.NewService("", filepath.Join(filepath.Dir(config.Path()), "baizhi-cookies.json"))
 			opts.AuthRoutes = bz.Routes
 
+			// 浏览器扩展桥:独立固定端口供 MonkeyCode 浏览器扩展连入。
+			// 创建失败仅告警(浏览器能力降级不可用,不阻塞 serve)。
+			var extBridge *browser.ExtBridge
+			if !noBrowser {
+				bridgeAddr := extAddr
+				fixed := cmd.Flags().Changed("ext-addr")
+				if env := os.Getenv("MC_AGENT_EXT_ADDR"); env != "" && !fixed {
+					bridgeAddr, fixed = env, true
+				}
+				dataDir := filepath.Dir(opts.SessionRoot)
+				b, err := browser.NewExtBridge(bridgeAddr, fixed, dataDir)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "警告: 浏览器扩展桥不可用: %v\n", err)
+				} else {
+					extBridge = b
+					opts.Browser = b
+				}
+			}
+
 			if !noUI {
 				ui, err := uiFS.ReadFile("uidist/index.html")
 				if err != nil {
@@ -162,6 +182,9 @@ func serveCmd() *cobra.Command {
 
 			ctx, cancel := signalContext()
 			defer cancel()
+			if extBridge != nil {
+				go extBridge.ListenAndServe(ctx)
+			}
 			if watchStdin {
 				// 宿主(桌面壳)持有本进程 stdin 管道;宿主任何方式退出
 				// 都会关闭管道,内核随之退出,避免孤儿进程
@@ -178,5 +201,7 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", "", "访问令牌(默认每次启动随机生成)")
 	cmd.Flags().BoolVar(&noUI, "no-ui", false, "不挂载内嵌调试界面")
 	cmd.Flags().BoolVar(&watchStdin, "watch-stdin", false, "stdin 关闭时退出(供桌面壳托管)")
+	cmd.Flags().StringVar(&extAddr, "ext-addr", "127.0.0.1:7440", "浏览器扩展桥监听地址(默认端口被占时自动顺延)")
+	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "禁用浏览器扩展桥(不注册 browser_ 工具)")
 	return cmd
 }

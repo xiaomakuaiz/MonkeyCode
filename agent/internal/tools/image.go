@@ -48,42 +48,54 @@ func ReadImageBlocks(path, displayPath string) ([]provider.ContentBlock, string,
 	if err != nil {
 		return nil, "", err
 	}
-	if len(data) > imageMaxSrcBytes {
-		return nil, "", fmt.Errorf("图片 %s 过大(%d 字节,上限 %d)", displayPath, len(data), imageMaxSrcBytes)
+	mediaType := imageMediaTypes[strings.ToLower(filepath.Ext(path))]
+	block, dims, err := ImageBlockFromBytes(data, mediaType)
+	if err != nil {
+		return nil, "", fmt.Errorf("图片 %s: %w", displayPath, err)
 	}
+	note := fmt.Sprintf("图片 %s(%s)", displayPath, dims)
+	blocks := []provider.ContentBlock{block, {Type: provider.BlockText, Text: note}}
+	return blocks, note, nil
+}
 
+// ImageBlockFromBytes 把内存中的图片字节规范化为模型可用的图片块
+// (解码 → 超限缩放 → 重编码);dims 为 "宽×高[,已缩放以适配模型]" 摘要,
+// 供调用方拼展示文本。mediaType 可空(按解码格式推断)。
+// MCP 图片结果与浏览器截图共用此入口。
+func ImageBlockFromBytes(data []byte, mediaType string) (provider.ContentBlock, string, error) {
+	if len(data) > imageMaxSrcBytes {
+		return provider.ContentBlock{}, "", fmt.Errorf("图片过大(%d 字节,上限 %d)", len(data), imageMaxSrcBytes)
+	}
 	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", fmt.Errorf("解码图片 %s 失败: %w", displayPath, err)
+		return provider.ContentBlock{}, "", fmt.Errorf("解码图片失败: %w", err)
 	}
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	if mediaType == "" {
+		mediaType = "image/" + format
+	}
 
 	// 尺寸合规且体积可接受:原始字节直传,零损
 	scaled := false
 	out := data
-	mediaType := imageMediaTypes[strings.ToLower(filepath.Ext(path))]
 	if max(w, h) > imageMaxEdge || len(data) > imageMaxOutBytes {
 		img = scaleDown(img, imageMaxEdge)
 		w, h = img.Bounds().Dx(), img.Bounds().Dy()
 		out, mediaType, err = encodeImage(img, format)
 		if err != nil {
-			return nil, "", fmt.Errorf("编码图片 %s 失败: %w", displayPath, err)
+			return provider.ContentBlock{}, "", fmt.Errorf("编码图片失败: %w", err)
 		}
 		scaled = true
 	}
 
-	note := fmt.Sprintf("图片 %s(%d×%d", displayPath, w, h)
+	dims := fmt.Sprintf("%d×%d", w, h)
 	if scaled {
-		note += ",已缩放以适配模型"
+		dims += ",已缩放以适配模型"
 	}
-	note += ")"
-	blocks := []provider.ContentBlock{
-		{Type: provider.BlockImage, Source: &provider.ImageSource{
-			Type: "base64", MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(out),
-		}},
-		{Type: provider.BlockText, Text: note},
-	}
-	return blocks, note, nil
+	block := provider.ContentBlock{Type: provider.BlockImage, Source: &provider.ImageSource{
+		Type: "base64", MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(out),
+	}}
+	return block, dims, nil
 }
 
 // scaleDown 等比缩放到最长边 ≤ maxEdge(CatmullRom,质量优先)。

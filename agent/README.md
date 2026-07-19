@@ -92,7 +92,32 @@ mc-agent mcp list          # 连接并列出各 server 的工具与连接状态
 - 传输支持 stdio(`command`)与 Streamable HTTP(`url`);
 - 权限:MCP 工具默认走审批,仅 server 声明 `readOnlyHint` 的工具自动放行;
   `--allow mcp__<server>__<tool>` 可预授权;
-- 单个 server 连接失败只告警跳过,不阻塞启动;连接随会话建立与关闭。
+- 单个 server 连接失败只告警跳过,不阻塞启动;连接随会话建立与关闭;
+- MCP 工具返回的图片(如浏览器类 MCP 的截图)会转为图片块送入视觉模型。
+
+## 浏览器控制(操作用户真实浏览器)
+
+serve/桌面模式内置浏览器控制:安装 **MonkeyCode 浏览器扩展**(仓库
+`browser-extension/`,Chrome/Edge)并配对后,agent 获得 `browser_` 工具集,
+在用户日常使用的浏览器里打开网页、点击、输入、截图——**共享登录态**,无需
+Node/Playwright 依赖。
+
+架构:扩展是"带鉴权的 chrome.debugger 哑代理"(WS 连内核
+`--ext-addr`,默认 127.0.0.1:7440,被占自动顺延),快照/元素定位/键鼠事件等
+语义全部在内核实现。
+
+- **配对**:内核每次启动生成一次性配对码(设置页「浏览器」分类展示),填入
+  扩展 options 一次即长期配对(凭据存数据目录 `ext-auth.json`,0600);
+- **工具**:`browser_navigate / browser_snapshot / browser_take_screenshot /
+  browser_click / browser_type / browser_select_option / browser_press_key /
+  browser_scroll / browser_tabs`;快照返回带编号(e1、e2...)的可交互元素列表,
+  交互按编号定位;
+- **权限**:快照/截图/滚动/标签页列表自动放行;导航/点击/输入等走审批,且
+  整类共用一次「记住」(不会每次点击都弹窗);
+- **标签页边界**:agent 默认只操作自己新开的标签页;操作用户已打开的页面
+  需用户点扩展图标主动「交给 agent」,随时可收回;操作中的标签页顶部会显示
+  Chrome 自带的调试提示条(无法隐藏),点其「取消」即断开控制;
+- CLI(`mc-agent -p`)模式不注册浏览器工具;`serve --no-browser` 可整体禁用。
 
 ## 技能(Skills)
 

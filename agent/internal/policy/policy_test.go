@@ -44,6 +44,51 @@ func TestBashAllowlist(t *testing.T) {
 	}
 }
 
+func TestBrowserToolPolicy(t *testing.T) {
+	e := New(ModeDefault, nil)
+	// 只读观察工具与标签页列表:直接放行
+	for _, req := range []Request{
+		{Tool: "browser_snapshot"},
+		{Tool: "browser_take_screenshot"},
+		{Tool: "browser_scroll"},
+		{Tool: "browser_tabs", Input: json.RawMessage(`{"action":"list"}`)},
+		{Tool: "browser_tabs"}, // 缺省 action 视同 list
+	} {
+		if err := e.Check(context.Background(), req); err != nil {
+			t.Fatalf("%s 应放行: %v", req.Tool, err)
+		}
+	}
+	// 交互工具:询问,rememberKey 归一为 "browser"
+	for _, tool := range []string{"browser_navigate", "browser_click", "browser_type",
+		"browser_select_option", "browser_press_key"} {
+		d, key := e.decide(Request{Tool: tool})
+		if d != Ask || key != "browser" {
+			t.Fatalf("%s 应 Ask 且归一记忆: d=%v key=%q", tool, d, key)
+		}
+	}
+	d, key := e.decide(Request{Tool: "browser_tabs", Input: json.RawMessage(`{"action":"new"}`)})
+	if d != Ask || key != "browser" {
+		t.Fatalf("tabs new 应 Ask 且归一记忆: d=%v key=%q", d, key)
+	}
+}
+
+// 一次「记住」放行全部浏览器交互工具
+func TestBrowserRememberOnce(t *testing.T) {
+	calls := 0
+	e := New(ModeDefault, func(ctx context.Context, req Request) (Response, error) {
+		calls++
+		return Response{Approved: true, Remember: true}, nil
+	})
+	for _, tool := range []string{"browser_navigate", "browser_click", "browser_type", "browser_press_key"} {
+		if err := e.Check(context.Background(), Request{Tool: tool, Title: tool}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("browser 类应一次审批全放行,calls = %d", calls)
+	}
+}
+
 func TestBashDenied(t *testing.T) {
 	e := New(ModeDefault, nil)
 	err := e.Check(context.Background(), bashReq("sudo rm -rf /"))

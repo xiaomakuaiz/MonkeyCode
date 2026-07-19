@@ -38,6 +38,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/chaitin/MonkeyCode/agent/internal/browser"
 	"github.com/chaitin/MonkeyCode/agent/internal/contextmgr"
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/loop"
@@ -86,6 +87,9 @@ type Options struct {
 	// 回调拿到路由器与鉴权包装器,注册的处理器须自行套 auth;
 	// server 对这些路由的业务零知识。
 	AuthRoutes func(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc)
+	// Browser 浏览器扩展桥(进程级单例,serve.go 创建并启动监听);
+	// 非 nil 时每个会话注册 browser_ 工具,并挂载 /api/browser/* 状态路由。
+	Browser *browser.ExtBridge
 }
 
 // Server localhost 宿主。
@@ -197,6 +201,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/uploads/{name}", s.auth(s.handleGetUpload))
 	mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	mux.HandleFunc("GET /ws", s.auth(s.handleWS))
+	if s.opts.Browser != nil {
+		mux.HandleFunc("GET /api/browser/status", s.auth(func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, s.opts.Browser.Status())
+		}))
+		mux.HandleFunc("POST /api/browser/repair", s.auth(func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, s.opts.Browser.Repair())
+		}))
+	}
 	if s.opts.AuthRoutes != nil {
 		s.opts.AuthRoutes(mux, s.auth)
 	}
@@ -968,6 +980,14 @@ func newLiveSession(s *Server, sess *session.Session) (*liveSession, error) {
 	ls.sub = sub
 	reg.Register(sub)
 	pol.AllowTool(sub.Name())
+
+	// 浏览器工具:经扩展桥控制用户真实浏览器。会话回收经
+	// engine.Close → registry.Close → Session.Close 自动剥离 debugger
+	if s.opts.Browser != nil {
+		for _, t := range browser.NewSession(s.opts.Browser, sess.Meta.ID).Tools() {
+			reg.Register(t)
+		}
+	}
 
 	var extras *contextmgr.Extras
 	var readRoots []string

@@ -77,6 +77,17 @@ export function IconMonitor({ size = 14, color = "var(--t5)", strokeWidth = 1.2,
   );
 }
 
+/** 地球(浏览器) */
+export function IconGlobe({ size = 14, color = "var(--t5)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ ...base, ...style }}>
+      <circle cx="8" cy="8" r="6" stroke={color} strokeWidth="1.2" />
+      <ellipse cx="8" cy="8" rx="2.6" ry="6" stroke={color} strokeWidth="1.1" />
+      <path d="M2.3 6h11.4M2.3 10h11.4" stroke={color} strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** 加号 */
 export function IconPlus({ size = 11, color = "var(--t4)", style }: IconProps) {
   return (

@@ -181,6 +181,25 @@ func (e *Engine) decide(req Request) (Decision, string) {
 	if readonlyTools[req.Tool] {
 		return Allow, req.Tool
 	}
+	// 浏览器工具:只读观察(快照/截图/滚动/标签页列表)放行;交互操作统一按
+	// "browser" 记忆——一次「记住」即放行整个任务的浏览器操作,免逐工具审批
+	if strings.HasPrefix(req.Tool, "browser_") {
+		switch req.Tool {
+		case "browser_snapshot", "browser_take_screenshot", "browser_scroll":
+			return Allow, req.Tool
+		case "browser_tabs":
+			var in struct {
+				Action string `json:"action"`
+			}
+			_ = json.Unmarshal(req.Input, &in)
+			if in.Action == "" || in.Action == "list" {
+				return Allow, req.Tool
+			}
+			return Ask, "browser"
+		default:
+			return Ask, "browser"
+		}
+	}
 	switch req.Tool {
 	case "write_file", "edit_file":
 		return Ask, req.Tool
