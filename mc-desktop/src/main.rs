@@ -27,6 +27,25 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
+
+// macOS 桌宠面板类:普通 NSWindow 被点击会激活应用——主窗口被系统提到
+// 最前并拿到焦点,触发"main 聚焦→藏桌宠",表现为"一点猴子主窗口就弹出、
+// 猴子消失"。NonactivatingPanel 点击不激活应用,彻底断根。
+// hides_on_deactivate 必须关:NSPanel 默认应用失活即隐藏,而桌宠恰恰在
+// 应用失活时出场,不关的话面板刚 show 就被系统藏掉。
+#[cfg(target_os = "macos")]
+tauri_panel! {
+    panel!(PetPanel {
+        config: {
+            can_become_key_window: false,
+            can_become_main_window: false,
+            is_floating_panel: true,
+            hides_on_deactivate: false
+        }
+    })
+}
 
 // ==================== 应用配置(壳持有) ====================
 
@@ -611,6 +630,15 @@ fn ensure_pet_window(app: &AppHandle) {
     match win {
         Ok(win) => {
             let _ = win.set_position(pet_position(app, saved));
+            // macOS:转 NonactivatingPanel(见文件头 PetPanel 注释);
+            // 无边框样式保持与 decorations(false) 一致
+            #[cfg(target_os = "macos")]
+            match win.to_panel::<PetPanel>() {
+                Ok(panel) => {
+                    panel.set_style_mask(StyleMask::empty().borderless().nonactivating_panel().into());
+                }
+                Err(e) => eprintln!("[mc-desktop] 桌宠转 NSPanel 失败(点击会激活应用): {e}"),
+            }
         }
         Err(e) => eprintln!("[mc-desktop] 桌宠窗口创建失败: {e}"),
     }
@@ -675,10 +703,14 @@ fn persist_pet_prefs(app: &AppHandle) {
 
 fn main() {
     eprintln!("[mc-desktop] main 进入");
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+    // 桌宠 NSPanel 转换(ensure_pet_window)依赖此插件注册的面板管理状态
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
         .manage(Kernel(Mutex::new(None)))
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(Tray(Mutex::new(None)))
