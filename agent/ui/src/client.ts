@@ -237,6 +237,8 @@ export interface CloudTaskDetail extends CloudTask {
   stats?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; llm_requests?: number };
   virtualmachine?: {
     id?: string;
+    /** VM 状态:pending/online/offline/hibernated(休眠,空闲超时后进入) */
+    status?: string;
     conditions?: { type?: string; status?: number; message?: string; progress?: number }[];
   };
 }

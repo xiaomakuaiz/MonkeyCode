@@ -125,6 +125,11 @@ export function CloudTaskView({
   const ended = taskStatus === "finished" || taskStatus === "error";
   const statusRef = useRef(taskStatus);
   statusRef.current = taskStatus;
+  // VM 状态:云环境空闲会休眠(hibernated);休眠期间发送入队,唤醒后自动投递
+  const vmId = meta?.virtualmachine?.id ?? "";
+  const vmStatus = meta?.virtualmachine?.status ?? "";
+  const hibernatedRef = useRef(false);
+  hibernatedRef.current = taskStatus === "processing" && vmStatus === "hibernated";
   const label = task.title || task.summary || task.content || meta?.title || meta?.summary || "云端任务";
 
   const rebuild = useCallback(() => {
@@ -135,6 +140,11 @@ export function CloudTaskView({
     try {
       const info = await mcTaskInfo(id);
       setMeta(info);
+      // VM 唤醒完成:休眠期间压着的排队消息可以投递了
+      if (info.virtualmachine?.status === "online" && hibernatedRef.current) {
+        hibernatedRef.current = false;
+        setTimeout(() => trySendRef.current(), 100);
+      }
       return info;
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -173,12 +183,31 @@ export function CloudTaskView({
     };
   }, [id, refreshInfo, rebuild]);
 
-  // 状态轮询:pending 3s(盯 VM 启动),processing 10s(刷新元数据/统计)
+  // 状态轮询:pending/休眠唤醒中 3s(盯状态翻转),processing 10s(刷新元数据)
+  const vmWaking = taskStatus === "processing" && vmStatus === "hibernated";
   useEffect(() => {
     if (ended) return;
-    const t = setInterval(() => void refreshInfo(), taskStatus === "pending" ? 3000 : 10000);
+    const fast = taskStatus === "pending" || vmWaking;
+    const t = setInterval(() => void refreshInfo(), fast ? 3000 : 10000);
     return () => clearInterval(t);
-  }, [taskStatus, ended, refreshInfo]);
+  }, [taskStatus, ended, vmWaking, refreshInfo]);
+
+  // 常驻控制流:进对话即连——服务端在控制连接建立时会自动唤醒休眠 VM,
+  // 且连接存续期间持续保活(不休眠);关闭视图断开,云端开始空闲倒计时。
+  // 与 web 控制台行为一致;switch_model/端口列表也复用这条连接。
+  const ctrlRef = useRef<ReturnType<typeof connectCloudControl> | null>(null);
+  useEffect(() => {
+    if (ended || !vmId) return;
+    const ctrl = connectCloudControl(id);
+    ctrlRef.current = ctrl;
+    // 连接触发唤醒后,尽快让轮询看到状态翻转
+    const t = setTimeout(() => void refreshInfo(), 1500);
+    return () => {
+      clearTimeout(t);
+      ctrl.close();
+      ctrlRef.current = null;
+    };
+  }, [id, ended, vmId, refreshInfo]);
 
   // 帧下发处理:cursor 帧捕获翻页游标,其余喂归约;轮结束把当前轮归档进历史
   const onFrames = useCallback(
@@ -290,11 +319,11 @@ export function CloudTaskView({
     [id, connHandlers],
   );
 
-  // 投递排队消息:任务在跑/流未同步/上一条未回执时按兵不动,条件齐了再发
+  // 投递排队消息:任务在跑/流未同步/上一条未回执/VM 休眠中都按兵不动,条件齐了再发
   const trySendQueued = useCallback(() => {
     if (!queuedRef.current) return;
     if (statusRef.current !== "processing") return;
-    if (!syncedRef.current || runningRef.current || sendingRef.current) return;
+    if (!syncedRef.current || runningRef.current || sendingRef.current || hibernatedRef.current) return;
     const q = queuedRef.current;
     setQueued("");
     dispatch(q);
@@ -307,7 +336,11 @@ export function CloudTaskView({
     if (!text || ended) return;
     setInput("");
     const idle =
-      statusRef.current === "processing" && syncedRef.current && !runningRef.current && !sendingRef.current;
+      statusRef.current === "processing" &&
+      syncedRef.current &&
+      !runningRef.current &&
+      !sendingRef.current &&
+      !hibernatedRef.current;
     if (idle) {
       dispatch(text);
     } else {
@@ -353,7 +386,6 @@ export function CloudTaskView({
   // 文件抽屉 / 终端面板(控制流与终端 WS 均走内核代理)
   const [filesOpen, setFilesOpen] = useState(false);
   const [termOpen, setTermOpen] = useState(false);
-  const vmId = meta?.virtualmachine?.id ?? "";
 
   // 回答 AI 提问:reply-question 经任务流上行(request_id 即 askId),乐观回写 UI
   const onAskAnswer = useCallback((askId: string, answers: Record<string, string | string[]>) => {
@@ -383,14 +415,16 @@ export function CloudTaskView({
     if (switching || modelId === meta?.model?.id) return;
     setSwitching(true);
     setErr("");
-    const ctrl = connectCloudControl(id);
+    // 优先复用常驻控制连接;不在(结束态等)才临时建一条
+    const shared = ctrlRef.current;
+    const ctrl = shared ?? connectCloudControl(id);
     try {
       await ctrl.call("switch_model", { model_id: modelId, load_session: true });
       await refreshInfo();
     } catch (e) {
       setErr("切换模型失败: " + (e instanceof Error ? e.message : String(e)));
     } finally {
-      ctrl.close();
+      if (!shared) ctrl.close();
       setSwitching(false);
     }
   };
@@ -407,12 +441,15 @@ export function CloudTaskView({
   const fetchPorts = () => {
     if (!vmId || ended) return;
     setPorts(null);
-    const ctrl = connectCloudControl(id);
+    const shared = ctrlRef.current;
+    const ctrl = shared ?? connectCloudControl(id);
     ctrl
       .call<{ ports?: PortInfo[] }>("port_forward_list")
       .then((r) => setPorts(r.ports ?? []))
       .catch(() => setPorts([]))
-      .finally(() => ctrl.close());
+      .finally(() => {
+        if (!shared) ctrl.close();
+      });
   };
 
   const st = STATUS_LABEL[taskStatus] ?? { text: taskStatus, color: "var(--t4)" };
@@ -430,6 +467,20 @@ export function CloudTaskView({
           <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color === "var(--t4)" ? "var(--t6)" : st.color, flex: "none" }} />
             <span style={{ fontWeight: 600, color: st.color, flex: "none" }}>{st.text}</span>
+            {/* 云环境休眠/唤醒外显:打开对话即触发唤醒(常驻控制连接),这里给可见反馈 */}
+            {vmWaking && (
+              <>
+                <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+                <span className="spinner" style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "var(--warn)", borderTopColor: "transparent" }} />
+                <span style={{ fontWeight: 600, color: "var(--warn)", flex: "none" }}>环境唤醒中</span>
+              </>
+            )}
+            {taskStatus === "processing" && vmStatus === "offline" && (
+              <>
+                <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+                <span style={{ fontWeight: 600, color: "var(--t5)", flex: "none" }}>环境离线</span>
+              </>
+            )}
             <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
             <IconCloud size={11} color="var(--t6)" />
             <span style={{ flex: "none" }}>云端</span>
@@ -699,7 +750,7 @@ export function CloudTaskView({
             <span style={{ color: "var(--t3)", flex: "none" }}>已排队</span>
             <span className="ellipsis" style={{ fontWeight: 600, flex: 1 }}>{queued}</span>
             <span style={{ color: "var(--t6)", flex: "none", fontSize: 11.5 }}>
-              {taskStatus === "pending" ? "环境就绪后自动发送" : "本轮结束后自动发送"}
+              {taskStatus === "pending" ? "环境就绪后自动发送" : vmWaking ? "环境唤醒后自动发送" : "本轮结束后自动发送"}
             </span>
             <button className="hv2 icon-btn" title="取消排队" onClick={() => setQueued("")} style={{ width: 20, height: 20, borderRadius: 5 }}>
               <IconX />
