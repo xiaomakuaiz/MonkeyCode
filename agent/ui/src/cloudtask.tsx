@@ -74,14 +74,12 @@ function vmCondition(meta: CloudTaskDetail | null): string {
 export function CloudTaskView({
   task,
   mcHost,
-  onClose,
   onTasksChanged,
 }: {
   /** 侧栏/新建入口带进来的任务(至少含 id;详情异步补全) */
   task: CloudTask;
   mcHost: string;
-  onClose: () => void;
-  /** 状态变化(停止/结束)后让 App 刷新侧栏列表 */
+  /** 状态变化(停止/结束)后让 App 刷新侧栏列表;关闭视图走 App 的 Esc/侧栏切换 */
   onTasksChanged?: () => void;
 }) {
   const id = task.id;
@@ -361,20 +359,22 @@ export function CloudTaskView({
           <span className="ellipsis" title={label} style={{ fontWeight: 700, fontSize: 13.5 }}>
             {label}
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
-            <IconCloud size={11} color="var(--t6)" />
+          <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color === "var(--t4)" ? "var(--t6)" : st.color, flex: "none" }} />
             <span style={{ fontWeight: 600, color: st.color, flex: "none" }}>{st.text}</span>
+            <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+            <IconCloud size={11} color="var(--t6)" />
+            <span style={{ flex: "none" }}>云端</span>
             {meta?.model && (
               <>
                 <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
                 <span className="ellipsis">{cloudModelLabel(meta.model)}</span>
               </>
             )}
-            <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
-            <span style={{ flex: "none" }}>云端任务</span>
           </span>
         </div>
         <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
+        {/* 头部只留两个控件(与本地会话一致):文件 + ⋯;终端/网页/预览/终止收进菜单 */}
         <button
           className="hv"
           title="浏览云端工作区文件(标注改动)"
@@ -399,56 +399,6 @@ export function CloudTaskView({
           <IconFolder size={12} />
           文件
         </button>
-        {vmId && !ended && (
-          <button
-            className="hv"
-            title="打开云端终端(直接操作虚拟机)"
-            onClick={() => setTermOpen((o) => !o)}
-            style={{
-              height: 28,
-              border: "1px solid var(--line)",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "0 12px",
-              borderRadius: 8,
-              background: termOpen ? "var(--hov)" : "var(--card)",
-              fontSize: 12,
-              color: "var(--t2)",
-              cursor: "pointer",
-              fontWeight: 600,
-              boxShadow: "var(--cardSh)",
-              flex: "none",
-            }}
-          >
-            <IconMonitor size={12} strokeWidth={1.4} color="var(--t3)" />
-            终端
-          </button>
-        )}
-        <button
-          className="hv"
-          title="在浏览器中打开完整控制台(预览/共享终端等)"
-          onClick={() => openExternal(`https://${mcHost}/console/task/${id}`)}
-          style={{
-            height: 28,
-            border: "1px solid var(--line)",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "0 12px",
-            borderRadius: 8,
-            background: "var(--card)",
-            fontSize: 12,
-            color: "var(--t2)",
-            cursor: "pointer",
-            fontWeight: 600,
-            boxShadow: "var(--cardSh)",
-            flex: "none",
-          }}
-        >
-          <IconGlobe size={12} color="var(--t3)" />
-          网页打开
-        </button>
         <div style={{ position: "relative", flex: "none" }}>
           <button
             className="hv icon-btn"
@@ -468,8 +418,34 @@ export function CloudTaskView({
               <div className="pop" style={{ position: "absolute", top: 32, right: 0, minWidth: 180 }}>
                 {menu === "open" ? (
                   <>
+                    {vmId && !ended && (
+                      <button
+                        className="hv menu-item"
+                        onClick={() => {
+                          setMenu("closed");
+                          setTermOpen((o) => !o);
+                        }}
+                        style={{ gap: 8 }}
+                      >
+                        <IconMonitor size={13} strokeWidth={1.4} color="var(--t3)" />
+                        <span style={{ flex: 1 }}>{termOpen ? "关闭终端" : "打开终端"}</span>
+                      </button>
+                    )}
+                    <button
+                      className="hv menu-item"
+                      title="完整控制台:预览/共享终端/文件下载等"
+                      onClick={() => {
+                        setMenu("closed");
+                        openExternal(`https://${mcHost}/console/task/${id}`);
+                      }}
+                      style={{ gap: 8 }}
+                    >
+                      <IconGlobe size={13} color="var(--t3)" />
+                      <span style={{ flex: 1 }}>在浏览器打开</span>
+                    </button>
                     {!ended && vmId && (
                       <>
+                        <span style={{ height: 1, background: "var(--line2)", margin: "4px 6px" }} />
                         <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: "var(--t6)", padding: "5px 9px 3px" }}>
                           在线预览
                         </span>
@@ -498,16 +474,16 @@ export function CloudTaskView({
                               </span>
                             </button>
                           ))}
-                        <span style={{ height: 1, background: "var(--line2)", margin: "4px 6px" }} />
                       </>
                     )}
-                    {ended ? (
-                      <div style={{ padding: "6px 9px", fontSize: 11.5, color: "var(--t5)" }}>任务已结束</div>
-                    ) : (
-                      <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
-                        <IconStop color="var(--err)" />
-                        终止任务
-                      </button>
+                    {!ended && (
+                      <>
+                        <span style={{ height: 1, background: "var(--line2)", margin: "4px 6px" }} />
+                        <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
+                          <IconStop color="var(--err)" />
+                          终止任务
+                        </button>
+                      </>
                     )}
                   </>
                 ) : (
@@ -533,9 +509,6 @@ export function CloudTaskView({
             </>
           )}
         </div>
-        <button className="hv2 icon-btn" title="关闭 (esc)" onClick={onClose} style={{ flex: "none", width: 28, height: 28, borderRadius: 8 }}>
-          <IconX size={11} color="var(--t4)" />
-        </button>
       </div>
 
       {/* ==== 对话流:列宽/内距/滚动条预留与 ChatView 一致 ==== */}
@@ -575,25 +548,39 @@ export function CloudTaskView({
         </div>
       </div>
 
-      {/* ==== 终端面板(底部,xterm;仅运行期展示)==== */}
-      {termOpen && vmId && !ended && (
-        <div style={{ flex: "none", height: 280, borderTop: "1px solid var(--line)", display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <div style={{ flex: "none", height: 30, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", background: "#22252a", color: "#aab2bd", fontSize: 11.5, fontWeight: 600 }}>
-            云端终端
-            <span style={{ fontWeight: 400, color: "#788089" }}>直接操作任务虚拟机</span>
-            <span style={{ flex: 1 }} />
-            <button className="icon-btn" title="关闭终端" onClick={() => setTermOpen(false)} style={{ width: 22, height: 22, borderRadius: 6 }}>
-              <IconX size={10} color="#aab2bd" />
-            </button>
-          </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <CloudTerminal vmId={vmId} />
-          </div>
-        </div>
-      )}
-
-      {/* ==== 运行条 + composer:与 ChatView 同列宽同出血 ==== */}
+      {/* ==== 运行条 + 终端卡 + composer:与 ChatView 同列宽同出血 ==== */}
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* 终端:对话列同宽的圆角深色悬浮卡(与 composer 同出血),融入卡片语言 */}
+        {termOpen && vmId && !ended && (
+          <div
+            style={{
+              height: 280,
+              margin: "0 -12px",
+              borderRadius: 12,
+              overflow: "hidden",
+              border: "1px solid var(--line)",
+              boxShadow: "var(--panelShLg)",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              background: "#1c1e22",
+              animation: "mcin .2s ease",
+            }}
+          >
+            <div style={{ flex: "none", height: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", background: "#24272c", borderBottom: "1px solid #2e3238" }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--ok)", flex: "none" }} />
+              <span style={{ color: "#c3cad3", fontSize: 11.5, fontWeight: 600 }}>云端终端</span>
+              <span style={{ color: "#6d7580", fontSize: 11 }}>任务虚拟机 · /workspace</span>
+              <span style={{ flex: 1 }} />
+              <button className="icon-btn" title="关闭终端" onClick={() => setTermOpen(false)} style={{ width: 22, height: 22, borderRadius: 6 }}>
+                <IconX size={10} color="#8b93a0" />
+              </button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <CloudTerminal vmId={vmId} />
+            </div>
+          </div>
+        )}
         {err && <div style={{ fontSize: 12, color: "var(--err)" }}>{err}</div>}
         {running && (
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -671,9 +658,12 @@ export function CloudTaskView({
               }}
             />
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 10px" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
+              <span
+                title={`${status} · 任务运行在云端服务器,关掉客户端也会继续`}
+                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--t5)", minWidth: 0 }}
+              >
                 <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--ok)" : "var(--t6)", flex: "none" }} />
-                <span className="ellipsis">{status} · 运行在云端,关掉客户端也会继续</span>
+                <span className="ellipsis">{status}</span>
               </span>
               <span style={{ flex: 1 }} />
               {/* 云端模型切换(经控制流 switch_model,保留会话上下文;执行中禁用) */}

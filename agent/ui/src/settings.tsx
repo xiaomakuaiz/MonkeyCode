@@ -817,13 +817,15 @@ export function SettingsView({
   // MCP 紧凑行(i 恒 mcps 真实索引);fragment 返回,由 mcpGroupCard 包分隔线
   const mcpRow = (m: McpEntry, i: number) => {
     const isOpen = mcpExpanded === i;
+    const disabled = !!m.extra?.disabled;
     return (
       <>
         <div
           className="hrow hv2"
           onClick={() => setMcpExpanded(isOpen ? null : i)}
-          style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: "pointer", userSelect: "none" }}
+          style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: "pointer", userSelect: "none", opacity: disabled ? 0.5 : 1 }}
         >
+          {m.source === SOURCE_BAIZHI && <BaizhiLogo size={14} />}
           <span className="ellipsis" style={{ fontSize: 12.5, fontFamily: MONO, color: m.name.trim() ? "var(--t1)" : "var(--t5)", flex: "none", maxWidth: 180 }}>
             {m.name.trim() || "未命名"}
           </span>
@@ -832,7 +834,19 @@ export function SettingsView({
             {mcpSummary(m)}
           </span>
           <span style={{ flex: 1 }} />
-          <span className="row-acts" style={{ display: "flex", alignItems: "center", fontSize: 12, flex: "none" }}>
+          <span className="row-acts" style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, flex: "none" }}>
+            <span
+              className="hv-t1"
+              style={{ color: disabled ? "var(--t5)" : "var(--acc)", fontWeight: 600 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const { disabled: _d, ...rest } = m.extra ?? {};
+                const extra = disabled ? rest : { ...rest, disabled: true };
+                patchMcp(i, { extra: Object.keys(extra).length ? extra : undefined });
+              }}
+            >
+              {disabled ? "启用" : "停用"}
+            </span>
             <span
               className="hv-err"
               style={{ color: "var(--t5)" }}

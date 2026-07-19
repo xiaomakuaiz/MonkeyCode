@@ -726,7 +726,6 @@ export default function App() {
             key={cloudTask.id}
             task={cloudTask}
             mcHost={mcHost}
-            onClose={closeCloudTask}
             onTasksChanged={() => void syncCloud()}
           />
         ) : isNewView ? (
