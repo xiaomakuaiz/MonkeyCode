@@ -158,6 +158,52 @@ export const baizhiSync = (knownKeys: string[]) =>
     body: JSON.stringify({ known_keys: knownKeys }),
   });
 
+// ==================== MonkeyCode 云端(百智会话桥接;凭证不出内核) ====================
+
+export interface McUser {
+  id?: string;
+  name?: string;
+  username?: string;
+  email?: string;
+  avatar_url?: string;
+}
+
+export interface McStatus {
+  logged_in: boolean;
+  /** 云端主机名(拼任务详情外链用,如 monkeycode-ai.com) */
+  host: string;
+  user?: McUser;
+}
+
+/** 云端任务(backend ProjectTask 的侧栏子集,字段与云端 JSON 一致)。
+ * 实测线上 title 常为空、任务文案落在 summary,展示优先 title → summary → content。 */
+export interface CloudTask {
+  id: string;
+  title?: string;
+  summary?: string;
+  content?: string;
+  status?: "pending" | "processing" | "error" | "finished";
+  created_at?: number;
+}
+
+export interface CloudTasksResp {
+  tasks?: CloudTask[];
+  page_info?: { total?: number; total_count?: number };
+}
+
+export const mcStatus = () => api<McStatus>("/api/mc/status");
+
+/** 桥接登录:内核用已有的百智云会话走 OAuth 换 monkeycode 会话。
+ * 未登录百智云或百智会话失效时报错(HTTP 401)。 */
+export const mcLogin = () =>
+  api<{ ok: boolean; user?: McUser }>("/api/mc/login", { method: "POST" });
+
+export const mcLogout = () =>
+  api<{ ok: boolean }>("/api/mc/logout", { method: "POST" });
+
+export const mcTasks = (page = 1, size = 20) =>
+  api<CloudTasksResp>(`/api/mc/tasks?page=${page}&size=${size}`);
+
 // ==================== 宿主(桌面壳)集成 ====================
 
 interface TauriGlobal {

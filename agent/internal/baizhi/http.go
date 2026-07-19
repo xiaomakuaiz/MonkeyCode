@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -24,6 +25,11 @@ func (s *Service) Routes(mux *http.ServeMux, auth func(http.HandlerFunc) http.Ha
 	mux.HandleFunc("POST /api/baizhi/wechat/start", auth(s.handleWechatStart))
 	mux.HandleFunc("GET /api/baizhi/wechat/poll", auth(s.handleWechatPoll))
 	mux.HandleFunc("POST /api/baizhi/sync", auth(s.handleSync))
+	// MonkeyCode 云端:百智会话桥接登录 + 云端任务代理
+	mux.HandleFunc("GET /api/mc/status", auth(s.handleMCStatus))
+	mux.HandleFunc("POST /api/mc/login", auth(s.handleMCLogin))
+	mux.HandleFunc("POST /api/mc/logout", auth(s.handleMCLogout))
+	mux.HandleFunc("GET /api/mc/tasks", auth(s.handleMCTasks))
 }
 
 // 发码含 PoW 求解 + 外网请求;登录同。给足超时但别无限等。
@@ -104,6 +110,70 @@ func (s *Service) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// ==================== MonkeyCode 云端 ====================
+
+func (s *Service) handleMCStatus(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	loggedIn, user, err := s.MonkeyCodeStatus(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	resp := map[string]any{"logged_in": loggedIn, "host": s.monkeyCodeHost()}
+	if len(user) > 0 {
+		resp["user"] = json.RawMessage(user)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleMCLogin 桥接登录(需已持有百智云会话;多跳外网请求,给足超时)。
+func (s *Service) handleMCLogin(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), upstreamTimeout)
+	defer cancel()
+	user, err := s.LoginMonkeyCode(ctx)
+	if err != nil {
+		status := http.StatusBadGateway
+		if isUnauthorized(err) {
+			status = http.StatusUnauthorized
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	resp := map[string]any{"ok": true}
+	if len(user) > 0 {
+		resp["user"] = json.RawMessage(user)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Service) handleMCLogout(w http.ResponseWriter, r *http.Request) {
+	s.MonkeyCodeLogout()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Service) handleMCTasks(w http.ResponseWriter, r *http.Request) {
+	page, size := 1, 20
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+		page = v
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("size")); err == nil && v > 0 && v <= 50 {
+		size = v
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	data, err := s.MonkeyCodeTasks(ctx, page, size)
+	if err != nil {
+		status := http.StatusBadGateway
+		if isUnauthorized(err) {
+			status = http.StatusUnauthorized
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, json.RawMessage(data))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

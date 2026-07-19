@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type Service struct {
 	http  *http.Client // API 短请求
 	lp    *http.Client // 微信授权页/二维码/长轮询(长轮询最长挂 ~25s)
 	store *cookieStore
+	mc    *cookieStore // MonkeyCode 云端会话,与百智会话独立(登出互不牵连)
 
 	wxMu       sync.Mutex
 	wx         *wechatLogin // 进行中的扫码会话(只保留最新)
@@ -45,12 +47,19 @@ func NewServiceWithEndpoints(ep Endpoints, cookiePath string) *Service {
 	// 不自动跟随重定向:微信回调等 302 的 Set-Cookie 要在首响应就吸收,
 	// 跟随会丢中间响应的 cookie(现有 API 端点均为 2xx JSON,不受影响)
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// MonkeyCode 会话与百智会话同目录、分文件:凭证语义不同(云端账号 vs
+	// 百智账号),一方登出不应顺带丢另一方
+	mcPath := ""
+	if cookiePath != "" {
+		mcPath = filepath.Join(filepath.Dir(cookiePath), "monkeycode-cookies.json")
+	}
 	return &Service{
 		ep:    ep,
 		base:  ep.Account,
 		http:  &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect},
 		lp:    &http.Client{Timeout: 40 * time.Second, CheckRedirect: noRedirect},
 		store: newCookieStore(cookiePath),
+		mc:    newCookieStore(mcPath),
 	}
 }
 
@@ -225,6 +234,15 @@ func (s *Service) callRaw(ctx context.Context, method, path string, body, out an
 // do 发请求:携带存储的 cookie,吸收响应的 Set-Cookie。
 // path 以 http 开头时视为绝对 URL(微信回调),否则拼在 base 后。
 func (s *Service) do(ctx context.Context, method, path string, body any) ([]byte, int, error) {
+	target := path
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		target = s.base + path
+	}
+	return s.doStore(ctx, s.store, method, target, body)
+}
+
+// doStore do 的底座:cookie 罐可指定(百智会话 / MonkeyCode 会话)。
+func (s *Service) doStore(ctx context.Context, store *cookieStore, method, target string, body any) ([]byte, int, error) {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -233,10 +251,6 @@ func (s *Service) do(ctx context.Context, method, path string, body any) ([]byte
 		}
 		reader = bytes.NewReader(data)
 	}
-	target := path
-	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
-		target = s.base + path
-	}
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return nil, 0, err
@@ -244,16 +258,16 @@ func (s *Service) do(ctx context.Context, method, path string, body any) ([]byte
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if h := s.store.header(req.URL); h != "" {
+	if h := store.header(req.URL); h != "" {
 		req.Header.Set("Cookie", h)
 	}
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("请求百智云失败: %w", err)
+		return nil, 0, fmt.Errorf("请求 %s 失败: %w", req.URL.Hostname(), err)
 	}
 	defer resp.Body.Close()
-	s.store.update(resp.Request.URL, resp.Cookies())
+	store.update(resp.Request.URL, resp.Cookies())
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {

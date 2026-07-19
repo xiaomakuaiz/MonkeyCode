@@ -86,6 +86,29 @@
       端点契约见下方"M2 收尾"节,后端确认后可直接照做)
 - [ ] Windows ConPTY 实测(阻塞:需 Windows 机器)、多模型冒烟分数矩阵(阻塞:需 GLM/Kimi/Qwen key)
 
+## MonkeyCode 云端账号同步 + 云端任务补齐(2026-07-18)✅
+
+> 目标:百智云登录成功后,内核复刻移动端的 OAuth 桥接(mc `/api/v1/users/login`
+> → 302 → baizhi `/oauth/authorize` 授权页 → 改写为 `/api/v1/oauth/authorize` API
+> 带百智 cookie → 302 回调落 monkeycode 会话),同步 monkeycode-ai.com 账号,
+> 并把 `GET /api/v1/users/tasks` 渲染进侧栏"云端任务"占位区。
+
+- [x] Go:`Endpoints.MonkeyCode`(env `MC_AGENT_MONKEYCODE_URL`)+ `monkeycode.go`
+      (桥接登录/status/tasks 代理;mc 会话独立落盘 monkeycode-cookies.json,0600;
+      cookie 按 host:port 分罐,百智/云端登出互不牵连)
+- [x] Go:本地路由 `/api/mc/{status,login,logout,tasks}` + 单测 3 例(假 mc + 假 baizhi
+      完整重定向链:授权页改写/会话独立/百智未登录与会话失效路径)
+- [x] UI:client.ts mc API;App.tsx 启动/离开设置页自动桥接同步 + 已同步时 60s 轮询;
+      sidebar.tsx 云端任务行(状态徽标,预览取最近 8 条,点击外开 `/console/task/:id`)
+- [x] 验证:go vet/test 全绿、tsc+vite 重建 uidist、7440 调试实例 + **真实生产链路**
+      跑通(百智会话 → 桥接拿到 monkeycode 用户 → 拉回真实任务列表 → 内核重启后
+      会话持久生效)+ Playwright e2e(侧栏渲染任务行/状态徽标/空态文案断言)
+
+**Review**:桥接完全复用移动端已验证的协议(未新增任何服务端契约);任务数据
+对内核不透明(RawMessage 直通),字段契约钉在 backend/domain/task.go。实测发现
+线上任务 title 常为空、文案在 summary,展示优先级 title→summary→content。
+遗留:侧栏仅预览+外链,云端任务的详情回放/派发(new task 的"云端"模式)另行实施。
+
 ## M2 收尾:平台对接实施计划(2026-07-13)
 
 > 设计依据:local-agent-design.md §6 登录流 / §3 上下文 / L180 改动清单。

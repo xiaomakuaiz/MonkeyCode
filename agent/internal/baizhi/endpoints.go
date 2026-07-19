@@ -16,6 +16,8 @@ type Endpoints struct {
 	ModelGateway string
 	// MCPGateway Agent 工具包(MCP 服务)。
 	MCPGateway string
+	// MonkeyCode MonkeyCode 云端(账号桥接登录 + 云端任务)。
+	MonkeyCode string
 }
 
 // 官方云默认地址。ai-models / model-square 是模型网关的历史别名,
@@ -24,11 +26,13 @@ const (
 	defaultAccount      = "https://baizhi.cloud"
 	defaultModelGateway = "https://ai-api-gateway.app.baizhi.cloud"
 	defaultMCPGateway   = "https://agent-toolkit.app.baizhi.cloud"
+	defaultMonkeyCode   = "https://monkeycode-ai.com"
 )
 
 // resolveEndpoints 组装最终地址:入参为空则取环境变量,再空则取官方云默认。
 // 环境变量:MC_AGENT_BAIZHI_URL(账号,保持既有名向后兼容)、
-// MC_AGENT_BAIZHI_MODEL_GATEWAY、MC_AGENT_BAIZHI_MCP_GATEWAY。
+// MC_AGENT_BAIZHI_MODEL_GATEWAY、MC_AGENT_BAIZHI_MCP_GATEWAY、
+// MC_AGENT_MONKEYCODE_URL(MonkeyCode 云端)。
 func resolveEndpoints(in Endpoints) Endpoints {
 	pick := func(explicit, env, def string) string {
 		v := explicit
@@ -44,5 +48,6 @@ func resolveEndpoints(in Endpoints) Endpoints {
 		Account:      pick(in.Account, "MC_AGENT_BAIZHI_URL", defaultAccount),
 		ModelGateway: pick(in.ModelGateway, "MC_AGENT_BAIZHI_MODEL_GATEWAY", defaultModelGateway),
 		MCPGateway:   pick(in.MCPGateway, "MC_AGENT_BAIZHI_MCP_GATEWAY", defaultMCPGateway),
+		MonkeyCode:   pick(in.MonkeyCode, "MC_AGENT_MONKEYCODE_URL", defaultMonkeyCode),
 	}
 }

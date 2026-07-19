@@ -164,3 +164,19 @@
   采样 childOffset = scrollTop - Δ,收敛值相等才算真对齐。
 - pkill 模式串会匹配到自己所在的复合命令行把 shell 一起杀掉(exit 144):
   模式里插字符类 `'scrolltest[ ]serve'` 或分独立调用执行。
+
+## 2026-07-18 补:云端账号桥接 + 调试进程管理
+
+- **跨端复用登录态优先找"已走通的客户端流程"照抄协议,别猜服务端契约**:
+  monkeycode 的百智 OAuth 桥接端点(`/api/v1/users/login` → 授权页 → 
+  `/api/v1/oauth/authorize` API → 回调)不在本仓库后端,但 mobile 的
+  WebView 桥接(login.tsx)就是活契约——Go 里把"WebView 导航拦截"换成
+  手动跟随重定向即可,一次过生产验证。
+- **多域 cookie 分罐要按 host:port 比较,不能只比 hostname**:httptest
+  的两个假服务同 IP 仅端口不同,按 hostname 分罐会把 mc 会话写进百智罐,
+  单测直接暴露;线上域名不同、无端口,语义等价。
+- **pkill 教训升级:字符类只保护 pkill 自己的模式串**——同一条复合命令里
+  若还有被杀进程的"启动命令"文本(如 `pkill -f 'x[ ]serve'; (x serve &)`),
+  pkill 仍会匹配 shell 自身把整条命令杀掉(exit 144)。启动与 pkill 必须
+  分两次独立调用;起长驻调试进程用 Bash 工具的 run_in_background,
+  别用 `( … & )` 子壳(父壳回收时序不可控,还会出现"端口占用"幻影)。

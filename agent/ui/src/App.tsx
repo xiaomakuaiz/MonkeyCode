@@ -3,13 +3,18 @@
 // 收口在 useSession 句柄里;视觉对照「MonkeyCode 桌面应用设计」。
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  baizhiStatus,
   connect,
   createSession,
   deleteSession,
   inDesktopShell,
   isWindowsShell,
   getHostInfo,
+  mcLogin,
+  mcStatus,
+  mcTasks,
   onHostEvent,
+  openExternal,
   takeUiIntent,
   listModels,
   listSessions,
@@ -17,6 +22,7 @@ import {
   setSessionTitle,
   subscribeEvents,
   updateCheck,
+  type CloudTask,
   type UpdateStatus,
 } from "./client";
 import { basename, ChatView } from "./chat";
@@ -127,6 +133,41 @@ export default function App() {
   const [busy, setBusy] = useState(false);
 
   const dirTouchedRef = useRef(false); // 用户改过工作目录后不再跟随默认值
+
+  // ===== 云端任务:百智云会话桥接 monkeycode 账号后自动同步 =====
+  // null = 未同步(空态给登录引导);已同步后 60s 轮询任务列表
+  const [cloudTasks, setCloudTasks] = useState<CloudTask[] | null>(null);
+  const [mcHost, setMcHost] = useState("monkeycode-ai.com");
+  const syncCloud = useCallback(async () => {
+    try {
+      const st = await mcStatus();
+      if (st.host) setMcHost(st.host);
+      if (!st.logged_in) {
+        // 云端会话缺失/失效:有百智会话就静默桥接一次,没有则保持未同步空态
+        const bz = await baizhiStatus();
+        if (!bz.logged_in) {
+          setCloudTasks(null);
+          return;
+        }
+        await mcLogin();
+      }
+      // 侧栏是预览位:只取最近 8 条,完整列表点击任务外开 web 控制台
+      const r = await mcTasks(1, 8);
+      setCloudTasks(r.tasks ?? []);
+    } catch {
+      /* 静默:云端同步失败不打扰本地使用,下次轮询/回到主界面再试 */
+    }
+  }, []);
+  // 启动即试同步;离开设置页也再试(用户可能刚在设置里登录了百智云)
+  useEffect(() => {
+    if (view !== "settings") void syncCloud();
+  }, [view, syncCloud]);
+  const cloudSynced = cloudTasks !== null;
+  useEffect(() => {
+    if (!cloudSynced) return;
+    const t = setInterval(() => void syncCloud(), 60_000);
+    return () => clearInterval(t);
+  }, [cloudSynced, syncCloud]);
 
   const refreshSessions = useCallback(async () => {
     const metas = await listSessions();
@@ -617,6 +658,8 @@ export default function App() {
           connected={session.connected}
           status={session.status}
           updateAvailable={!!update?.available}
+          cloudTasks={cloudTasks}
+          onOpenCloudTask={(t) => openExternal(`https://${mcHost}/console/task/${t.id}`)}
           onSelect={(m) => openSession(m)}
           onNewTask={(dir) => {
             if (dir) {

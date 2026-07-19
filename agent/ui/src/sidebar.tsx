@@ -15,6 +15,7 @@ import {
   IconTrash,
 } from "./icons";
 import logoUrl from "./logo.png";
+import type { CloudTask } from "./client";
 import type { SessionMeta } from "./types";
 
 export interface ProjectGroup {
@@ -55,6 +56,14 @@ const sectionHeader: CSSProperties = {
   color: "var(--t4)",
   padding: "6px 6px 4px",
   letterSpacing: 0.4,
+};
+
+/** 云端任务状态文案(与 web/移动端 TaskStatus 词汇一致) */
+const CLOUD_STATUS: Record<string, { text: string; color: string }> = {
+  pending: { text: "排队中", color: "var(--warn)" },
+  processing: { text: "运行中", color: "var(--acc)" },
+  error: { text: "出错", color: "var(--err)" },
+  finished: { text: "已完成", color: "inherit" },
 };
 
 /** 会话行状态文案(时间无信息量,不展示) */
@@ -371,6 +380,8 @@ export function Sidebar({
   connected,
   status,
   updateAvailable,
+  cloudTasks,
+  onOpenCloudTask,
   onSelect,
   onNewTask,
   onOpenSettings,
@@ -387,6 +398,10 @@ export function Sidebar({
   connected: boolean;
   status: string;
   updateAvailable: boolean;
+  /** 云端任务:null = 未同步云端账号(空态给登录引导),[] = 已同步无任务 */
+  cloudTasks: CloudTask[] | null;
+  /** 点击云端任务:外开 web 控制台任务详情 */
+  onOpenCloudTask: (t: CloudTask) => void;
   onSelect: (m: SessionMeta) => void;
   onNewTask: (dir?: string) => void;
   onOpenSettings: () => void;
@@ -472,24 +487,68 @@ export function Sidebar({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-        {/* 云端任务:执行后端未上线,常驻空态(有后端后在此渲染任务卡) */}
+        {/* 云端任务:百智云登录后内核桥接 monkeycode 账号自动同步;点击外开 web 详情 */}
         <div style={{ ...sectionHeader, marginTop: -1 }}>
           <IconCloud style={{ marginTop: -1 }} />
           云端任务
         </div>
-        <div
-          style={{
-            borderRadius: 8,
-            border: "1px dashed var(--dashBd)",
-            padding: "9px 11px",
-            fontSize: 11.5,
-            color: "var(--t4)",
-            lineHeight: 1.55,
-            marginBottom: 8,
-          }}
-        >
-          还没有云端任务。长任务可派发到服务器,关掉客户端也会继续。
-        </div>
+        {cloudTasks && cloudTasks.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 1, marginBottom: 8 }}>
+            {cloudTasks.map((t) => {
+              const st = CLOUD_STATUS[t.status ?? ""] ?? { text: "", color: "inherit" };
+              const label = t.title || t.summary || t.content;
+              return (
+                <div
+                  key={t.id}
+                  className="hv"
+                  title={label}
+                  onClick={() => onOpenCloudTask(t)}
+                  style={{
+                    height: 28,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 8px 0 23px",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: 12.5,
+                    color: "var(--t2)",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}
+                >
+                  <span className="ellipsis" style={{ flex: 1 }}>{label || "云端任务"}</span>
+                  <span
+                    style={{
+                      flex: "none",
+                      fontSize: 11,
+                      opacity: 0.7,
+                      color: st.color === "inherit" ? undefined : st.color,
+                    }}
+                  >
+                    {st.text}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div
+            style={{
+              borderRadius: 8,
+              border: "1px dashed var(--dashBd)",
+              padding: "9px 11px",
+              fontSize: 11.5,
+              color: "var(--t4)",
+              lineHeight: 1.55,
+              marginBottom: 8,
+            }}
+          >
+            {cloudTasks
+              ? "还没有云端任务。在网页或手机端派发的任务会同步到这里。"
+              : "登录百智云账号后,云端任务会自动同步到这里。"}
+          </div>
+        )}
 
         <div style={sectionHeader}>
           <IconMonitor style={{ marginTop: -1 }} />
