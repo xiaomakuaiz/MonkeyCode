@@ -217,18 +217,34 @@
   connect();
 
   // ---- 交互:拖动(位移阈值)与点击(唤回主窗口) ----
-  let down = null, dragged = false;
+  // macOS 不能走原生 startDragging:tao 在 mac 上用 performWindowDragWithEvent,
+  // 它只认"当下正在处理的 mousedown 事件"——阈值方案到 mousemove 才发起,
+  // 事件已过期,原生拖拽静默失败(窗口不动,松手还被判成点击)。
+  // mac 改为手动移窗(setPosition 跟随鼠标);Windows/Linux 保留原生拖拽
+  // (WM_NCLBUTTONDOWN/合成器语义,按住期间任何时刻发起都有效,且更顺滑)。
+  const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
+  const petWin = () => window.__TAURI__.window.getCurrentWindow();
+  let down = null, dragged = false, winPos = null;
   document.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     down = { x: e.screenX, y: e.screenY };
     dragged = false;
+    winPos = null;
+    if (isMac) petWin().outerPosition().then((p) => { winPos = p; }).catch(() => {});
   });
   document.addEventListener('mousemove', (e) => {
-    if (!down || dragged) return;
-    if (Math.abs(e.screenX - down.x) + Math.abs(e.screenY - down.y) > 4) {
-      dragged = true;
+    if (!down) return;
+    const dx = e.screenX - down.x, dy = e.screenY - down.y;
+    if (!dragged && Math.abs(dx) + Math.abs(dy) <= 4) return;
+    dragged = true;
+    if (isMac) {
+      if (!winPos) return; // outerPosition 未返回前先不动
+      const s = window.devicePixelRatio || 1; // screenX 是逻辑坐标,窗口位置是物理像素
+      petWin().setPosition(new window.__TAURI__.dpi.PhysicalPosition(
+        Math.round(winPos.x + dx * s), Math.round(winPos.y + dy * s)));
+    } else {
       down = null; // OS 接管拖动后 mouseup 不可靠,直接终结本次手势
-      window.__TAURI__.window.getCurrentWindow().startDragging();
+      petWin().startDragging();
     }
   });
   document.addEventListener('mouseup', () => {
