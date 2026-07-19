@@ -553,6 +553,18 @@ export async function openExtensionDir(): Promise<string | null> {
   return (await tauri.core.invoke("open_extension_dir")) as string;
 }
 
+/** 枚举 WSL 发行版(设置视图"运行环境"下拉用)。
+ * 非壳环境、非 Windows 或未装 WSL 均返回空数组。 */
+export async function listWslDistros(): Promise<string[]> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return [];
+  try {
+    return ((await tauri.core.invoke("list_wsl_distros")) as string[]) ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /** 是否 macOS 桌面壳(标题栏为 Overlay,侧栏顶部须为红绿灯预留拖拽区)。 */
 export function isMacShell(): boolean {
   return inDesktopShell() && /Mac/.test(navigator.userAgent);

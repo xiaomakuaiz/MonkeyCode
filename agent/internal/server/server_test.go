@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1579,5 +1580,37 @@ func TestNonVisionModelGetsPlaceholder(t *testing.T) {
 				t.Fatalf("应为占位文本: %+v", b)
 			}
 		}
+	}
+}
+
+// WSL 内核下,UI 传来的 Windows 表示路径(UNC/盘符)应被翻译成 Linux 路径。
+// 仅在 linux 上有意义(接线带 runtime.GOOS 守卫)。
+func TestCreateSessionWSLPathTranslation(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("接线仅在 linux 生效")
+	}
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+	_, ts := newTestServer(t, &stubProvider{})
+
+	// UNC 路径 → 剥前缀得真实临时目录
+	dir := t.TempDir()
+	unc := `\\wsl$\Ubuntu` + strings.ReplaceAll(dir, "/", `\`)
+	resp, body := apiReq(t, ts, "POST", "/api/sessions", "test-token",
+		fmt.Sprintf(`{"workdir":%q}`, unc))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("UNC 翻译建会话失败: %d %s", resp.StatusCode, body)
+	}
+	var meta struct {
+		Workdir string `json:"workdir"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil || meta.Workdir != dir {
+		t.Fatalf("workdir = %q, want %q (err=%v)", meta.Workdir, dir, err)
+	}
+
+	// 发行版不匹配 → 400 且错误可读
+	resp, body = apiReq(t, ts, "POST", "/api/sessions", "test-token",
+		`{"workdir":"\\\\wsl$\\Debian\\home\\x"}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "Debian") {
+		t.Fatalf("发行版不匹配应 400 并点名发行版: %d %s", resp.StatusCode, body)
 	}
 }

@@ -15,6 +15,7 @@ SIDECAR_ARM := $(BIN_DIR)/mc-agent-aarch64-apple-darwin
 SIDECAR_X64 := $(BIN_DIR)/mc-agent-x86_64-apple-darwin
 SIDECAR_UNI := $(BIN_DIR)/mc-agent-universal-apple-darwin
 SIDECAR_WIN := $(BIN_DIR)/mc-agent-x86_64-pc-windows-msvc.exe
+SIDECAR_WSL := $(BIN_DIR)/mc-agent-linux
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 
@@ -87,9 +88,12 @@ check-windows:
 
 # Windows 内核 sidecar(x64;tauri bundle 按 <name>-<triple>.exe 查找,
 # 安装后落地为应用同目录的 mc-agent.exe,与壳的 find_agent 查找顺序吻合)。
+# 同时产出 Linux 内核(bundle.resources 随包分发;WSL 运行环境下壳经
+# wsl.exe 在发行版内执行它,CGO_ENABLED=0 静态编译 musl 发行版也能跑)。
 kernel-windows:
 	mkdir -p $(BIN_DIR)
 	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WIN)) ./cmd/mc-agent
+	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WSL)) ./cmd/mc-agent
 
 # 浏览器扩展:随包分发(tauri bundle.resources 引用 ../browser-extension/dist,
 # 缺失会打包失败)。

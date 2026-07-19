@@ -13,6 +13,7 @@ fn main() {
                 "update_check",
                 "update_install",
                 "open_extension_dir",
+                "list_wsl_distros",
             ]),
         ),
     )

@@ -41,6 +41,8 @@ export interface HostConfig {
   models: HostModel[];
   /** MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构) */
   mcp_servers: Record<string, unknown>;
+  /** 内核运行环境:空/缺省 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows) */
+  kernel_env?: string;
 }
 
 /** GET /api/sessions 返回的会话元信息 */

@@ -12,6 +12,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod wsl;
+
 use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -51,6 +53,10 @@ struct DesktopConfig {
     /// MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构)
     #[serde(default = "json_object")]
     mcp_servers: serde_json::Value,
+    /// 内核运行环境:空 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows)。
+    /// 业务字段(设置视图读写),保存即经 save_config 重启内核生效。
+    #[serde(default)]
+    kernel_env: String,
     /// 桌宠开关(托盘菜单切换)
     #[serde(default = "default_true")]
     pet_enabled: bool,
@@ -64,6 +70,7 @@ impl Default for DesktopConfig {
         Self {
             models: json_array(),
             mcp_servers: json_object(),
+            kernel_env: String::new(),
             pet_enabled: true,
             pet_pos: None,
         }
@@ -177,7 +184,9 @@ fn sync_tray_theme(app: &AppHandle, theme: Theme) {
 /// 不可直接 kill:messages.json(模型上下文)只在轮次收尾落盘,强杀会丢掉
 /// 执行中轮次的全部消息;而 UI 回放(events.jsonl)逐帧实时落盘看着完好,
 /// 重启后用户发"继续"才发现模型没了上下文。
-fn stop_kernel(mut child: Child) {
+/// wsl_distro:内核跑在 WSL 里时传发行版名。强杀杀的是 wsl.exe 中继进程,
+/// 不保证 guest 内的内核退出(会残留占端口),须补 pkill 兜底。
+fn stop_kernel(mut child: Child, wsl_distro: Option<&str>) {
     drop(child.stdin.take());
     // 内核侧收尾预算:取消轮次等待 3s + HTTP 优雅关闭 3s,留足余量
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -191,6 +200,12 @@ fn stop_kernel(mut child: Child) {
     eprintln!("[mc-desktop] 内核未在期限内优雅退出,强制终止");
     let _ = child.kill();
     let _ = child.wait();
+    if let Some(d) = wsl_distro {
+        let args: Vec<String> = ["-d", d, "--exec", "pkill", "-x", "mc-agent-linux"]
+            .map(String::from)
+            .into();
+        let _ = wsl::run_wsl(&args, Duration::from_secs(5));
+    }
 }
 
 // ==================== Tauri 命令(内核 UI 的设置视图调用) ====================
@@ -227,6 +242,8 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
 fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     // 设置视图载荷只含业务字段,壳自有偏好(桌宠)从磁盘合并保留
     let disk = load_config(&app);
+    // 旧内核按"保存前"的运行环境回收(用户可能这次就在切换运行环境)
+    let old_kernel_env = disk.kernel_env.clone();
     let config = DesktopConfig {
         pet_enabled: disk.pet_enabled,
         pet_pos: disk.pet_pos,
@@ -239,7 +256,7 @@ fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     // 重试保存即可再次拉起。
     if let Some(old) = app.state::<Kernel>().0.lock().unwrap().take() {
         app.state::<KernelInfo>().0.lock().unwrap().take();
-        stop_kernel(old);
+        stop_kernel(old, wsl::distro_of(&old_kernel_env));
     }
     let (child, port, token) = start_kernel(&app, &files)?;
     app.state::<Kernel>().0.lock().unwrap().replace(child);
@@ -288,6 +305,13 @@ fn kernel_info(app: AppHandle) -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn show_main(app: AppHandle) {
     show_any_window(&app);
+}
+
+/// 枚举 WSL 发行版(设置视图"运行环境"下拉用)。
+/// 非 Windows、未装 WSL 或任何失败均返回空数组,UI 据此隐藏 WSL 选项。
+#[tauri::command]
+fn list_wsl_distros() -> Vec<String> {
+    wsl::list_distros()
 }
 
 /// UI 内检查更新:返回结果而非弹对话框(设置视图内联展示)。
@@ -360,7 +384,8 @@ fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, Strin
         // 必须先在这里回收内核,否则 mc-agent.exe 占用文件导致 NSIS 安装失败
         .on_before_exit(move || {
             if let Some(child) = handle.state::<Kernel>().0.lock().unwrap().take() {
-                stop_kernel(child);
+                let env = load_config(&handle).kernel_env;
+                stop_kernel(child, wsl::distro_of(&env));
             }
         });
     // 本机测试覆盖清单地址(release 构建强制 https,http 清单只在 debug 下可用)
@@ -670,7 +695,8 @@ fn main() {
             show_main,
             update_check,
             update_install,
-            open_extension_dir
+            open_extension_dir,
+            list_wsl_distros
         ])
         .setup(|app| {
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
@@ -761,7 +787,8 @@ fn main() {
             RunEvent::Exit => {
                 persist_pet_prefs(app); // 拖动位置只在退出/开关切换时落盘
                 if let Some(child) = app.state::<Kernel>().0.lock().unwrap().take() {
-                    stop_kernel(child);
+                    let env = load_config(app).kernel_env;
+                    stop_kernel(child, wsl::distro_of(&env));
                 }
             }
             _ => {}
@@ -839,14 +866,20 @@ fn show_any_window(app: &AppHandle) {
 // ==================== 内核进程 ====================
 
 /// 启动内核:配置经环境变量注入(不走 argv,避免泄漏进 ps)。
+/// kernel_env 为 "wsl:<发行版>" 时经 wsl.exe 在 WSL 内拉起 Linux 内核
+/// (WSL2 localhost 转发让 Windows 侧照常直连 127.0.0.1:port)。
 /// 返回 (子进程, 端口, 令牌)。
 fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, String), String> {
-    let bin = find_agent().ok_or_else(|| {
-        "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
-    })?;
+    let kernel_env = load_config(app).kernel_env;
+    let wsl_distro = wsl::distro_of(&kernel_env).map(str::to_string);
 
     let port = kernel_port(app)?;
     let token = rand_token();
+    let addr = format!("127.0.0.1:{port}");
+    // 壳持有内核 stdin 管道:壳以任何方式退出(含被 kill),管道关闭,
+    // 内核随之退出,不留孤儿进程(wsl.exe 透传 stdio,WSL 模式下 EOF
+    // 同样抵达 guest 内核,--watch-stdin 契约保持)
+    let serve_args = ["serve", "--addr", addr.as_str(), "--token", token.as_str(), "--watch-stdin"];
 
     // 内核 stdout/stderr 落盘:GUI 壳没有控制台,不落盘的话内核 panic/报错
     // 文本直接丢失,"exit code: N" 无从诊断(Win7 排障教训)。每次启动截断重写。
@@ -854,22 +887,35 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
     let log_out = fs::File::create(&log_path).ok();
     let log_err = log_out.as_ref().and_then(|f| f.try_clone().ok());
 
-    let mut cmd = Command::new(&bin);
-    cmd.args([
-        "serve",
-        "--addr",
-        &format!("127.0.0.1:{port}"),
-        "--token",
-        &token,
-        // 壳持有内核 stdin 管道:壳以任何方式退出(含被 kill),
-        // 管道关闭,内核随之退出,不留孤儿进程
-        "--watch-stdin",
-    ])
-    .env("MC_AGENT_MODELS", &files.models)
-    .env("MC_AGENT_MCP_CONFIG", &files.mcp)
-    .stdin(Stdio::piped())
-    .stdout(log_out.map(Stdio::from).unwrap_or_else(Stdio::inherit))
-    .stderr(log_err.map(Stdio::from).unwrap_or_else(Stdio::inherit));
+    let (mut cmd, bin_desc, ready_secs) = if let Some(distro) = &wsl_distro {
+        let bin = find_agent_linux(app).ok_or_else(|| {
+            "找不到 mc-agent-linux(WSL 内核;查找顺序: MC_AGENT_LINUX_BIN 环境变量 → 应用资源目录 → 应用同目录)".to_string()
+        })?;
+        // 一次调用完成 VM 预热 + 发行版健康检查 + 三个路径的 Windows→Linux 翻译
+        let paths = wsl::prepare(distro, &[&bin, &files.models, &files.mcp])?;
+        let mut cmd = Command::new(wsl::wsl_exe());
+        cmd.args(["-d", distro, "--exec", &paths[0]])
+            .args(serve_args)
+            .env("MC_AGENT_MODELS", &paths[1])
+            .env("MC_AGENT_MCP_CONFIG", &paths[2])
+            // wsl.exe 不透传任意环境变量,须经 WSLENV 白名单;
+            // 值已是 Linux 路径,/u = 仅 Win→WSL 方向、不再做路径翻译
+            .env("WSLENV", "MC_AGENT_MODELS/u:MC_AGENT_MCP_CONFIG/u");
+        // VM 已被 prepare 预热,30s 覆盖内核自身启动
+        (cmd, format!("wsl:{distro} {}", paths[0]), 30u64)
+    } else {
+        let bin = find_agent().ok_or_else(|| {
+            "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
+        })?;
+        let mut cmd = Command::new(&bin);
+        cmd.args(serve_args)
+            .env("MC_AGENT_MODELS", &files.models)
+            .env("MC_AGENT_MCP_CONFIG", &files.mcp);
+        (cmd, bin.display().to_string(), 15u64)
+    };
+    cmd.stdin(Stdio::piped())
+        .stdout(log_out.map(Stdio::from).unwrap_or_else(Stdio::inherit))
+        .stderr(log_err.map(Stdio::from).unwrap_or_else(Stdio::inherit));
     // Windows 下内核是 console 程序,GUI 壳拉起时会弹出控制台窗口,须显式抑制
     #[cfg(windows)]
     {
@@ -879,10 +925,10 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动内核失败({}): {e}", bin.display()))?;
+        .map_err(|e| format!("启动内核失败({bin_desc}): {e}"))?;
 
     // 等待内核就绪(端口可连接);失败时带上退出状态
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(ready_secs);
     loop {
         if TcpStream::connect_timeout(
             &format!("127.0.0.1:{port}").parse().unwrap(),
@@ -893,9 +939,11 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
             return Ok((child, port, token));
         }
         if let Ok(Some(status)) = child.try_wait() {
-            // 附上内核日志尾部,让错误页直接可诊断(而不是只有退出码)
-            let tail = fs::read_to_string(&log_path)
-                .map(|s| {
+            // 附上内核日志尾部,让错误页直接可诊断(而不是只有退出码)。
+            // wsl.exe 的报错可能是 UTF-16,经双解码防乱码。
+            let tail = fs::read(&log_path)
+                .map(|b| {
+                    let s = wsl::decode_wsl_output(&b);
                     let lines: Vec<_> = s.lines().collect();
                     lines[lines.len().saturating_sub(15)..].join("\n")
                 })
@@ -908,7 +956,19 @@ fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, Str
         }
         if Instant::now() > deadline {
             let _ = child.kill();
-            return Err("内核在 15 秒内未就绪".to_string());
+            let mut msg = format!("内核在 {ready_secs} 秒内未就绪");
+            if let Some(distro) = &wsl_distro {
+                // 杀掉的是 wsl.exe 中继,guest 内核可能残活并占住端口,补清理
+                let args: Vec<String> = ["-d", distro, "--exec", "pkill", "-x", "mc-agent-linux"]
+                    .map(String::from)
+                    .into();
+                let _ = wsl::run_wsl(&args, Duration::from_secs(5));
+                msg.push_str(&format!(
+                    "。WSL 模式排查:确认 {distro} 为 WSL2 且未在 .wslconfig 中关闭 \
+                     localhostForwarding;系统睡眠恢复后异常可先执行 `wsl --shutdown` 再重启应用"
+                ));
+            }
+            return Err(msg);
         }
         std::thread::sleep(Duration::from_millis(150));
     }
@@ -941,6 +1001,34 @@ fn find_agent() -> Option<PathBuf> {
     paths.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
 }
 
+/// 查找 Linux 内核二进制(WSL 模式;随 Windows 包以资源分发,经 /mnt/c 在
+/// WSL 内直接执行,无需拷入发行版):MC_AGENT_LINUX_BIN → 资源目录 → 应用同目录。
+fn find_agent_linux(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("MC_AGENT_LINUX_BIN") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(p) = app
+        .path()
+        .resolve("mc-agent-linux", tauri::path::BaseDirectory::Resource)
+    {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("mc-agent-linux");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 /// 内核端口:首次分配后持久化(配置目录 port 文件),之后复用。
 /// localStorage 按 origin(协议+主机+端口)隔离,端口一变 UI 本地偏好
 /// (主题/分组折叠等)就全部丢失;仅端口被其他进程占用时才换新并持久化。
@@ -952,8 +1040,17 @@ fn kernel_port(app: &AppHandle) -> Result<u16, String> {
         .and_then(|s| s.trim().parse::<u16>().ok())
         .filter(|&p| p != 0)
     {
-        if TcpListener::bind(("127.0.0.1", p)).is_ok() {
-            return Ok(p);
+        // WSL 内核退出后,Windows 侧的 localhost 转发监听拆除有延迟,
+        // 立即复用端口可能瞬时 bind 失败;短暂重试再放弃(换端口丢 localStorage)
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if TcpListener::bind(("127.0.0.1", p)).is_ok() {
+                return Ok(p);
+            }
+            if Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(300));
         }
         eprintln!("[mc-desktop] 端口 {p} 被占用,换用新端口(UI 本地偏好将重置)");
     }

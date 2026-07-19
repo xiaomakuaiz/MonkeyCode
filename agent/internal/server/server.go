@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -422,6 +423,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.opts.NewProvider(req.Model); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	// WSL 内核:UI 侧可能传来 Windows 表示的路径(原生对话框的 \\wsl$\...
+	// UNC / 手动粘贴的 C:\...),先翻译成 Linux 路径
+	if runtime.GOOS == "linux" && repo.InWSL() {
+		translated, err := repo.TranslateWindowsPath(req.Workdir)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		req.Workdir = translated
 	}
 	// 展开 ~/(桌面 UI 的默认工作目录以 ~ 表达,跨平台由内核解析)
 	if req.Workdir == "~" || strings.HasPrefix(req.Workdir, "~/") {

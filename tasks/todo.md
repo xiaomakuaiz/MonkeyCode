@@ -1196,3 +1196,57 @@ UI 一卡片一图标两封装。未触碰 loop/provider/session 核心链路;CL
 - [x] go test/vet/gofmt、扩展 tsc+vitest 全绿
 - 已知边界:专属窗口最小化会暂停渲染,截图可能失败(错误如实返回);
   同一标签页仍应只属一个会话(归属表保证)
+
+---
+
+# WSL 运行环境支持一期:全局模式开关(2026-07-19)
+
+> 计划:~/.claude/plans/prancy-sniffing-clover.md。用户拍板:路线 C(内核跑进 WSL)
+> 第一阶段——设置里选"运行环境:Windows 本地 / WSL(发行版)",壳经
+> `wsl.exe -d <distro> --exec` 拉起 Linux 版内核,agent 全走 Linux 代码路径;
+> 一次一个内核,按会话选环境留二期。
+
+- [x] 步骤 1 Go:internal/repo/wslpath.go(InWSL/TranslateWindowsPath)+ 表驱动单测 11 例;
+      handleCreateSession 接线(UNC/盘符 → Linux 路径,发行版不匹配 400)+ 集成测试;
+      Reveal WSL 分支(explorer.exe + wslpath -w)
+- [x] 步骤 2 Rust:src/wsl.rs(decode_wsl_output 双解码/run_wsl 超时/wsl_prepare 预热+健康检查+
+      批量 wslpath 一体/list_distros 滤 docker-desktop)+ 单测 4 例;DesktopConfig.kernel_env;
+      start_kernel WSL 分叉(find_agent_linux:MC_AGENT_LINUX_BIN→资源目录→同目录;WSLENV=/u
+      白名单注入;30s 探活,超时文案带 localhostForwarding/wsl --shutdown 排查);stop_kernel
+      加 wsl_distro 参数,强杀后 pkill -x mc-agent-linux 兜底(三个调用点接线,save_config 按
+      保存前的旧环境回收);kernel_port bind 失败重试 3s(WSL 转发拆除竞态防丢 localStorage);
+      kernel.log 尾部读取双解码防 UTF-16 乱码
+- [x] 步骤 3 ACL:build.rs + tauri.conf.json kernel-ui capability 加 list_wsl_distros
+- [x] 步骤 4 UI:HostConfig.kernel_env;client.ts listWslDistros;settings.tsx 通用页"运行环境"
+      卡片(仅 Windows 壳显示;下拉=本机+发行版,已配置但未检测到的发行版保留可见;
+      提示会话隔离//mnt/c 变慢/localhost 不可达);payloadOf/baseline/dirty/discard 全接线;uidist 重建
+- [x] 步骤 5 打包:Makefile kernel-windows 与 desktop-windows.yml 追加 GOOS=linux 静态编译;
+      tauri.windows.conf.json resources 加 mc-agent-linux(不走 externalBin,避免 triple/.exe 拼接);
+      win7 通道不加(无 WSL2,UI 自然降级隐藏)
+- [x] 步骤 6 验证:agent 全量 17 包 go test + gofmt/vet 干净;cargo build+test 4 例;UI tsc+
+      vitest 25 例+uidist 重建;scripts/fake-wsl.sh shim 三形态单测(UTF-16 列表/prepare 恒等
+      翻译/serve 透传+stdin EOF 优雅退出)+ 无头壳端到端(xvfb+dbus:WSL 分叉拉起内核就绪、
+      端口持久化、healthz 通、MC_AGENT_MODELS/WSLENV 注入正确、杀壳无孤儿内核)
+
+## Review
+
+改动面:agent 侧新增 internal/repo/wslpath.go(纯函数翻译)+ server 接线 8 行 + Reveal 分支;
+壳侧新增 src/wsl.rs(全平台编译,MC_WSL_EXE 可 shim)+ start_kernel/stop_kernel/kernel_port 改造;
+UI 一卡片一字段一 IPC 封装。内核工具链/loop/policy 零改动——WSL 模式即 Linux 原生路径,
+这正是选路线 C 的原因。
+
+**真机(Windows + WSL2)待验证清单**(本机无 Windows,交付前人工过一遍):
+1. 多发行版/零发行版/未装 WSL 三态下拉;docker-desktop 被滤
+2. 切 WSL 保存 → `wsl -d X -- ps aux | grep mc-agent` 内核在 WSL;UI 正常;origin 未变(主题保留)
+3. 新会话三种路径:对话框选 `\\wsl.localhost\...`、粘 `C:\...`、粘 `~/...` 均成功且 bash 走 Linux
+4. Reveal 打开 explorer 定位正确;切模式后会话列表按环境隔离
+5. 托盘退出后 `wsl -d X -- ps` 无残留;强杀路径 pkill 兜底生效
+6. `wsl --shutdown` 后冷启动 30s 内就绪;发行版名错误时错误页无 UTF-16 乱码
+7. 含空格安装路径(C:\Program Files)全流程;NSIS 包内含 mc-agent-linux
+8. 设置页运行期实际调通 list_wsl_distros(capability 只能运行期验证,bb1574e 教训)
+9. 扩展桥 127.0.0.1:7440 在 WSL 模式可用
+10. 自动更新 on_before_exit 停 WSL 内核无残留
+
+已知限制(设置页提示已覆盖):localhostForwarding 关闭/睡眠恢复 relay 失效 → 探活超时带排查
+指引;drvfs metadata 挂载时 /mnt/c ELF 可能无执行位(后续 hardening:stage 进 WSL home);
+Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows localhost 服务(NAT 单向)。

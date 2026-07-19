@@ -60,6 +60,7 @@
             "allow-update-check",
             "allow-update-install",
             "allow-open-extension-dir",
+            "allow-list-wsl-distros",
             "dialog:allow-open",
             "opener:allow-open-url",
             "opener:allow-default-urls"

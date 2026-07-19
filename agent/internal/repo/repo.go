@@ -204,6 +204,15 @@ func (b *Browser) Reveal(rel string) error {
 		if !st.IsDir() {
 			dir = filepath.Dir(p)
 		}
+		// WSL 内没有桌面环境,xdg-open 无宿主;转回 Windows 路径交给
+		// 宿主侧 explorer.exe(WSL interop 直接可调)
+		if InWSL() {
+			win, err := windowsPathOf(dir)
+			if err != nil {
+				return fmt.Errorf("转换 Windows 路径失败: %w", err)
+			}
+			return exec.Command("explorer.exe", win).Start()
+		}
 		return exec.Command("xdg-open", dir).Start()
 	}
 }

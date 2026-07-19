@@ -47,6 +47,9 @@ jobs:
           mkdir -p ../mc-desktop/binaries
           go build -trimpath -ldflags "-s -w" \
             -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
+          # WSL 内核(bundle.resources 随包分发,壳经 wsl.exe 在发行版内执行)
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
+            -o ../mc-desktop/binaries/mc-agent-linux ./cmd/mc-agent
 
       # secret 就绪时走发布构建(额外产出签名的 updater setup.exe + latest-windows.json),
       # 否则回退普通打包,CI 不红

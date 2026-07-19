@@ -11,6 +11,8 @@ import {
   getBrowserExtStatus,
   getHostConfig,
   inDesktopShell,
+  isWindowsShell,
+  listWslDistros,
   openExtensionDir,
   repairBrowserExt,
   saveHostConfig,
@@ -414,6 +416,8 @@ export function SettingsView({
   const [mcps, setMcps] = useState<McpEntry[]>([]);
   const [mcpExpanded, setMcpExpanded] = useState<number | null>(null);
   const [baizhiMcpOpen, setBaizhiMcpOpen] = useState(true); // 百智云 MCP 组(默认展开)
+  const [kernelEnv, setKernelEnv] = useState(""); // 内核运行环境:"" 本机 / "wsl:<发行版>"
+  const [wslDistros, setWslDistros] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
@@ -436,14 +440,15 @@ export function SettingsView({
   const loggedIn = !!bzStatus?.logged_in;
 
   // 归一化保存载荷:save() 与 dirty 比较共用同一形态(名称 trim、default 重算、MCP 序列化)
-  const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[]): HostConfig => ({
+  const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[], ke: string): HostConfig => ({
     models: ms.map((m, i) => ({ ...m, name: m.name.trim(), default: i === di })),
     mcp_servers: mcpsToServers(mc),
+    kernel_env: ke,
   });
 
   // 加载快照:baseline 供 dirty 比较,snapshot 供「放弃更改」复原
   const baseline = useRef("");
-  const snapshot = useRef<{ models: HostModel[]; defaultIdx: number; mcps: McpEntry[] } | null>(null);
+  const snapshot = useRef<{ models: HostModel[]; defaultIdx: number; mcps: McpEntry[]; kernelEnv: string } | null>(null);
 
   useEffect(() => {
     if (!desktop) {
@@ -455,21 +460,26 @@ export function SettingsView({
         const ms = cfg?.models ?? [];
         const di = Math.max(0, ms.findIndex((m) => m.default));
         const mc = serversToMcps(cfg?.mcp_servers ?? {});
+        const ke = cfg?.kernel_env ?? "";
         setModels(ms);
         setDefaultIdx(di);
         setMcps(mc);
-        snapshot.current = { models: ms, defaultIdx: di, mcps: mc };
-        baseline.current = JSON.stringify(payloadOf(ms, di, mc));
+        setKernelEnv(ke);
+        snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke };
+        baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke));
         setLoaded(true);
       })
       .catch((e) => setErr("读取配置失败: " + (e instanceof Error ? e.message : String(e))));
+    if (isWindowsShell()) {
+      void listWslDistros().then(setWslDistros);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktop]);
 
   const dirty = useMemo(
-    () => desktop && loaded && JSON.stringify(payloadOf(models, defaultIdx, mcps)) !== baseline.current,
+    () => desktop && loaded && JSON.stringify(payloadOf(models, defaultIdx, mcps, kernelEnv)) !== baseline.current,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [desktop, loaded, models, defaultIdx, mcps],
+    [desktop, loaded, models, defaultIdx, mcps, kernelEnv],
   );
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -487,6 +497,7 @@ export function SettingsView({
     setModels(s.models);
     setDefaultIdx(s.defaultIdx);
     setMcps(s.mcps);
+    setKernelEnv(s.kernelEnv);
     setExpanded(null);
     setMcpExpanded(null);
     setAdvOpen({});
@@ -554,7 +565,7 @@ export function SettingsView({
     setErr("");
     setSaving(true);
     try {
-      await saveHostConfig(payloadOf(models, defaultIdx, mcps));
+      await saveHostConfig(payloadOf(models, defaultIdx, mcps, kernelEnv));
       // 成功后壳会重启内核并导航整页,这里保持"保存中"直到卸载
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -964,6 +975,33 @@ export function SettingsView({
           <span style={{ fontSize: 12, color: "var(--t5)" }}>深色模式即将支持。</span>
         </div>
       </Section>
+      {desktop && isWindowsShell() && (
+        <Section label="运行环境">
+          <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <select value={kernelEnv} onChange={(e) => setKernelEnv(e.target.value)} style={{ ...select, maxWidth: 280 }}>
+              <option value="">Windows 本机</option>
+              {wslDistros.map((d) => (
+                <option key={d} value={"wsl:" + d}>
+                  WSL · {d}
+                </option>
+              ))}
+              {/* 已配置的发行版不在检测列表(被删除/WSL 异常)时仍要可见可保存 */}
+              {kernelEnv.startsWith("wsl:") && !wslDistros.includes(kernelEnv.slice(4)) && (
+                <option value={kernelEnv}>WSL · {kernelEnv.slice(4)}(未检测到)</option>
+              )}
+            </select>
+            {wslDistros.length === 0 && (
+              <span style={{ fontSize: 12, color: "var(--t5)" }}>未检测到 WSL 发行版(需要 WSL2,可用 `wsl --install` 安装)。</span>
+            )}
+            <span style={{ fontSize: 12, color: "var(--t5)", lineHeight: 1.7 }}>
+              选择 WSL 后,任务在该发行版内执行(bash、git、node 等用发行版内安装的工具链)。
+              工作区建议放在 WSL 内目录(如 ~/dev),/mnt/c 下的 Windows 目录会明显变慢。
+              注意:会话列表按运行环境隔离(历史会话在另一环境中不可见);
+              WSL 内访问不到 Windows 本机的 localhost 服务(如本机 HTTP 型 MCP)。
+            </span>
+          </div>
+        </Section>
+      )}
       {desktop && (
         <Section label="关于">
           <AboutCard version={hostVersion ?? "—"} update={update} onUpdateStatus={onUpdateStatus} />
