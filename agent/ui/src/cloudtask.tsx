@@ -789,9 +789,11 @@ export function CloudTaskView({
               placeholder={
                 taskStatus === "pending"
                   ? "环境启动中…现在发送会排队,就绪后自动送达"
-                  : running
-                    ? "补充说明…运行中发送会排队"
-                    : "继续对话…"
+                  : vmWaking
+                    ? "环境唤醒中…现在发送会排队,唤醒后自动送达"
+                    : running
+                      ? "补充说明…运行中发送会排队"
+                      : "继续对话…"
               }
               style={{
                 border: "none",
