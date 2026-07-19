@@ -238,7 +238,8 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
         const it = items[i];
         if (it.kind === "tool" && it.tcId === u.toolCallId) {
           const out = typeof u.rawOutput === "string" ? u.rawOutput.split("\n")[0].slice(0, 160) : "";
-          items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, lastLine: undefined };
+          const images = Array.isArray(u.images) ? (u.images as string[]) : it.images;
+          items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, images, lastLine: undefined };
           break;
         }
       }

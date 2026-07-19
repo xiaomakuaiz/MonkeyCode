@@ -145,6 +145,10 @@ type ToolCallUpdate struct {
 	RawInput      any    `json:"rawInput,omitempty"`
 	RawOutput     any    `json:"rawOutput,omitempty"`
 	Progress      any    `json:"progress,omitempty"`
+	// Images 工具产出的图片(截图/读图)在会话工作区的相对路径,前端用带
+	// token 的 uploads 回读端点渲染缩略图。图片字节不进帧(避免 events.jsonl
+	// 膨胀),只带路径引用。
+	Images []string `json:"images,omitempty"`
 }
 
 type messageChunk struct {

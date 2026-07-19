@@ -208,12 +208,17 @@ function stripWorkdir(text: string, workdir?: string): string {
 export function ToolCard({
   item,
   onOpenChild,
+  uploadUrl,
   workdir,
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
   onOpenChild?: (id: string) => void;
+  /** 已上传/落盘图片路径 → 可渲染 URL(工具截图缩略图;不传则不渲染图) */
+  uploadUrl?: (path: string) => string;
   workdir?: string;
 }) {
+  const [zoom, setZoom] = useState<string | null>(null);
+  const images = uploadUrl ? (item.images ?? []) : [];
   const feed = item.feed ?? [];
   const visible = feed.slice(-FEED_WINDOW);
   // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
@@ -279,6 +284,48 @@ export function ToolCard({
       {item.status === "run" && item.lastLine && (
         <div style={{ ...stepRow, display: "block", color: "var(--t5)", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", animation: "mcpulse 1.2s infinite" }}>
           {item.lastLine}
+        </div>
+      )}
+      {images.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingLeft: 15 }}>
+          {images.map((p) => (
+            <img
+              key={p}
+              src={uploadUrl!(p)}
+              alt={p}
+              title={p}
+              onClick={() => setZoom(p)}
+              style={{
+                maxWidth: 180,
+                maxHeight: 130,
+                borderRadius: 8,
+                border: "1px solid var(--line)",
+                cursor: "zoom-in",
+                display: "block",
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {zoom && (
+        <div
+          onClick={() => setZoom(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "var(--scrim3)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={uploadUrl!(zoom)}
+            alt={zoom}
+            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "var(--shadowLg)" }}
+          />
         </div>
       )}
     </div>
@@ -752,7 +799,7 @@ export function LogList({
       out.push(
         <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {group.map((t, j) => (
-            <ToolCard key={t.tcId || j} item={t} onOpenChild={onOpenChild} workdir={workdir} />
+            <ToolCard key={t.tcId || j} item={t} onOpenChild={onOpenChild} uploadUrl={uploadUrl} workdir={workdir} />
           ))}
         </div>,
       );

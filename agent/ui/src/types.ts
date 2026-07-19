@@ -92,6 +92,8 @@ export interface AcpUpdate {
   progress?: ToolProgress;
   model?: string;
   mode?: string;
+  /** 工具产出的图片(截图/读图)在工作区的相对路径 */
+  images?: string[];
 }
 
 /** tool_call_update{status:in_progress} 的执行期进度载荷 */
@@ -141,6 +143,8 @@ export type LogItem =
       title: string;
       status: "run" | "ok" | "fail";
       out: string;
+      /** 工具产出的图片(截图/读图)工作区相对路径,工具卡渲染缩略图 */
+      images?: string[];
       /** 子代理进度窗口(工具步骤 + 回复文本行,时间序) */
       feed?: SubEntry[];
       /** 最新输出行(kind=output 进度,如 bash 长命令) */

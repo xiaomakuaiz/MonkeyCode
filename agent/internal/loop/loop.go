@@ -3,9 +3,12 @@ package loop
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -14,6 +17,56 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
 )
+
+// toolImageExts 工具产图 MIME → 扩展名(落盘命名用)。
+var toolImageExts = map[string]string{
+	"image/png":  ".png",
+	"image/jpeg": ".jpg",
+	"image/gif":  ".gif",
+	"image/webp": ".webp",
+}
+
+// saveToolImage 把工具产出的图片字节落盘到会话工作区 .mc-agent/uploads/
+// (与用户上传同目录,复用 handleGetUpload 回读端点),返回工作区相对路径。
+// 命名按 toolCallId + 序号,唯一且可追溯;workdir 为空则报错(调用方降级不显示图)。
+func saveToolImage(workdir, toolID string, idx int, mediaType string, data []byte) (string, error) {
+	if workdir == "" {
+		return "", fmt.Errorf("无工作区,跳过落盘")
+	}
+	dir := filepath.Join(workdir, ".mc-agent", "uploads")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	// uploads 不入库:目录内放自免疫的 .gitignore(仅首次创建)
+	gi := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(gi); os.IsNotExist(err) {
+		_ = os.WriteFile(gi, []byte("*\n"), 0o644)
+	}
+	ext := toolImageExts[mediaType]
+	if ext == "" {
+		ext = ".png"
+	}
+	name := fmt.Sprintf("shot-%s-%d%s", sanitizeToolID(toolID), idx, ext)
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		return "", err
+	}
+	return ".mc-agent/uploads/" + name, nil
+}
+
+// sanitizeToolID 把 toolCallId 净化为安全文件名片段(字母数字 - _)。
+func sanitizeToolID(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '-' || r == '_' ||
+			(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "img"
+	}
+	return b.String()
+}
 
 const (
 	// defaultMaxSteps 单轮步数保险丝:只防模型失控空转(上下文压缩会让
@@ -335,12 +388,30 @@ func (e *Engine) execToolUse(ctx context.Context, tu provider.ContentBlock) prov
 			finish("failed", err.Error())
 			return result(err.Error(), true)
 		}
+		// 图片块落盘一份供 UI 展示(截图/读图);在 stripImageBlocks 之前取字节,
+		// 使非视觉模型下截图仍能在对话框显示。字节只落盘,帧里只带路径引用。
+		var images []string
+		for i, blk := range blocks {
+			if blk.Type != provider.BlockImage || blk.Source == nil {
+				continue
+			}
+			raw, derr := base64.StdEncoding.DecodeString(blk.Source.Data)
+			if derr != nil {
+				continue
+			}
+			if p, serr := saveToolImage(e.env.Workdir, tu.ID, i, blk.Source.MediaType, raw); serr == nil {
+				images = append(images, p)
+			}
+		}
 		// 非视觉模型:图片块降级为文本占位——不发 base64(网关要么报错,
 		// 要么把它当文本灌进上下文,烧 token 且模型读不懂)
 		if !e.opts.Vision {
 			blocks = stripImageBlocks(blocks)
 		}
-		finish("completed", display)
+		e.emit(e.builder.ToolCallUpdate(frame.ToolCallUpdate{
+			ToolCallID: tu.ID, Title: title, Kind: tu.Name,
+			Status: "completed", RawOutput: truncateForUI(display), Images: images,
+		}))
 		if len(blocks) == 1 && blocks[0].Type == provider.BlockText {
 			return result(blocks[0].Text, false)
 		}
