@@ -70,7 +70,7 @@ export function mapDebuggerError(message: string | undefined): RespError {
 // ---- op 准入 ----
 
 /** 需要标签页已在受控集合内才允许的 op */
-const CONTROLLED_ONLY_OPS: ReadonlySet<string> = new Set([Op.CDP, Op.Attach, Op.TabsClose]);
+const CONTROLLED_ONLY_OPS: ReadonlySet<string> = new Set([Op.CDP, Op.Attach, Op.TabsClose, Op.FramesList]);
 
 /**
  * op 准入判断:对受控敏感的 op(cdp/attach/tabs.close),tab 不在受控集合

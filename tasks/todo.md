@@ -1277,3 +1277,21 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       验证快照抓到发布按钮 + 真实鼠标点击生效;单测更新字段
 - 说明:type/select/press 本就用 objectId callOn,跨同进程 iframe 自动生效;
       纯内核改动,扩展/UI 无需重建
+
+## 增补:iframe 支持 阶段2——跨源 OOPIF(2026-07-19)
+
+- [x] 协议(Go+TS):Request/Message 加 sessionId;新 op frames.list;FrameInfo
+- [x] refTable:ref → elemRef{sessionID, objectID}(sessionID 非空=OOPIF 子会话)
+- [x] 内核 cdp.go:CDPSession(带 sessionId 路由)+ FramesList
+- [x] 内核 snapshot:collectFrame 统一采集,主 target + FramesList 各 OOPIF 子会话
+      各跑 collectJS,元素并入连续编号(标注 framed);对象组按会话逐个释放
+- [x] 内核交互按 session 分派:主 target(含同源 iframe)真实鼠标(getBoxModel);
+      OOPIF 走子会话 element.click()/DOM 设值兜底(跨进程坐标累加脆弱,故退化合成事件)
+- [x] 扩展 cdp.ts:attach 后 setAutoAttach(flatten,filter iframe);Target.attachedToTarget
+      记子会话并递归 setAutoAttach(非递归限制,触达嵌套 OOPIF);sendCommand 带 sessionId;
+      framesList;detach/onDetach 清理子会话表
+- [x] 扩展 background:Target.attach/detachedToTarget 自处理不转发;CDP 事件带 source.sessionId
+- [x] e2e:--site-per-process + localhost≠127.0.0.1 造真实 OOPIF,验证快照采到跨源
+      按钮 + DOM click 生效(父页面 postMessage 改标题);全绿
+- 取舍:OOPIF 用合成 click/DOM 设值(非 isTrusted),覆盖 99% 按钮;真实鼠标坐标
+      累加留待需要时再做。嵌套 OOPIF 靠扩展递归 setAutoAttach + frames.list 全深度返回

@@ -171,12 +171,30 @@ const e2ePageHTML = `<!doctype html><html><head><title>E2E 测试页</title></he
 <a href="#down">锚点链接</a>
 <!-- 同源 iframe:内含发布按钮,点击后经 postMessage 改父页面标题 -->
 <iframe id="editor" src="/iframe" style="width:300px;height:120px;border:1px solid #ccc"></iframe>
-<script>window.addEventListener('message', e => { if (e.data === 'published') document.title = '已发布'; });</script>
+<div id="cross"></div>
+<script>
+window.addEventListener('message', e => {
+  if (e.data === 'published') document.title = '已发布';
+  if (e.data === 'cross-published') document.title = '跨源已发布';
+});
+// 动态插入跨源 iframe:localhost ≠ 127.0.0.1(不同 origin),配合
+// --site-per-process 成为跨进程 OOPIF。
+var f = document.createElement('iframe');
+f.src = 'http://localhost:' + location.port + '/iframe2';
+f.style = 'width:300px;height:120px';
+document.getElementById('cross').appendChild(f);
+</script>
 </body></html>`
 
 // e2eIframeHTML 同源 iframe 内容:发布按钮点击后通知父页面。
 const e2eIframeHTML = `<!doctype html><html><head><title>iframe 编辑器</title></head><body>
 <button id="publish" onclick="parent.postMessage('published','*')">发布</button>
+</body></html>`
+
+// e2eCrossIframeHTML 跨源(OOPIF)iframe 内容:跨源发布按钮通知父页面。
+const e2eCrossIframeHTML = `<!doctype html><html><head><title>跨源编辑器</title></head><body>
+<button id="cpublish" onclick="parent.postMessage('cross-published','*')">跨源发布</button>
+<input id="cinp" placeholder="跨源输入框">
 </body></html>`
 
 func TestE2E_ChromiumExtension(t *testing.T) {
@@ -197,11 +215,14 @@ func TestE2E_ChromiumExtension(t *testing.T) {
 	_, bridgePort, _ := net.SplitHostPort(bridgeAddr)
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/html; charset=utf-8")
-		if r.URL.Path == "/iframe" {
+		switch r.URL.Path {
+		case "/iframe":
 			_, _ = w.Write([]byte(e2eIframeHTML))
-			return
+		case "/iframe2":
+			_, _ = w.Write([]byte(e2eCrossIframeHTML))
+		default:
+			_, _ = w.Write([]byte(e2ePageHTML))
 		}
-		_, _ = w.Write([]byte(e2ePageHTML))
 	}))
 	defer page.Close()
 
@@ -217,6 +238,9 @@ func TestE2E_ChromiumExtension(t *testing.T) {
 		"--disable-dev-shm-usage",
 		// 无桌面会话的 Linux 上系统代理解析会挂起 ~20s(SW 网络请求首当其冲)
 		"--no-proxy-server",
+		// 强制跨 origin iframe 跨进程化(OOPIF),让 localhost≠127.0.0.1 的
+		// 子 iframe 走 Target auto-attach 路径,覆盖阶段2
+		"--site-per-process",
 		"about:blank",
 	}
 	var cmd *exec.Cmd
@@ -423,6 +447,44 @@ func TestE2E_ChromiumExtension(t *testing.T) {
 	}
 	if parentTitle != "已发布" {
 		t.Fatalf("iframe 内发布按钮点击未生效,父页面标题=%q", parentTitle)
+	}
+
+	// 阶段2 核心:跨源 OOPIF iframe 内的按钮。动态插入的跨源 iframe 需时间
+	// 完成 auto-attach,轮询 snapshot 直到 FramesList 采到子会话里的按钮。
+	var crossSnap string
+	deadlineCross := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadlineCross) {
+		crossSnap, err = s.snapshot(ctx)
+		if err == nil && strings.Contains(crossSnap, "跨源发布") {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !strings.Contains(crossSnap, "跨源发布") {
+		t.Fatalf("跨源 OOPIF 按钮未采集到(auto-attach/site-per-process 未生效?):\n%s", crossSnap)
+	}
+	crossRef := ""
+	for _, line := range strings.Split(crossSnap, "\n") {
+		if strings.Contains(line, "跨源发布") {
+			crossRef = strings.Fields(line)[0]
+		}
+	}
+	if crossRef == "" {
+		t.Fatal("跨源发布按钮无 ref")
+	}
+	// 点击(OOPIF 走子会话 element.click 兜底),父页面标题应变"跨源已发布"
+	if _, err = s.click(ctx, crossRef); err != nil {
+		t.Fatalf("点击跨源 OOPIF 内按钮: %v", err)
+	}
+	deadlineCross = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadlineCross) {
+		if err := s.eval(ctx, tab, `document.title`, &parentTitle); err == nil && parentTitle == "跨源已发布" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if parentTitle != "跨源已发布" {
+		t.Fatalf("跨源 OOPIF 按钮点击未生效,父页面标题=%q", parentTitle)
 	}
 
 	// screenshot:应产出图片块

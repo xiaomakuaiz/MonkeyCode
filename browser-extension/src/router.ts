@@ -1,6 +1,6 @@
 // 请求分发:op → 具体实现。准入判断(checkOpAllowed)与错误码映射
 // 都在纯函数层,这里只做装配,保证异常一律转成协议错误帧而非裂开。
-import { attach, detach, OpError, sendCommand } from "./cdp";
+import { attach, detach, framesList, OpError, sendCommand } from "./cdp";
 import { checkOpAllowed } from "./core";
 import { Op, type Request, type Response } from "./protocol";
 import { getControlled, tabsActivate, tabsClose, tabsCreate, tabsList } from "./tabs";
@@ -13,7 +13,9 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     switch (req.op) {
       case Op.CDP:
-        return { id: req.id, result: await sendCommand(req.tabId!, req.method ?? "", req.params) };
+        return { id: req.id, result: await sendCommand(req.tabId!, req.method ?? "", req.params, req.sessionId) };
+      case Op.FramesList:
+        return { id: req.id, result: framesList(req.tabId!) };
       case Op.TabsCreate:
         return { id: req.id, result: await tabsCreate(req.params) };
       case Op.TabsList:

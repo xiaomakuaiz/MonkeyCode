@@ -50,13 +50,13 @@ func TestRefTable(t *testing.T) {
 	if _, err := rt.lookup("e1"); err == nil {
 		t.Fatal("无快照时 lookup 应报错")
 	}
-	rt.rebuild(2, []string{"obj-a", "obj-b"})
+	rt.rebuild(2, []elemRef{{objectID: "obj-a"}, {objectID: "obj-b"}})
 	if rt.objectGroup() != "mc-gen-2" {
 		t.Fatalf("对象组名不对: %s", rt.objectGroup())
 	}
-	id, err := rt.lookup("e2")
-	if err != nil || id != "obj-b" {
-		t.Fatalf("lookup e2: %q %v", id, err)
+	r, err := rt.lookup("e2")
+	if err != nil || r.objectID != "obj-b" || r.sessionID != "" {
+		t.Fatalf("lookup e2: %+v %v", r, err)
 	}
 	if _, err := rt.lookup("e3"); err == nil {
 		t.Fatal("越界 ref 应报失效错")

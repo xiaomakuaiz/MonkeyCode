@@ -11,6 +11,7 @@ export const Op = {
   TabsClose: "tabs.close",
   Attach: "attach",
   Detach: "detach",
+  FramesList: "frames.list",
   Ping: "ping",
 } as const;
 
@@ -43,6 +44,14 @@ export interface Request {
   tabId?: number;
   method?: string;
   params?: Record<string, unknown>;
+  /** 非空 = 路由到跨源 iframe(OOPIF)flat 子会话 */
+  sessionId?: string;
+}
+
+// 跨源 iframe(OOPIF)子会话(frames.list 结果项)
+export interface FrameInfo {
+  sessionId: string;
+  url?: string;
 }
 
 export interface RespError {

@@ -1,7 +1,7 @@
 // 背景 service worker 入口:装配 bridge + router + 浏览器事件监听。
 // 所有监听器必须在顶层同步注册(MV3 SW 冷启动后事件才收得到)。
 import { Bridge } from "./bridge";
-import { getAttached, markDetached, attach } from "./cdp";
+import { getAttached, markDetached, attach, onTargetAttached, onTargetDetached } from "./cdp";
 import { normalizePairingCode } from "./core";
 import { Ev, type TabInfo } from "./protocol";
 import { handleRequest } from "./router";
@@ -12,10 +12,24 @@ bridge.onRequest = handleRequest;
 
 // ---- debugger 事件 → 内核 ----
 
-// CDP 事件全量转发,浏览器语义(快照/ref/坐标)都在 Go 侧,扩展不做解释
+// CDP 事件全量转发,浏览器语义(快照/ref/坐标)都在 Go 侧,扩展不做解释。
+// Target.attach/detachToTarget 是 OOPIF 子会话管理(传输层),扩展自处理不转发。
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (source.tabId === undefined) return;
-  bridge.send({ event: Ev.CDP, tabId: source.tabId, method, params: params ?? {} });
+  if (method === "Target.attachedToTarget") {
+    const p = params as { sessionId: string; targetInfo: { type?: string; url?: string } };
+    void onTargetAttached(source.tabId, p.sessionId, p.targetInfo);
+    return;
+  }
+  if (method === "Target.detachedFromTarget") {
+    const p = params as { sessionId: string };
+    onTargetDetached(source.tabId, p.sessionId);
+    return;
+  }
+  // 子会话(OOPIF)的 CDP 事件带 sessionId,内核按 tabId 路由到属主会话。
+  // flat session 的 source 带 sessionId(Chrome 125+),类型定义尚未覆盖,故断言取。
+  const sessionId = (source as { sessionId?: string }).sessionId;
+  bridge.send({ event: Ev.CDP, tabId: source.tabId, sessionId, method, params: params ?? {} });
 });
 
 // 被剥离(用户点提示条取消/页面关闭/DevTools 接管):上报但保留受控成员资格,

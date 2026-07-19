@@ -12,8 +12,13 @@ import (
 // callTimeout 单条指令默认超时(导航等待等长操作由调用方分段轮询)。
 const callTimeout = 30 * time.Second
 
-// CDP 执行一条 CDP 命令;out 非 nil 时把 result 反序列化进去。
+// CDP 执行一条 CDP 命令(标签页根会话);out 非 nil 时把 result 反序列化进去。
 func (b *ExtBridge) CDP(ctx context.Context, tabID int, method string, params any, out any) error {
+	return b.CDPSession(ctx, tabID, "", method, params, out)
+}
+
+// CDPSession 执行一条 CDP 命令;sessionID 非空时路由到跨源 iframe 子会话。
+func (b *ExtBridge) CDPSession(ctx context.Context, tabID int, sessionID, method string, params any, out any) error {
 	var raw json.RawMessage
 	if params != nil {
 		data, err := json.Marshal(params)
@@ -24,7 +29,7 @@ func (b *ExtBridge) CDP(ctx context.Context, tabID int, method string, params an
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	res, err := b.call(cctx, Request{Op: OpCDP, TabID: tabID, Method: method, Params: raw})
+	res, err := b.call(cctx, Request{Op: OpCDP, TabID: tabID, SessionID: sessionID, Method: method, Params: raw})
 	if err != nil {
 		return err
 	}
@@ -34,6 +39,23 @@ func (b *ExtBridge) CDP(ctx context.Context, tabID int, method string, params an
 		}
 	}
 	return nil
+}
+
+// FramesList 列出标签页当前的跨源 iframe(OOPIF)子会话。
+func (b *ExtBridge) FramesList(ctx context.Context, tabID int) ([]FrameInfo, error) {
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	res, err := b.call(cctx, Request{Op: OpFramesList, TabID: tabID})
+	if err != nil {
+		return nil, err
+	}
+	var frames []FrameInfo
+	if len(res) > 0 {
+		if err := json.Unmarshal(res, &frames); err != nil {
+			return nil, fmt.Errorf("frames.list 结果解析失败: %w", err)
+		}
+	}
+	return frames, nil
 }
 
 // TabsCreate 新建标签页(自动 attach 并纳入受控集合),返回 tabId。

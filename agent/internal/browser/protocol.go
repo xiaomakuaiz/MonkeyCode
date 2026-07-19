@@ -31,6 +31,7 @@ const (
 	OpTabsClose    = "tabs.close"    // 关闭标签页
 	OpAttach       = "attach"        // attach debugger(幂等;仅受控集合内允许)
 	OpDetach       = "detach"        // detach debugger
+	OpFramesList   = "frames.list"   // 列出标签页的跨源 iframe(OOPIF)子会话
 	OpPing         = "ping"          // 保活(兼作 MV3 SW 续命)
 )
 
@@ -63,6 +64,9 @@ type Request struct {
 	TabID  int             `json:"tabId,omitempty"`
 	Method string          `json:"method,omitempty"` // op=cdp 时的 CDP 方法名
 	Params json.RawMessage `json:"params,omitempty"`
+	// SessionID 非空时命令路由到跨源 iframe(OOPIF)的 flat 子会话
+	// (chrome.debugger flat session,Chrome 125+);空 = 标签页根会话。
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // Message 扩展→内核入站帧(应答或事件,按字段区分)。
@@ -73,12 +77,13 @@ type Message struct {
 	Error  *RespError      `json:"error,omitempty"`
 
 	// 事件字段
-	Event  string          `json:"event,omitempty"`
-	TabID  int             `json:"tabId,omitempty"`
-	Method string          `json:"method,omitempty"` // event=cdp 时的 CDP 事件名
-	Params json.RawMessage `json:"params,omitempty"` // event=cdp 时的事件载荷
-	Info   *TabInfo        `json:"info,omitempty"`   // tab.updated / handoff
-	Reason string          `json:"reason,omitempty"` // detached
+	Event     string          `json:"event,omitempty"`
+	TabID     int             `json:"tabId,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"` // event=cdp 且来自 OOPIF 子会话时
+	Method    string          `json:"method,omitempty"`    // event=cdp 时的 CDP 事件名
+	Params    json.RawMessage `json:"params,omitempty"`    // event=cdp 时的事件载荷
+	Info      *TabInfo        `json:"info,omitempty"`      // tab.updated / handoff
+	Reason    string          `json:"reason,omitempty"`    // detached
 
 	// hello 字段
 	Auth    *HelloAuth   `json:"auth,omitempty"`
@@ -140,6 +145,12 @@ type TabInfo struct {
 	Active     bool   `json:"active,omitempty"`
 	Controlled bool   `json:"controlled,omitempty"` // 在受控集合内
 	Status     string `json:"status,omitempty"`     // loading | complete
+}
+
+// FrameInfo 一个跨源 iframe(OOPIF)子会话(frames.list 结果项)。
+type FrameInfo struct {
+	SessionID string `json:"sessionId"`
+	URL       string `json:"url,omitempty"`
 }
 
 // helloOK 内核对 hello 的应答帧。

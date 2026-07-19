@@ -20,6 +20,7 @@ type Session struct {
 	tabID      int          // 当前操作的标签页(0=无)
 	tabs       map[int]bool // 本会话控制的标签页
 	refs       refTable
+	lastOOPIF  []string // 上次快照涉及的跨源 iframe 子会话(释放对象组用)
 	notes      []string // 事件旁白,附注到下一个工具结果
 	closed     bool
 }
@@ -242,10 +243,15 @@ func (r *evalResult) err() error {
 	return fmt.Errorf("页面脚本执行异常: %s", truncate(desc, 300))
 }
 
-// eval 在页面主世界执行表达式,returnByValue 反序列化进 out(可 nil)。
+// eval 在标签页根会话的主世界执行表达式,returnByValue 反序列化进 out(可 nil)。
 func (s *Session) eval(ctx context.Context, tab int, expr string, out any) error {
+	return s.evalSession(ctx, tab, "", expr, out)
+}
+
+// evalSession 在指定会话(空 = 根会话;非空 = OOPIF 子会话)执行表达式。
+func (s *Session) evalSession(ctx context.Context, tab int, sessionID, expr string, out any) error {
 	var res evalResult
-	if err := s.bridge.CDP(ctx, tab, "Runtime.evaluate", map[string]any{
+	if err := s.bridge.CDPSession(ctx, tab, sessionID, "Runtime.evaluate", map[string]any{
 		"expression": expr, "returnByValue": true,
 	}, &res); err != nil {
 		return err
@@ -262,14 +268,15 @@ func (s *Session) eval(ctx context.Context, tab int, expr string, out any) error
 }
 
 // callOn 对远端元素执行函数(this 为元素),returnByValue 反序列化进 out。
-// 执行上下文已销毁(页面导航)时统一翻译为 ref 失效错误。
-func (s *Session) callOn(ctx context.Context, tab int, objectID, fn string, args []any, out any) error {
+// sessionID 非空时元素在 OOPIF 子会话。执行上下文已销毁(页面导航)时统一
+// 翻译为 ref 失效错误。
+func (s *Session) callOn(ctx context.Context, tab int, sessionID, objectID, fn string, args []any, out any) error {
 	callArgs := make([]map[string]any, len(args))
 	for i, a := range args {
 		callArgs[i] = map[string]any{"value": a}
 	}
 	var res evalResult
-	err := s.bridge.CDP(ctx, tab, "Runtime.callFunctionOn", map[string]any{
+	err := s.bridge.CDPSession(ctx, tab, sessionID, "Runtime.callFunctionOn", map[string]any{
 		"objectId": objectID, "functionDeclaration": fn,
 		"arguments": callArgs, "returnByValue": true,
 	}, &res)

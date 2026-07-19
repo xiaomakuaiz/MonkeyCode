@@ -142,41 +142,78 @@ func (s *Session) snapshot(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	// 释放上一代对象组(防远端对象泄漏)
+	// 释放上一代对象组(主 + 上次的所有 OOPIF 子会话,防远端对象泄漏)
 	s.mu.Lock()
 	oldGroup := ""
 	if s.refs.gen > 0 {
 		oldGroup = s.refs.objectGroup()
 	}
+	oldSessions := append([]string{""}, s.lastOOPIF...)
+	newGen := s.refs.gen + 1
 	s.mu.Unlock()
 	if oldGroup != "" {
-		_ = s.bridge.CDP(ctx, tab, "Runtime.releaseObjectGroup", map[string]string{"objectGroup": oldGroup}, nil)
+		for _, sid := range oldSessions {
+			_ = s.bridge.CDPSession(ctx, tab, sid, "Runtime.releaseObjectGroup",
+				map[string]string{"objectGroup": oldGroup}, nil)
+		}
 	}
+	group := fmt.Sprintf("mc-gen-%d", newGen)
 
-	// ① 采集:元数据按值返回,元素数组存 window.__mcAgentRefs
-	var raw string
-	if err := s.eval(ctx, tab, collectJS, &raw); err != nil {
-		return "", err
-	}
-	meta, err := parseSnapshotMeta(raw)
+	// 主 target(含同源 iframe,阶段1)
+	meta, refs, err := s.collectFrame(ctx, tab, "", group)
 	if err != nil {
 		return "", err
 	}
 
-	// ② 取元素数组句柄(归入本代对象组)
-	group := fmt.Sprintf("mc-gen-%d", meta.Gen)
-	var arr evalResult
-	if err := s.bridge.CDP(ctx, tab, "Runtime.evaluate", map[string]any{
-		"expression": "window.__mcAgentRefs", "objectGroup": group,
-	}, &arr); err != nil {
-		return "", err
-	}
-	if err := arr.err(); err != nil {
-		return "", err
+	// 跨源 iframe(OOPIF):各自独立子会话,逐个采集并入(扩展已递归 attach
+	// 所有层级,FramesList 返回全部深度的子会话)。单个子会话失败只跳过。
+	oopif := []string{}
+	frames, ferr := s.bridge.FramesList(ctx, tab)
+	if ferr == nil {
+		for _, f := range frames {
+			fMeta, fRefs, err := s.collectFrame(ctx, tab, f.SessionID, group)
+			if err != nil {
+				continue
+			}
+			for i := range fMeta.Items {
+				fMeta.Items[i].Framed = true
+			}
+			meta.Items = append(meta.Items, fMeta.Items...)
+			refs = append(refs, fRefs...)
+			oopif = append(oopif, f.SessionID)
+		}
+		// 顶层跨源 iframe 已展开;仅当无法枚举时才提示"未包含"
+		meta.CrossOriginIframes = 0
 	}
 
-	// ③ 逐索引取每个元素的 objectId
-	ids := make([]string, len(meta.Items))
+	s.mu.Lock()
+	s.refs.rebuild(newGen, refs)
+	s.lastOOPIF = oopif
+	s.mu.Unlock()
+	return formatSnapshot(meta) + s.takeNotes(), nil
+}
+
+// collectFrame 在一个会话(空 = 根会话/主 target;非空 = OOPIF 子会话)采集
+// 可交互元素:执行 collectJS 拿元数据,再取元素数组句柄逐个解析 objectId。
+func (s *Session) collectFrame(ctx context.Context, tab int, sessionID, group string) (*snapshotMeta, []elemRef, error) {
+	var raw string
+	if err := s.evalSession(ctx, tab, sessionID, collectJS, &raw); err != nil {
+		return nil, nil, err
+	}
+	meta, err := parseSnapshotMeta(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	var arr evalResult
+	if err := s.bridge.CDPSession(ctx, tab, sessionID, "Runtime.evaluate", map[string]any{
+		"expression": "window.__mcAgentRefs", "objectGroup": group,
+	}, &arr); err != nil {
+		return nil, nil, err
+	}
+	if err := arr.err(); err != nil {
+		return nil, nil, err
+	}
+	refs := make([]elemRef, len(meta.Items))
 	if arr.Result.ObjectID != "" && len(meta.Items) > 0 {
 		var props struct {
 			Result []struct {
@@ -184,28 +221,24 @@ func (s *Session) snapshot(ctx context.Context) (string, error) {
 				Value *remoteObject `json:"value"`
 			} `json:"result"`
 		}
-		if err := s.bridge.CDP(ctx, tab, "Runtime.getProperties", map[string]any{
+		if err := s.bridge.CDPSession(ctx, tab, sessionID, "Runtime.getProperties", map[string]any{
 			"objectId": arr.Result.ObjectID, "ownProperties": true,
 		}, &props); err != nil {
-			return "", err
+			return nil, nil, err
 		}
 		for _, p := range props.Result {
 			idx, err := strconv.Atoi(p.Name)
-			if err != nil || idx < 0 || idx >= len(ids) || p.Value == nil {
+			if err != nil || idx < 0 || idx >= len(refs) || p.Value == nil {
 				continue
 			}
-			ids[idx] = p.Value.ObjectID
+			refs[idx] = elemRef{sessionID: sessionID, objectID: p.Value.ObjectID}
 		}
 	}
-
-	s.mu.Lock()
-	s.refs.rebuild(meta.Gen, ids)
-	s.mu.Unlock()
-	return formatSnapshot(meta) + s.takeNotes(), nil
+	return meta, refs, nil
 }
 
-// resolveRef 取 ref 对应的 RemoteObjectId。
-func (s *Session) resolveRef(ref string) (string, error) {
+// resolveRef 取 ref 对应的元素定位信息。
+func (s *Session) resolveRef(ref string) (elemRef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.refs.lookup(ref)
@@ -233,18 +266,14 @@ type elemRect struct {
 	H float64 `json:"h"`
 }
 
-// locate 元素滚动进视口并取**主视口坐标**(供顶层 Input 真实鼠标点击)。
-// 坐标经 DOM.getBoxModel(objectId) 取得,它由浏览器统一计算,自动含所有
-// 同进程 iframe 的偏移——iframe 内元素也能拿到正确的顶层坐标。
-func (s *Session) locate(ctx context.Context, tab int, ref string) (elemRect, error) {
-	objID, err := s.resolveRef(ref)
-	if err != nil {
-		return elemRect{}, err
-	}
+// locate 主 target(含同进程 iframe)元素滚动进视口并取**主视口坐标**
+// (供顶层 Input 真实鼠标点击)。坐标经 DOM.getBoxModel(objectId) 取得,
+// 浏览器统一计算,自动含所有同进程 iframe 偏移。OOPIF 元素不走此路(用 DOM 点击)。
+func (s *Session) locate(ctx context.Context, tab int, objID string) (elemRect, error) {
 	// 先滚进视口(iframe 内元素 scrollIntoView 会滚对应 iframe;callFunctionOn
 	// 在元素所属执行上下文运行,跨 iframe 自动正确)
 	var connected *bool
-	err = s.callOn(ctx, tab, objID, `function(){
+	err := s.callOn(ctx, tab, "", objID, `function(){
 		if (!this.isConnected) return null;
 		this.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
 		return true;
@@ -253,7 +282,7 @@ func (s *Session) locate(ctx context.Context, tab int, ref string) (elemRect, er
 		return elemRect{}, err
 	}
 	if connected == nil {
-		return elemRect{}, errRefStale(ref)
+		return elemRect{}, errRefStale("该元素")
 	}
 	var box struct {
 		Model struct {
@@ -264,13 +293,13 @@ func (s *Session) locate(ctx context.Context, tab int, ref string) (elemRect, er
 	}
 	if err := s.bridge.CDP(ctx, tab, "DOM.getBoxModel", map[string]any{"objectId": objID}, &box); err != nil {
 		if isStaleObjectErr(err) {
-			return elemRect{}, errRefStale(ref)
+			return elemRect{}, errRefStale("该元素")
 		}
 		return elemRect{}, err
 	}
 	q := box.Model.Content
 	if len(q) < 8 || box.Model.Width <= 0 || box.Model.Height <= 0 {
-		return elemRect{}, errRefStale(ref)
+		return elemRect{}, errRefStale("该元素")
 	}
 	// content 是内容盒的四角 [x1,y1,x2,y2,x3,y3,x4,y4](主视口坐标),取中心
 	return elemRect{
@@ -281,23 +310,45 @@ func (s *Session) locate(ctx context.Context, tab int, ref string) (elemRect, er
 	}, nil
 }
 
-// click 真实鼠标事件序列点击 ref 元素。
+// click 点击 ref 元素。主 target(含同源 iframe)走真实鼠标事件(坐标经
+// getBoxModel 统一计算);跨源 iframe(OOPIF)因跨进程坐标累加脆弱,退化为
+// 在元素所在子会话执行 element.click()(合成事件,绝大多数按钮响应)。
 func (s *Session) click(ctx context.Context, ref string) (string, error) {
 	tab, err := s.ensureTab(ctx)
 	if err != nil {
 		return "", err
 	}
-	rect, err := s.locate(ctx, tab, ref)
+	r, err := s.resolveRef(ref)
 	if err != nil {
 		return "", err
 	}
-	for _, ev := range []map[string]any{
-		{"type": "mouseMoved", "x": rect.X, "y": rect.Y},
-		{"type": "mousePressed", "x": rect.X, "y": rect.Y, "button": "left", "clickCount": 1},
-		{"type": "mouseReleased", "x": rect.X, "y": rect.Y, "button": "left", "clickCount": 1},
-	} {
-		if err := s.bridge.CDP(ctx, tab, "Input.dispatchMouseEvent", ev, nil); err != nil {
+	if r.sessionID == "" {
+		rect, err := s.locate(ctx, tab, r.objectID)
+		if err != nil {
 			return "", err
+		}
+		for _, ev := range []map[string]any{
+			{"type": "mouseMoved", "x": rect.X, "y": rect.Y},
+			{"type": "mousePressed", "x": rect.X, "y": rect.Y, "button": "left", "clickCount": 1},
+			{"type": "mouseReleased", "x": rect.X, "y": rect.Y, "button": "left", "clickCount": 1},
+		} {
+			if err := s.bridge.CDP(ctx, tab, "Input.dispatchMouseEvent", ev, nil); err != nil {
+				return "", err
+			}
+		}
+	} else {
+		var ok *bool
+		err = s.callOn(ctx, tab, r.sessionID, r.objectID, `function(){
+			if (!this.isConnected) return null;
+			this.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
+			this.click();
+			return true;
+		}`, nil, &ok)
+		if err != nil {
+			return "", err
+		}
+		if ok == nil {
+			return "", errRefStale(ref)
 		}
 	}
 	return s.interactionResult(ctx, tab, fmt.Sprintf("已点击 %s", ref)), nil
@@ -309,12 +360,44 @@ func (s *Session) typeText(ctx context.Context, ref, text string, clear, submit 
 	if err != nil {
 		return "", err
 	}
-	objID, err := s.resolveRef(ref)
+	r, err := s.resolveRef(ref)
 	if err != nil {
 		return "", err
 	}
+	action := fmt.Sprintf("已在 %s 输入 %q", ref, truncate(text, 60))
+	if r.sessionID != "" {
+		// 跨源 iframe:顶层 Input 到不了子进程焦点,直接在子会话用 DOM 设值
+		var ok *bool
+		err = s.callOn(ctx, tab, r.sessionID, r.objectID, `function(text, clear, submit){
+			if (!this.isConnected) return null;
+			this.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
+			this.focus();
+			if ('value' in this) {
+				this.value = clear ? text : (this.value + text);
+			} else if (this.isContentEditable) {
+				if (clear) this.textContent = '';
+				this.textContent += text;
+			}
+			this.dispatchEvent(new Event('input', {bubbles: true}));
+			this.dispatchEvent(new Event('change', {bubbles: true}));
+			if (submit && this.form) this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit();
+			return true;
+		}`, []any{text, clear, submit}, &ok)
+		if err != nil {
+			return "", err
+		}
+		if ok == nil {
+			return "", errRefStale(ref)
+		}
+		if submit {
+			action += " 并提交"
+		}
+		return s.interactionResult(ctx, tab, action), nil
+	}
+
+	// 主 target(含同源 iframe):真实输入事件
 	var ok *bool
-	err = s.callOn(ctx, tab, objID, `function(clear){
+	err = s.callOn(ctx, tab, "", r.objectID, `function(clear){
 		if (!this.isConnected) return null;
 		this.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
 		this.focus();
@@ -334,7 +417,6 @@ func (s *Session) typeText(ctx context.Context, ref, text string, clear, submit 
 	if err := s.bridge.CDP(ctx, tab, "Input.insertText", map[string]string{"text": text}, nil); err != nil {
 		return "", err
 	}
-	action := fmt.Sprintf("已在 %s 输入 %q", ref, truncate(text, 60))
 	if submit {
 		if err := s.dispatchKey(ctx, tab, namedKeys["enter"], 0); err != nil {
 			return "", err
@@ -350,7 +432,7 @@ func (s *Session) selectOption(ctx context.Context, ref string, values []string)
 	if err != nil {
 		return "", err
 	}
-	objID, err := s.resolveRef(ref)
+	r, err := s.resolveRef(ref)
 	if err != nil {
 		return "", err
 	}
@@ -358,7 +440,7 @@ func (s *Session) selectOption(ctx context.Context, ref string, values []string)
 		Err string `json:"err"`
 		Hit int    `json:"hit"`
 	}
-	err = s.callOn(ctx, tab, objID, `function(values){
+	err = s.callOn(ctx, tab, r.sessionID, r.objectID, `function(values){
 		if (!this.isConnected) return null;
 		if (this.tagName !== 'SELECT') return {err: 'not_select'};
 		const want = new Set(values);
@@ -436,8 +518,28 @@ func (s *Session) scroll(ctx context.Context, direction, ref string) (string, er
 		return "", err
 	}
 	if ref != "" {
-		if _, err := s.locate(ctx, tab, ref); err != nil {
+		r, err := s.resolveRef(ref)
+		if err != nil {
 			return "", err
+		}
+		if r.sessionID == "" {
+			if _, err := s.locate(ctx, tab, r.objectID); err != nil {
+				return "", err
+			}
+		} else {
+			// OOPIF:在子会话滚动元素进视口
+			var ok *bool
+			err = s.callOn(ctx, tab, r.sessionID, r.objectID, `function(){
+				if (!this.isConnected) return null;
+				this.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
+				return true;
+			}`, nil, &ok)
+			if err != nil {
+				return "", err
+			}
+			if ok == nil {
+				return "", errRefStale(ref)
+			}
 		}
 		return fmt.Sprintf("已滚动到 %s%s", ref, s.takeNotes()), nil
 	}
