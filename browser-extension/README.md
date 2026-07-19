@@ -52,7 +52,9 @@ openssl rsa -in dev-key.pem -pubout -outform DER | base64 -w0
 openssl rsa -in dev-key.pem -pubout -outform DER | sha256sum | head -c 32 | tr '0-9a-f' 'a-p'
 ```
 
-图标为脚本生成的纯色占位:`npm run icons`(产物已入库,一般无需重跑)。
+图标(`src/icons/icon{16,48,128}.png`)由 MonkeyCode 源图 `mc-desktop/icons/source.png`
+缩放而来,已入库。更新方式:用 ImageMagick(`convert source.png -resize 128x128 icon128.png`)
+或任意等比缩放工具重新生成三个尺寸。
 
 ## 已知限制
 

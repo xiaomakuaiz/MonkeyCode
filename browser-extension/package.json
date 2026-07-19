@@ -7,8 +7,7 @@
     "dev": "vite build --watch",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "icons": "node scripts/gen-icons.mjs"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",
