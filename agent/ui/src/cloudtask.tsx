@@ -23,7 +23,7 @@ import { CloudTerminal } from "./cloudterm";
 import { b64decode } from "./codec";
 import { COL_MAX, isImeEnter, markImeEnd } from "./chat";
 import { LogList } from "./components";
-import { IconCheck, IconChevronDown, IconCloud, IconDots, IconFolder, IconGlobe, IconMonitor, IconSend, IconStop, IconX } from "./icons";
+import { IconCheck, IconChevronDown, IconClock, IconCloud, IconDots, IconFolder, IconGlobe, IconMonitor, IconSend, IconStop, IconX } from "./icons";
 import { answerAsk, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Frame } from "./types";
 
@@ -106,8 +106,25 @@ export function CloudTaskView({
   const onTasksChangedRef = useRef(onTasksChanged);
   onTasksChangedRef.current = onTasksChanged;
 
+  // ===== 发送排队:发消息与连接生命周期解耦 =====
+  // 任何时刻都能按发送:环境启动中/正在执行/流还没同步上/上一条还没回执时
+  // 先入队,就绪(轮结束、attach 同步完)后自动投递;连发多条合并进同一队列,
+  // 不会再出现"第二条把第一条的连接关掉导致丢消息"。
+  const [queued, setQueuedState] = useState("");
+  const queuedRef = useRef("");
+  const setQueued = useCallback((v: string) => {
+    queuedRef.current = v;
+    setQueuedState(v);
+  }, []);
+  const runningRef = useRef(false); // chat.running 镜像(稳定回调里读)
+  const syncedRef = useRef(false); // attach 至少连上过一次:running 状态才可信
+  const sendingRef = useRef(false); // 直发后等首帧回执,期间再发只入队
+  const trySendRef = useRef<() => void>(() => {}); // 解循环依赖:投递入口经 ref 调用
+
   const taskStatus = meta?.status ?? task.status ?? "pending";
   const ended = taskStatus === "finished" || taskStatus === "error";
+  const statusRef = useRef(taskStatus);
+  statusRef.current = taskStatus;
   const label = task.title || task.summary || task.content || meta?.title || meta?.summary || "云端任务";
 
   const rebuild = useCallback(() => {
@@ -174,15 +191,20 @@ export function CloudTaskView({
           if (c?.cursor) setCursor((prev) => prev ?? { cursor: c.cursor!, hasMore: !!c.has_more });
           continue;
         }
+        if (f.type === "task-started") runningRef.current = true;
         if (f.type === "task-ended") turnEnded = true;
         frames.push(f);
       }
       if (!frames.length) return;
+      sendingRef.current = false; // 收到帧 = 上一条直发已被云端接收
       liveRef.current.push(...frames);
       setChat((s) => reduceBatch(s, frames));
       if (turnEnded) {
         historyRef.current = [...historyRef.current, ...liveRef.current];
         liveRef.current = [];
+        runningRef.current = false;
+        // 轮结束是排队消息的主要投递时机(稍等连接收尾)
+        setTimeout(() => trySendRef.current(), 200);
       }
     },
     [],
@@ -194,6 +216,11 @@ export function CloudTaskView({
       onStatus: (text: string, ok: boolean) => {
         setStatus(text);
         setConnected(ok);
+        if (ok) {
+          syncedRef.current = true;
+          // 连上后稍等回放揭示轮状态,再尝试投递排队消息
+          setTimeout(() => trySendRef.current(), 400);
+        }
       },
       onEnded: () => void refreshInfo().then(() => onTasksChangedRef.current?.()),
       // 断线重连(降级 attach)会整轮回放当前轮:清本地当前轮缓存,回放为权威
@@ -242,18 +269,59 @@ export function CloudTaskView({
     }
   };
 
-  // 发后续消息:并入历史(兜底,轮结束时通常已归档)→ 换 mode=new 连接
-  // (连上自动上行 user-input,云端回显,无需本地插气泡)
+  // 直发:并入历史 → 换 mode=new 连接(连上自动上行 user-input,云端回显)。
+  // 只在"任务空闲且流已同步"时走这条路;其余场景一律入队(见 sendMsg)。
+  const dispatch = useCallback(
+    (text: string) => {
+      historyRef.current = [...historyRef.current, ...liveRef.current];
+      liveRef.current = [];
+      connRef.current?.close();
+      pinnedRef.current = true;
+      sendingRef.current = true;
+      // 回执保护:15s 没等到任何帧(投递失败/被拒)就解除,让排队恢复流动
+      setTimeout(() => {
+        if (sendingRef.current) {
+          sendingRef.current = false;
+          trySendRef.current();
+        }
+      }, 15000);
+      connRef.current = connectCloudTask(id, "new", connHandlers(), text);
+    },
+    [id, connHandlers],
+  );
+
+  // 投递排队消息:任务在跑/流未同步/上一条未回执时按兵不动,条件齐了再发
+  const trySendQueued = useCallback(() => {
+    if (!queuedRef.current) return;
+    if (statusRef.current !== "processing") return;
+    if (!syncedRef.current || runningRef.current || sendingRef.current) return;
+    const q = queuedRef.current;
+    setQueued("");
+    dispatch(q);
+  }, [dispatch, setQueued]);
+  trySendRef.current = trySendQueued;
+
+  // 发送:随时可按。空闲且已同步 → 直发;否则入队(多条合并),就绪自动投递
   const sendMsg = () => {
     const text = input.trim();
     if (!text || ended) return;
-    historyRef.current = [...historyRef.current, ...liveRef.current];
-    liveRef.current = [];
-    connRef.current?.close();
-    pinnedRef.current = true;
-    connRef.current = connectCloudTask(id, "new", connHandlers(), text);
     setInput("");
+    const idle =
+      statusRef.current === "processing" && syncedRef.current && !runningRef.current && !sendingRef.current;
+    if (idle) {
+      dispatch(text);
+    } else {
+      setQueued(queuedRef.current ? queuedRef.current + "\n" + text : text);
+    }
   };
+
+  // 任务结束时还压着排队消息:外显提醒,不静默丢
+  useEffect(() => {
+    if (ended && queuedRef.current) {
+      setErr(`任务已结束,有未发送的消息:「${queuedRef.current.slice(0, 60)}」`);
+      setQueued("");
+    }
+  }, [ended, setQueued]);
 
   // 中断当前执行(WS user-cancel,不终止任务)
   const cancelRun = () => {
@@ -613,6 +681,32 @@ export function CloudTaskView({
           </div>
         )}
 
+        {queued && !ended && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "var(--panel2)",
+              border: "1px solid var(--cardBd)",
+              borderRadius: 10,
+              padding: "7px 12px",
+              fontSize: 12,
+              margin: "0 -12px",
+            }}
+          >
+            <IconClock />
+            <span style={{ color: "var(--t3)", flex: "none" }}>已排队</span>
+            <span className="ellipsis" style={{ fontWeight: 600, flex: 1 }}>{queued}</span>
+            <span style={{ color: "var(--t6)", flex: "none", fontSize: 11.5 }}>
+              {taskStatus === "pending" ? "环境就绪后自动发送" : "本轮结束后自动发送"}
+            </span>
+            <button className="hv2 icon-btn" title="取消排队" onClick={() => setQueued("")} style={{ width: 20, height: 20, borderRadius: 5 }}>
+              <IconX />
+            </button>
+          </div>
+        )}
+
         {ended ? (
           <div style={{ fontSize: 12, color: "var(--t5)", textAlign: "center", padding: "4px 0" }}>
             任务已结束,只读回放。需要继续可新建云端任务。
@@ -633,7 +727,6 @@ export function CloudTaskView({
               ref={taRef}
               rows={2}
               value={input}
-              disabled={taskStatus === "pending"}
               onChange={(e) => setInput(e.target.value)}
               onCompositionEnd={markImeEnd}
               onKeyDown={(e) => {
@@ -642,7 +735,13 @@ export function CloudTaskView({
                   sendMsg();
                 }
               }}
-              placeholder={taskStatus === "pending" ? "云端环境启动中,就绪后可对话…" : "继续对话…"}
+              placeholder={
+                taskStatus === "pending"
+                  ? "环境启动中…现在发送会排队,就绪后自动送达"
+                  : running
+                    ? "补充说明…运行中发送会排队"
+                    : "继续对话…"
+              }
               style={{
                 border: "none",
                 outline: "none",
@@ -721,7 +820,7 @@ export function CloudTaskView({
                   height: 27,
                   borderRadius: 8,
                   background: "var(--acc)",
-                  opacity: taskStatus !== "pending" && input.trim() ? 1 : 0.45,
+                  opacity: input.trim() ? 1 : 0.45,
                 }}
               >
                 <IconSend />
