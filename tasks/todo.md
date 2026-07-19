@@ -146,6 +146,28 @@
 静默丢弃——需要 LogItem 加 ask 变体 + reduce 分支 + 卡片渲染 + WS 回传;
 Control WS(文件树/diff/端口/切模型)未接,详情视图给了"网页打开"兜底。
 
+### 三期补齐(2026-07-19 同日,用户反馈驱动)✅
+
+- [x] 刷新:侧栏"云端任务"标题加刷新按钮(同步中转圈)+ 窗口重获焦点自动刷新
+      (网页/手机刚派发的任务切回来即可见,不等 60s 轮询)
+- [x] 展示统一:云端详情视图对齐 ChatView——56px 双行标题栏(可拖拽窗口)、
+      COL_MAX 同列宽同 scrollbar-gutter、运行条 + 停止胶囊、出血 composer 卡片、
+      终止任务收进 ⋯ 菜单(与删除会话同交互);COL_MAX 从 chat.tsx 导出共用
+- [x] 看文件:内核加 /api/mc/tasks/{id}/control WS 代理(云端 Control 流);
+      cloudfiles.tsx 文件抽屉(文件树/内容预览/改动 diff,结构对齐本地抽屉,
+      kind 与字段对齐 web task-file-explorer:repo_file_list/read_file/changes/diff,
+      call 按 request_id 配对,断线重连+未连先排队)
+- [x] 终端:内核加 /api/mc/vms/{id}/terminal WS 代理(云端 VM 终端流);
+      cloudterm.tsx = xterm.js + FitAddon,协议对齐 web common/terminal.tsx
+      (文本 JSON 帧,data=base64/resize={row,col}/5s ping);底部 280px 面板,
+      Esc 透传给 shell(App 快捷键对 .xterm 目标放行)
+- [x] 验证:对真实运行中的云端任务只读 e2e 全过——文件树列出 /workspace、
+      .gitignore 预览带行号、终端 zsh 里 echo TERM-OK-42 回显;并发上限时
+      创建错误条正确外显("你已有一个正在运行的任务");截图逐张目检
+
+遗留(下期):在线预览(port_forward_list/access_url)、切模型/重启(Control
+已通,差 UI)、文件下载、云端 ask 问答卡。
+
 ## M2 收尾:平台对接实施计划(2026-07-13)
 
 > 设计依据:local-agent-design.md §6 登录流 / §3 上下文 / L180 改动清单。

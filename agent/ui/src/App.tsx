@@ -637,8 +637,13 @@ export default function App() {
           if (typing) return t.blur();
           return closeSettings();
         }
+        if (view === "cloud") {
+          // xterm 的隐藏 textarea:Esc 要透传给云端 shell(vim 等),不 blur 不关视图
+          if (t?.closest?.(".xterm")) return;
+          if (typing) return t.blur();
+          return closeCloudTask();
+        }
         if (typing) return t.blur();
-        if (view === "cloud") return closeCloudTask();
         // 仅会话视图响应审批快捷键:新任务/云端视图不误拒背景会话的审批(Enter 同守卫)
         if (openPerm && view === "session" && !isNewView && !e.isComposing) session.answerPerm(openPerm.id, "deny");
         return;

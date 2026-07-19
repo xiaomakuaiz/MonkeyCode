@@ -16,10 +16,12 @@ import {
   type CloudTaskDetail,
 } from "./client";
 import { cloudModelLabel } from "./cloud";
+import { CloudFilesDrawer } from "./cloudfiles";
+import { CloudTerminal } from "./cloudterm";
 import { b64decode } from "./codec";
 import { COL_MAX, isImeEnter, markImeEnd } from "./chat";
 import { LogList } from "./components";
-import { IconCloud, IconDots, IconGlobe, IconSend, IconStop, IconX } from "./icons";
+import { IconCloud, IconDots, IconFolder, IconGlobe, IconMonitor, IconSend, IconStop, IconX } from "./icons";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Frame } from "./types";
 
@@ -280,6 +282,11 @@ export function CloudTaskView({
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }, [input]);
 
+  // 文件抽屉 / 终端面板(控制流与终端 WS 均走内核代理)
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [termOpen, setTermOpen] = useState(false);
+  const vmId = meta?.virtualmachine?.id ?? "";
+
   const st = STATUS_LABEL[taskStatus] ?? { text: taskStatus, color: "var(--t4)" };
   const running = chat.running && taskStatus === "processing";
   const roundNo = Math.max(1, chat.items.filter((it) => it.kind === "user").length);
@@ -308,7 +315,57 @@ export function CloudTaskView({
         <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
         <button
           className="hv"
-          title="在浏览器中打开完整控制台(文件/终端/预览)"
+          title="浏览云端工作区文件(标注改动)"
+          onClick={() => setFilesOpen(true)}
+          style={{
+            height: 28,
+            border: "1px solid var(--line)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "0 12px",
+            borderRadius: 8,
+            background: "var(--card)",
+            fontSize: 12,
+            color: "var(--t2)",
+            cursor: "pointer",
+            fontWeight: 600,
+            boxShadow: "var(--cardSh)",
+            flex: "none",
+          }}
+        >
+          <IconFolder size={12} />
+          文件
+        </button>
+        {vmId && !ended && (
+          <button
+            className="hv"
+            title="打开云端终端(直接操作虚拟机)"
+            onClick={() => setTermOpen((o) => !o)}
+            style={{
+              height: 28,
+              border: "1px solid var(--line)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "0 12px",
+              borderRadius: 8,
+              background: termOpen ? "var(--hov)" : "var(--card)",
+              fontSize: 12,
+              color: "var(--t2)",
+              cursor: "pointer",
+              fontWeight: 600,
+              boxShadow: "var(--cardSh)",
+              flex: "none",
+            }}
+          >
+            <IconMonitor size={12} strokeWidth={1.4} color="var(--t3)" />
+            终端
+          </button>
+        )}
+        <button
+          className="hv"
+          title="在浏览器中打开完整控制台(预览/共享终端等)"
           onClick={() => openExternal(`https://${mcHost}/console/task/${id}`)}
           style={{
             height: 28,
@@ -417,6 +474,23 @@ export function CloudTaskView({
         </div>
       </div>
 
+      {/* ==== 终端面板(底部,xterm;仅运行期展示)==== */}
+      {termOpen && vmId && !ended && (
+        <div style={{ flex: "none", height: 280, borderTop: "1px solid var(--line)", display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <div style={{ flex: "none", height: 30, display: "flex", alignItems: "center", gap: 8, padding: "0 12px", background: "#22252a", color: "#aab2bd", fontSize: 11.5, fontWeight: 600 }}>
+            云端终端
+            <span style={{ fontWeight: 400, color: "#788089" }}>直接操作任务虚拟机</span>
+            <span style={{ flex: 1 }} />
+            <button className="icon-btn" title="关闭终端" onClick={() => setTermOpen(false)} style={{ width: 22, height: 22, borderRadius: 6 }}>
+              <IconX size={10} color="#aab2bd" />
+            </button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <CloudTerminal vmId={vmId} />
+          </div>
+        </div>
+      )}
+
       {/* ==== 运行条 + composer:与 ChatView 同列宽同出血 ==== */}
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {err && <div style={{ fontSize: 12, color: "var(--err)" }}>{err}</div>}
@@ -519,6 +593,32 @@ export function CloudTaskView({
           </div>
         )}
       </div>
+
+      {/* ==== 云端文件抽屉(右侧浮层,结构对齐本地文件抽屉)==== */}
+      {filesOpen && (
+        <>
+          <div onClick={() => setFilesOpen(false)} style={{ position: "absolute", inset: 0, background: "var(--scrim)", zIndex: 35 }} />
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 600,
+              maxWidth: "90vw",
+              background: "var(--pop)",
+              borderLeft: "1px solid var(--line)",
+              boxShadow: "var(--shadow)",
+              zIndex: 36,
+              display: "flex",
+              flexDirection: "column",
+              animation: "mcslide .22s ease",
+            }}
+          >
+            <CloudFilesDrawer taskId={id} onClose={() => setFilesOpen(false)} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
