@@ -504,10 +504,12 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
 function ItemView({
   item,
   onPermAnswer,
+  onAskAnswer,
   uploadUrl,
 }: {
   item: Exclude<LogItem, { kind: "tool" }>;
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
+  onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
   uploadUrl?: (path: string) => string;
 }) {
   switch (item.kind) {
@@ -532,19 +534,203 @@ function ItemView({
       );
     case "perm":
       return <PermCard item={item} onAnswer={onPermAnswer} />;
+    case "ask":
+      return <AskCard item={item} onAnswer={onAskAnswer} />;
   }
+}
+
+/** 自定义答案在选中集合里的占位键(对齐 mobile askAnswers.ts) */
+const CUSTOM_ANSWER_KEY = "__monkeycode_custom_answer__";
+
+/** AI 提问卡:每题单选/多选 + 可选自定义输入;全部作答后可提交。
+ * 已答/过期态只读展示答案。onAnswer 缺省(只读回放场景)则不可交互。 */
+function AskCard({
+  item,
+  onAnswer,
+}: {
+  item: Extract<LogItem, { kind: "ask" }>;
+  onAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
+}) {
+  const [selected, setSelected] = useState<Record<number, Set<string>>>({});
+  const [custom, setCustom] = useState<Record<number, string>>({});
+
+  const toggle = (qi: number, choice: string, multi: boolean) => {
+    setSelected((prev) => {
+      const cur = new Set(prev[qi] ?? []);
+      if (cur.has(choice)) cur.delete(choice);
+      else {
+        if (!multi) cur.clear();
+        cur.add(choice);
+      }
+      return { ...prev, [qi]: cur };
+    });
+  };
+
+  // 全部题目已作答(自定义项须有内容)才能提交;答案 {问题: 值},多选为数组
+  const buildAnswers = (): Record<string, string | string[]> | null => {
+    const answers: Record<string, string | string[]> = {};
+    for (let qi = 0; qi < item.questions.length; qi++) {
+      const q = item.questions[qi];
+      const choices = selected[qi];
+      if (!choices || choices.size === 0) return null;
+      const values: string[] = [];
+      for (const c of choices) {
+        if (c === CUSTOM_ANSWER_KEY) {
+          const v = (custom[qi] ?? "").trim();
+          if (!v) return null;
+          values.push(v);
+        } else {
+          values.push(c);
+        }
+      }
+      answers[q.question] = q.multiSelect ? values : values[0];
+    }
+    return answers;
+  };
+
+  const open = item.state === "open" && !!onAnswer;
+  const ready = open && buildAnswers() !== null;
+
+  const optBtn = (active: boolean): CSSProperties => ({
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    padding: "7px 12px",
+    borderRadius: 8,
+    border: `1px solid ${active ? "var(--acc)" : "var(--line)"}`,
+    background: active ? "var(--accBg)" : "var(--card)",
+    cursor: open ? "pointer" : "default",
+    userSelect: "none",
+    textAlign: "left",
+  });
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--warnBd)",
+        borderRadius: 12,
+        background: "var(--warnBg)",
+        padding: "13px 15px",
+        maxWidth: 560,
+        animation: "mcin .25s ease",
+      }}
+    >
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--warn)", whiteSpace: "nowrap" }}>
+        {item.state === "open" ? "AI 想确认几个问题" : item.state === "done" ? "已回答的问题" : "提问已过期"}
+      </div>
+      {item.questions.map((q, qi) => {
+        const done = item.state !== "open";
+        const answered = q.answer !== undefined ? (Array.isArray(q.answer) ? q.answer : [q.answer]) : [];
+        return (
+          <div key={qi} style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 7 }}>
+              {q.header && (
+                <span style={{ flex: "none", fontSize: 10.5, fontWeight: 700, color: "var(--acc)", background: "var(--accBg)", borderRadius: 5, padding: "1px 6px" }}>
+                  {q.header}
+                </span>
+              )}
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)", lineHeight: 1.5 }}>{q.question}</span>
+            </div>
+            {done ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {answered.length > 0 ? (
+                  answered.map((a, i) => (
+                    <span key={i} style={{ fontSize: 12, color: "var(--acc)", background: "var(--accBg)", borderRadius: 7, padding: "3px 10px", fontWeight: 600 }}>
+                      {a}
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ fontSize: 12, color: "var(--t5)" }}>(未回答)</span>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {q.options.map((o) => {
+                  const active = selected[qi]?.has(o.label) ?? false;
+                  return (
+                    <div key={o.label} className={open ? "hv" : undefined} onClick={() => open && toggle(qi, o.label, q.multiSelect)} style={optBtn(active)}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: active ? "var(--acc)" : "var(--t1)" }}>{o.label}</span>
+                      {o.description && <span style={{ fontSize: 11.5, color: "var(--t5)", lineHeight: 1.5 }}>{o.description}</span>}
+                    </div>
+                  );
+                })}
+                {q.custom && (
+                  <div
+                    className={open ? "hv" : undefined}
+                    onClick={() => open && !selected[qi]?.has(CUSTOM_ANSWER_KEY) && toggle(qi, CUSTOM_ANSWER_KEY, q.multiSelect)}
+                    style={optBtn(selected[qi]?.has(CUSTOM_ANSWER_KEY) ?? false)}
+                  >
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t3)" }}>自定义答案…</span>
+                    {selected[qi]?.has(CUSTOM_ANSWER_KEY) && (
+                      <input
+                        autoFocus
+                        value={custom[qi] ?? ""}
+                        onChange={(e) => setCustom((p) => ({ ...p, [qi]: e.target.value }))}
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder="输入你的回答"
+                        style={{
+                          marginTop: 4,
+                          border: "1px solid var(--line)",
+                          borderRadius: 6,
+                          padding: "5px 8px",
+                          fontSize: 12.5,
+                          background: "var(--card)",
+                          color: "var(--t1)",
+                          outline: "none",
+                        }}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {open && (
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+          <div
+            className={ready ? "hv-acc" : undefined}
+            onClick={() => {
+              const answers = buildAnswers();
+              if (answers && onAnswer) onAnswer(item.askId, answers);
+            }}
+            style={{
+              height: 28,
+              display: "flex",
+              alignItems: "center",
+              padding: "0 16px",
+              background: ready ? "var(--acc)" : "var(--hov)",
+              border: "none",
+              color: ready ? "var(--onAcc)" : "var(--t5)",
+              borderRadius: 8,
+              cursor: ready ? "pointer" : "default",
+              fontSize: 12.5,
+              fontWeight: 700,
+              userSelect: "none",
+            }}
+          >
+            提交回答
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 对话流:相邻工具卡聚成一列(间距 8,设计稿 agents 列) */
 export function LogList({
   items,
   onPermAnswer,
+  onAskAnswer,
   onOpenChild,
   uploadUrl,
   workdir,
 }: {
   items: LogItem[];
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
+  /** 回答 AI 提问卡(云端任务);缺省则提问卡只读 */
+  onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
   onOpenChild?: (id: string) => void;
   /** 已上传图片路径 → 可渲染 URL(气泡缩略图;不传则图片行按纯文本展示) */
   uploadUrl?: (path: string) => string;
@@ -571,7 +757,7 @@ export function LogList({
         </div>,
       );
     } else {
-      out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} uploadUrl={uploadUrl} />);
+      out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} onAskAnswer={onAskAnswer} uploadUrl={uploadUrl} />);
       i++;
     }
   }

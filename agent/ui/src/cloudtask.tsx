@@ -6,8 +6,10 @@
 // 渲染复用本地会话的帧归约链(reduceBatch → LogList):云端帧与本地 Frame 同构。
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  connectCloudControl,
   connectCloudTask,
   mcTaskInfo,
+  mcTaskOptions,
   mcTaskRounds,
   mcTaskStop,
   openExternal,
@@ -15,14 +17,14 @@ import {
   type CloudTask,
   type CloudTaskDetail,
 } from "./client";
-import { cloudModelLabel } from "./cloud";
+import { cloudModelLabel, usableCloudModels, type McCloudModel } from "./cloud";
 import { CloudFilesDrawer } from "./cloudfiles";
 import { CloudTerminal } from "./cloudterm";
 import { b64decode } from "./codec";
 import { COL_MAX, isImeEnter, markImeEnd } from "./chat";
 import { LogList } from "./components";
-import { IconCloud, IconDots, IconFolder, IconGlobe, IconMonitor, IconSend, IconStop, IconX } from "./icons";
-import { initialChat, reduceBatch, type ChatState } from "./reduce";
+import { IconCheck, IconChevronDown, IconCloud, IconDots, IconFolder, IconGlobe, IconMonitor, IconSend, IconStop, IconX } from "./icons";
+import { answerAsk, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Frame } from "./types";
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {
@@ -287,6 +289,66 @@ export function CloudTaskView({
   const [termOpen, setTermOpen] = useState(false);
   const vmId = meta?.virtualmachine?.id ?? "";
 
+  // 回答 AI 提问:reply-question 经任务流上行(request_id 即 askId),乐观回写 UI
+  const onAskAnswer = useCallback((askId: string, answers: Record<string, string | string[]>) => {
+    const sent = connRef.current?.send("reply-question", {
+      request_id: askId,
+      answers_json: JSON.stringify(answers),
+      cancelled: false,
+    });
+    if (sent) setChat((s) => answerAsk(s, askId, answers));
+    else setErr("云端连接已断开,回答未发送;等重连后再试");
+  }, []);
+
+  // 切换模型:一次性控制流连接调 switch_model(load_session 保留会话上下文)
+  const [cloudModels, setCloudModels] = useState<McCloudModel[] | null>(null);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const openModelPicker = () => {
+    setModelOpen((o) => !o);
+    if (!cloudModels) {
+      mcTaskOptions()
+        .then((o) => setCloudModels(usableCloudModels(o.models, o.plan)))
+        .catch(() => setCloudModels([]));
+    }
+  };
+  const switchModel = async (modelId: string) => {
+    setModelOpen(false);
+    if (switching || modelId === meta?.model?.id) return;
+    setSwitching(true);
+    setErr("");
+    const ctrl = connectCloudControl(id);
+    try {
+      await ctrl.call("switch_model", { model_id: modelId, load_session: true });
+      await refreshInfo();
+    } catch (e) {
+      setErr("切换模型失败: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      ctrl.close();
+      setSwitching(false);
+    }
+  };
+
+  // 在线预览:⋯ 菜单打开时拉端口列表,access_url 可直接在浏览器打开
+  interface PortInfo {
+    port?: number;
+    access_url?: string;
+    label?: string;
+    process?: string;
+    status?: string;
+  }
+  const [ports, setPorts] = useState<PortInfo[] | null>(null);
+  const fetchPorts = () => {
+    if (!vmId || ended) return;
+    setPorts(null);
+    const ctrl = connectCloudControl(id);
+    ctrl
+      .call<{ ports?: PortInfo[] }>("port_forward_list")
+      .then((r) => setPorts(r.ports ?? []))
+      .catch(() => setPorts([]))
+      .finally(() => ctrl.close());
+  };
+
   const st = STATUS_LABEL[taskStatus] ?? { text: taskStatus, color: "var(--t4)" };
   const running = chat.running && taskStatus === "processing";
   const roundNo = Math.max(1, chat.items.filter((it) => it.kind === "user").length);
@@ -391,7 +453,11 @@ export function CloudTaskView({
           <button
             className="hv icon-btn"
             title="更多"
-            onClick={() => setMenu(menu === "closed" ? "open" : "closed")}
+            onClick={() => {
+              const next = menu === "closed" ? "open" : "closed";
+              setMenu(next);
+              if (next === "open") fetchPorts();
+            }}
             style={{ width: 28, height: 28, borderRadius: 8, background: menu !== "closed" ? "var(--hov)" : "transparent" }}
           >
             <IconDots size={14} color="var(--t5)" />
@@ -399,16 +465,51 @@ export function CloudTaskView({
           {menu !== "closed" && (
             <>
               <div className="backdrop" onClick={() => setMenu("closed")} />
-              <div className="pop" style={{ position: "absolute", top: 32, right: 0, minWidth: 130 }}>
+              <div className="pop" style={{ position: "absolute", top: 32, right: 0, minWidth: 180 }}>
                 {menu === "open" ? (
-                  ended ? (
-                    <div style={{ padding: "6px 9px", fontSize: 11.5, color: "var(--t5)" }}>任务已结束</div>
-                  ) : (
-                    <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
-                      <IconStop color="var(--err)" />
-                      终止任务
-                    </button>
-                  )
+                  <>
+                    {!ended && vmId && (
+                      <>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: "var(--t6)", padding: "5px 9px 3px" }}>
+                          在线预览
+                        </span>
+                        {ports === null && (
+                          <div style={{ padding: "3px 9px 6px", fontSize: 11.5, color: "var(--t5)" }}>检测开放端口…</div>
+                        )}
+                        {ports !== null && ports.filter((p) => p.access_url).length === 0 && (
+                          <div style={{ padding: "3px 9px 6px", fontSize: 11.5, color: "var(--t5)" }}>没有开放的端口</div>
+                        )}
+                        {(ports ?? [])
+                          .filter((p) => p.access_url)
+                          .map((p) => (
+                            <button
+                              key={p.port}
+                              className="hv menu-item"
+                              title={p.access_url}
+                              onClick={() => {
+                                setMenu("closed");
+                                openExternal(p.access_url!);
+                              }}
+                              style={{ gap: 8 }}
+                            >
+                              <IconGlobe size={12} color="var(--acc)" />
+                              <span style={{ flex: 1, minWidth: 0 }} className="ellipsis">
+                                :{p.port} {p.label || p.process || ""}
+                              </span>
+                            </button>
+                          ))}
+                        <span style={{ height: 1, background: "var(--line2)", margin: "4px 6px" }} />
+                      </>
+                    )}
+                    {ended ? (
+                      <div style={{ padding: "6px 9px", fontSize: 11.5, color: "var(--t5)" }}>任务已结束</div>
+                    ) : (
+                      <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
+                        <IconStop color="var(--err)" />
+                        终止任务
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <>
                     <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
@@ -470,7 +571,7 @@ export function CloudTaskView({
               {ended ? "没有可回放的对话记录。" : status}
             </div>
           )}
-          <LogList items={chat.items} onPermAnswer={() => {}} />
+          <LogList items={chat.items} onPermAnswer={() => {}} onAskAnswer={ended ? undefined : onAskAnswer} />
         </div>
       </div>
 
@@ -575,6 +676,52 @@ export function CloudTaskView({
                 <span className="ellipsis">{status} · 运行在云端,关掉客户端也会继续</span>
               </span>
               <span style={{ flex: 1 }} />
+              {/* 云端模型切换(经控制流 switch_model,保留会话上下文;执行中禁用) */}
+              <span style={{ position: "relative", flex: "none" }}>
+                <button
+                  className="hv"
+                  title={running ? "执行中不可切换模型" : "切换云端模型"}
+                  disabled={running || switching}
+                  onClick={openModelPicker}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    height: 24,
+                    padding: "0 8px",
+                    border: "none",
+                    borderRadius: 7,
+                    background: modelOpen ? "var(--hov)" : "transparent",
+                    cursor: running || switching ? "default" : "pointer",
+                    fontSize: 11.5,
+                    color: "var(--t3)",
+                    maxWidth: 200,
+                    opacity: running || switching ? 0.5 : 1,
+                  }}
+                >
+                  <span className="ellipsis">{switching ? "切换中…" : cloudModelLabel(meta?.model) || "模型"}</span>
+                  <IconChevronDown color="var(--t5)" />
+                </button>
+                {modelOpen && (
+                  <>
+                    <div className="backdrop" onClick={() => setModelOpen(false)} />
+                    <div className="pop" style={{ position: "absolute", bottom: 30, right: 0, borderRadius: 10, minWidth: 210, maxHeight: 280, overflowY: "auto" }}>
+                      {(cloudModels ?? []).map((m) => (
+                        <button key={m.id} className="hv menu-item" onClick={() => void switchModel(m.id!)} style={{ gap: 8 }}>
+                          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t2)" }}>{cloudModelLabel(m)}</span>
+                          {m.id === meta?.model?.id && <IconCheck size={11} color="var(--acc)" strokeWidth={1.6} />}
+                        </button>
+                      ))}
+                      {cloudModels === null && (
+                        <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>加载中…</span>
+                      )}
+                      {cloudModels !== null && cloudModels.length === 0 && (
+                        <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>没有可用模型</span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </span>
               <button
                 className="hv-acc icon-btn"
                 title="发送 ↩ · 换行 ⇧↩"

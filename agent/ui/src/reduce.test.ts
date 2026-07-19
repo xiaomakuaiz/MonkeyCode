@@ -3,7 +3,7 @@
 // 与内核下行格式(data = base64(JSON))一致。
 import { describe, expect, it } from "vitest";
 import { b64encode } from "./codec";
-import { answerPerm, initialChat, permStateLabel, reduceBatch, reduceFrame } from "./reduce";
+import { answerAsk, answerPerm, initialChat, permStateLabel, reduceBatch, reduceFrame } from "./reduce";
 import type { AcpUpdate, Frame, LogItem, ToolProgress } from "./types";
 
 const frame = (type: string, data?: unknown, kind?: string): Frame => ({
@@ -244,5 +244,75 @@ describe("轮次与系统帧", () => {
     expect(reduceFrame(s, frame("不认识"))).toBe(s);
     expect(reduceFrame(s, acp({ sessionUpdate: "future_update" }))).toBe(s);
     expect(reduceFrame(s, { type: "task-running", kind: "别的" })).toBe(s);
+  });
+});
+
+describe("AI 提问卡(ask_user_question)", () => {
+  const questions = [
+    {
+      question: "选哪个方案?",
+      header: "方案",
+      options: [{ label: "方案 A", description: "简单" }, { label: "方案 B" }],
+      custom: true,
+    },
+    { question: "要哪些能力?", multiple: true, options: [{ label: "X" }, { label: "Y" }] },
+  ];
+
+  it("tool_call 形态的提问(title=Question)渲染为 ask 卡而非工具卡", () => {
+    const s = run([acp({ sessionUpdate: "tool_call", toolCallId: "ask-1", title: "Question", rawInput: { questions } })]);
+    expect(s.items).toHaveLength(1);
+    const ask = s.items[0] as Extract<LogItem, { kind: "ask" }>;
+    expect(ask.kind).toBe("ask");
+    expect(ask.askId).toBe("ask-1");
+    expect(ask.state).toBe("open");
+    expect(ask.questions[0].multiSelect).toBe(false);
+    expect(ask.questions[0].custom).toBe(true);
+    expect(ask.questions[1].multiSelect).toBe(true);
+  });
+
+  it("acp_ask_user_question 帧(toolCall 包裹)同样出卡;同 askId 更新不重复", () => {
+    const f = frame(
+      "task-running",
+      { toolCall: { toolCallId: "ask-2", rawInput: { questions } } },
+      "acp_ask_user_question",
+    );
+    const s = run([f, f]);
+    expect(s.items.filter((it) => it.kind === "ask")).toHaveLength(1);
+  });
+
+  it("reply-question 回显把卡片置 done 并按题回填答案", () => {
+    const s = run([
+      acp({ sessionUpdate: "tool_call", toolCallId: "ask-3", title: "Question", rawInput: { questions } }),
+      frame("reply-question", {
+        request_id: "ask-3",
+        answers_json: JSON.stringify({ "选哪个方案?": "方案 A", "要哪些能力?": ["X", "Y"] }),
+      }),
+    ]);
+    const ask = s.items[0] as Extract<LogItem, { kind: "ask" }>;
+    expect(ask.state).toBe("done");
+    expect(ask.questions[0].answer).toBe("方案 A");
+    expect(ask.questions[1].answer).toEqual(["X", "Y"]);
+  });
+
+  it("轮结束时未回答的提问卡过期", () => {
+    const s = run([
+      acp({ sessionUpdate: "tool_call", toolCallId: "ask-4", title: "Question", rawInput: { questions } }),
+      frame("task-ended"),
+    ]);
+    const ask = s.items.find((it) => it.kind === "ask") as Extract<LogItem, { kind: "ask" }>;
+    expect(ask.state).toBe("expired");
+  });
+
+  it("answerAsk 乐观回写:置 done 并填答案", () => {
+    const s0 = run([acp({ sessionUpdate: "tool_call", toolCallId: "ask-5", title: "Question", rawInput: { questions } })]);
+    const s = answerAsk(s0, "ask-5", { "选哪个方案?": "自定义答案", "要哪些能力?": ["X"] });
+    const ask = s.items[0] as Extract<LogItem, { kind: "ask" }>;
+    expect(ask.state).toBe("done");
+    expect(ask.questions[0].answer).toBe("自定义答案");
+  });
+
+  it("普通 tool_call(有 title 非提问词汇)不受影响,仍是工具卡", () => {
+    const s = run([acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "bash", rawInput: { questions } })]);
+    expect(s.items[0].kind).toBe("tool");
   });
 });

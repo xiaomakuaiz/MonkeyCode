@@ -80,7 +80,10 @@ export interface AcpUpdate {
   title?: string;
   kind?: string;
   status?: string;
+  rawInput?: unknown;
   rawOutput?: unknown;
+  /** ask_user_question 的兜底载荷位置(部分 CLI 把问题放在 _meta 里) */
+  _meta?: unknown;
   entries?: PlanEntry[];
   attempt?: number;
   message?: string;
@@ -114,6 +117,19 @@ export interface PlanEntry {
 export type PermOutcome = "approved" | "denied" | "timeout" | "cancelled";
 export type PermState = "open" | "allowed" | "rejected" | PermOutcome | "expired";
 
+/** AI 提问(ask_user_question)的一道题(结构对齐 mobile messages/handler.ts) */
+export interface AskQuestion {
+  question: string;
+  /** 简短标签(chip 展示) */
+  header?: string;
+  multiSelect: boolean;
+  /** 允许自定义答案(选项之外自由输入) */
+  custom: boolean;
+  options: { label: string; description?: string }[];
+  /** 已答内容(reply-question 回显/回放后填充) */
+  answer?: string | string[];
+}
+
 /** 对话流里的一条渲染项 */
 export type LogItem =
   | { kind: "user"; text: string }
@@ -134,7 +150,9 @@ export type LogItem =
     }
   | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "sys"; text: string; error?: boolean }
-  | { kind: "perm"; id: string; title: string; tool: string; state: PermState };
+  | { kind: "perm"; id: string; title: string; tool: string; state: PermState }
+  /** AI 提问卡片(云端 ask_user_question;askId 即回传 reply 的 request_id) */
+  | { kind: "ask"; askId: string; state: "open" | "done" | "expired"; questions: AskQuestion[] };
 
 export interface FileChange {
   status: "A" | "M" | "D";

@@ -1,7 +1,7 @@
-// 帧 → 对话流渲染项的归约:流式文本聚合、工具状态回写、审批卡片终态等。
-// 纯函数,不触 DOM。
+// 帧 → 对话流渲染项的归约:流式文本聚合、工具状态回写、审批卡片终态、
+// AI 提问卡(ask_user_question)等。纯函数,不触 DOM。
 import { b64decode, frameData } from "./codec";
-import type { AcpUpdate, Frame, LogItem, PermOutcome, SubEntry, ToolProgress, Usage } from "./types";
+import type { AcpUpdate, AskQuestion, Frame, LogItem, PermOutcome, SubEntry, ToolProgress, Usage } from "./types";
 
 export interface ChatState {
   items: LogItem[];
@@ -63,9 +63,91 @@ function push(s: ChatState, item: LogItem): ChatState {
   return { ...s, items: [...s.items, item], streamKind: "" };
 }
 
-/** 轮次结束:未答复的审批卡片过期 */
+/** 轮次结束:未答复的审批卡片与提问卡片过期 */
 function expirePerms(items: LogItem[]): LogItem[] {
-  return items.map((it) => (it.kind === "perm" && it.state === "open" ? { ...it, state: "expired" } : it));
+  return items.map((it) =>
+    (it.kind === "perm" || it.kind === "ask") && it.state === "open" ? { ...it, state: "expired" } : it,
+  );
+}
+
+// ==================== AI 提问(ask_user_question,对齐 mobile handler.ts) ====================
+
+/** 问题结构归一:multiple/multiSelect 兼容,options 只留 label/description */
+function normalizeAskQuestions(raw: unknown, defaultMultiple: boolean): AskQuestion[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw.map((q) => {
+    const o = q as {
+      question?: string;
+      header?: string;
+      multiple?: boolean;
+      multiSelect?: boolean;
+      custom?: boolean;
+      options?: { label?: string; description?: string }[];
+    };
+    return {
+      question: o?.question ?? "",
+      header: o?.header,
+      multiSelect: !!(o?.multiple ?? o?.multiSelect ?? defaultMultiple),
+      custom: !!o?.custom,
+      options: (Array.isArray(o?.options) ? o.options : []).map((x) => ({
+        label: x?.label ?? "",
+        description: x?.description,
+      })),
+    };
+  });
+}
+
+/** 从 tool_call/acp_ask_user_question 载荷里提取问题清单(rawInput 优先,_meta 兜底) */
+function askQuestionsFrom(tc: AcpUpdate | Record<string, unknown>): AskQuestion[] | null {
+  const t = tc as { rawInput?: { questions?: unknown; multiple?: boolean }; _meta?: { askUserQuestion?: { questions?: unknown; multiple?: boolean } } };
+  const meta = t._meta?.askUserQuestion;
+  const raw = Array.isArray(t.rawInput?.questions) ? t.rawInput.questions : meta?.questions;
+  const defMulti = !!(t.rawInput?.multiple ?? meta?.multiple ?? false);
+  return normalizeAskQuestions(raw, defMulti);
+}
+
+/** 该 tool_call 是否是"向用户提问"(title/kind 词汇 + 载荷里确有问题清单) */
+function isAskToolCall(u: AcpUpdate): AskQuestion[] | null {
+  const questions = askQuestionsFrom(u);
+  if (!questions) return null;
+  const norm = (v?: string) => (v ?? "").toLowerCase().trim().replace(/[_\s]+/g, "-");
+  const title = norm(u.title);
+  const kind = norm(u.kind);
+  const hit =
+    title === "question" ||
+    title === "user-question" ||
+    title.endsWith("-user-question") ||
+    title.includes("ask-user-question") ||
+    kind === "user-question" ||
+    kind === "ask-user-question" ||
+    (title === "" && kind === "");
+  return hit ? questions : null;
+}
+
+/** 新建/更新提问卡:同 askId 原地更新(保留已答内容);占位工具卡原地替换 */
+function upsertAsk(s: ChatState, askId: string, questions: AskQuestion[], completed: boolean): ChatState {
+  const items = s.items.slice();
+  const askIdx = items.findIndex((it) => it.kind === "ask" && it.askId === askId);
+  if (askIdx >= 0) {
+    const ask = items[askIdx] as Extract<LogItem, { kind: "ask" }>;
+    const answered = new Map(
+      ask.questions.filter((q) => q.answer !== undefined).map((q) => [q.question, q.answer] as const),
+    );
+    items[askIdx] = {
+      ...ask,
+      state: ask.state === "done" ? "done" : completed ? "done" : ask.state,
+      questions: questions.map((q) => (answered.has(q.question) ? { ...q, answer: answered.get(q.question) } : q)),
+    };
+    return { ...s, items, streamKind: "" };
+  }
+  const next: LogItem = { kind: "ask", askId, state: completed ? "done" : "open", questions };
+  const toolIdx = items.findIndex((it) => it.kind === "tool" && it.tcId === askId);
+  if (toolIdx >= 0) {
+    items[toolIdx] = next;
+    return { ...s, items, streamKind: "" };
+  }
+  items.push(next);
+  return { ...s, items, streamKind: "" };
 }
 
 /** 进度窗口在内存里保留的条数上限(渲染只取尾部几条,完整过程在子会话)。 */
@@ -123,7 +205,10 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       return appendStream(s, "agent", u.content?.text ?? "");
     case "agent_thought_chunk":
       return appendStream(s, "thought", u.content?.text ?? "");
-    case "tool_call":
+    case "tool_call": {
+      // 云端 CLI 的"向用户提问"以 tool_call 形态出现,渲染为提问卡而非工具卡
+      const askQs = isAskToolCall(u);
+      if (askQs && u.toolCallId) return upsertAsk(s, u.toolCallId, askQs, u.status === "completed");
       return push(s, {
         kind: "tool",
         tcId: u.toolCallId ?? "",
@@ -131,7 +216,20 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
         status: "run",
         out: "",
       });
+    }
     case "tool_call_update": {
+      const askQs = isAskToolCall(u);
+      if (askQs && u.toolCallId) return upsertAsk(s, u.toolCallId, askQs, u.status === "completed");
+      // 已是提问卡的 toolCallId 只回写终态(completed → done)
+      if (u.toolCallId && s.items.some((it) => it.kind === "ask" && it.askId === u.toolCallId)) {
+        if (u.status !== "completed") return s;
+        return {
+          ...s,
+          items: s.items.map((it) =>
+            it.kind === "ask" && it.askId === u.toolCallId && it.state === "open" ? { ...it, state: "done" } : it,
+          ),
+        };
+      }
       if (u.status === "in_progress") {
         return u.progress ? applyProgress(s, u.toolCallId ?? "", u.progress) : s;
       }
@@ -233,11 +331,52 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
       if (f.kind === "acp_event") {
         const data = frameData<{ update?: AcpUpdate }>(f);
         if (data?.update) return reduceAcp(s, data.update);
+        return s;
+      }
+      if (f.kind === "acp_ask_user_question") {
+        // 云端专用帧:{toolCall:{toolCallId, rawInput.questions, ...}}
+        const data = frameData<{ toolCall?: AcpUpdate & Record<string, unknown> }>(f);
+        const tc = data?.toolCall;
+        const id = tc?.toolCallId;
+        const qs = tc ? askQuestionsFrom(tc) : null;
+        if (id && qs) return upsertAsk(s, id, qs, tc?.status === "completed");
+        return s;
       }
       return s;
+    case "reply-question": {
+      // 答案回显/回放:request_id 即 askId,answers_json = {问题: 答案}
+      const data = frameData<{ request_id?: string; answers_json?: string; cancelled?: boolean }>(f);
+      if (!data?.request_id) return s;
+      let answers: Record<string, string | string[]> = {};
+      try {
+        answers = JSON.parse(data.answers_json ?? "{}") as Record<string, string | string[]>;
+      } catch {
+        /* 坏载荷按无答案处理 */
+      }
+      return {
+        ...s,
+        items: s.items.map((it) =>
+          it.kind === "ask" && it.askId === data.request_id
+            ? { ...it, state: "done", questions: it.questions.map((q) => ({ ...q, answer: answers[q.question] })) }
+            : it,
+        ),
+      };
+    }
     default:
       return s;
   }
+}
+
+/** 本地答复提问卡(提交后立即回写 UI,不等 reply-question 回显) */
+export function answerAsk(s: ChatState, askId: string, answers: Record<string, string | string[]>): ChatState {
+  return {
+    ...s,
+    items: s.items.map((it) =>
+      it.kind === "ask" && it.askId === askId && it.state === "open"
+        ? { ...it, state: "done", questions: it.questions.map((q) => ({ ...q, answer: answers[q.question] })) }
+        : it,
+    ),
+  };
 }
 
 export function reduceBatch(s: ChatState, batch: Frame[]): ChatState {
