@@ -3,6 +3,7 @@
     "active": true,
     "targets": ["nsis"],
     "externalBin": ["binaries/mc-agent"],
+    "resources": { "../browser-extension/dist": "browser-extension" },
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
       "nsis": {

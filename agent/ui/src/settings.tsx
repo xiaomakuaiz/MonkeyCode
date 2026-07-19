@@ -11,6 +11,7 @@ import {
   getBrowserExtStatus,
   getHostConfig,
   inDesktopShell,
+  openExtensionDir,
   repairBrowserExt,
   saveHostConfig,
   updateCheck,
@@ -199,6 +200,7 @@ function BrowserExtCard() {
   const [fetchErr, setFetchErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [extDirMsg, setExtDirMsg] = useState("");
 
   const refresh = async () => {
     try {
@@ -291,10 +293,31 @@ function BrowserExtCard() {
       <div style={{ fontSize: 12.5, color: "var(--t4)", lineHeight: 1.8 }}>
         安装 MonkeyCode 浏览器扩展后,agent 可以在你的浏览器里打开网页、点击、输入、截图(共享登录态,操作前会请求授权):
         <ol style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-          <li>在 Chrome/Edge 打开扩展管理页(chrome://extensions),开启「开发者模式」,「加载已解压的扩展程序」选择仓库的 browser-extension/dist 目录(构建见其 README);</li>
+          <li>
+            {inDesktopShell() ? (
+              <>
+                点击
+                <button
+                  className="hv"
+                  onClick={() => {
+                    void openExtensionDir()
+                      .then((p) => setExtDirMsg(p ? `已在文件管理器中定位: ${p}` : ""))
+                      .catch((e) => setExtDirMsg(e instanceof Error ? e.message : String(e)));
+                  }}
+                  style={{ ...whiteBtn, height: 22, padding: "0 8px", fontSize: 11.5, margin: "0 4px", verticalAlign: "middle" }}
+                >
+                  打开扩展目录
+                </button>
+                → 在 Chrome/Edge 扩展管理页(chrome://extensions)开启「开发者模式」→「加载已解压的扩展程序」选择该目录;
+              </>
+            ) : (
+              <>在 Chrome/Edge 打开扩展管理页(chrome://extensions),开启「开发者模式」,「加载已解压的扩展程序」选择仓库的 browser-extension/dist 目录(构建见其 README);</>
+            )}
+          </li>
           <li>点击扩展图标 → 选项,填入上方配对码完成配对;</li>
           <li>状态变为「已连接」即可在对话中使用;操作标签页顶部会显示浏览器自带的调试提示条,点击其「取消」即收回控制。</li>
         </ol>
+        {extDirMsg && <div style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO, marginTop: 4 }}>{extDirMsg}</div>}
         操作你已打开的页面:点扩展图标 →「把此标签页交给 agent 操作」。
       </div>
     </>

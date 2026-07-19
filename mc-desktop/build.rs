@@ -12,6 +12,7 @@ fn main() {
                 "show_main",
                 "update_check",
                 "update_install",
+                "open_extension_dir",
             ]),
         ),
     )

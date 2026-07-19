@@ -32,6 +32,13 @@ jobs:
 
       # 内核 sidecar:tauri bundle 按 <name>-<triple>.exe 查找,
       # 安装后落地为应用同目录的 mc-agent.exe(壳 find_agent 的查找路径)
+      # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
+      - name: Build browser extension
+        working-directory: browser-extension
+        run: |
+          npm ci
+          npm run build
+
       - name: Build kernel sidecar
         working-directory: agent
         env:

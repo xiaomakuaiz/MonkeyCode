@@ -27,6 +27,13 @@ jobs:
         with:
           workspaces: mc-desktop
 
+      # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
+      - name: Build browser extension
+        working-directory: browser-extension
+        run: |
+          npm ci
+          npm run build
+
       - name: Build app bundle (universal, unsigned)
         working-directory: mc-desktop
         env:

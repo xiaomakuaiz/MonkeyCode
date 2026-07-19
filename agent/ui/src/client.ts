@@ -265,6 +265,14 @@ export async function saveHostConfig(config: HostConfig): Promise<void> {
   await tauri.core.invoke("save_config", { config });
 }
 
+/** 在文件管理器中定位随桌面包分发的浏览器扩展目录(用户在扩展管理页
+ * 「加载已解压的扩展程序」时选它)。返回目录路径;非壳环境返回 null。 */
+export async function openExtensionDir(): Promise<string | null> {
+  const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (!tauri?.core?.invoke) return null;
+  return (await tauri.core.invoke("open_extension_dir")) as string;
+}
+
 /** 是否 macOS 桌面壳(标题栏为 Overlay,侧栏顶部须为红绿灯预留拖拽区)。 */
 export function isMacShell(): boolean {
   return inDesktopShell() && /Mac/.test(navigator.userAgent);

@@ -200,6 +200,27 @@ fn get_config(app: AppHandle) -> DesktopConfig {
     load_config(&app)
 }
 
+/// 在文件管理器中定位随包分发的浏览器扩展目录(设置页引导用户到
+/// chrome://extensions「加载已解压的扩展程序」选它)。返回目录路径。
+/// dev 运行(cargo run 无 bundle 资源)回退仓库内 browser-extension/dist。
+#[tauri::command]
+fn open_extension_dir(app: AppHandle) -> Result<String, String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(p) = app
+        .path()
+        .resolve("browser-extension", tauri::path::BaseDirectory::Resource)
+    {
+        candidates.push(p);
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../browser-extension/dist"));
+    let dir = candidates
+        .into_iter()
+        .find(|p| p.join("manifest.json").is_file())
+        .ok_or_else(|| "扩展目录不存在(安装包未包含扩展,或开发环境未构建 browser-extension)".to_string())?;
+    tauri_plugin_opener::reveal_item_in_dir(&dir).map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// 保存配置并(重)启内核,主窗口导航到新内核 URL(整页重载)。
 /// 内容不做业务校验(壳零字段知识):表单校验在设置视图,权威校验在内核。
 #[tauri::command]
@@ -648,7 +669,8 @@ fn main() {
             kernel_info,
             show_main,
             update_check,
-            update_install
+            update_install,
+            open_extension_dir
         ])
         .setup(|app| {
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞

@@ -18,7 +18,7 @@ SIDECAR_WIN := $(BIN_DIR)/mc-agent-x86_64-pc-windows-msvc.exe
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 
-.PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows kernel-universal kernel-windows icons clean
+.PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows kernel-universal kernel-windows browser-extension icons clean
 
 # ---------- 开发 ----------
 
@@ -30,7 +30,7 @@ run: dev
 
 # ---------- macOS 打包(universal .app/.dmg,内核 sidecar)----------
 
-macos: check-macos kernel-universal icons/icon.icns
+macos: check-macos kernel-universal browser-extension icons/icon.icns
 	$(TAURI) build --target universal-apple-darwin --config tauri.macos.conf.json $(EXTRA_TAURI_CONFIG)
 	@echo ""
 	@echo "打包完成,分发产物:"
@@ -69,7 +69,7 @@ kernel-universal:
 
 # ---------- Windows 打包(NSIS 安装包,内核 sidecar)----------
 
-windows: check-windows kernel-windows
+windows: check-windows kernel-windows browser-extension
 	$(TAURI) build --config tauri.windows.conf.json $(EXTRA_TAURI_CONFIG)
 	@echo ""
 	@echo "打包完成,分发产物:"
@@ -90,6 +90,11 @@ check-windows:
 kernel-windows:
 	mkdir -p $(BIN_DIR)
 	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WIN)) ./cmd/mc-agent
+
+# 浏览器扩展:随包分发(tauri bundle.resources 引用 ../browser-extension/dist,
+# 缺失会打包失败)。
+browser-extension:
+	cd ../browser-extension && npm ci && npm run build
 
 # 图标产物已入库,仅源图(icons/source.png,1024²)更新时重新生成。
 # 注意:tauri icon 无平台过滤参数,会连带产出 ios/android(生成后清理);
