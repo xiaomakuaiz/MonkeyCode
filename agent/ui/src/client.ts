@@ -512,18 +512,32 @@ interface TauriGlobal {
   event?: { listen?: (name: string, cb: () => void) => Promise<() => void> };
 }
 
-/** 原生目录选择(桌面壳内可用);非壳环境或取消返回 null。 */
-export async function pickDirectory(): Promise<string | null> {
+/** 原生目录选择(桌面壳内可用);非壳环境或取消返回 null。
+ * defaultPath:对话框初始位置(WSL 模式传发行版 UNC 根,否则默认落在
+ * Windows 目录,选出来的路径环境不对)。 */
+export async function pickDirectory(defaultPath?: string): Promise<string | null> {
   const tauri = (window as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (!tauri?.core?.invoke) return null;
   try {
     const r = await tauri.core.invoke("plugin:dialog|open", {
-      options: { directory: true, multiple: false, title: "选择工作区目录" },
+      options: { directory: true, multiple: false, title: "选择工作区目录", ...(defaultPath ? { defaultPath } : {}) },
     });
     return typeof r === "string" ? r : null;
   } catch {
     return null;
   }
+}
+
+/** 当前内核运行环境对应的目录对话框初始位置:WSL 模式返回发行版 UNC 根
+ * (\\wsl$\<发行版>,老新 Windows 通吃),本机模式/读取失败返回 undefined。 */
+export async function workdirPickBase(): Promise<string | undefined> {
+  try {
+    const env = (await getHostConfig())?.kernel_env ?? "";
+    if (env.startsWith("wsl:") && env.length > 4) return `\\\\wsl$\\${env.slice(4)}`;
+  } catch {
+    /* 非壳或读取失败:不指定初始位置 */
+  }
+  return undefined;
 }
 
 /** 是否运行在桌面壳内。 */

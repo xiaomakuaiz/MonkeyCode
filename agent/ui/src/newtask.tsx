@@ -4,7 +4,7 @@
 import { useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { basename, isImeEnter, markImeEnd, ModelPicker } from "./chat";
 import { MONO } from "./components";
-import { inDesktopShell, mcTaskCreate, mcTaskOptions, pickDirectory, type CloudTask } from "./client";
+import { inDesktopShell, mcTaskCreate, mcTaskOptions, pickDirectory, workdirPickBase, type CloudTask } from "./client";
 import {
   cloudModelLabel,
   pickDefaultCloudImage,
@@ -137,7 +137,8 @@ export function NewTaskView({
   };
 
   const browse = async () => {
-    const p = await pickDirectory();
+    // WSL 模式:对话框定位到发行版文件系统,选出的目录才在内核所在环境
+    const p = await pickDirectory(await workdirPickBase());
     if (p) pick(p);
   };
 
