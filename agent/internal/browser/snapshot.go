@@ -9,20 +9,24 @@ import (
 // snapshotMaxElems 快照元素上限(防 token 爆炸)。与 collectJS 里的 MAX 保持一致。
 const snapshotMaxElems = 150
 
-// collectJS 页面内采集脚本:枚举可见的可交互元素(含开放 shadowRoot,
-// 跨源 iframe 与 closed shadow root 不支持),元素数组存入
-// window.__mcAgentRefs 供第二步取句柄,返回元数据 JSON 字符串。
-// window.__mcAgentGen 为页面内代号:导航后归零,交互前用它快速判定 ref 失效。
+// collectJS 页面内采集脚本:枚举可见的可交互元素,递归进开放 shadowRoot
+// 与**同源 iframe**(contentDocument 可访问);跨源 iframe(OOPIF)在另一
+// 进程/执行上下文,此脚本进不去,仅计数(由内核的 OOPIF 路径单独采集)。
+// 元素数组存入 window.__mcAgentRefs 供第二步取句柄;window.__mcAgentGen 为
+// 页面内代号:导航后归零,交互前用它快速判定 ref 失效。
 const collectJS = `(() => {
   const SELS = 'a[href],button,input,select,textarea,summary,[onclick],[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=combobox],[role=option],[role=switch],[contenteditable="true"]';
   const MAX = 150;
   const seen = new Set();
   const els = [];
   let truncated = false;
+  let crossOrigin = 0;
   const visible = (el) => {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return false;
-    const st = getComputedStyle(el);
+    // iframe 内元素须用其所属 window 的 getComputedStyle(跨 document)
+    const win = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    const st = win.getComputedStyle(el);
     return st.visibility !== 'hidden' && st.display !== 'none';
   };
   const collect = (root) => {
@@ -32,10 +36,16 @@ const collectJS = `(() => {
       seen.add(el);
       els.push(el);
     }
-    // 开放 shadowRoot 递归(closed 拿不到,跨源 iframe 不进入)
+    // 开放 shadowRoot 与同源 iframe 递归(closed shadowRoot / 跨源 iframe 进不去)
     for (const el of root.querySelectorAll('*')) {
-      if (el.shadowRoot) collect(el.shadowRoot);
       if (els.length >= MAX) { truncated = true; return; }
+      if (el.shadowRoot) collect(el.shadowRoot);
+      if (el.tagName === 'IFRAME') {
+        let doc = null;
+        try { doc = el.contentDocument; } catch (e) { doc = null; }
+        if (doc) collect(doc);
+        else crossOrigin++;
+      }
     }
   };
   collect(document);
@@ -56,28 +66,30 @@ const collectJS = `(() => {
     if (el.type === 'checkbox' || el.type === 'radio' || role === 'checkbox' || role === 'switch') {
       it.checked = !!el.checked || el.getAttribute('aria-checked') === 'true';
     }
+    // 元素在同源 iframe 内时标注,便于模型理解层级
+    if (el.ownerDocument !== document) it.framed = true;
     return it;
   });
   return JSON.stringify({
     url: location.href, title: document.title,
     scrollY: Math.round(scrollY), winH: innerHeight,
     docH: Math.round(document.documentElement.scrollHeight),
-    iframes: document.querySelectorAll('iframe').length,
+    crossOriginIframes: crossOrigin,
     truncated, gen: window.__mcAgentGen, items,
   });
 })()`
 
 // snapshotMeta collectJS 返回的元数据。
 type snapshotMeta struct {
-	URL       string     `json:"url"`
-	Title     string     `json:"title"`
-	ScrollY   int        `json:"scrollY"`
-	WinH      int        `json:"winH"`
-	DocH      int        `json:"docH"`
-	Iframes   int        `json:"iframes"`
-	Truncated bool       `json:"truncated"`
-	Gen       int        `json:"gen"`
-	Items     []snapItem `json:"items"`
+	URL                string     `json:"url"`
+	Title              string     `json:"title"`
+	ScrollY            int        `json:"scrollY"`
+	WinH               int        `json:"winH"`
+	DocH               int        `json:"docH"`
+	CrossOriginIframes int        `json:"crossOriginIframes"`
+	Truncated          bool       `json:"truncated"`
+	Gen                int        `json:"gen"`
+	Items              []snapItem `json:"items"`
 }
 
 type snapItem struct {
@@ -89,6 +101,7 @@ type snapItem struct {
 	Value   string `json:"value,omitempty"`
 	PH      string `json:"ph,omitempty"`
 	Checked *bool  `json:"checked,omitempty"`
+	Framed  bool   `json:"framed,omitempty"`
 }
 
 // parseSnapshotMeta 解析采集脚本返回的 JSON。
@@ -136,13 +149,16 @@ func formatSnapshot(m *snapshotMeta) string {
 		if it.Href != "" {
 			fmt.Fprintf(&b, " → %s", it.Href)
 		}
+		if it.Framed {
+			b.WriteString(" (iframe 内)")
+		}
 		b.WriteString("\n")
 	}
 	if m.Truncated {
 		fmt.Fprintf(&b, "(元素过多,仅列出前 %d 个;可滚动后重新 snapshot)\n", snapshotMaxElems)
 	}
-	if m.Iframes > 0 {
-		fmt.Fprintf(&b, "(页面含 %d 个 iframe,其内容未包含)\n", m.Iframes)
+	if m.CrossOriginIframes > 0 {
+		fmt.Fprintf(&b, "(页面含 %d 个跨源 iframe,其内容未包含)\n", m.CrossOriginIframes)
 	}
 	return b.String()
 }

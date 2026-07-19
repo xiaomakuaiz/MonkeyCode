@@ -7,17 +7,18 @@ import (
 
 func TestParseAndFormatSnapshot(t *testing.T) {
 	raw := `{"url":"https://example.com/login","title":"登录页","scrollY":0,"winH":800,"docH":2400,
-		"iframes":1,"truncated":false,"gen":3,"items":[
+		"crossOriginIframes":1,"truncated":false,"gen":3,"items":[
 		{"tag":"a","text":"首页","href":"/home"},
 		{"tag":"button","text":"登录"},
 		{"tag":"input","type":"text","text":"","value":"","ph":"用户名"},
-		{"tag":"input","type":"checkbox","text":"记住我","checked":true}
+		{"tag":"input","type":"checkbox","text":"记住我","checked":true},
+		{"tag":"button","text":"发布","framed":true}
 	]}`
 	m, err := parseSnapshotMeta(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Gen != 3 || len(m.Items) != 4 {
+	if m.Gen != 3 || len(m.Items) != 5 {
 		t.Fatalf("元数据解析不对: %+v", m)
 	}
 	out := formatSnapshot(m)
@@ -27,8 +28,9 @@ func TestParseAndFormatSnapshot(t *testing.T) {
 		"e2 [button] \"登录\"",
 		"e3 [input:text]", "占位:\"用户名\"",
 		"e4 [input:checkbox]", "[已勾选]",
+		"e5 [button] \"发布\" (iframe 内)",
 		"滚动: 视口顶部在 0/2400px",
-		"1 个 iframe",
+		"1 个跨源 iframe",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("快照缺少 %q,实际:\n%s", want, out)

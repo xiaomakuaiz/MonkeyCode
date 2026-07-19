@@ -88,7 +88,7 @@ func (s *Session) adoptTab(t *TabInfo) {
 	s.addNoteLocked(fmt.Sprintf("用户交付了标签页 #%d(%s)", t.TabID, firstNonEmpty(t.Title, t.URL)))
 }
 
-// ensureTab 激活会话并确保当前标签页可操作(attach 幂等自愈 + Page.enable)。
+// ensureTab 激活会话并确保当前标签页可操作(attach 幂等自愈 + 域启用)。
 func (s *Session) ensureTab(ctx context.Context) (int, error) {
 	if err := s.ensure(ctx); err != nil {
 		return 0, err
@@ -102,8 +102,10 @@ func (s *Session) ensureTab(ctx context.Context) (int, error) {
 	if err := s.bridge.Attach(ctx, tab); err != nil {
 		return 0, err
 	}
-	// Page 事件(对话框/导航)只 enable 这一个 domain,事件量可控
+	// Page 事件(对话框/导航)只 enable 这一个 domain,事件量可控;
+	// DOM enable 供 getBoxModel 取元素主视口坐标(含 iframe 偏移)
 	_ = s.bridge.CDP(ctx, tab, "Page.enable", nil, nil)
+	_ = s.bridge.CDP(ctx, tab, "DOM.enable", nil, nil)
 	return tab, nil
 }
 
@@ -294,6 +296,8 @@ func isStaleObjectErr(err error) bool {
 	for _, pat := range []string{
 		"Cannot find context", "Could not find object",
 		"Inspected target navigated", "Execution context was destroyed",
+		// DOM 域:节点已从文档移除 / 无对应节点(getBoxModel 等)
+		"No node with given id", "Could not find node", "Node with given id does not belong",
 	} {
 		if strings.Contains(msg, pat) {
 			return true

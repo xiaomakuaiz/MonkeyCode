@@ -233,26 +233,52 @@ type elemRect struct {
 	H float64 `json:"h"`
 }
 
-// locate 元素滚动进视口并取中心坐标;元素已脱离文档时报 ref 失效。
+// locate 元素滚动进视口并取**主视口坐标**(供顶层 Input 真实鼠标点击)。
+// 坐标经 DOM.getBoxModel(objectId) 取得,它由浏览器统一计算,自动含所有
+// 同进程 iframe 的偏移——iframe 内元素也能拿到正确的顶层坐标。
 func (s *Session) locate(ctx context.Context, tab int, ref string) (elemRect, error) {
 	objID, err := s.resolveRef(ref)
 	if err != nil {
 		return elemRect{}, err
 	}
-	var rect *elemRect
+	// 先滚进视口(iframe 内元素 scrollIntoView 会滚对应 iframe;callFunctionOn
+	// 在元素所属执行上下文运行,跨 iframe 自动正确)
+	var connected *bool
 	err = s.callOn(ctx, tab, objID, `function(){
 		if (!this.isConnected) return null;
 		this.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
-		const r = this.getBoundingClientRect();
-		return {x: r.x + r.width/2, y: r.y + r.height/2, w: r.width, h: r.height};
-	}`, nil, &rect)
+		return true;
+	}`, nil, &connected)
 	if err != nil {
 		return elemRect{}, err
 	}
-	if rect == nil || rect.W <= 0 || rect.H <= 0 {
+	if connected == nil {
 		return elemRect{}, errRefStale(ref)
 	}
-	return *rect, nil
+	var box struct {
+		Model struct {
+			Content []float64 `json:"content"`
+			Width   float64   `json:"width"`
+			Height  float64   `json:"height"`
+		} `json:"model"`
+	}
+	if err := s.bridge.CDP(ctx, tab, "DOM.getBoxModel", map[string]any{"objectId": objID}, &box); err != nil {
+		if isStaleObjectErr(err) {
+			return elemRect{}, errRefStale(ref)
+		}
+		return elemRect{}, err
+	}
+	q := box.Model.Content
+	if len(q) < 8 || box.Model.Width <= 0 || box.Model.Height <= 0 {
+		return elemRect{}, errRefStale(ref)
+	}
+	// content 是内容盒的四角 [x1,y1,x2,y2,x3,y3,x4,y4](主视口坐标),取中心
+	return elemRect{
+		X: (q[0] + q[2] + q[4] + q[6]) / 4,
+		Y: (q[1] + q[3] + q[5] + q[7]) / 4,
+		W: box.Model.Width,
+		H: box.Model.Height,
+	}, nil
 }
 
 // click 真实鼠标事件序列点击 ref 元素。
