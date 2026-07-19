@@ -1,7 +1,8 @@
 {
   "bundle": {
     "resources": {
-      "ucrt/*": "./"
+      "ucrt/*": "./",
+      "binaries/mc-agent-linux": null
     },
     "windows": {
       "webviewInstallMode": {
