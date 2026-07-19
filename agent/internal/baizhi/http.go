@@ -25,11 +25,17 @@ func (s *Service) Routes(mux *http.ServeMux, auth func(http.HandlerFunc) http.Ha
 	mux.HandleFunc("POST /api/baizhi/wechat/start", auth(s.handleWechatStart))
 	mux.HandleFunc("GET /api/baizhi/wechat/poll", auth(s.handleWechatPoll))
 	mux.HandleFunc("POST /api/baizhi/sync", auth(s.handleSync))
-	// MonkeyCode 云端:百智会话桥接登录 + 云端任务代理
+	// MonkeyCode 云端:百智会话桥接登录 + 云端任务代理(列表/详情/回放/流/操作/创建)
 	mux.HandleFunc("GET /api/mc/status", auth(s.handleMCStatus))
 	mux.HandleFunc("POST /api/mc/login", auth(s.handleMCLogin))
 	mux.HandleFunc("POST /api/mc/logout", auth(s.handleMCLogout))
 	mux.HandleFunc("GET /api/mc/tasks", auth(s.handleMCTasks))
+	mux.HandleFunc("POST /api/mc/tasks", auth(s.handleMCTaskCreate))
+	mux.HandleFunc("GET /api/mc/tasks/{id}", auth(s.handleMCTaskInfo))
+	mux.HandleFunc("GET /api/mc/tasks/{id}/rounds", auth(s.handleMCTaskRounds))
+	mux.HandleFunc("POST /api/mc/tasks/{id}/stop", auth(s.handleMCTaskStop))
+	mux.HandleFunc("GET /api/mc/tasks/{id}/stream", auth(s.handleMCTaskStream))
+	mux.HandleFunc("GET /api/mc/task-options", auth(s.handleMCTaskOptions))
 }
 
 // 发码含 PoW 求解 + 外网请求;登录同。给足超时但别无限等。
@@ -154,6 +160,15 @@ func (s *Service) handleMCLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// mcError 云端代理错误统一出口:会话失效回 401(UI 触发重新桥接),其余 502。
+func mcError(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
+	if isUnauthorized(err) {
+		status = http.StatusUnauthorized
+	}
+	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
 func (s *Service) handleMCTasks(w http.ResponseWriter, r *http.Request) {
 	page, size := 1, 20
 	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
@@ -164,16 +179,77 @@ func (s *Service) handleMCTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	data, err := s.MonkeyCodeTasks(ctx, page, size)
+	data, err := s.MonkeyCodeTasks(ctx, page, size, r.URL.Query().Get("status"))
 	if err != nil {
-		status := http.StatusBadGateway
-		if isUnauthorized(err) {
-			status = http.StatusUnauthorized
-		}
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		mcError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, json.RawMessage(data))
+}
+
+func (s *Service) handleMCTaskInfo(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	data, err := s.MonkeyCodeTaskInfo(ctx, r.PathValue("id"))
+	if err != nil {
+		mcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, json.RawMessage(data))
+}
+
+func (s *Service) handleMCTaskRounds(w http.ResponseWriter, r *http.Request) {
+	limit := 1 // 一次一轮(对齐 mobile);上限 10 与云端一致
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 10 {
+		limit = v
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	data, err := s.MonkeyCodeTaskRounds(ctx, r.PathValue("id"), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		mcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (s *Service) handleMCTaskStop(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.MonkeyCodeTaskStop(ctx, r.PathValue("id")); err != nil {
+		mcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Service) handleMCTaskCreate(w http.ResponseWriter, r *http.Request) {
+	var req MCCreateTaskReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体格式错误"})
+		return
+	}
+	// 建任务云端要排调度,给足时间
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	data, err := s.MonkeyCodeCreateTask(ctx, req)
+	if err != nil {
+		mcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, json.RawMessage(data))
+}
+
+func (s *Service) handleMCTaskOptions(w http.ResponseWriter, r *http.Request) {
+	// 串行拉四个上游列表,给足时间
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	data, err := s.MonkeyCodeTaskOptions(ctx)
+	if err != nil {
+		mcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

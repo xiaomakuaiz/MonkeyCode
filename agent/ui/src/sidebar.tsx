@@ -381,6 +381,7 @@ export function Sidebar({
   status,
   updateAvailable,
   cloudTasks,
+  activeCloudId,
   onOpenCloudTask,
   onSelect,
   onNewTask,
@@ -400,7 +401,9 @@ export function Sidebar({
   updateAvailable: boolean;
   /** 云端任务:null = 未同步云端账号(空态给登录引导),[] = 已同步无任务 */
   cloudTasks: CloudTask[] | null;
-  /** 点击云端任务:外开 web 控制台任务详情 */
+  /** 当前在主区打开的云端任务(行高亮) */
+  activeCloudId?: string | null;
+  /** 点击云端任务:在桌面内打开详情视图 */
   onOpenCloudTask: (t: CloudTask) => void;
   onSelect: (m: SessionMeta) => void;
   onNewTask: (dir?: string) => void;
@@ -417,6 +420,13 @@ export function Sidebar({
     }
   });
   const [archivedOpen, setArchivedOpen] = useState(() => localStorage.getItem("mc.archivedOpen") === "1");
+  const [cloudHistoryOpen, setCloudHistoryOpen] = useState(() => localStorage.getItem("mc.cloudHistoryOpen") === "1");
+  const toggleCloudHistory = () => {
+    setCloudHistoryOpen((o) => {
+      localStorage.setItem("mc.cloudHistoryOpen", o ? "0" : "1");
+      return !o;
+    });
+  };
 
   const toggleGroup = (dir: string) => {
     setCollapsed((prev) => {
@@ -487,68 +497,115 @@ export function Sidebar({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-        {/* 云端任务:百智云登录后内核桥接 monkeycode 账号自动同步;点击外开 web 详情 */}
+        {/* 云端任务:百智云登录后内核桥接 monkeycode 账号自动同步。
+            默认只列未结束(排队中/运行中),已结束折叠进"历史任务"按需展开 */}
         <div style={{ ...sectionHeader, marginTop: -1 }}>
           <IconCloud style={{ marginTop: -1 }} />
           云端任务
         </div>
-        {cloudTasks && cloudTasks.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 1, marginBottom: 8 }}>
-            {cloudTasks.map((t) => {
-              const st = CLOUD_STATUS[t.status ?? ""] ?? { text: "", color: "inherit" };
-              const label = t.title || t.summary || t.content;
-              return (
-                <div
-                  key={t.id}
-                  className="hv"
-                  title={label}
-                  onClick={() => onOpenCloudTask(t)}
+        {(() => {
+          const taskRow = (t: CloudTask) => {
+            const st = CLOUD_STATUS[t.status ?? ""] ?? { text: "", color: "inherit" };
+            const label = t.title || t.summary || t.content;
+            const active = t.id === activeCloudId;
+            return (
+              <div
+                key={t.id}
+                className={active ? undefined : "hv"}
+                title={label}
+                onClick={() => onOpenCloudTask(t)}
+                style={{
+                  height: 28,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "0 8px 0 23px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 12.5,
+                  background: active ? "var(--accSel)" : "transparent",
+                  color: active ? "var(--onAcc)" : "var(--t2)",
+                  fontWeight: active ? 500 : 400,
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                }}
+              >
+                <span className="ellipsis" style={{ flex: 1 }}>{label || "云端任务"}</span>
+                <span
                   style={{
-                    height: 28,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "0 8px 0 23px",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    fontSize: 12.5,
-                    color: "var(--t2)",
-                    whiteSpace: "nowrap",
-                    minWidth: 0,
+                    flex: "none",
+                    fontSize: 11,
+                    opacity: 0.7,
+                    color: active ? "var(--onAccDim)" : st.color === "inherit" ? undefined : st.color,
                   }}
                 >
-                  <span className="ellipsis" style={{ flex: 1 }}>{label || "云端任务"}</span>
-                  <span
+                  {st.text}
+                </span>
+              </div>
+            );
+          };
+          if (!cloudTasks || cloudTasks.length === 0) {
+            return (
+              <div
+                style={{
+                  borderRadius: 8,
+                  border: "1px dashed var(--dashBd)",
+                  padding: "9px 11px",
+                  fontSize: 11.5,
+                  color: "var(--t4)",
+                  lineHeight: 1.55,
+                  marginBottom: 8,
+                }}
+              >
+                {cloudTasks
+                  ? "还没有云端任务。在网页或手机端派发的任务会同步到这里。"
+                  : "登录百智云账号后,云端任务会自动同步到这里。"}
+              </div>
+            );
+          }
+          const running = cloudTasks.filter((t) => t.status === "pending" || t.status === "processing");
+          const past = cloudTasks.filter((t) => t.status !== "pending" && t.status !== "processing");
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 1, marginBottom: 8 }}>
+              {running.map(taskRow)}
+              {running.length === 0 && (
+                <div style={{ padding: "3px 8px 4px 23px", fontSize: 11.5, color: "var(--t5)" }}>
+                  没有进行中的云端任务
+                </div>
+              )}
+              {past.length > 0 && (
+                <>
+                  <div
+                    className="hv"
+                    onClick={toggleCloudHistory}
                     style={{
-                      flex: "none",
-                      fontSize: 11,
-                      opacity: 0.7,
-                      color: st.color === "inherit" ? undefined : st.color,
+                      height: 26,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "0 8px 0 5px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      userSelect: "none",
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      color: "var(--t5)",
                     }}
                   >
-                    {st.text}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div
-            style={{
-              borderRadius: 8,
-              border: "1px dashed var(--dashBd)",
-              padding: "9px 11px",
-              fontSize: 11.5,
-              color: "var(--t4)",
-              lineHeight: 1.55,
-              marginBottom: 8,
-            }}
-          >
-            {cloudTasks
-              ? "还没有云端任务。在网页或手机端派发的任务会同步到这里。"
-              : "登录百智云账号后,云端任务会自动同步到这里。"}
-          </div>
-        )}
+                    <span style={{ width: 12, height: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <IconChevronRight
+                        size={8}
+                        style={{ transform: cloudHistoryOpen ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
+                      />
+                    </span>
+                    历史任务 ({past.length})
+                  </div>
+                  {cloudHistoryOpen && past.map(taskRow)}
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         <div style={sectionHeader}>
           <IconMonitor style={{ marginTop: -1 }} />

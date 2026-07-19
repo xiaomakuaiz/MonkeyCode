@@ -150,7 +150,7 @@ func (s *Service) monkeyCodeUser(ctx context.Context) (json.RawMessage, error) {
 	var out struct {
 		User json.RawMessage `json:"user"`
 	}
-	if err := s.mcCall(ctx, "/api/v1/users/status", nil, &out); err != nil {
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/status", nil, &out); err != nil {
 		return nil, err
 	}
 	// 空对象也算未登录(与移动端 hasUserIdentity 语义一致)
@@ -194,24 +194,183 @@ func (s *Service) monkeyCodeHost() string {
 }
 
 // MonkeyCodeTasks 云端任务列表({tasks, page_info} 原样透传 UI)。
-func (s *Service) MonkeyCodeTasks(ctx context.Context, page, size int) (json.RawMessage, error) {
+// status 可选,逗号分隔多值(pending,processing,error,finished),空为全部。
+func (s *Service) MonkeyCodeTasks(ctx context.Context, page, size int, status string) (json.RawMessage, error) {
 	q := url.Values{}
 	q.Set("page", strconv.Itoa(page))
 	q.Set("size", strconv.Itoa(size))
+	if status != "" {
+		q.Set("status", status)
+	}
 	var out json.RawMessage
-	if err := s.mcCall(ctx, "/api/v1/users/tasks?"+q.Encode(), nil, &out); err != nil {
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/tasks?"+q.Encode(), nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
+// MonkeyCodeTaskInfo 云端任务详情(ProjectTask 原样透传 UI)。
+func (s *Service) MonkeyCodeTaskInfo(ctx context.Context, id string) (json.RawMessage, error) {
+	var out json.RawMessage
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/tasks/"+url.PathEscape(id), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MonkeyCodeTaskRounds 云端任务历史回放(一次一轮或多轮)。
+// 归一为 UI 帧词汇:chunk 的 event→type,时间戳纳秒→毫秒;data(base64)原样透传,
+// 与本地会话的 Frame 结构同构,UI 的帧归约层可直接消费。
+func (s *Service) MonkeyCodeTaskRounds(ctx context.Context, id, cursor string, limit int) (map[string]any, error) {
+	q := url.Values{}
+	q.Set("id", id)
+	q.Set("limit", strconv.Itoa(limit))
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	var out struct {
+		Chunks []struct {
+			Data      json.RawMessage `json:"data"`
+			Event     string          `json:"event"`
+			Kind      string          `json:"kind"`
+			Timestamp int64           `json:"timestamp"`
+			Seq       uint64          `json:"seq"`
+			TurnSeq   uint32          `json:"turn_seq"`
+		} `json:"chunks"`
+		NextCursor string `json:"next_cursor"`
+		HasMore    bool   `json:"has_more"`
+	}
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/tasks/rounds?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	frames := make([]map[string]any, 0, len(out.Chunks))
+	for _, c := range out.Chunks {
+		ts := c.Timestamp
+		if ts > 1e14 { // 纳秒级(rounds 落盘粒度)转毫秒,对齐 WS 下行
+			ts /= 1e6
+		}
+		f := map[string]any{"type": c.Event, "timestamp": ts}
+		if c.Kind != "" {
+			f["kind"] = c.Kind
+		}
+		if len(c.Data) > 0 {
+			f["data"] = c.Data
+		}
+		if c.Seq > 0 {
+			f["seq"] = c.Seq
+		}
+		frames = append(frames, f)
+	}
+	return map[string]any{"frames": frames, "next_cursor": out.NextCursor, "has_more": out.HasMore}, nil
+}
+
+// MonkeyCodeTaskStop 终止云端任务(区别于 WS 上行 user-cancel:那只中断当前执行)。
+func (s *Service) MonkeyCodeTaskStop(ctx context.Context, id string) error {
+	return s.mcCall(ctx, http.MethodPut, "/api/v1/users/tasks/stop", map[string]string{"id": id}, nil)
+}
+
+// ==================== 云端建任务 ====================
+
+// 云端建任务默认值,与 mobile TASK_DEFAULTS / DEFAULT_SKILL_IDS 及 Web 端一致:
+// 个人云端固定公共宿主机 + opencode CLI + 2 核 8G 3 小时 + 官方四技能。
+var mcDefaultSkillIDs = []string{
+	"MonkeyCodeOfficialPlugins/main/skills/feature-design",
+	"MonkeyCodeOfficialPlugins/main/skills/project-wiki",
+	"MonkeyCodeOfficialPlugins/main/skills/feature-implementer",
+	"MonkeyCodeOfficialPlugins/main/skills/implementation-planner",
+}
+
+// MCCreateTaskReq UI 提交的最小建任务请求;其余字段内核补默认值。
+type MCCreateTaskReq struct {
+	Content   string `json:"content"`
+	ModelID   string `json:"model_id"`
+	ImageID   string `json:"image_id"`
+	RepoURL   string `json:"repo_url"`   // 空 = 不关联仓库(快速开始)
+	Branch    string `json:"branch"`     // 仅 RepoURL 非空时有意义
+	ProjectID string `json:"project_id"` // 选了已有项目时带上
+}
+
+// MonkeyCodeCreateTask 创建云端任务;返回云端 ProjectTask(含 id)。
+// 首轮由服务端用 content 自动启动,客户端建完直接 attach 看流即可。
+func (s *Service) MonkeyCodeCreateTask(ctx context.Context, req MCCreateTaskReq) (json.RawMessage, error) {
+	if req.Content == "" || req.ModelID == "" || req.ImageID == "" {
+		return nil, fmt.Errorf("任务描述、模型与镜像不能为空")
+	}
+	repo := map[string]string{}
+	if req.RepoURL != "" {
+		repo["repo_url"] = req.RepoURL
+		if req.Branch != "" {
+			repo["branch"] = req.Branch
+		}
+	}
+	extra := map[string]any{"skill_ids": mcDefaultSkillIDs}
+	if req.ProjectID != "" {
+		extra["project_id"] = req.ProjectID
+	}
+	payload := map[string]any{
+		"content":   req.Content,
+		"host_id":   "public_host",
+		"image_id":  req.ImageID,
+		"model_id":  req.ModelID,
+		"repo":      repo,
+		"cli_name":  "opencode",
+		"resource":  map[string]any{"core": 2, "memory": uint64(8) << 30, "life": 3 * 60 * 60},
+		"task_type": "develop",
+		"extra":     extra,
+	}
+	var out json.RawMessage
+	if err := s.mcCall(ctx, http.MethodPost, "/api/v1/users/tasks", payload, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MonkeyCodeTaskOptions 建任务所需的下拉数据:模型/镜像/项目/订阅档。
+// 项目与订阅失败可容忍(与 mobile 一致:catch 后置空),模型/镜像失败即报错。
+func (s *Service) MonkeyCodeTaskOptions(ctx context.Context) (map[string]any, error) {
+	var models struct {
+		Models json.RawMessage `json:"models"`
+	}
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/models", nil, &models); err != nil {
+		return nil, err
+	}
+	var images struct {
+		Images json.RawMessage `json:"images"`
+	}
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/images", nil, &images); err != nil {
+		return nil, err
+	}
+	res := map[string]any{
+		"models":   orEmptyArray(models.Models),
+		"images":   orEmptyArray(images.Images),
+		"projects": json.RawMessage("[]"),
+		"plan":     "",
+	}
+	var projects struct {
+		Projects json.RawMessage `json:"projects"`
+	}
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/projects?limit=50", nil, &projects); err == nil {
+		res["projects"] = orEmptyArray(projects.Projects)
+	}
+	var sub struct {
+		Plan string `json:"plan"`
+	}
+	if err := s.mcCall(ctx, http.MethodGet, "/api/v1/users/subscription", nil, &sub); err == nil {
+		res["plan"] = sub.Plan
+	}
+	return res, nil
+}
+
+func orEmptyArray(v json.RawMessage) json.RawMessage {
+	if len(v) == 0 || string(v) == "null" {
+		return json.RawMessage("[]")
+	}
+	return v
+}
+
 // mcCall 请求 MonkeyCode 云端接口并解开 {code,message,data} 包壳
 // (语义对齐移动端 client.ts request:401 即会话失效,code!=0 即业务失败)。
-func (s *Service) mcCall(ctx context.Context, path string, body, out any) error {
-	method := http.MethodGet
-	if body != nil {
-		method = http.MethodPost
-	}
+func (s *Service) mcCall(ctx context.Context, method, path string, body, out any) error {
 	data, status, err := s.doStore(ctx, s.mc, method, s.ep.MonkeyCode+path, body)
 	if err != nil {
 		return err

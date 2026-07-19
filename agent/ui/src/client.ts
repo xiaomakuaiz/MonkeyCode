@@ -1,6 +1,7 @@
 // 内核连接层:REST(会话管理)+ WS(帧双向流,含 call/call-response 同步查询)。
 // 帧载荷编解码在 codec.ts(纯函数,归约层与单测直接依赖那边)。
 import { b64encode, frameData } from "./codec";
+import type { McTaskOptions } from "./cloud";
 import type { Frame, HostConfig, ModelInfo, SessionMeta } from "./types";
 
 export const token: string =
@@ -222,8 +223,164 @@ export const mcLogin = () =>
 export const mcLogout = () =>
   api<{ ok: boolean }>("/api/mc/logout", { method: "POST" });
 
-export const mcTasks = (page = 1, size = 20) =>
-  api<CloudTasksResp>(`/api/mc/tasks?page=${page}&size=${size}`);
+export const mcTasks = (page = 1, size = 20, status = "") =>
+  api<CloudTasksResp>(
+    `/api/mc/tasks?page=${page}&size=${size}${status ? `&status=${encodeURIComponent(status)}` : ""}`,
+  );
+
+/** 云端任务详情(ProjectTask 子集;VM 准备进度在 virtualmachine.conditions)。 */
+export interface CloudTaskDetail extends CloudTask {
+  model?: { id?: string; model?: string; remark?: string };
+  branch?: string;
+  repo_url?: string;
+  full_name?: string;
+  stats?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; llm_requests?: number };
+  virtualmachine?: {
+    id?: string;
+    conditions?: { type?: string; status?: number; message?: string; progress?: number }[];
+  };
+}
+
+export const mcTaskInfo = (id: string) => api<CloudTaskDetail>(`/api/mc/tasks/${encodeURIComponent(id)}`);
+
+/** 历史回放:内核已把云端 chunk 归一为 Frame 词汇(event→type,ns→ms)。
+ * 一次一轮(对齐移动端);cursor 往更早翻。 */
+export const mcTaskRounds = (id: string, cursor = "", limit = 1) =>
+  api<{ frames: Frame[]; next_cursor?: string; has_more?: boolean }>(
+    `/api/mc/tasks/${encodeURIComponent(id)}/rounds?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+  );
+
+/** 终止云端任务(REST;区别于流上行 user-cancel:那只中断当前执行)。 */
+export const mcTaskStop = (id: string) =>
+  api<{ ok: boolean }>(`/api/mc/tasks/${encodeURIComponent(id)}/stop`, { method: "POST" });
+
+/** 创建云端任务(内核补默认值:公共宿主机/opencode/2核8G3小时/官方技能)。 */
+export const mcTaskCreate = (req: {
+  content: string;
+  model_id: string;
+  image_id: string;
+  repo_url?: string;
+  branch?: string;
+  project_id?: string;
+}) => api<CloudTaskDetail>("/api/mc/tasks", { method: "POST", body: JSON.stringify(req) });
+
+export const mcTaskOptions = () => api<McTaskOptions>("/api/mc/task-options");
+
+export interface CloudConn {
+  /** 上行一帧(payload 会 base64(JSON) 包装);未连接返回 false。 */
+  send(type: string, payload?: unknown): boolean;
+  close(): void;
+}
+
+/** 连接云端任务流(内核代理:内核带 monkeycode 会话拨 wss 到云端)。
+ * mode=attach 回放当前轮+实时跟看;mode=new 开新一轮(连上即发 firstInput)。
+ * 帧结构与本地会话 Frame 同构,可直接喂 reduceBatch;ping 已滤除,seq 单调去重。
+ * 断线自动重连(降级 attach);收到 task-ended 后不再重连并回调 onEnded。 */
+export function connectCloudTask(
+  taskId: string,
+  mode: "attach" | "new",
+  h: {
+    onFrames(batch: Frame[]): void;
+    onStatus(text: string, connected: boolean): void;
+    onEnded?(): void;
+    /** 断线重连前回调:attach 会整轮回放当前轮,视图应清掉当前轮本地缓存 */
+    onReconnect?(): void;
+  },
+  firstInput?: string,
+): CloudConn {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let ended = false;
+  let lastSeq = 0;
+  let queue: Frame[] = [];
+  let flushScheduled = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingFirst = firstInput;
+  let curMode = mode;
+  let attempt = 0;
+
+  function flush() {
+    flushScheduled = false;
+    const batch = queue;
+    queue = [];
+    if (batch.length) h.onFrames(batch);
+  }
+  function schedule() {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    requestAnimationFrame(flush);
+  }
+
+  const doSend = (type: string, payload: unknown = {}) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ type, data: b64encode(JSON.stringify(payload)), timestamp: Date.now() }));
+    return true;
+  };
+
+  function open() {
+    if (closed || ended) return;
+    if (attempt > 0) {
+      // 重连:回放将成为当前轮的权威来源,seq 水位一并复位
+      h.onReconnect?.();
+      lastSeq = 0;
+    }
+    attempt += 1;
+    h.onStatus("连接云端…", false);
+    const sock = new WebSocket(
+      `ws://${location.host}/api/mc/tasks/${encodeURIComponent(taskId)}/stream?mode=${curMode}&token=${encodeURIComponent(token)}`,
+    );
+    ws = sock;
+    sock.onopen = () => {
+      h.onStatus("已连接云端", true);
+      // 新一轮:云端等第一条 user-input 才开跑;content 需再包一层 base64
+      if (pendingFirst !== undefined) {
+        doSend("user-input", { content: b64encode(pendingFirst), attachments: [] });
+        pendingFirst = undefined;
+      }
+    };
+    sock.onclose = () => {
+      if (ws !== sock || closed) return;
+      if (ended) {
+        // task-ended 按轮下发:这里只代表本轮结束,任务是否终结以详情轮询为准
+        h.onStatus("本轮已结束,可继续对话", false);
+        return;
+      }
+      h.onStatus("⚠ 云端连接断开,2 秒后自动重连…", false);
+      curMode = "attach"; // 重连降级为跟看,避免误开新轮(对齐移动端)
+      reconnectTimer = setTimeout(open, 2000);
+    };
+    sock.onmessage = (ev) => {
+      let f: Frame;
+      try {
+        f = JSON.parse(ev.data as string) as Frame;
+      } catch {
+        return;
+      }
+      if (f.type === "ping") return;
+      if (typeof f.seq === "number" && f.seq > 0) {
+        if (f.seq <= lastSeq) return; // 重连回放重叠帧去重
+        lastSeq = f.seq;
+      }
+      if (f.type === "task-ended") ended = true;
+      queue.push(f);
+      schedule();
+      if (f.type === "task-ended") h.onEnded?.();
+    };
+  }
+
+  open();
+  return {
+    send: doSend,
+    close() {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+    },
+  };
+}
 
 // ==================== 宿主(桌面壳)集成 ====================
 

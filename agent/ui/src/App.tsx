@@ -14,7 +14,6 @@ import {
   mcStatus,
   mcTasks,
   onHostEvent,
-  openExternal,
   takeUiIntent,
   listModels,
   listSessions,
@@ -26,6 +25,7 @@ import {
   type UpdateStatus,
 } from "./client";
 import { basename, ChatView } from "./chat";
+import { CloudTaskView } from "./cloudtask";
 import { CodeView, DiffPanel, LogList, MONO } from "./components";
 import { IconChevronRight, IconFile, IconFolder, IconX } from "./icons";
 import { NewTaskView } from "./newtask";
@@ -90,7 +90,7 @@ const drawerTabStyle = (active: boolean): CSSProperties => ({
 });
 export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [view, setView] = useState<"new" | "session" | "settings">("new");
+  const [view, setView] = useState<"new" | "session" | "settings" | "cloud">("new");
   // 页内设置视图的脏状态(浏览器回退模式;桌面走独立设置窗口):离开前确认
   const settingsDirty = useRef(false);
   const closeSettings = () => {
@@ -151,8 +151,8 @@ export default function App() {
         }
         await mcLogin();
       }
-      // 侧栏是预览位:只取最近 8 条,完整列表点击任务外开 web 控制台
-      const r = await mcTasks(1, 8);
+      // 默认视图只展示未结束任务,取 20 条保证"历史任务"折叠区也有内容
+      const r = await mcTasks(1, 20);
       setCloudTasks(r.tasks ?? []);
     } catch {
       /* 静默:云端同步失败不打扰本地使用,下次轮询/回到主界面再试 */
@@ -168,6 +168,19 @@ export default function App() {
     const t = setInterval(() => void syncCloud(), 60_000);
     return () => clearInterval(t);
   }, [cloudSynced, syncCloud]);
+  // 桌面内打开的云端任务(view === "cloud" 时渲染详情视图)
+  const [cloudTask, setCloudTaskOpen] = useState<CloudTask | null>(null);
+  const openCloudTask = (t: CloudTask) => {
+    setCloudTaskOpen(t);
+    setDrawerOpen(false);
+    setViewer(null);
+    setView("cloud");
+  };
+  const closeCloudTask = () => {
+    setCloudTaskOpen(null);
+    setView(session.id ? "session" : "new");
+    void syncCloud();
+  };
 
   const refreshSessions = useCallback(async () => {
     const metas = await listSessions();
@@ -615,11 +628,12 @@ export default function App() {
           return closeSettings();
         }
         if (typing) return t.blur();
-        // !isNewView:新任务视图不误拒背景会话的审批(Enter 分支同守卫,保持对称)
-        if (openPerm && !isNewView && !e.isComposing) session.answerPerm(openPerm.id, "deny");
+        if (view === "cloud") return closeCloudTask();
+        // 仅会话视图响应审批快捷键:新任务/云端视图不误拒背景会话的审批(Enter 同守卫)
+        if (openPerm && view === "session" && !isNewView && !e.isComposing) session.answerPerm(openPerm.id, "deny");
         return;
       }
-      if (e.key === "Enter" && !e.isComposing && openPerm && !isNewView) {
+      if (e.key === "Enter" && !e.isComposing && openPerm && view === "session" && !isNewView) {
         const t = e.target as HTMLElement | null;
         const typing = t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT");
         if (typing && session.input.trim()) return; // 正在输入内容,不当作审批
@@ -659,7 +673,8 @@ export default function App() {
           status={session.status}
           updateAvailable={!!update?.available}
           cloudTasks={cloudTasks}
-          onOpenCloudTask={(t) => openExternal(`https://${mcHost}/console/task/${t.id}`)}
+          activeCloudId={view === "cloud" ? cloudTask?.id ?? null : null}
+          onOpenCloudTask={openCloudTask}
           onSelect={(m) => openSession(m)}
           onNewTask={(dir) => {
             if (dir) {
@@ -689,6 +704,14 @@ export default function App() {
             update={update}
             onUpdateStatus={setUpdate}
           />
+        ) : view === "cloud" && cloudTask ? (
+          <CloudTaskView
+            key={cloudTask.id}
+            task={cloudTask}
+            mcHost={mcHost}
+            onClose={closeCloudTask}
+            onTasksChanged={() => void syncCloud()}
+          />
         ) : isNewView ? (
           <NewTaskView
             dir={newDir}
@@ -699,6 +722,11 @@ export default function App() {
             busy={busy}
             err={newErr}
             offerCreate={offerCreate}
+            cloudReady={cloudSynced}
+            onCloudCreated={(t) => {
+              openCloudTask(t);
+              void syncCloud();
+            }}
             onDirChange={(d) => {
               dirTouchedRef.current = true;
               setNewDir(d);

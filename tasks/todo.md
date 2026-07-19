@@ -109,7 +109,7 @@
 线上任务 title 常为空、文案在 summary,展示优先级 title→summary→content。
 遗留:侧栏仅预览+外链,云端任务的详情回放/派发(new task 的"云端"模式)另行实施。
 
-## 云端任务二期:过滤 + 桌面内详情/操作 + 云端派发(2026-07-19,进行中)
+## 云端任务二期:过滤 + 桌面内详情/操作 + 云端派发(2026-07-19)✅
 
 > 目标:1) 侧栏默认只展示未结束任务,历史任务可展开查看;2) 点击任务在
 > mc-desktop 内查看与操作(回放 + 实时流 + 停止/续聊),不开浏览器;
@@ -117,13 +117,34 @@
 > 协议依据:mobile 端(new-task.tsx / task 详情 / stream.ts / messages/handler.ts)
 > 是活契约,backend/ 同构代码钉字段。
 
-- [ ] 摸清协议(3 个并行探索:任务流/控制、建任务/列表过滤、agent UI 帧对齐评估)
-- [ ] 内核:云端任务代理端点扩展(详情/rounds/实时流 WS 代理/停止/续聊输入/创建
-      + 建任务所需的模型/项目等下拉数据源)
-- [ ] UI:侧栏过滤(默认未结束 + "历史任务"展开);云端任务详情视图(复用帧归约
-      渲染链,只读回放 + 运行中实时跟看 + 操作);newtask 云端模式(仓库/模型选择
-      → 创建 → 进详情跟看)
-- [ ] 验证:go vet/test、单测、uidist 重建、7440 调试实例真实云端任务端到端 + Playwright e2e
+- [x] 摸清协议(3 个并行探索):关键结论——云端 WS 下行 TaskStream 与本地 Frame
+      逐字段同构(ACP 载荷同一套),渲染链 reduceBatch→LogList 可直接复用;
+      rounds 历史 chunk 用 event 字段需归一为 type;seq 全局单调跨轮;
+      task-ended 按"轮"下发(kind=turn_end),不是任务终结;建任务最小体 =
+      content+model+image+public_host+opencode+repo:{}(服务端自动跑首轮)
+- [x] 内核(baizhi 包):`/api/mc/tasks` 加 status 逗号多值过滤;新增
+      `/api/mc/tasks/{id}`(详情)、`/{id}/rounds`(回放,event→type/ns→ms 归一)、
+      `/{id}/stop`、`POST /api/mc/tasks`(创建,内核补默认值)、`/api/mc/task-options`
+      (模型/镜像/项目/订阅);`mcstream.go` WS 代理(内核带 monkeycode cookie 拨
+      wss 到云端 stream,双向原样转发,下行读限 32MB)
+- [x] UI:侧栏默认只列 pending/processing + "历史任务(N)"折叠展开(记忆);
+      `cloudtask.tsx` 详情视图(结束态 rounds 只读回放+"加载更早"游标翻页;
+      pending 显示 VM 准备进度 3s 轮询;processing WS attach 实时跟看;
+      续聊走 mode=new;停止=WS user-cancel,终止=REST stop,网页打开兜底);
+      `cloud.ts` 移植 mobile 默认模型/镜像挑选;newtask 云端模式(项目选择/
+      云端模型选择/真实创建→进详情跟看,未同步账号给登录引导)
+- [x] 修复:云端流重复渲染——App 内联回调进了 WS effect 依赖,每次重渲染
+      重建 attach 连接导致服务端整轮重放;修法:回调走 ref + liveRef 只存
+      当前轮(轮结束归档 history)+ (重)连时清当前轮缓存以回放为权威
+- [x] 验证:go vet/test + UI 25 单测全绿;帧级诊断(裸连代理 WS 抓全帧确认
+      线上流干净);**真实生产端到端**:UI 建云端任务(qwen3.5-plus/devbox)→
+      VM 启动进度 → 实时流两轮对话 → 终止回收;Playwright e2e 三阶段
+      (侧栏过滤/只读回放/派发续聊终止)+ 截图逐张目检
+
+**Review**:内核继续零翻译代理(凭证不出内核),UI 复用本地渲染链零新组件。
+遗留:云端 ask 问答卡(acp_ask_user_question/reply-question)未实现,遇到会
+静默丢弃——需要 LogItem 加 ask 变体 + reduce 分支 + 卡片渲染 + WS 回传;
+Control WS(文件树/diff/端口/切模型)未接,详情视图给了"网页打开"兜底。
 
 ## M2 收尾:平台对接实施计划(2026-07-13)
 

@@ -157,7 +157,7 @@ func TestLoginMonkeyCodeBridge(t *testing.T) {
 	}
 
 	// 任务列表透传
-	data, err := s.MonkeyCodeTasks(ctx, 1, 20)
+	data, err := s.MonkeyCodeTasks(ctx, 1, 20, "")
 	if err != nil {
 		t.Fatalf("MonkeyCodeTasks: %v", err)
 	}
