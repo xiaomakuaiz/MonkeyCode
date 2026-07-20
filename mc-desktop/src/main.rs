@@ -1,14 +1,14 @@
 // MonkeyCode 本地桌面客户端 —— Tauri 壳。
 //
 // 职责边界:壳持有**应用配置**(模型列表等)与宿主事务(进程生命周期、
-// 托盘、桌宠、更新),并承载 UI(agent/ui 构建产物随壳分发,frontendDist)。
-// agent 内核是壳拉起的子进程,UI 只经 Tauri IPC 与壳对话,壳内 driver 层
-// 适配不同引擎(mc-agent REST/WS;ohmyagent stdio JSON-RPC,M3 接入)。
+// 托盘、桌宠、更新),并承载 UI(ui/ 构建产物随壳分发,frontendDist)。
+// 引擎 ohmyagent 是壳拉起的子进程(stdio JSON-RPC,driver/ohmy.rs),
+// UI 只经 Tauri IPC 与壳对话。
 //
 // 生命周期:
 //   启动 → 拉起引擎(无配置则零模型模式)→ 主窗口加载内置 UI。
-//   设置保存 → 壳写清单 → 重启引擎 → UI 整页刷新(会话在磁盘,重连自动回放)。
-//   关主窗口只隐藏(任务继续跑),托盘"退出"才真正退出并回收内核。
+//   设置保存 → 壳物化配置 → 重启引擎 → UI 整页刷新(会话在磁盘,重连自动回放)。
+//   关主窗口只隐藏(任务继续跑),托盘"退出"才真正退出并回收引擎。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -124,11 +124,11 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
 /// 写清单并(重)启引擎(阻塞流程:优雅停内核 ~10s + 起新内核 ~15s,
 /// 调用方负责丢 blocking 池)。save_config 与 engine_restart 共用。
 fn apply_config_and_restart(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
-    let files = save_config_files(app, config)?;
+    save_config_files(app, config)?;
     if let Some(engine) = app.state::<DriverHost>().take() {
         engine.stop();
     }
-    let engine = driver::start_engine(app, config, &files)?;
+    let engine = driver::start_engine(app, config)?;
     app.state::<DriverHost>().set(engine);
     Ok(())
 }
@@ -261,7 +261,7 @@ fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, Strin
         // 与 latest.json 的版本号不一致即视为有更新
         .version_comparator(|current, update| update.version != current)
         // Windows 安装器路径由插件直接退进程(不走 RunEvent::Exit),
-        // 必须先在这里回收内核,否则 mc-agent.exe 占用文件导致 NSIS 安装失败
+        // 必须先在这里回收引擎进程,否则 ohmyagent.exe 占用文件导致 NSIS 安装失败
         .on_before_exit(move || {
             if let Some(engine) = handle.state::<DriverHost>().take() {
                 engine.stop();
@@ -541,14 +541,15 @@ fn set_pet_visible(app: &AppHandle, show: bool) {
     }
 }
 
-/// 桌宠偏好落盘:以磁盘配置为基础只覆写壳自有字段,不动 models/mcp_servers。
+/// 桌宠偏好落盘:以磁盘配置为基础只覆写壳自有字段,只写权威 config.json
+/// (不触发引擎配置物化——含密钥的 ~/.ohmyagent 不该被无关操作反复重写)。
 fn persist_pet_prefs(app: &AppHandle) {
     let mut cfg = load_config(app);
     cfg.pet_enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
     if let Some(pos) = *app.state::<PetPos>().0.lock().unwrap() {
         cfg.pet_pos = Some(pos);
     }
-    if let Err(e) = save_config_files(app, &cfg) {
+    if let Err(e) = config::save_config_json(app, &cfg) {
         eprintln!("[mc-desktop] 桌宠偏好保存失败: {e}");
     }
 }
@@ -594,7 +595,6 @@ fn main() {
             driver::session_call,
             driver::upload_file,
             driver::upload_read,
-            driver::kernel_http,
             baizhi::baizhi_status,
             baizhi::baizhi_send_code,
             baizhi::baizhi_login,
@@ -636,12 +636,12 @@ fn main() {
                 });
             }
 
-            // 无条件拉起引擎:无配置时写出空清单,内核以零模型模式启动,
+            // 无条件拉起引擎:无配置时写出空配置,引擎以零模型模式启动,
             // 首启向导由 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
             app.state::<PetEnabled>().0.store(cfg.pet_enabled, Ordering::Relaxed);
-            let files = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
-            match driver::start_engine(app.handle(), &cfg, &files) {
+            save_config_files(app.handle(), &cfg)?; // 刷新物化配置
+            match driver::start_engine(app.handle(), &cfg) {
                 Ok(engine) => {
                     app.state::<DriverHost>().set(engine);
                     create_main_window(app.handle(), "index.html");

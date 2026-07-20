@@ -47,7 +47,6 @@
             "allow-session-call",
             "allow-upload-file",
             "allow-upload-read",
-            "allow-kernel-http",
             "allow-cloud-ws-open",
             "allow-cloud-ws-send",
             "allow-cloud-ws-close",

@@ -44,7 +44,6 @@ export interface HostConfig {
   /** 内核运行环境:空/缺省 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows) */
   kernel_env?: string;
   /** agent 引擎:"mc-agent"(缺省)| "ohmyagent";保存即重启对应引擎 */
-  agent_engine?: string;
 }
 
 /** 会话状态词汇(与壳 driver/frame.rs 的 SessionStatus 对表;

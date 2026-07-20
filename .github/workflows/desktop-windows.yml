@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [feat-local-version]
-    paths: ["mc-desktop/**", "agent/**", ".github/workflows/desktop-windows.yml"]
+    paths: ["mc-desktop/**", ".github/workflows/desktop-windows.yml"]
+
+env:
+  # 引擎版本钉死:升级引擎 = 改这里(配合壳的 system/ready 能力握手)
+  OHMYAGENT_REF: 317755865b376b3fd739ed40d956e6f2ce5cccca
 
 jobs:
   build:
@@ -17,8 +21,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
+          go-version: stable
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -30,8 +33,6 @@ jobs:
         with:
           workspaces: mc-desktop
 
-      # 内核 sidecar:tauri bundle 按 <name>-<triple>.exe 查找,
-      # 安装后落地为应用同目录的 mc-agent.exe(壳 find_agent 的查找路径)
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
       - name: Build browser extension
         working-directory: browser-extension
@@ -39,35 +40,20 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build kernel sidecar
-        working-directory: agent
-        env:
-          CGO_ENABLED: "0"
-        run: |
-          mkdir -p ../mc-desktop/binaries
-          go build -trimpath -ldflags "-s -w" \
-            -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
-          # WSL 内核(bundle.resources 随包分发,壳经 wsl.exe 在发行版内执行)
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
-            -o ../mc-desktop/binaries/mc-agent-linux ./cmd/mc-agent
-
-      # ohmyagent 引擎 sidecar(可选):独立仓库,凭据就绪时才构建并打进包;
-      # 缺失时用户仍可自装 ohmyagent 到 PATH(壳 find_ohmyagent 兜底)
-      - name: Build ohmyagent sidecar (optional)
-        id: ohmy
+      # 引擎 sidecar:独立仓库,钉 OHMYAGENT_REF;单引擎化后引擎必须进包,
+      # 凭据缺失直接失败而非静默出无引擎包
+      - name: Build ohmyagent sidecar (pinned)
         env:
           OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
         run: |
-          if [ -z "$OHMYAGENT_REPO_TOKEN" ]; then
-            echo "::notice::OHMYAGENT_REPO_TOKEN 未配置,跳过 ohmyagent sidecar"
-            echo "built=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git clone --depth 1 "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git" /tmp/ohmyagent
+          [ -n "$OHMYAGENT_REPO_TOKEN" ] || { echo "::error::OHMYAGENT_REPO_TOKEN 未配置,引擎无法进包"; exit 1; }
+          git init -q /tmp/ohmyagent
           cd /tmp/ohmyagent
+          git remote add origin "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git"
+          git fetch -q --depth 1 origin "$OHMYAGENT_REF"
+          git checkout -q FETCH_HEAD
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
             -o "$GITHUB_WORKSPACE/mc-desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
-          echo "built=true" >> "$GITHUB_OUTPUT"
 
       # secret 就绪时走发布构建(额外产出签名的 updater setup.exe + latest-windows.json),
       # 否则回退普通打包,CI 不红
@@ -75,20 +61,14 @@ jobs:
         working-directory: mc-desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          OHMY_BUILT: ${{ steps.ohmy.outputs.built }}
         run: |
-          # ohmyagent sidecar 就绪时叠加 externalBin 覆盖配置
-          OHMY_CFG=""
-          if [ "$OHMY_BUILT" = "true" ]; then
-            OHMY_CFG="--config tauri.ohmy.conf.json"
-          fi
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             npx --yes @tauri-apps/cli@^2 build \
-              --config tauri.windows.conf.json $OHMY_CFG --config tauri.release.conf.json
+              --config tauri.windows.conf.json --config tauri.release.conf.json
             python scripts/gen-latest-json.py windows
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY 未配置,跳过 updater 产物"
-            npx --yes @tauri-apps/cli@^2 build --config tauri.windows.conf.json $OHMY_CFG
+            npx --yes @tauri-apps/cli@^2 build --config tauri.windows.conf.json
           fi
 
       - uses: actions/upload-artifact@v4

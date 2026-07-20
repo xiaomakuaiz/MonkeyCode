@@ -1,25 +1,27 @@
 # mc-desktop 构建与打包。
 #
+# 引擎 sidecar 来自独立的 ohmyagent 仓库(不入本仓),打包前须指定源码位置:
+#   export OHMYAGENT_SRC=/path/to/ohmyagent
+#
 # macOS 打包(在 Mac 上执行):
-#   make macos          # universal .app/.dmg,内核 sidecar 打进包
+#   make macos          # universal .app/.dmg,引擎 sidecar 打进包
 # 前置:Go 1.25+、Node 22、Rust 且已加双架构 target:
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin
 #
 # Windows 打包(在 Windows 上执行,Git Bash/MSYS;无 Windows 机器时走
 # CI: .github/workflows/desktop-windows.yml):
-#   make windows        # NSIS 安装包,内核 sidecar 打进包
+#   make windows        # NSIS 安装包,引擎 sidecar 打进包
 
-AGENT_DIR   := ../agent
+OHMYAGENT_SRC ?=
 BIN_DIR     := binaries
-SIDECAR_ARM := $(BIN_DIR)/mc-agent-aarch64-apple-darwin
-SIDECAR_X64 := $(BIN_DIR)/mc-agent-x86_64-apple-darwin
-SIDECAR_UNI := $(BIN_DIR)/mc-agent-universal-apple-darwin
-SIDECAR_WIN := $(BIN_DIR)/mc-agent-x86_64-pc-windows-msvc.exe
-SIDECAR_WSL := $(BIN_DIR)/mc-agent-linux
+SIDECAR_ARM := $(BIN_DIR)/ohmyagent-aarch64-apple-darwin
+SIDECAR_X64 := $(BIN_DIR)/ohmyagent-x86_64-apple-darwin
+SIDECAR_UNI := $(BIN_DIR)/ohmyagent-universal-apple-darwin
+SIDECAR_WIN := $(BIN_DIR)/ohmyagent-x86_64-pc-windows-msvc.exe
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 
-.PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows kernel-universal kernel-windows browser-extension icons clean
+.PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows check-ohmy-src engine-universal engine-windows browser-extension icons clean
 
 # ---------- 开发 ----------
 
@@ -29,9 +31,9 @@ dev:
 run: dev
 	./target/debug/mc-desktop
 
-# ---------- macOS 打包(universal .app/.dmg,内核 sidecar)----------
+# ---------- macOS 打包(universal .app/.dmg,引擎 sidecar)----------
 
-macos: check-macos kernel-universal browser-extension icons/icon.icns
+macos: check-macos engine-universal browser-extension icons/icon.icns
 	$(TAURI) build --target universal-apple-darwin --config tauri.macos.conf.json $(EXTRA_TAURI_CONFIG)
 	@echo ""
 	@echo "打包完成,分发产物:"
@@ -58,19 +60,24 @@ check-macos:
 	@rustup target list --installed | grep -q x86_64-apple-darwin || \
 		{ echo "错误: 缺少 rust target,先执行: rustup target add x86_64-apple-darwin"; exit 1; }
 
-# 双架构编译内核 sidecar。universal 打包会按架构各编译一遍,每遍的
+check-ohmy-src:
+	@[ -n "$(OHMYAGENT_SRC)" ] && [ -d "$(OHMYAGENT_SRC)/cmd/ohmyagent" ] || \
+		{ echo "错误: 需要 OHMYAGENT_SRC 指向 ohmyagent 源码仓库,如:"; \
+		  echo "  export OHMYAGENT_SRC=~/dev/chaitin/ai/monkeycode/ohmyagent"; exit 1; }
+
+# 双架构编译引擎 sidecar。universal 打包会按架构各编译一遍,每遍的
 # tauri_build 都要求存在 <name>-<本架构 triple> 文件,最终 bundle 阶段
 # 再合成/取 universal——三个命名全部备齐,覆盖每个阶段的查找路径。
-kernel-universal:
+# externalBin 列在基础配置里:缺二进制打包直接失败(不再有"包里没引擎"的静默)。
+engine-universal: check-ohmy-src
 	mkdir -p $(BIN_DIR)
-	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_ARM)) ./cmd/mc-agent
-	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_X64)) ./cmd/mc-agent
+	cd $(OHMYAGENT_SRC) && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_ARM)) ./cmd/ohmyagent
+	cd $(OHMYAGENT_SRC) && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_X64)) ./cmd/ohmyagent
 	lipo -create -output $(SIDECAR_UNI) $(SIDECAR_ARM) $(SIDECAR_X64)
-	$(SIDECAR_UNI) --version
 
-# ---------- Windows 打包(NSIS 安装包,内核 sidecar)----------
+# ---------- Windows 打包(NSIS 安装包,引擎 sidecar)----------
 
-windows: check-windows kernel-windows browser-extension
+windows: check-windows engine-windows browser-extension
 	$(TAURI) build --config tauri.windows.conf.json $(EXTRA_TAURI_CONFIG)
 	@echo ""
 	@echo "打包完成,分发产物:"
@@ -86,14 +93,12 @@ windows-release: check-signing windows
 check-windows:
 	@[ "$$OS" = "Windows_NT" ] || { echo "错误: Windows 打包需在 Windows 上执行(无 Windows 机器时用 CI: desktop-windows.yml)"; exit 1; }
 
-# Windows 内核 sidecar(x64;tauri bundle 按 <name>-<triple>.exe 查找,
-# 安装后落地为应用同目录的 mc-agent.exe,与壳的 find_agent 查找顺序吻合)。
-# 同时产出 Linux 内核(bundle.resources 随包分发;WSL 运行环境下壳经
-# wsl.exe 在发行版内执行它,CGO_ENABLED=0 静态编译 musl 发行版也能跑)。
-kernel-windows:
+# Windows 引擎 sidecar(x64;tauri bundle 按 <name>-<triple>.exe 查找,
+# 安装后落地为应用同目录的 ohmyagent.exe,与壳的 find_ohmyagent 查找顺序吻合)。
+# WSL 模式的 ohmyagent-linux 随 M3 落地。
+engine-windows: check-ohmy-src
 	mkdir -p $(BIN_DIR)
-	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WIN)) ./cmd/mc-agent
-	cd $(AGENT_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WSL)) ./cmd/mc-agent
+	cd $(OHMYAGENT_SRC) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WIN)) ./cmd/ohmyagent
 
 # 浏览器扩展:随包分发(tauri bundle.resources 引用 ../browser-extension/dist,
 # 缺失会打包失败)。

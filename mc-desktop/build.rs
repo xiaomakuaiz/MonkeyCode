@@ -28,7 +28,6 @@ fn main() {
                 "session_call",
                 "upload_file",
                 "upload_read",
-                "kernel_http",
                 "cloud_ws_open",
                 "cloud_ws_send",
                 "cloud_ws_close",

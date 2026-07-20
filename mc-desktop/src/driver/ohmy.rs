@@ -133,7 +133,7 @@ impl OhmyDriver {
 
     pub fn start_with(app: Arc<dyn ShellCtx>, cfg: &DesktopConfig) -> Result<Self, String> {
         if crate::wsl::distro_of(&cfg.kernel_env).is_some() {
-            return Err("ohmyagent 引擎暂不支持 WSL 运行环境,请在设置中切换回本机或 mc-agent".into());
+            return Err("WSL 运行环境暂未支持(移植中),请在设置中切换回本机".into());
         }
         let bin = find_ohmyagent().ok_or_else(|| {
             "找不到 ohmyagent 可执行文件(查找顺序: MC_OHMYAGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()

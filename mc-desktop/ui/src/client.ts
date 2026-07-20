@@ -88,7 +88,6 @@ export function subscribeEvents(onEvent: (e: SessionEvent) => void): () => void 
 
 /** 引擎能力(UI 按此降级;引擎未运行时 reject)。 */
 export interface EngineCaps {
-  engine: string;
   browser_ext: boolean;
   usage_update: boolean;
   perm_remember: boolean;

@@ -37,7 +37,7 @@ pub struct DesktopConfig {
     /// 内核运行环境:空 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows)。
     #[serde(default)]
     pub kernel_env: String,
-    /// agent 引擎:"mc-agent"(默认)| "ohmyagent"。保存即重启对应引擎。
+    /// 已废弃(单引擎化后忽略):历史 config.json 兼容保留,不再消费。
     #[serde(default = "default_engine")]
     pub agent_engine: String,
     /// 桌宠开关(托盘菜单切换)
@@ -120,47 +120,26 @@ pub fn load_config(app: &AppHandle) -> DesktopConfig {
         .unwrap_or_default()
 }
 
-/// 内核消费的配置文件路径集合。
-pub struct KernelFiles {
-    pub models: PathBuf,
-    pub mcp: PathBuf,
-}
-
-/// 写应用配置 + 内核清单(模型 + MCP,均 0600,含密钥)。
-pub fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<KernelFiles, String> {
+/// 只写权威 config.json(壳自有偏好如桌宠走这条,不触发引擎配置物化)。
+pub fn save_config_json(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), String> {
     let dir = config_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
-
-    let write = |path: &PathBuf, data: Vec<u8>| -> Result<(), String> {
-        fs::write(path, data).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-        }
-        Ok(())
-    };
-
-    let cfg_data = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
-    write(&dir.join("config.json"), cfg_data)?;
-
-    let files = KernelFiles {
-        models: dir.join("models.json"),
-        mcp: dir.join("mcp.json"),
-    };
-    let models_data = serde_json::to_vec_pretty(&cfg.models).map_err(|e| e.to_string())?;
-    write(&files.models, models_data)?;
-
-    let mcp_data = serde_json::to_vec_pretty(&serde_json::json!({ "mcpServers": cfg.mcp_servers }))
-        .map_err(|e| e.to_string())?;
-    write(&files.mcp, mcp_data)?;
-
-    // ohmyagent 引擎:配置由壳接管写 ~/.ohmyagent(桌面版声明式管理)。
-    // 仅在选中该引擎时写,避免无谓覆盖用户 CLI 配置。
-    if cfg.agent_engine == "ohmyagent" {
-        write_ohmyagent_config(cfg)?;
+    let data = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
+    let path = dir.join("config.json");
+    fs::write(&path, data).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
-    Ok(files)
+    Ok(())
+}
+
+/// 写应用配置(权威 config.json)+ 物化引擎配置(~/.ohmyagent,0600 含密钥)。
+/// 引擎(重)启路径专用;桌宠偏好等壳自有字段用 save_config_json。
+pub fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), String> {
+    save_config_json(app, cfg)?;
+    write_ohmyagent_config(cfg)
 }
 
 /// 壳清单 → ~/.ohmyagent/settings.json + mcp.json。

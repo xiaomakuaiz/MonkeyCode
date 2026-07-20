@@ -1605,3 +1605,19 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       入站 shell_sid_of 反查、sidecar 持久化),空会话重建走全新 create
       换绑,壳 sid/目录/UI 通道稳定;同时治好"打开空历史会话失败"潜在 bug
 - [x] 验证:cargo test 24/24 三连跑;ask E2E 恰好全程压过换绑路径
+
+## ohmyagent 单引擎化 M1(2026-07-20)
+
+- [x] 壳内移除 mc-agent:删 driver/mc.rs(619 行)与 Engine 枚举分发,
+      DriverHost 直持 OhmyDriver;kernel_http 命令三处注销(浏览器 tab
+      随 caps.browser_ext=false 隐藏,M2 迁壳后恢复);config.rs 停写
+      models.json/mcp.json,物化只剩 ~/.ohmyagent;agent_engine 字段
+      废弃兼容保留;设置页删引擎选择器;EngineCaps 去 engine 维度
+- [x] 顺手收账:桌宠偏好拆 save_config_json 只写权威 config.json,
+      不再触发含密钥的引擎配置全量物化(审计 D 组旧账)
+- [x] 打包链:Makefile 全面转 ohmyagent sidecar(OHMYAGENT_SRC 指源码,
+      engine-universal/engine-windows 目标;externalBin 列基础配置——
+      缺二进制打包直接失败);删 tauri.ohmy.conf.json 叠加层与
+      mc-agent-linux 资源;三个 CI 钉 OHMYAGENT_REF(commit sha)且
+      凭据缺失即失败(审计 B1/B2 核销);win7 用同款 go-win7 工具链编译引擎
+- [x] 验证:cargo test 24/24、UI tsc+38/38+build 全绿;workflows YAML 校验过

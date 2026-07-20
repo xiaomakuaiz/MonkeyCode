@@ -6,7 +6,7 @@ name: Desktop Windows 7 Build
 #   - WebView2: 固定版 109.0.1518.78(Win7 最后支持的版本,离线捆进安装包,+~180MB)
 #   - updater 指向独立的 latest-win7.json,防止 Win7 用户被推送 Win10-only 更新
 # 维护约束:
-#   - agent/go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
+#   - ohmyagent go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
 #   - mc-desktop/Cargo.toml 改依赖后,跑 mc-desktop/scripts/regen-win7-lock.sh 重新生成
 #     Cargo.lock.win7(cargo 1.77.2 增量解析 + 压回 reqwest 的 http3/quinn 可选子树到
 #     edition<=2021)。直接 `cargo update` 会拉进 edition2024 依赖(rust>=1.85),即便不参与
@@ -19,10 +19,10 @@ on:
   workflow_dispatch:
   push:
     branches: [feat-local-version]
-    paths: ["mc-desktop/**", "agent/**", ".github/workflows/desktop-win7.yml"]
+    paths: ["mc-desktop/**", ".github/workflows/desktop-win7.yml"]
 
 env:
-  GO_WIN7_VERSION: patched-1.26.5 # 与 agent/go.mod 的 go 1.26.5 对应
+  GO_WIN7_VERSION: patched-1.26.5 # 与 ohmyagent go.mod 的 go 版本对应
   GO_WIN7_LEGACY_SHA256: "1fded9947a2da9e3eb8f6dc1754637dbb4f4eb82d6024c227fae870986cf629c"
   WEBVIEW2_VERSION: 109.0.1518.78
   WEBVIEW2_CAB_SHA256: "7622281cf83de1a35e3a471f432f7a897d65f0a7d3975df08512b7b253dd45c7"
@@ -97,20 +97,26 @@ jobs:
           echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
           echo "$HOME/go-win7-legacy/bin" >> "$GITHUB_PATH"
 
-      - name: Build kernel sidecar (win7-compatible)
-        working-directory: agent
+      # 引擎 sidecar(win7 兼容工具链编译;钉 OHMYAGENT_REF,凭据缺失直接失败)
+      - name: Build ohmyagent sidecar (win7-compatible, pinned)
         env:
           CGO_ENABLED: "0"
+          OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
+          OHMYAGENT_REF: 317755865b376b3fd739ed40d956e6f2ce5cccca
         run: |
           go version
           # 断言用的是 go-win7 而非 runner 预装的官方 Go(官方产物 Win7 上直接崩,
           # 且 go version 输出无法区分,必须查 GOROOT)
           [ "$(go env GOROOT)" = "$GOROOT" ]
-          mkdir -p ../mc-desktop/binaries
+          [ -n "$OHMYAGENT_REPO_TOKEN" ] || { echo "::error::OHMYAGENT_REPO_TOKEN 未配置,引擎无法进包"; exit 1; }
+          git init -q /tmp/ohmyagent
+          cd /tmp/ohmyagent
+          git remote add origin "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git"
+          git fetch -q --depth 1 origin "$OHMYAGENT_REF"
+          git checkout -q FETCH_HEAD
+          mkdir -p "$GITHUB_WORKSPACE/mc-desktop/binaries"
           go build -trimpath -ldflags "-s -w" \
-            -o ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe ./cmd/mc-agent
-          # 冒烟:至少保证在 runner(新版 Windows)上能启动(win7 兼容产物向上兼容)
-          ../mc-desktop/binaries/mc-agent-x86_64-pc-windows-msvc.exe --version
+            -o "$GITHUB_WORKSPACE/mc-desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
 
       - name: Download WebView2 fixed runtime 109
         working-directory: mc-desktop

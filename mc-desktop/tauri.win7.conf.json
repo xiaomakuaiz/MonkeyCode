@@ -1,8 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "ucrt/*": "./",
-      "binaries/mc-agent-linux": null
+      "ucrt/*": "./"
     },
     "windows": {
       "webviewInstallMode": {
@@ -13,7 +12,9 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://release.monkeycode-ai.com/public/desktop/latest-win7.json"]
+      "endpoints": [
+        "https://release.monkeycode-ai.com/public/desktop/latest-win7.json"
+      ]
     }
   }
 }

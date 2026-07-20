@@ -4,6 +4,10 @@ name: Desktop macOS Build
 on:
   workflow_dispatch:
 
+env:
+  # 引擎版本钉死:升级引擎 = 改这里(配合壳的 system/ready 能力握手)
+  OHMYAGENT_REF: 317755865b376b3fd739ed40d956e6f2ce5cccca
+
 jobs:
   build:
     runs-on: macos-14
@@ -12,8 +16,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
+          go-version: stable
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -34,43 +37,27 @@ jobs:
           npm ci
           npm run build
 
-      # ohmyagent 引擎 sidecar(可选):独立仓库,凭据就绪时才构建并打进包;
-      # 缺失时用户仍可自装 ohmyagent 到 PATH(壳 find_ohmyagent 兜底)
-      - name: Build ohmyagent sidecar (optional)
-        id: ohmy
+      # 引擎源码(独立仓库,钉 OHMYAGENT_REF;单引擎化后引擎必须进包,
+      # 凭据缺失直接失败而非静默出无引擎包)
+      - name: Fetch ohmyagent (pinned)
         env:
           OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
         run: |
-          if [ -z "$OHMYAGENT_REPO_TOKEN" ]; then
-            echo "::notice::OHMYAGENT_REPO_TOKEN 未配置,跳过 ohmyagent sidecar"
-            echo "built=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git clone --depth 1 "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git" /tmp/ohmyagent
+          [ -n "$OHMYAGENT_REPO_TOKEN" ] || { echo "::error::OHMYAGENT_REPO_TOKEN 未配置,引擎无法进包"; exit 1; }
+          git init -q /tmp/ohmyagent
           cd /tmp/ohmyagent
-          BIN="$GITHUB_WORKSPACE/mc-desktop/binaries"
-          mkdir -p "$BIN"
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" \
-            -o "$BIN/ohmyagent-aarch64-apple-darwin" ./cmd/ohmyagent
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
-            -o "$BIN/ohmyagent-x86_64-apple-darwin" ./cmd/ohmyagent
-          lipo -create -output "$BIN/ohmyagent-universal-apple-darwin" \
-            "$BIN/ohmyagent-aarch64-apple-darwin" "$BIN/ohmyagent-x86_64-apple-darwin"
-          echo "built=true" >> "$GITHUB_OUTPUT"
+          git remote add origin "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git"
+          git fetch -q --depth 1 origin "$OHMYAGENT_REF"
+          git checkout -q FETCH_HEAD
 
       - name: Build app bundle (universal, unsigned)
         working-directory: mc-desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          OHMY_BUILT: ${{ steps.ohmy.outputs.built }}
+          OHMYAGENT_SRC: /tmp/ohmyagent
         # secret 就绪时走发布构建(额外产出签名的 updater tar.gz + latest.json),
-        # 否则回退普通打包,CI 不红
+        # 否则回退普通打包,CI 不红;引擎 sidecar 由 make 从 OHMYAGENT_SRC 构建
         run: |
-          # ohmyagent sidecar 就绪时叠加 externalBin 覆盖配置(Makefile 对
-          # 环境注入的 EXTRA_TAURI_CONFIG 用 += 追加,release 配置不冲掉它)
-          if [ "$OHMY_BUILT" = "true" ]; then
-            export EXTRA_TAURI_CONFIG="--config tauri.ohmy.conf.json"
-          fi
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             make macos-release
           else
