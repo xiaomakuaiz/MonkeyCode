@@ -1,5 +1,0 @@
-{
-  "description": "修复计数器的数据竞争,使 -race 测试通过",
-  "prompt": "counter 包的测试用 -race 跑会失败(数据竞争)。请修复并用 go test -race ./... 验证。",
-  "check": "go test -race ./..."
-}

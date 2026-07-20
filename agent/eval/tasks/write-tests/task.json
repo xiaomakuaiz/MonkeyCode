@@ -1,5 +1,0 @@
-{
-  "description": "为 stack.go 编写覆盖核心行为的单元测试",
-  "prompt": "stack.go 还没有单元测试。请编写 stack_test.go,覆盖 Push/Pop/Peek 的正常路径和空栈时的错误路径,并跑测试确认全部通过。",
-  "check": "go test ./... && grep -q 'func Test' stack_test.go && [ $(grep -c 'func Test' stack_test.go) -ge 2 ]"
-}

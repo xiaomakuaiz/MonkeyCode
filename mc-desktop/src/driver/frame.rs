@@ -1,7 +1,7 @@
-// Frame 词汇的唯一 Rust 定义。
+// Frame 词汇的唯一定义(产帧权威;词汇源自 mc-agent 时代的 frame.go,
+// 其 Go 版随单引擎化删除,git 历史可查)。
 //
-// 权威对表:mc-agent(agent/internal/frame/frame.go)产帧、本模块产帧、
-// UI 消费(mc-desktop/ui/src/{types.ts,reduce.ts})三方共用同一词汇——
+// 对表:本模块产帧、UI 消费(mc-desktop/ui/src/{types.ts,reduce.ts})——
 // 任何新帧类型/字段先改这里与 types.ts,driver 禁止手拼 Frame JSON。
 //
 // 帧结构:{ type, kind?, data?(base64 JSON), timestamp(ms), seq }

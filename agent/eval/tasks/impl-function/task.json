@@ -1,5 +1,0 @@
-{
-  "description": "按测试规格实现 ParseVersion 函数",
-  "prompt": "version.go 里的 ParseVersion 还没实现(目前只有 panic 占位)。请阅读 version_test.go 了解期望行为,实现该函数并使所有测试通过。",
-  "check": "go test ./..."
-}

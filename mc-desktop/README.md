@@ -1,115 +1,49 @@
 # mc-desktop — MonkeyCode 本地桌面客户端(Tauri 壳)
 
-职责边界:**壳是纯宿主——持有应用配置与宿主事务,不渲染任何业务界面**;
-agent 内核只是壳拉起的子进程,**全部产品 UI(含设置视图)在内核的 React 应用**(`agent/ui/`)。
+单引擎架构:壳(Rust)承载 UI(`ui/` React SPA,构建产物随壳分发)与
+全部平台服务(百智云/云端任务/文件浏览/上传/浏览器扩展桥),引擎
+**ohmyagent** 是壳拉起的 stdio JSON-RPC 子进程(独立上游仓库,不 fork,
+CI 按 OHMYAGENT_REF 钉版本)。
 
-- 配置(模型列表 + MCP 服务器)存于壳的应用配置目录(`config.json`/`models.json`/`mcp.json`,0600);
-  **所有权在壳、渲染在内核 UI**:设置视图经 Tauri IPC `get_config`/`save_config` 读写,保存即重启内核生效。
-  壳对配置内容零字段知识(原样透传),表单校验在设置视图、权威校验在内核
-- 内核经环境变量注入配置(`MC_AGENT_MODELS`/`MC_AGENT_MCP_CONFIG` 指向壳写的清单;不走 argv,避免泄漏进 ps),内核零管理职责;项目级 `.mc-agent/mcp.json` 仍随仓库生效
-- **壳无条件拉起内核**:无配置时写出空清单,内核以零模型模式启动(服务与 UI 照常起,建会话前引导配置),
-  首启向导即内核 UI 的设置视图;坏配置同样不致死(内核降级零模型 + stderr 警告),
-  壳的错误页只兜内核起不来的场景(二进制缺失等安装级故障)
-- 设置在内核 UI 页内(占满主窗口、隐藏主侧栏);内核 UI 的 ⚙ 按钮直接切设置视图,
-  托盘菜单"设置"经 `open-settings` 事件恢复主窗口并切到设置视图
-- 对话业务与 UI 在 Go 内核(`agent/`),二者经 localhost WS 帧协议解耦;内核 `/healthz` 外显版本号
+分层、契约(帧词汇/能力/IPC/配置所有权/会话状态机)、浏览器桥与
+上游缺口清单见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**(权威文档)。
 
 ## 构建与运行
 
-前置:Rust 工具链、Linux 需 webkit2gtk;先安装内核(`agent/` 下 `make install`)。模型配置在应用内完成,无需命令行。
+前置:Rust 工具链、Node 22、Go 1.26+(编译引擎)、Linux 需 webkit2gtk。
 
 ```bash
-cd mc-desktop
-cargo build --release
-./target/release/mc-desktop
+# 引擎源码位置(独立仓库)
+export OHMYAGENT_SRC=~/dev/chaitin/ai/monkeycode/ohmyagent
+
+cd ui && npm ci && npm run build   # 生成 uidist(cargo build 的前置)
+cd .. && cargo build && ./target/debug/mc-desktop
+
+# HMR 开发(devUrl overlay)
+npx tauri dev --config tauri.dev.conf.json
+
+# 测试(含 ohmy 假 LLM E2E、浏览器桥假扩展、MCP 冒烟)
+MC_OHMYAGENT_BIN=$OHMYAGENT_SRC/bin/ohmyagent cargo test
+cd ui && npm test
 ```
 
-macOS 分发包(在 Mac 上,universal .app/.dmg,内核 sidecar 打入):
+开发运行找不到引擎时,壳按 `MC_OHMYAGENT_BIN` → 应用同目录 → PATH →
+`~/.local/bin` 兜底查找。
+
+## 打包
 
 ```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin   # 一次性
-make macos    # 产物在 target/universal-apple-darwin/release/bundle/dmg/
+make macos            # universal .app/.dmg(在 Mac 上执行)
+make macos-release    # + 签名 updater 产物(需 TAURI_SIGNING_PRIVATE_KEY)
+make windows          # NSIS 安装包(在 Windows 上执行;或走 CI)
 ```
 
-CI 的 desktop-macos.yml 走同一个 make 入口(push 自动构建,产物在 Actions Artifacts)。
-包未签名:同事首次打开需 右键→打开;提示"已损坏"时 `xattr -cr /Applications/MonkeyCode.app`。
+引擎 sidecar 由 make 从 `OHMYAGENT_SRC` 编译;externalBin 在基础 tauri
+配置中,缺二进制打包直接失败。CI:desktop-{macos,windows,win7}.yml
+(win7 通道用 go-win7 补丁工具链 + 固定版 WebView2)。
 
-内核二进制查找顺序:`MC_AGENT_BIN` 环境变量 → 应用同目录 → PATH(含 `~/.local/bin`)。
+## 浏览器扩展
 
-## 自动更新与发布
-
-壳内置 tauri-plugin-updater:启动 5 秒后 + 托盘"检查更新"菜单,拉取 OSS 更新清单,
-版本号与本地**不一致**即弹窗询问,确认后下载(minisign 验签)安装并自动重启。
-macOS 原地替换 .app,未签名包不受影响(自更新下载无 quarantine 属性,不触发 Gatekeeper);
-Windows 静默跑 NSIS 安装器(壳先经 updater 的 `on_before_exit` 钩子回收内核进程,
-否则 mc-agent.exe 占用文件会导致安装失败)。
-
-三条更新通道各自独立清单(`public/desktop/` 下),由对应平台的发布构建产出,发布互不协调:
-
-| 通道 | 清单 | 产出 |
-|---|---|---|
-| macOS | `latest.json` | desktop-macos.yml(`make macos-release`) |
-| Windows | `latest-windows.json` | desktop-windows.yml |
-| Win7 | `latest-win7.json` | desktop-win7.yml |
-
-版本号格式 **`YYMMDDNN`**(日期 + 两位序号,如 26071401),内部以 semver 主版本位承载
-(`26071401.0.0`),`tauri.conf.json` 与 `Cargo.toml` 两处保持一致。
-
-发布流程(CI 出产物,人工上传 OSS):
-
-1. 把 `tauri.conf.json` + `Cargo.toml` 的版本改为当天新序号(如 `26071502.0.0`),push;
-2. 三条 desktop CI 在配置了 `TAURI_SIGNING_PRIVATE_KEY` secret 时走发布构建,
-   Artifacts 里多出 `updater/` 目录:带版本文件名的更新包 + 对应清单;
-3. 上传 OSS `public/desktop/`:**先传包,再覆盖清单**(顺序保证客户端不会拉到不存在的包)。
-   各平台可独立发布,只传自己通道的包和清单即可。
-
-签名密钥:`npx @tauri-apps/cli signer generate` 生成,公钥在 `tauri.conf.json`,私钥在
-GitHub secret `TAURI_SIGNING_PRIVATE_KEY`(丢失则无法再发更新,老用户需手动重装)。
-本地联调:`MC_UPDATE_MANIFEST=http://127.0.0.1:8000/latest.json ./target/debug/mc-desktop`
-可覆盖清单地址(http 仅 debug 构建放行)。
-
-完整链路人工验证:装当前版,OSS 放新版包 + 清单,启动应弹"发现新版本",确认后自动重启为新版。
-历史遗留:2607 早期的 Windows 安装烧的端点还是 `latest.json`(当时无 Windows 条目,从未能自动更新),
-需手动重装一次才能进入 `latest-windows.json` 新通道。
-
-## 进程生命周期
-
-- 壳启动 → spawn `mc-agent serve --addr 127.0.0.1:<端口> --token <随机> --watch-stdin`,15 秒内等待就绪,失败则打开错误页(不静默退出);
-- 端口首次分配后持久化(配置目录 `port` 文件)并跨启动复用:localStorage 按 origin(含端口)隔离,
-  端口固定 UI 本地偏好(主题/分组折叠)才能保留;被占用时才换新端口(偏好随之重置一次)。
-  保存设置重启内核时**先停旧再起新**(同端口复用的前提);
-
-- 壳持有内核 stdin 管道:**壳以任何方式退出(含被 SIGKILL)都会关闭管道,内核随之退出**,不留孤儿进程;正常退出路径额外主动 kill。
-
-## WSL 运行环境(Windows)
-
-设置 → 通用 → 运行环境可选择在 WSL 发行版内运行内核:壳改经
-`wsl.exe -d <发行版> --exec` 拉起随包分发的 Linux 内核(资源文件
-`mc-agent-linux`,经 /mnt/c 直接执行,不拷入发行版);WSL2 的 localhost
-转发让 Windows 侧照常直连 `127.0.0.1:<端口>`,端口/令牌/stdin 看门狗
-契约不变。环境变量经 `WSLENV`(/u 标志)白名单注入,清单文件路径由
-`wslpath` 预翻译。一次只跑一个内核;会话存储在各自环境的 home 下,
-按环境天然隔离。
-
-开发机(无 Windows)冒烟:`MC_WSL_EXE` 指向 `scripts/fake-wsl.sh` +
-`MC_AGENT_LINUX_BIN` 指向本机 mc-agent,config.json 写
-`"kernel_env": "wsl:Ubuntu-22.04"` 即可走通整条 WSL 代码路径。
-
-## 托盘常驻
-
-内核正常运行时,**关窗只隐藏窗口**,任务继续在内核执行;托盘左键单击或菜单"显示窗口"恢复,菜单"退出 MonkeyCode"才真正退出(内核随之回收)。降级逻辑:托盘创建失败(无 StatusNotifier 宿主的桌面环境)或内核启动失败的错误页,关窗直接退出,不会出现"藏起来找不回"的僵尸窗口。
-
-## 无头/CI 环境冒烟
-
-WebKitGTK 初始化依赖 DBus 会话总线,纯 Xvfb 下会阻塞,需:
-
-```bash
-NO_AT_BRIDGE=1 xvfb-run -a dbus-run-session -- ./target/debug/mc-desktop
-```
-
-## 路线图(v0 之后)
-
-- ~~托盘常驻 + 关窗不退出~~(已交付);~~独立 React UI 替换内嵌调试 UI~~(已交付,见 `agent/ui/`);
-- ~~自更新(壳整包,内核随包)~~(已交付,见上节);内核独立热更新(清单加 kernel 段,免重启壳);
-- macOS/Windows 构建与签名(内核作为 sidecar 捆绑进安装包);
-- OAuth 登录(系统浏览器 + 深链,内核侧 `mc-agent login` 已就绪,待后端端点)。
+`../browser-extension/` 随包分发(设置页引导加载);扩展经
+`ws://127.0.0.1:{7440-7449}/ext` 连壳内桥,配对码在设置页展示。
+browser_* 工具经壳内 MCP server 暴露给引擎。

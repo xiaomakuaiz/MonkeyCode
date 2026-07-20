@@ -1,5 +1,0 @@
-{
-  "description": "给 CLI 增加 -upper 参数",
-  "prompt": "这是一个把输入原样输出的小 CLI(main.go)。请增加一个 -upper 布尔参数:指定时把输出转为大写。保持默认行为不变,完成后自行构建并用两种方式运行验证。",
-  "check": "go build -o app . && [ \"$(echo hello | ./app)\" = hello ] && [ \"$(echo hello | ./app -upper)\" = HELLO ]"
-}

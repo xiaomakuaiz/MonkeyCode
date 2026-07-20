@@ -1,5 +1,0 @@
-{
-  "description": "修复 Sum 函数的 off-by-one 错误并使测试通过",
-  "prompt": "这个 Go 项目的单元测试挂了,请找到原因并修复,然后跑测试确认通过。",
-  "check": "go test ./..."
-}

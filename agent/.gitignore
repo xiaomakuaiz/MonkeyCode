@@ -1,5 +1,0 @@
-bin/
-dist/
-*.exe
-eval-report*.json
-!eval/baselines/*.json

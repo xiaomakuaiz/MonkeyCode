@@ -1642,3 +1642,16 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       错误码中文文案)+ MCP HTTP 冒烟(401/回显协议版本/9 工具/isError/202);
       cargo 30/30、UI 38/38、build 零告警
 - [ ] 待真机冒烟:真实 Chrome + 扩展(配对→navigate→snapshot→click→截图)
+
+## ohmyagent 单引擎化 M4:agent/ 删除 + 文档重写(2026-07-20)
+
+- [x] agent/(32M Go 内核,浏览器语义已迁毕)与 agent-ci.yml 整体删除;
+      browser-extension/ 保留(WS 契约面转壳内 browser/,扩展零改动);
+      移植 provenance 注释指向 git 历史(e8666a8 前)
+- [x] ARCHITECTURE.md 单引擎重写:分层图(引擎经 MCP 消费壳内浏览器工具)、
+      契约 1 收敛两方对表(frame.rs 唯一产帧权威)、契约 4 补 engine_id
+      解耦与数据归属、浏览器桥章节(单共享会话差异声明)、上游缺口清单
+      并入近期全部变通;README 改薄为入口 + 快速上手
+- [x] 审计清单核销:双 driver 产帧分叉/engines_list/驱动风格统一/
+      settings 引擎硬编码——随单引擎化蒸发
+- [ ] M3(WSL)待上游 OHMYAGENT_CONFIG_DIR 就绪后启动
