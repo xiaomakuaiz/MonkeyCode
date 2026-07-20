@@ -1466,3 +1466,21 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       TypeError → React 整树崩 → 白屏(仅 ohmy 引擎+有历史会话时触发,Linux 探针环境无会话未踩到)
 - [x] 修复:config.rs 增共享 ms_to_rfc3339(cookies.rs 复用),ohmy sessions_list 输出转字符串;
       UI 三处 updated_at 排序 String() 加固(历史 sidecar/异构数据不再能炸渲染树)
+
+## ohmyagent 上游更新适配(2026-07-20)
+
+- [x] 切模型/模式:destroy+resume 变通删除,改原生 session/switchModel /
+      session/switchMode;模式运行中也可切(上游 evaluator.SetMode 即时生效);
+      未激活会话仍走 create(resume) 带全参(switch 要求会话存活)
+- [x] 顺手修正 session_open 惰性 resume 只传 {resume} 的老坑:现从 sidecar
+      带上会话自身 model/permission_mode(缺参会回落进程默认值);
+      模型已删配置时退化引擎默认,不阻断打开
+- [x] MCP headers:上游已支持(mcp ServerConfig.headers),config.rs 删跳过
+      分支,streamable-http 条目 headers 透传(百智 MCP 网关 Bearer 可挂)
+- [x] usage 评估后不接:turn/stopped 的 usage 是整轮累计(loop totalUsage.Add),
+      上下文条语义是"当前占用/预算",累计 input 虚高会误触"接近上限"警告;
+      用量条继续隐藏,待上游按次出 usage 或给 context_tokens
+- [x] compaction 事件上游新增,壳侧此前已有 compact_status 映射,无需改
+- [x] ARCHITECTURE.md 上游缺口清单同步(三项已补齐移出)
+- [x] 验证:重建 ohmyagent 二进制,cargo test 21/21(E2E 补 switchModel/
+      switchMode 真通路断言,对新二进制实测),cargo build 零告警

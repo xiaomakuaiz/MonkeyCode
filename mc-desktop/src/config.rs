@@ -171,8 +171,7 @@ pub fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<KernelF
 /// openai_responses→openai-responses。
 ///
 /// 已知限制(引擎协议决定):每个 provider 路由只有一组 endpoint/key,
-/// 同协议多网关时默认模型所在网关生效,其余条目跳过(stderr 告警);
-/// mcp.json 无 headers 字段,需要鉴权头的条目(百智 MCP 网关)无法携带,跳过。
+/// 同协议多网关时默认模型所在网关生效,其余条目跳过(stderr 告警)。
 ///
 /// 首次接管前把用户已有文件备份为 .bak(仅当 .bak 不存在,保留最初原件)。
 fn write_ohmyagent_config(cfg: &DesktopConfig) -> Result<(), String> {
@@ -289,18 +288,12 @@ fn write_ohmyagent_config(cfg: &DesktopConfig) -> Result<(), String> {
                 }
                 servers.push(entry);
             } else if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
-                let has_headers = v
-                    .get("headers")
-                    .and_then(|h| h.as_object())
-                    .map(|h| !h.is_empty())
-                    .unwrap_or(false);
-                if has_headers {
-                    eprintln!(
-                        "[mc-desktop] ohmyagent 引擎限制:MCP 条目「{name}」需要鉴权头,协议不支持,已跳过"
-                    );
-                    continue;
+                let mut entry =
+                    serde_json::json!({ "name": name, "transport": "streamable-http", "url": url });
+                if let Some(h) = v.get("headers").and_then(|h| h.as_object()).filter(|h| !h.is_empty()) {
+                    entry["headers"] = serde_json::json!(h);
                 }
-                servers.push(serde_json::json!({ "name": name, "transport": "streamable-http", "url": url }));
+                servers.push(entry);
             }
         }
     }

@@ -406,9 +406,16 @@ impl OhmyDriver {
             !sessions.get(id).map(|s| s.created).unwrap_or(false)
         };
         if need_create {
-            let result = self.rpc("session/create", json!({ "resume": id })).await?;
-            let _ = result;
             let meta = self.read_sidecar(id);
+            // resume 缺参会回落进程默认值,尽力带上会话自身的模型/模式;
+            // 模型已从配置中移除时退化为引擎默认(不阻断打开)
+            let mode = meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
+            let mut params = json!({ "resume": id, "permission_mode": ohmy_mode_of(mode) });
+            let model_name = meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
+            if let Ok(model_id) = self.model_id_of(model_name) {
+                params["model"] = json!(model_id);
+            }
+            self.rpc("session/create", params).await?;
             self.0.sessions.lock().unwrap().entry(id.to_string()).or_insert(SessionState {
                 seq: 0,
                 running: false,
@@ -658,8 +665,18 @@ impl OhmyDriver {
         match kind {
             "session_set_model" => {
                 let name = payload.get("model").and_then(|v| v.as_str()).unwrap_or("");
-                self.model_id_of(name)?; // 前置校验,未知模型不动会话
-                self.recreate(id, Some(name), None).await?;
+                let model_id = self.model_id_of(name)?; // 前置校验,未知模型不动会话
+                // 引擎同样拒绝运行中切模型,本地先给友好错误
+                if self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false) {
+                    return Err("执行中不能切换,请先取消当前任务".into());
+                }
+                if self.session_created(id) {
+                    self.rpc("session/switchModel", json!({ "session_id": id, "model": model_id }))
+                        .await?;
+                } else {
+                    let mode = self.session_mode(id);
+                    self.create_resumed(id, &model_id, &mode).await?;
+                }
                 if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
                     s.model_name = name.to_string();
                 }
@@ -668,8 +685,18 @@ impl OhmyDriver {
                 Ok(json!({ "result": { "model": name } }))
             }
             "session_set_mode" => {
+                // 权限模式运行中也可切(引擎侧即时生效于后续审批)
                 let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
-                self.recreate(id, None, Some(mode)).await?;
+                if self.session_created(id) {
+                    self.rpc(
+                        "session/switchMode",
+                        json!({ "session_id": id, "permission_mode": ohmy_mode_of(mode) }),
+                    )
+                    .await?;
+                } else {
+                    let model_id = self.model_id_of(&self.session_model_name(id))?;
+                    self.create_resumed(id, &model_id, mode).await?;
+                }
                 if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
                     s.mode = mode.to_string();
                 }
@@ -681,37 +708,37 @@ impl OhmyDriver {
         }
     }
 
-    /// destroy + resume 重建(切模型/权限模式的变通;仅空闲时)。
-    /// 重建总是同时带上 model 与 permission_mode(覆盖项 + 会话当前值),
-    /// 缺参会被 ohmyagent 回落到进程默认值——单项切换不能重置另一项。
-    async fn recreate(&self, id: &str, model_name: Option<&str>, mode: Option<&str>) -> Result<(), String> {
-        let (cur_model, cur_mode) = {
-            let sessions = self.0.sessions.lock().unwrap();
-            let s = sessions.get(id);
-            if s.map(|s| s.running).unwrap_or(false) {
-                return Err("执行中不能切换,请先取消当前任务".into());
-            }
-            (
-                s.map(|s| s.model_name.clone()).unwrap_or_default(),
-                s.map(|s| s.mode.clone()).unwrap_or_else(|| "default".into()),
-            )
-        };
-        let model_id = self.model_id_of(model_name.unwrap_or(&cur_model))?;
-        let mode = mode.unwrap_or(&cur_mode);
-        let ohmy_mode = if mode == "yolo" { "bypassPermissions" } else { "default" };
-        let created = self.0.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false);
-        if created {
-            self.rpc("session/destroy", json!({ "session_id": id })).await?;
-        }
+    /// 会话尚未在引擎中激活时,以 resume + 目标参数一次建出
+    /// (switchModel/switchMode 要求会话存活;未激活时缺参会回落进程默认值,
+    /// 故 model 与 permission_mode 必须同时带上)。
+    async fn create_resumed(&self, id: &str, model_id: &str, mode: &str) -> Result<(), String> {
         self.rpc(
             "session/create",
-            json!({ "resume": id, "model": model_id, "permission_mode": ohmy_mode }),
+            json!({ "resume": id, "model": model_id, "permission_mode": ohmy_mode_of(mode) }),
         )
         .await?;
         if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
             s.created = true;
         }
         Ok(())
+    }
+
+    fn session_created(&self, id: &str) -> bool {
+        self.0.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false)
+    }
+
+    fn session_mode(&self, id: &str) -> String {
+        self.0
+            .sessions
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|s| s.mode.clone())
+            .unwrap_or_else(|| "default".into())
+    }
+
+    fn session_model_name(&self, id: &str) -> String {
+        self.0.sessions.lock().unwrap().get(id).map(|s| s.model_name.clone()).unwrap_or_default()
     }
 
     // ==================== 辅助 ====================
@@ -993,6 +1020,11 @@ impl Inner {
 }
 
 /// 工具标题:「名称 主参数」(对齐 mc-agent「动词 目标」的可读形态)。
+/// 壳模式词汇 → ohmyagent permission_mode
+fn ohmy_mode_of(mode: &str) -> &'static str {
+    if mode == "yolo" { "bypassPermissions" } else { "default" }
+}
+
 fn perm_title(tool: &str, input: &Value) -> String {
     let arg = ["file_path", "path", "command", "pattern", "url", "cwd"]
         .iter()
@@ -1195,11 +1227,15 @@ data: {"type":"message_stop"}"#,
         assert_eq!(items[0].get("status").and_then(|v| v.as_str()), Some("finished"));
         assert!(items[0].get("title").and_then(|v| v.as_str()).unwrap_or("").contains("hello world"));
 
-        // 切模型变通路径(destroy + resume-create)在空闲时可用
+        // session/switchMode、session/switchModel 通路(会话已激活,走原生 RPC)
         driver
             .session_call(&sid, "session_set_mode", json!({ "mode": "yolo" }))
             .await
             .expect("切权限模式");
+        driver
+            .session_call(&sid, "session_set_model", json!({ "model": "测试模型" }))
+            .await
+            .expect("切模型");
 
         driver.stop();
     }
