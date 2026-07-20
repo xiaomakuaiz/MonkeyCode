@@ -345,6 +345,11 @@ export function connectCloudTask(
     onEnded?(): void;
     /** 断线重连前回调:attach 会整轮回放当前轮,视图应清掉当前轮本地缓存 */
     onReconnect?(): void;
+    /** 空闲关闭/连接彻底失败:云端对"当前轮已结束"的 attach 会直接关连接,
+     * 这不是断线,不该重连——视图应转入"就绪"态(发消息时再建连接)。 */
+    onIdle?(): void;
+    /** mode=new 的首条输入未能送达(拨号失败):视图应把内容放回队列 */
+    onSendFailed?(text: string): void;
   },
   firstInput?: string,
 ): CloudConn {
@@ -358,6 +363,10 @@ export function connectCloudTask(
   let pendingFirst = firstInput;
   let curMode = mode;
   let attempt = 0;
+  let openedThisAttempt = false; // 本次尝试是否成功建立过管道
+  let framesThisOpen = 0; // 本次连接收到的业务帧数(区分"空闲关闭"与"断流")
+  let dialFails = 0; // 连续拨号失败次数(指数退避,超限放弃)
+  let sentFirstText: string | null = null; // 已上行但尚无任何回显的首条输入
 
   function flush() {
     flushScheduled = false;
@@ -392,6 +401,12 @@ export function connectCloudTask(
       if (f.seq <= lastSeq) return; // 重连回放重叠帧去重
       lastSeq = f.seq;
     }
+    // cursor(翻页游标)/error(拒绝提示)不算"轮活跃":空闲 attach 云端也会
+    // 先发 cursor 再关连接,计入会让空闲关闭被误判成断流而无限重连
+    if (f.type !== "cursor" && f.type !== "error") {
+      framesThisOpen += 1;
+      sentFirstText = null; // 有回显 = 首条输入已被云端接收
+    }
     if (f.type === "task-ended") ended = true;
     queue.push(f);
     schedule();
@@ -406,9 +421,43 @@ export function connectCloudTask(
       h.onStatus("本轮已结束,可继续对话", false);
       return;
     }
-    h.onStatus("⚠ 云端连接断开,2 秒后自动重连…", false);
+    if (openedThisAttempt && framesThisOpen === 0) {
+      closed = true;
+      if (sentFirstText !== null) {
+        // mode=new 发了首条输入却零回显被关:大概率被拒(休眠/运行互斥),
+        // 内容交还队列重试,绝不静默丢
+        h.onSendFailed?.(sentFirstText);
+        return;
+      }
+      // 连上了但一帧未发就被关:云端对"当前轮已结束"的 attach 就是这么处理的。
+      // 不是断线,停止重连,转"就绪"——发消息时会另建 mode=new 连接
+      h.onIdle?.();
+      return;
+    }
+    if (!openedThisAttempt) {
+      dialFails += 1;
+      if (pendingFirst !== undefined) {
+        // 带首条输入的连接没拨通:内容交还视图排队,本连接就此作废
+        const text = pendingFirst;
+        pendingFirst = undefined;
+        closed = true;
+        h.onSendFailed?.(text);
+        return;
+      }
+      if (dialFails >= 5) {
+        // 连不上云端流(网络/环境异常):放弃自动重连,转就绪模式兜底
+        closed = true;
+        h.onStatus("⚠ 云端流连接失败,发送消息时会重试", false);
+        h.onIdle?.();
+        return;
+      }
+    } else {
+      dialFails = 0; // 曾成功收流的断开:从头开始退避
+    }
+    const delay = Math.min(2000 * 2 ** Math.max(0, dialFails - 1), 30_000);
+    h.onStatus(`⚠ 云端连接断开,${Math.round(delay / 1000)} 秒后自动重连…`, false);
     curMode = "attach"; // 重连降级为跟看,避免误开新轮(对齐移动端)
-    reconnectTimer = setTimeout(open, 2000);
+    reconnectTimer = setTimeout(open, delay);
   }
 
   function open() {
@@ -419,6 +468,8 @@ export function connectCloudTask(
       lastSeq = 0;
     }
     attempt += 1;
+    openedThisAttempt = false;
+    framesThisOpen = 0;
     h.onStatus("连接云端…", false);
     openPipe("stream", taskId, { mode: curMode }, onText, onPipeClose)
       .then((p) => {
@@ -427,9 +478,12 @@ export function connectCloudTask(
           return;
         }
         pipe = p;
+        openedThisAttempt = true;
+        dialFails = 0;
         h.onStatus("已连接云端", true);
         // 新一轮:云端等第一条 user-input 才开跑;content 需再包一层 base64
         if (pendingFirst !== undefined) {
+          sentFirstText = pendingFirst;
           doSend("user-input", { content: b64encode(pendingFirst), attachments: [] });
           pendingFirst = undefined;
         }

@@ -252,19 +252,37 @@ export function CloudTaskView({
         }
       },
       onEnded: () => void refreshInfo().then(() => onTasksChangedRef.current?.()),
+      // 空闲关闭(云端对"当前轮已结束"的 attach 直接关连接):不是断线,
+      // 转就绪态——可直接发消息(届时另建 mode=new 连接)
+      onIdle: () => {
+        syncedRef.current = true;
+        runningRef.current = false;
+        setConnected(false);
+        setStatus("已就绪,可继续对话");
+        setTimeout(() => trySendRef.current(), 100);
+      },
+      // 首条输入未送达(拨号失败/零回显被关):放回队列头,绝不静默丢
+      onSendFailed: (text: string) => {
+        sendingRef.current = false;
+        setQueued(queuedRef.current ? text + "\n" + queuedRef.current : text);
+        setStatus("消息未送达,已重新排队");
+        setTimeout(() => trySendRef.current(), 2000);
+      },
       // 断线重连(降级 attach)会整轮回放当前轮:清本地当前轮缓存,回放为权威
       onReconnect: () => {
         liveRef.current = [];
         setChat(reduceBatch(initialChat, historyRef.current));
       },
     }),
-    [onFrames, refreshInfo],
+    [onFrames, refreshInfo, setQueued],
   );
 
   // 运行中:WS attach 跟看(内核代理带 monkeycode 会话拨云端)。
   // 依赖全部稳定(id/taskStatus/稳定回调),只在进入 processing 时建一次。
   useEffect(() => {
     if (taskStatus !== "processing") return;
+    // VM 休眠/唤醒中不发起 attach(必被拒,徒增重连噪音);唤醒完成后 effect 重跑
+    if (vmWaking) return;
     if (connRef.current) return; // 发消息时已切换为 mode=new 连接,不重复建
     // attach 会整轮回放当前轮:清掉本地当前轮缓存,以服务端回放为权威
     liveRef.current = [];
@@ -274,7 +292,7 @@ export function CloudTaskView({
       connRef.current?.close();
       connRef.current = null;
     };
-  }, [id, taskStatus, connHandlers]);
+  }, [id, taskStatus, vmWaking, connHandlers]);
 
   // 贴底跟随(简化版:仅程序滚动,不做锚点恢复——云端流为跟看场景)
   useEffect(() => {
