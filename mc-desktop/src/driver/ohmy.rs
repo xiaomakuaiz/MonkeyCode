@@ -81,6 +81,9 @@ struct Inner {
     /// 原样转发,session_id 是子循环的随机 id,不带父归属——首次见到时
     /// 用"运行中且持有未闭合 Agent 工具的会话"启发式认领
     subagents: StdMutex<HashMap<String, SubagentRoute>>,
+    /// 父会话 Agent 工具入参暂存(tc_id → (description, prompt)),
+    /// 子会话物化时作标题与首条输入
+    agent_inputs: StdMutex<HashMap<String, (String, String)>>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -97,6 +100,10 @@ struct SessionState {
     running: bool,
     /// 本进程内已 session/create(resume)过
     created: bool,
+    /// 引擎侧会话 id(通常 == 壳 sid;空会话无法 resume 时壳会 destroy +
+    /// 全新 create,引擎发新 id——壳 sid/目录/UI 通道保持不变,仅此别名换绑。
+    /// 出站 RPC 用它,入站事件经 shell_sid_of 反查;sidecar 持久化)
+    engine_id: String,
     /// UI 是否在听 frames:{sid}(未打开时帧只入日志不 emit)
     opened: bool,
     /// 已发 tool_call 未见 tool_result 的调用(tc_id → 工具名)。
@@ -176,6 +183,7 @@ impl OhmyDriver {
             perm_tools: StdMutex::new(HashMap::new()),
             engine_caps: StdMutex::new(HashSet::new()),
             subagents: StdMutex::new(HashMap::new()),
+            agent_inputs: StdMutex::new(HashMap::new()),
             stopped: Arc::new(AtomicBool::new(false)),
         });
 
@@ -348,6 +356,9 @@ impl OhmyDriver {
             if meta.as_object().map(|m| m.is_empty()).unwrap_or(true) {
                 continue; // 无 sidecar 的目录不是本壳建的会话
             }
+            if meta.get("parent").and_then(|v| v.as_str()).map(|p| !p.is_empty()).unwrap_or(false) {
+                continue; // 子代理子会话不进列表(经父会话工具卡点开,与 mc-agent 一致)
+            }
             let running = sessions.get(&id).map(|s| s.running).unwrap_or(false);
             let status = if running {
                 "running".to_string()
@@ -410,6 +421,7 @@ impl OhmyDriver {
                 seq: 0,
                 running: false,
                 created: true,
+                engine_id: sid.clone(),
                 opened: false,
                 open_tools: HashMap::new(),
                 workdir: workdir.to_string(),
@@ -438,26 +450,57 @@ impl OhmyDriver {
         };
         if need_create {
             let meta = self.read_sidecar(id);
-            // resume 缺参会回落进程默认值,尽力带上会话自身的模型/模式;
-            // 模型已从配置中移除时退化为引擎默认(不阻断打开)
-            let mode = meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
-            let mut params = json!({ "resume": id, "permission_mode": ohmy_mode_of(mode) });
-            let model_name = meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
-            if let Ok(model_id) = self.model_id_of(model_name) {
-                params["model"] = json!(model_id);
+            let is_child =
+                meta.get("parent").and_then(|v| v.as_str()).map(|p| !p.is_empty()).unwrap_or(false);
+            let mut engine_id = meta
+                .get("engine_id")
+                .and_then(|v| v.as_str())
+                .filter(|e| !e.is_empty())
+                .unwrap_or(id)
+                .to_string();
+            if !is_child {
+                // 有历史则 resume 带全参(缺参会回落进程默认值);空会话
+                // resume 必失败,改全新 create 换绑 engine_id(壳 sid 不变)。
+                // 模型已从配置移除时不带 model,退化引擎默认(不阻断打开)
+                let mode = meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
+                let has_history = crate::config::home_dir()
+                    .map(|h| h.join(".ohmyagent/sessions").join(&engine_id).join("messages.jsonl").is_file())
+                    .unwrap_or(false);
+                let mut params = if has_history {
+                    json!({ "resume": engine_id, "permission_mode": ohmy_mode_of(mode) })
+                } else {
+                    json!({ "cwd": meta.get("workdir").and_then(|v| v.as_str()).unwrap_or(""),
+                        "permission_mode": ohmy_mode_of(mode) })
+                };
+                let model_name = meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
+                if let Ok(model_id) = self.model_id_of(model_name) {
+                    params["model"] = json!(model_id);
+                }
+                let result = self.rpc("session/create", params).await?;
+                if let Some(e) = result.get("session_id").and_then(|v| v.as_str()) {
+                    engine_id = e.to_string();
+                }
+                if engine_id != id {
+                    let e = engine_id.clone();
+                    self.write_sidecar(id, |m| m["engine_id"] = json!(e));
+                }
             }
-            self.rpc("session/create", params).await?;
-            self.0.sessions.lock().unwrap().entry(id.to_string()).or_insert(SessionState {
+            // 子代理子会话是壳侧实体(仅回放),登记但不向引擎 resume
+            let mut sessions = self.0.sessions.lock().unwrap();
+            let entry = sessions.entry(id.to_string()).or_insert(SessionState {
                 seq: 0,
                 running: false,
                 created: true,
+                engine_id: engine_id.clone(),
                 opened: false,
                 open_tools: HashMap::new(),
                 workdir: meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 model_name: meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 mode: meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default").to_string(),
                 title: meta.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            }).created = true;
+            });
+            entry.created = true;
+            entry.engine_id = engine_id.clone();
         }
         // 回放日志(重开页面/重连:整份重放,行为与 mc-agent 回放一致)。
         // 顺序保证不重帧:先置 opened=false 并清掉该会话的批量缓冲(其中的帧
@@ -500,14 +543,32 @@ impl OhmyDriver {
             }
         }
         let created = self.0.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false);
+        let eng = self.engine_id(id);
         if created {
-            let _ = self.rpc("session/destroy", json!({ "session_id": id })).await;
+            let _ = self.rpc("session/destroy", json!({ "session_id": eng })).await;
         }
         self.0.sessions.lock().unwrap().remove(id);
-        // 删 ohmyagent 会话目录(messages.jsonl)+ 壳 sidecar(含帧日志)
+        // 级联删子代理子会话(sidecar parent == id;壳侧实体,无引擎目录)
+        let children: Vec<String> = std::fs::read_dir(&self.0.data_dir)
+            .map(|it| {
+                it.flatten()
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|cid| {
+                        self.read_sidecar(cid).get("parent").and_then(|v| v.as_str()) == Some(id)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for cid in children {
+            self.0.sessions.lock().unwrap().remove(&cid);
+            self.0.subagents.lock().unwrap().remove(&cid);
+            let _ = std::fs::remove_dir_all(self.0.data_dir.join(&cid));
+        }
+        // 删 ohmyagent 会话目录(messages.jsonl,目录名是引擎 id)+ 壳 sidecar(含帧日志)
         if let Some(home) = crate::config::home_dir() {
             let root = home.join(".ohmyagent").join("sessions");
-            let _ = std::fs::remove_dir_all(root.join(id));
+            let _ = std::fs::remove_dir_all(root.join(&eng));
         }
         let _ = std::fs::remove_dir_all(self.0.data_dir.join(id));
         Ok(json!({ "ok": true }))
@@ -602,7 +663,10 @@ impl OhmyDriver {
                     m["turns"] = json!(turns + 1);
                 });
                 self.emit_session_event(id, SessionStatus::Running.as_str());
-                match self.rpc("session/sendMessage", json!({ "session_id": id, "message": text })).await {
+                match self
+                    .rpc("session/sendMessage", json!({ "session_id": self.engine_id(id), "message": text }))
+                    .await
+                {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         // 引擎没接活:补终止帧关轮,状态回落,错误上抛(UI 保留输入)
@@ -621,7 +685,7 @@ impl OhmyDriver {
                 // 引擎应答是确认而非前提:cancel 无应答(挂死/超时)时本地和解,
                 // 否则会话永卡 running;引擎若事后仍发 turn/stopped,
                 // 幂等守卫(was_running)会吞掉迟到的收尾
-                if let Err(e) = self.rpc("cancel", json!({ "session_id": id })).await {
+                if let Err(e) = self.rpc("cancel", json!({ "session_id": self.engine_id(id) })).await {
                     self.0.reconcile_session(id, &format!("取消未获引擎应答,已本地中断({e})"));
                 }
                 Ok(())
@@ -712,8 +776,11 @@ impl OhmyDriver {
                     let mode = self.session_mode(id);
                     self.create_resumed(id, &model_id, &mode).await?;
                 } else if self.has_cap("session/switchModel") {
-                    self.rpc("session/switchModel", json!({ "session_id": id, "model": model_id }))
-                        .await?;
+                    self.rpc(
+                        "session/switchModel",
+                        json!({ "session_id": self.engine_id(id), "model": model_id }),
+                    )
+                    .await?;
                 } else {
                     // 版本握手回退:旧引擎无 switch RPC,destroy+resume 全参重建
                     let mode = self.session_mode(id);
@@ -727,24 +794,27 @@ impl OhmyDriver {
                 Ok(json!({ "result": { "model": name } }))
             }
             "session_set_mode" => {
-                // 权限模式运行中也可切(引擎侧即时生效于后续审批)
+                // 权限模式切换。空闲时总是 destroy+resume 全参重建——上游
+                // subagent 权限顶棚在会话构建时快照,switchMode 只改父评估器,
+                // 热切后子代理仍按旧模式全拒(headless prompter);重建才能带新顶棚。
+                // 运行中退而求其次热切(父会话即时生效;子代理顶棚不变,上游缺口)。
                 let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
+                let running =
+                    self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false);
                 if !self.session_created(id) {
                     let model_id = self.model_id_of(&self.session_model_name(id))?;
                     self.create_resumed(id, &model_id, mode).await?;
+                } else if !running {
+                    let model_id = self.model_id_of(&self.session_model_name(id))?;
+                    self.recreate_fallback(id, &model_id, mode).await?;
                 } else if self.has_cap("session/switchMode") {
                     self.rpc(
                         "session/switchMode",
-                        json!({ "session_id": id, "permission_mode": ohmy_mode_of(mode) }),
+                        json!({ "session_id": self.engine_id(id), "permission_mode": ohmy_mode_of(mode) }),
                     )
                     .await?;
                 } else {
-                    // 版本握手回退:旧引擎只能 destroy+resume,那必须空闲
-                    if self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false) {
-                        return Err("当前引擎版本较旧,执行中不能切换权限模式,请先取消任务".into());
-                    }
-                    let model_id = self.model_id_of(&self.session_model_name(id))?;
-                    self.recreate_fallback(id, &model_id, mode).await?;
+                    return Err("当前引擎版本较旧,执行中不能切换权限模式,请先取消任务".into());
                 }
                 // 与 mc-agent setMode 对齐:切到 yolo 自动放行本会话所有挂起审批。
                 // 先切引擎再排空——切换后引擎新的审批直接放行不再产生 ask,
@@ -779,17 +849,31 @@ impl OhmyDriver {
         }
     }
 
-    /// 会话尚未在引擎中激活时,以 resume + 目标参数一次建出
-    /// (switchModel/switchMode 要求会话存活;未激活时缺参会回落进程默认值,
-    /// 故 model 与 permission_mode 必须同时带上)。
+    /// 会话在引擎中(重)建:有历史则 resume 带全参(缺参会回落进程默认值);
+    /// 空会话(messages.jsonl 未生成)resume 必失败,改全新 create——
+    /// 引擎发新 id,壳 sid/目录/UI 通道不变,engine_id 换绑并落 sidecar。
     async fn create_resumed(&self, id: &str, model_id: &str, mode: &str) -> Result<(), String> {
-        self.rpc(
-            "session/create",
-            json!({ "resume": id, "model": model_id, "permission_mode": ohmy_mode_of(mode) }),
-        )
-        .await?;
+        let eng = self.engine_id(id);
+        let has_history = crate::config::home_dir()
+            .map(|h| h.join(".ohmyagent/sessions").join(&eng).join("messages.jsonl").is_file())
+            .unwrap_or(false);
+        let params = if has_history {
+            json!({ "resume": eng, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
+        } else {
+            let workdir =
+                self.0.sessions.lock().unwrap().get(id).map(|s| s.workdir.clone()).unwrap_or_default();
+            json!({ "cwd": workdir, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
+        };
+        let result = self.rpc("session/create", params).await?;
+        let new_eng =
+            result.get("session_id").and_then(|v| v.as_str()).unwrap_or(&eng).to_string();
         if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
             s.created = true;
+            s.engine_id = new_eng.clone();
+        }
+        if new_eng != id {
+            let e = new_eng.clone();
+            self.write_sidecar(id, |m| m["engine_id"] = json!(e));
         }
         Ok(())
     }
@@ -798,14 +882,29 @@ impl OhmyDriver {
         self.0.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false)
     }
 
+    /// 出站 RPC 用的引擎会话 id(通常 == 壳 sid;空会话重建后换绑,
+    /// 未加载时回退 sidecar 记录)。
+    fn engine_id(&self, id: &str) -> String {
+        if let Some(e) = self.0.sessions.lock().unwrap().get(id).map(|s| s.engine_id.clone()) {
+            return e;
+        }
+        self.read_sidecar(id)
+            .get("engine_id")
+            .and_then(|v| v.as_str())
+            .filter(|e| !e.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| id.to_string())
+    }
+
     fn has_cap(&self, cap: &str) -> bool {
         self.0.engine_caps.lock().unwrap().contains(cap)
     }
 
-    /// 版本握手回退:旧引擎(system/ready 未宣告 switch RPC)用
-    /// destroy + resume 全参重建实现切换(仅空闲时安全)。
+    /// destroy + 重建实现切换(仅空闲时安全):模式切换的常规路径
+    /// (子代理权限顶棚只在构建时生效)与旧引擎无 switch RPC 的回退。
     async fn recreate_fallback(&self, id: &str, model_id: &str, mode: &str) -> Result<(), String> {
-        self.rpc("session/destroy", json!({ "session_id": id })).await?;
+        // destroy 容错:引擎侧可能已无此会话(崩溃重启后),不阻断重建
+        let _ = self.rpc("session/destroy", json!({ "session_id": self.engine_id(id) })).await;
         if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
             s.created = false;
         }
@@ -978,7 +1077,7 @@ impl Inner {
                 _ => return,
             }
         };
-        self.subagents.lock().unwrap().retain(|_, r| r.parent_sid != sid);
+        self.close_children_of_session(sid, SessionStatus::Interrupted);
         for (tc, _name) in open {
             self.push_frame(sid, |seq| frame::tool_call_failed(&tc, "已中断", seq));
         }
@@ -1007,7 +1106,11 @@ impl Inner {
             self.pending_questions.lock().unwrap().remove(&req_id);
             self.emit_session_ask(&sid, false);
         }
-        let ids: Vec<String> = self.sessions.lock().unwrap().keys().cloned().collect();
+        // 子会话跳过:由各自父会话的和解统一收尾(close_children_of_session)
+        let ids: Vec<String> = {
+            let subs = self.subagents.lock().unwrap();
+            self.sessions.lock().unwrap().keys().filter(|id| !subs.contains_key(*id)).cloned().collect()
+        };
         for id in ids {
             self.reconcile_session(&id, reason);
         }
@@ -1019,7 +1122,7 @@ impl Inner {
             "event/stream" => self.handle_event(params),
             "permission/request" => {
                 let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let sid = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
                 let tool = params.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let input = params.get("input").cloned().unwrap_or(Value::Null);
                 if req_id.is_empty() || sid.is_empty() {
@@ -1041,7 +1144,7 @@ impl Inner {
             }
             "permission/cancelled" => {
                 let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let sid = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
                 let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("cancelled");
                 self.perm_tools.lock().unwrap().remove(&req_id);
                 if !sid.is_empty() {
@@ -1054,7 +1157,7 @@ impl Inner {
             }
             "question/request" => {
                 let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let sid = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
                 let questions = params.get("questions").cloned().unwrap_or(json!([]));
                 if req_id.is_empty() || sid.is_empty() {
                     return;
@@ -1076,7 +1179,7 @@ impl Inner {
                 }
             }
             "turn/stopped" => {
-                let sid = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
                 let stop_reason = params.get("stop_reason").and_then(|v| v.as_str()).unwrap_or("complete");
                 let err = params.get("error").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 if sid.is_empty() {
@@ -1093,8 +1196,8 @@ impl Inner {
                         None => (false, HashMap::new()),
                     }
                 };
-                // 轮次收尾:该会话的子代理路由随之失效
-                self.subagents.lock().unwrap().retain(|_, r| r.parent_sid != sid);
+                // 轮次收尾:残留子代理(未随工具闭合)按中断收尾
+                self.close_children_of_session(&sid, SessionStatus::Interrupted);
                 if !was_running {
                     // 已本地和解(取消超时/引擎重启)后迟到的收尾,忽略防重复帧
                     return;
@@ -1125,39 +1228,87 @@ impl Inner {
         }
     }
 
-    /// 子代理事件 → 父会话 Agent 工具卡的进度 feed(ToolProgress 词汇)。
-    /// 上游缺口:转发的子循环事件不带父归属(session_id 是子循环随机 id),
-    /// 首见时用"运行中且持有未闭合 Agent 工具的会话"启发式认领;
-    /// 认领不到(如迟到事件)则丢弃。
-    fn handle_subagent_event(&self, child_sid: &str, etype: &str, event: &Value, data: &Value) {
-        let (psid, ptc) = {
-            let mut subs = self.subagents.lock().unwrap();
-            if let Some(r) = subs.get(child_sid) {
-                (r.parent_sid.clone(), r.parent_tc.clone())
-            } else {
-                let claimed = {
-                    let sessions = self.sessions.lock().unwrap();
-                    sessions.iter().find_map(|(sid, s)| {
-                        if !s.running {
-                            return None;
-                        }
-                        s.open_tools
-                            .iter()
-                            .find(|(_, name)| name.as_str() == "Agent")
-                            .map(|(tc, _)| (sid.clone(), tc.clone()))
-                    })
-                };
-                let Some((psid, ptc)) = claimed else { return };
-                subs.insert(
-                    child_sid.to_string(),
-                    SubagentRoute {
-                        parent_sid: psid.clone(),
-                        parent_tc: ptc.clone(),
-                        line_buf: String::new(),
-                    },
-                );
-                (psid, ptc)
-            }
+    /// 子代理认领 + 物化。上游转发子循环事件不带父归属(session_id 是
+    /// 子循环随机 id),首见时用"运行中且持有未闭合 Agent 工具的会话"
+    /// 启发式认领,并把子代理物化为**壳侧子会话**(sidecar 带 parent,
+    /// 可回放可跟流)——展示与 mc-agent 对齐:父卡 feed 预览 +
+    /// child_session 链接点开完整对话。认领不到(迟到事件)返回 false。
+    fn claim_subagent(&self, child_sid: &str) -> bool {
+        if self.subagents.lock().unwrap().contains_key(child_sid) {
+            return true;
+        }
+        let claimed = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions.iter().find_map(|(sid, s)| {
+                if !s.running {
+                    return None;
+                }
+                s.open_tools
+                    .iter()
+                    .find(|(_, name)| name.as_str() == "Agent")
+                    .map(|(tc, _)| (sid.clone(), tc.clone(), s.workdir.clone(), s.model_name.clone()))
+            })
+        };
+        let Some((psid, ptc, workdir, model_name)) = claimed else { return false };
+        let (title, prompt) = self
+            .agent_inputs
+            .lock()
+            .unwrap()
+            .get(&ptc)
+            .cloned()
+            .unwrap_or_else(|| ("子代理".into(), String::new()));
+        self.sessions.lock().unwrap().insert(
+            child_sid.to_string(),
+            SessionState {
+                seq: 0,
+                running: true,
+                created: true, // 壳侧会话,无引擎实体,open 不做 resume RPC
+                engine_id: child_sid.to_string(),
+                opened: false,
+                open_tools: HashMap::new(),
+                workdir: workdir.clone(),
+                model_name: model_name.clone(),
+                mode: "default".into(),
+                title: title.clone(),
+            },
+        );
+        self.write_sidecar(child_sid, |m| {
+            m["parent"] = json!(psid);
+            m["workdir"] = json!(workdir);
+            m["model_name"] = json!(model_name);
+            m["title"] = json!(title);
+            m["status"] = json!(SessionStatus::Running.as_str());
+        });
+        self.subagents.lock().unwrap().insert(
+            child_sid.to_string(),
+            SubagentRoute { parent_sid: psid.clone(), parent_tc: ptc.clone(), line_buf: String::new() },
+        );
+        // 子会话回放形状与主会话一致:user-input(任务)→ task-started → …
+        if !prompt.is_empty() {
+            self.push_frame(child_sid, |seq| frame::user_input(&prompt, seq));
+        }
+        self.push_frame(child_sid, frame::task_started);
+        // 父卡挂子会话链接(UI 点开完整视图)
+        self.push_frame(&psid, |seq| {
+            frame::tool_call_progress(
+                &ptc,
+                json!({ "kind": "child_session", "childSessionId": child_sid }),
+                seq,
+            )
+        });
+        true
+    }
+
+    /// 子代理事件在父卡进度窗的内联预览(完整对话在子会话本体)。
+    fn subagent_feed(&self, child_sid: &str, etype: &str, event: &Value, data: &Value) {
+        let Some((psid, ptc)) = self
+            .subagents
+            .lock()
+            .unwrap()
+            .get(child_sid)
+            .map(|r| (r.parent_sid.clone(), r.parent_tc.clone()))
+        else {
+            return;
         };
         match etype {
             "tool_call" => {
@@ -1225,43 +1376,93 @@ impl Inner {
         }
     }
 
-    /// 父会话某工具闭合:冲洗其子代理残留行缓冲并删路由。
+    /// 入站事件的壳会话反查(引擎 session_id → 壳 sid)。通常同名;
+    /// 空会话重建换绑后不同。未命中原样返回(供子代理未知 id 认领)。
+    fn shell_sid_of(&self, engine: &str) -> String {
+        self.sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, s)| s.engine_id == engine)
+            .map(|(sid, _)| sid.clone())
+            .unwrap_or_else(|| engine.to_string())
+    }
+
+    /// 关闭一个子会话:收尾帧 + sidecar 终态(不发 session-event,不惊动侧栏)。
+    fn close_child(&self, child_sid: &str, status: SessionStatus) {
+        let was = {
+            let mut sessions = self.sessions.lock().unwrap();
+            match sessions.get_mut(child_sid) {
+                Some(s) if s.running => {
+                    s.running = false;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !was {
+            return;
+        }
+        self.push_frame(child_sid, frame::task_ended);
+        self.write_sidecar(child_sid, |m| m["status"] = json!(status.as_str()));
+    }
+
+    /// 父会话某工具闭合:冲洗子代理残留行缓冲、关闭对应子会话、删路由。
     fn close_subagents_of(&self, sid: &str, tc_id: &str) {
-        let tails: Vec<(String, String)> = {
+        let closing: Vec<(String, String)> = {
             let mut subs = self.subagents.lock().unwrap();
-            let tails = subs
-                .values_mut()
-                .filter(|r| r.parent_sid == sid && r.parent_tc == tc_id)
-                .filter_map(|r| {
-                    let tail = std::mem::take(&mut r.line_buf);
-                    let tail = tail.trim().to_string();
-                    if tail.is_empty() { None } else { Some((r.parent_sid.clone(), tail)) }
-                })
+            let closing = subs
+                .iter_mut()
+                .filter(|(_, r)| r.parent_sid == sid && r.parent_tc == tc_id)
+                .map(|(child, r)| (child.clone(), std::mem::take(&mut r.line_buf).trim().to_string()))
                 .collect();
             subs.retain(|_, r| !(r.parent_sid == sid && r.parent_tc == tc_id));
-            tails
+            closing
         };
-        for (psid, tail) in tails {
-            self.push_frame(&psid, |seq| {
-                frame::tool_call_progress(tc_id, json!({ "kind": "subagent_text", "line": tail }), seq)
-            });
+        for (child, tail) in closing {
+            if !tail.is_empty() {
+                self.push_frame(sid, |seq| {
+                    frame::tool_call_progress(tc_id, json!({ "kind": "subagent_text", "line": tail }), seq)
+                });
+            }
+            self.close_child(&child, SessionStatus::Finished);
+        }
+        self.agent_inputs.lock().unwrap().remove(tc_id);
+    }
+
+    /// 会话轮次结束/和解:其子代理路由全部失效,残留子会话按 status 收尾。
+    fn close_children_of_session(&self, sid: &str, status: SessionStatus) {
+        let children: Vec<String> = {
+            let mut subs = self.subagents.lock().unwrap();
+            let children = subs
+                .iter()
+                .filter(|(_, r)| r.parent_sid == sid)
+                .map(|(child, _)| child.clone())
+                .collect();
+            subs.retain(|_, r| r.parent_sid != sid);
+            children
+        };
+        for child in children {
+            self.close_child(&child, status);
         }
     }
 
     /// event/stream 事件归一化 → Frame。
     fn handle_event(&self, event: Value) {
         let etype = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let sid = event.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if sid.is_empty() {
+        let raw = event.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+        if raw.is_empty() {
             return;
         }
+        let sid = self.shell_sid_of(raw);
         let data = event.get("data").cloned().unwrap_or(Value::Null);
         // 未知 session_id = 上游转发的子代理事件(子循环随机 id):
-        // 认领到父会话,归一化为 Agent 工具卡的进度 feed,而不是丢弃
-        if !self.sessions.lock().unwrap().contains_key(&sid) {
-            self.handle_subagent_event(&sid, etype, &event, &data);
+        // 认领并物化为壳侧子会话,后续事件走正常帧路径;认领不到(迟到)丢弃
+        if !self.sessions.lock().unwrap().contains_key(&sid) && !self.claim_subagent(&sid) {
             return;
         }
+        // 子代理事件在父卡进度窗同步一份内联预览(非子代理为 no-op)
+        self.subagent_feed(&sid, etype, &event, &data);
         match etype {
             // user_message:引擎回显忽略——session_send 已本地先行落 user-input
             // 帧(ack 与事件无时序保证,双写会重复气泡)
@@ -1287,6 +1488,17 @@ impl Inner {
                 if !tc_id.is_empty() {
                     if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
                         s.open_tools.insert(tc_id.clone(), name.clone());
+                    }
+                    if name == "Agent" {
+                        // 暂存入参:子会话物化时作标题(description)与首条输入(prompt)
+                        let desc = input
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("子代理")
+                            .to_string();
+                        let prompt =
+                            input.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        self.agent_inputs.lock().unwrap().insert(tc_id.clone(), (desc, prompt));
                     }
                 }
                 self.push_frame(&sid, |seq| frame::tool_call(&tc_id, &title, &input, seq));
@@ -1779,6 +1991,38 @@ mod tests {
                     .unwrap_or(false)
         });
         assert!(has_sub_text, "缺子代理进度行: {journal:?}");
+        // 子会话物化:父卡有 child_session 链接,子 journal 形状完整可回放
+        let child_id = journal
+            .iter()
+            .filter_map(acp_update)
+            .find_map(|u| {
+                if u.get("toolCallId").and_then(|v| v.as_str()) != Some("tu_1") {
+                    return None;
+                }
+                let p = u.get("progress")?;
+                if p.get("kind").and_then(|v| v.as_str()) != Some("child_session") {
+                    return None;
+                }
+                p.get("childSessionId").and_then(|v| v.as_str()).map(String::from)
+            })
+            .expect("缺 child_session 链接");
+        let ctypes: Vec<String> = driver
+            .read_journal(&child_id)
+            .iter()
+            .filter_map(|f| f.get("type").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        for t in ["user-input", "task-started", "task-ended"] {
+            assert!(ctypes.iter().any(|x| x == t), "子会话缺 {t}: {ctypes:?}");
+        }
+        // 子会话不进会话列表(经父卡点开,与 mc-agent 一致)
+        let list = driver.sessions_list().await.unwrap();
+        assert!(
+            list.as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s.get("id").and_then(|v| v.as_str()) != Some(child_id.as_str())),
+            "子会话不应出现在列表"
+        );
         driver.stop();
     }
 }

@@ -1589,3 +1589,19 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] 测试脚手架升级:fake_anthropic 支持多步回放(按请求序)+
       sse_tool_use 构造器;新增 e2e_ask_user_question_flow、
       e2e_subagent_progress;cargo test 24/24
+
+## SubAgent 展示对齐 mc + yolo 权限顶棚修复(2026-07-20)
+
+- [x] 展示对齐:子代理物化为壳侧子会话(sidecar 带 parent,journal 完整
+      可回放)——父卡 feed 预览 + child_session 链接点开完整视图,与
+      mc-agent 双通道一致;子会话不进列表、删除级联、重启后可回放
+      (session_open 对 parent 会话跳过引擎 resume)
+- [x] yolo 权限根因:上游 subagent 工厂在会话构建时快照权限模式,
+      switchMode 只改父评估器 → 子代理顶棚仍 default + HeadlessPrompter
+      全拒(mc 子代理固定 yolo 所以无此问题)。壳修法:空闲切模式一律
+      destroy+重建带新顶棚,运行中才热切(仅父生效,上游缺口记档)
+- [x] 连带根治:空会话 resume 必失败(messages.jsonl 未生成)→
+      引擎 id 与壳 sid 解耦(SessionState.engine_id 别名,出站 RPC 映射、
+      入站 shell_sid_of 反查、sidecar 持久化),空会话重建走全新 create
+      换绑,壳 sid/目录/UI 通道稳定;同时治好"打开空历史会话失败"潜在 bug
+- [x] 验证:cargo test 24/24 三连跑;ask E2E 恰好全程压过换绑路径
