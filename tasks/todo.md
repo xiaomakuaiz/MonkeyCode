@@ -1571,3 +1571,21 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] 验证:cargo test 22/22 三连跑(新增 e2e_stop_reconciles_running_session:
       8s 慢速假 LLM 挂住轮次 → stop → 断言收尾帧与 interrupted;
       E2E_LOCK 串行防 HOME 互踩);UI tsc + 38/38;E2E 补 created 断言
+
+## AskUserQuestion 与 SubAgent 展示修复(2026-07-20)
+
+- [x] SubAgent 根因:上游 stdioEventSink 原样转发子循环事件,session_id 是
+      子循环随机 8 位 id(uuid[:8]),壳 push_frame 查无此会话静默丢弃。
+      修复:未知 sid 事件走 handle_subagent_event——首见用"运行中且持有
+      未闭合 Agent 工具的会话"启发式认领(open_tools 升级 tc_id→工具名),
+      归一化为父会话 Agent 工具卡的 progress feed(subagent_tool 步骤 +
+      subagent_text 整行缓冲,UI applyProgress 现成消费);工具闭合/轮次
+      收尾/和解时清路由并冲洗残留行缓冲;上游缺口记档(应带 parent_session_id)
+- [x] AskUserQuestion 排查:壳/归约/渲染三层全链路验证无缺陷
+      (deferred 工具经 ToolSearch 载入 → question/request → 提问卡帧 →
+      reply-question → 轮次完成);此前"展示不出来"最可能是旧二进制或
+      模型直调 deferred 工具 unknown tool 后静默挂——今日 failed 帧
+      修复后该场景已可见
+- [x] 测试脚手架升级:fake_anthropic 支持多步回放(按请求序)+
+      sse_tool_use 构造器;新增 e2e_ask_user_question_flow、
+      e2e_subagent_progress;cargo test 24/24

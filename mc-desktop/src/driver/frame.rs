@@ -169,6 +169,17 @@ pub fn tool_call_completed(tc_id: &str, raw_output: &str, seq: u64) -> Value {
     )
 }
 
+/// 工具执行期进度(status=in_progress + progress 载荷;词汇见 types.ts
+/// ToolProgress:subagent_tool/subagent_text/output/child_session)。
+/// 子代理活动即经此挂到父会话 Agent 工具卡的进度窗。
+pub fn tool_call_progress(tc_id: &str, progress: Value, seq: u64) -> Value {
+    acp(
+        json!({ "sessionUpdate": "tool_call_update", "toolCallId": tc_id,
+            "status": "in_progress", "progress": progress }),
+        seq,
+    )
+}
+
 /// 工具失败/中断收尾。ohmyagent 的工具错误路径不发 tool_result 事件
 /// (错误只进模型消息),由驱动在轮次结束时对未闭合的 tool_call 补此帧,
 /// 否则 UI 工具卡永远转圈。

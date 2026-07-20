@@ -138,7 +138,10 @@ usage,但上下文条语义是"当前占用/预算",累计 input 会虚高——
 每模型独立凭据(现同 configKey 冲突跳过)、stdio 模式会话索引
 (现 sidecar 权威)。
 工具错误路径不发 tool_result(错误只进模型消息;壳在轮次收尾对
-未闭合 tool_call 补 failed 帧变通)。
+未闭合 tool_call 补 failed 帧变通)。子代理转发事件不带父归属
+(session_id 是子循环随机 id;壳用"运行中且持有未闭合 Agent 工具
+的会话"启发式认领,归一化为 Agent 工具卡 progress feed——
+并发多 Agent 时归属可能不准,上游应在转发事件上带 parent_session_id)。
 已补齐并接入:session/switchModel、session/switchMode(替代
 destroy+resume,模式可运行中切;壳按 system/ready 的 capabilities
 做版本握手,旧引擎自动回退 destroy+resume)、mcp headers、compaction 事件。

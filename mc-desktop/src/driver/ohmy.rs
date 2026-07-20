@@ -77,7 +77,18 @@ struct Inner {
     perm_tools: StdMutex<HashMap<String, String>>,
     /// system/ready 宣告的引擎能力(版本握手:缺 switch RPC 时回退 destroy+resume)
     engine_caps: StdMutex<HashSet<String>>,
+    /// 子代理事件路由(child_sid → 父会话/父 Agent 工具)。上游把子循环事件
+    /// 原样转发,session_id 是子循环的随机 id,不带父归属——首次见到时
+    /// 用"运行中且持有未闭合 Agent 工具的会话"启发式认领
+    subagents: StdMutex<HashMap<String, SubagentRoute>>,
     stopped: Arc<AtomicBool>,
+}
+
+struct SubagentRoute {
+    parent_sid: String,
+    parent_tc: String,
+    /// model_delta 行缓冲:凑整行再出 subagent_text(防每 token 一帧)
+    line_buf: String,
 }
 
 struct SessionState {
@@ -88,9 +99,10 @@ struct SessionState {
     created: bool,
     /// UI 是否在听 frames:{sid}(未打开时帧只入日志不 emit)
     opened: bool,
-    /// 已发 tool_call 未见 tool_result 的调用(引擎错误路径不发 tool_result,
-    /// 轮次收尾时对余量补 failed 帧)
-    open_tools: HashSet<String>,
+    /// 已发 tool_call 未见 tool_result 的调用(tc_id → 工具名)。
+    /// 引擎错误路径不发 tool_result,轮次收尾时对余量补 failed 帧;
+    /// 工具名用于子代理事件认领(找未闭合的 Agent 工具)
+    open_tools: HashMap<String, String>,
     workdir: String,
     model_name: String,
     mode: String,
@@ -163,6 +175,7 @@ impl OhmyDriver {
             pending_perms: StdMutex::new(HashMap::new()),
             perm_tools: StdMutex::new(HashMap::new()),
             engine_caps: StdMutex::new(HashSet::new()),
+            subagents: StdMutex::new(HashMap::new()),
             stopped: Arc::new(AtomicBool::new(false)),
         });
 
@@ -398,7 +411,7 @@ impl OhmyDriver {
                 running: false,
                 created: true,
                 opened: false,
-                open_tools: HashSet::new(),
+                open_tools: HashMap::new(),
                 workdir: workdir.to_string(),
                 model_name: model_name.to_string(),
                 mode: "default".into(),
@@ -439,7 +452,7 @@ impl OhmyDriver {
                 running: false,
                 created: true,
                 opened: false,
-                open_tools: HashSet::new(),
+                open_tools: HashMap::new(),
                 workdir: meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 model_name: meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 mode: meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default").to_string(),
@@ -965,7 +978,8 @@ impl Inner {
                 _ => return,
             }
         };
-        for tc in open {
+        self.subagents.lock().unwrap().retain(|_, r| r.parent_sid != sid);
+        for (tc, _name) in open {
             self.push_frame(sid, |seq| frame::tool_call_failed(&tc, "已中断", seq));
         }
         self.push_frame(sid, |seq| frame::task_error(reason, seq));
@@ -1076,9 +1090,11 @@ impl Inner {
                             s.running = false;
                             (was, std::mem::take(&mut s.open_tools))
                         }
-                        None => (false, HashSet::new()),
+                        None => (false, HashMap::new()),
                     }
                 };
+                // 轮次收尾:该会话的子代理路由随之失效
+                self.subagents.lock().unwrap().retain(|_, r| r.parent_sid != sid);
                 if !was_running {
                     // 已本地和解(取消超时/引擎重启)后迟到的收尾,忽略防重复帧
                     return;
@@ -1087,7 +1103,7 @@ impl Inner {
                 // 未闭合的 tool_call 在此补 failed 帧,否则 UI 永远转圈
                 let tool_msg =
                     if stop_reason == "interrupted" { "已中断" } else { "执行失败(引擎未回传详情)" };
-                for tc in open {
+                for (tc, _name) in open {
                     self.push_frame(&sid, |seq| frame::tool_call_failed(&tc, tool_msg, seq));
                 }
                 // 状态词汇对齐 SessionStatus:取消是 interrupted,
@@ -1109,6 +1125,129 @@ impl Inner {
         }
     }
 
+    /// 子代理事件 → 父会话 Agent 工具卡的进度 feed(ToolProgress 词汇)。
+    /// 上游缺口:转发的子循环事件不带父归属(session_id 是子循环随机 id),
+    /// 首见时用"运行中且持有未闭合 Agent 工具的会话"启发式认领;
+    /// 认领不到(如迟到事件)则丢弃。
+    fn handle_subagent_event(&self, child_sid: &str, etype: &str, event: &Value, data: &Value) {
+        let (psid, ptc) = {
+            let mut subs = self.subagents.lock().unwrap();
+            if let Some(r) = subs.get(child_sid) {
+                (r.parent_sid.clone(), r.parent_tc.clone())
+            } else {
+                let claimed = {
+                    let sessions = self.sessions.lock().unwrap();
+                    sessions.iter().find_map(|(sid, s)| {
+                        if !s.running {
+                            return None;
+                        }
+                        s.open_tools
+                            .iter()
+                            .find(|(_, name)| name.as_str() == "Agent")
+                            .map(|(tc, _)| (sid.clone(), tc.clone()))
+                    })
+                };
+                let Some((psid, ptc)) = claimed else { return };
+                subs.insert(
+                    child_sid.to_string(),
+                    SubagentRoute {
+                        parent_sid: psid.clone(),
+                        parent_tc: ptc.clone(),
+                        line_buf: String::new(),
+                    },
+                );
+                (psid, ptc)
+            }
+        };
+        match etype {
+            "tool_call" => {
+                let tc_id = event
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| data.get("id").and_then(|v| v.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("工具");
+                let input = data.get("input").cloned().unwrap_or(Value::Null);
+                let title = perm_title(name, &input);
+                self.push_frame(&psid, |seq| {
+                    frame::tool_call_progress(
+                        &ptc,
+                        json!({ "kind": "subagent_tool", "id": tc_id, "title": title, "status": "run" }),
+                        seq,
+                    )
+                });
+            }
+            "tool_result" => {
+                let tc_id = event.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                self.push_frame(&psid, |seq| {
+                    frame::tool_call_progress(
+                        &ptc,
+                        json!({ "kind": "subagent_tool", "id": tc_id, "status": "ok" }),
+                        seq,
+                    )
+                });
+            }
+            "model_delta" => {
+                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let lines = {
+                    let mut subs = self.subagents.lock().unwrap();
+                    let Some(r) = subs.get_mut(child_sid) else { return };
+                    r.line_buf.push_str(text);
+                    let mut out = Vec::new();
+                    while let Some(pos) = r.line_buf.find('\n') {
+                        let line: String = r.line_buf.drain(..=pos).collect();
+                        let line = line.trim_end().to_string();
+                        if !line.is_empty() {
+                            out.push(line);
+                        }
+                    }
+                    out
+                };
+                for line in lines {
+                    self.push_frame(&psid, |seq| {
+                        frame::tool_call_progress(&ptc, json!({ "kind": "subagent_text", "line": line }), seq)
+                    });
+                }
+            }
+            "error" => {
+                let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("子代理出错");
+                self.push_frame(&psid, |seq| {
+                    frame::tool_call_progress(
+                        &ptc,
+                        json!({ "kind": "subagent_text", "line": format!("✗ {msg}") }),
+                        seq,
+                    )
+                });
+            }
+            // thinking_delta/model_done:进度窗不展示思考流与轮界
+            _ => {}
+        }
+    }
+
+    /// 父会话某工具闭合:冲洗其子代理残留行缓冲并删路由。
+    fn close_subagents_of(&self, sid: &str, tc_id: &str) {
+        let tails: Vec<(String, String)> = {
+            let mut subs = self.subagents.lock().unwrap();
+            let tails = subs
+                .values_mut()
+                .filter(|r| r.parent_sid == sid && r.parent_tc == tc_id)
+                .filter_map(|r| {
+                    let tail = std::mem::take(&mut r.line_buf);
+                    let tail = tail.trim().to_string();
+                    if tail.is_empty() { None } else { Some((r.parent_sid.clone(), tail)) }
+                })
+                .collect();
+            subs.retain(|_, r| !(r.parent_sid == sid && r.parent_tc == tc_id));
+            tails
+        };
+        for (psid, tail) in tails {
+            self.push_frame(&psid, |seq| {
+                frame::tool_call_progress(tc_id, json!({ "kind": "subagent_text", "line": tail }), seq)
+            });
+        }
+    }
+
     /// event/stream 事件归一化 → Frame。
     fn handle_event(&self, event: Value) {
         let etype = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -1117,6 +1256,12 @@ impl Inner {
             return;
         }
         let data = event.get("data").cloned().unwrap_or(Value::Null);
+        // 未知 session_id = 上游转发的子代理事件(子循环随机 id):
+        // 认领到父会话,归一化为 Agent 工具卡的进度 feed,而不是丢弃
+        if !self.sessions.lock().unwrap().contains_key(&sid) {
+            self.handle_subagent_event(&sid, etype, &event, &data);
+            return;
+        }
         match etype {
             // user_message:引擎回显忽略——session_send 已本地先行落 user-input
             // 帧(ack 与事件无时序保证,双写会重复气泡)
@@ -1141,7 +1286,7 @@ impl Inner {
                 let title = perm_title(&name, &input);
                 if !tc_id.is_empty() {
                     if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
-                        s.open_tools.insert(tc_id.clone());
+                        s.open_tools.insert(tc_id.clone(), name.clone());
                     }
                 }
                 self.push_frame(&sid, |seq| frame::tool_call(&tc_id, &title, &input, seq));
@@ -1152,6 +1297,8 @@ impl Inner {
                 if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
                     s.open_tools.remove(&tc_id);
                 }
+                // Agent 工具闭合:清对应子代理路由(残留行缓冲先冲洗成尾行)
+                self.close_subagents_of(&sid, &tc_id);
                 self.push_frame(&sid, |seq| frame::tool_call_completed(&tc_id, content, seq));
             }
             "send_user_message" | "task_notification" => {
@@ -1250,14 +1397,69 @@ mod tests {
     /// E2E 串行锁:两个 E2E 都改进程级 HOME/XDG 环境变量,并行会互踩
     static E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// 假 Anthropic SSE 服务:任何 POST /v1/messages 都回一段固定的流式应答;
+    fn sse_event(name: &str, data: Value) -> String {
+        format!("event: {name}\ndata: {data}")
+    }
+
+    fn sse_head() -> Vec<String> {
+        vec![sse_event(
+            "message_start",
+            json!({"type":"message_start","message":{"id":"m1","role":"assistant","content":[],"model":"test-model","usage":{"input_tokens":10,"output_tokens":0}}}),
+        )]
+    }
+
+    fn sse_tail(stop_reason: &str) -> Vec<String> {
+        vec![
+            sse_event("content_block_stop", json!({"type":"content_block_stop","index":0})),
+            sse_event(
+                "message_delta",
+                json!({"type":"message_delta","delta":{"stop_reason":stop_reason},"usage":{"output_tokens":5}}),
+            ),
+            sse_event("message_stop", json!({"type":"message_stop"})),
+        ]
+    }
+
+    /// 一段纯文本流式应答(end_turn)。
+    fn sse_text(text: &str) -> String {
+        let mut ev = sse_head();
+        ev.push(sse_event(
+            "content_block_start",
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        ));
+        ev.push(sse_event(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}}),
+        ));
+        ev.extend(sse_tail("end_turn"));
+        ev.join("\n\n") + "\n\n"
+    }
+
+    /// 一次工具调用流式应答(stop_reason=tool_use)。
+    fn sse_tool_use(tu_id: &str, name: &str, input: &Value) -> String {
+        let mut ev = sse_head();
+        ev.push(sse_event(
+            "content_block_start",
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":tu_id,"name":name,"input":{}}}),
+        ));
+        ev.push(sse_event(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":input.to_string()}}),
+        ));
+        ev.extend(sse_tail("tool_use"));
+        ev.join("\n\n") + "\n\n"
+    }
+
+    /// 假 Anthropic SSE 服务:按请求序回放 steps(超出重复最后一步);
     /// delay_ms > 0 时应答前挂起(模拟慢模型,测运行中停止的和解)。
-    fn fake_anthropic(delay_ms: u64) -> String {
+    fn fake_anthropic_steps(delay_ms: u64, steps: Vec<String>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         std::thread::spawn(move || {
             for conn in listener.incoming() {
                 let Ok(mut conn) = conn else { continue };
+                let n = counter.fetch_add(1, Ordering::Relaxed);
+                let sse = steps[n.min(steps.len() - 1)].clone();
                 std::thread::spawn(move || {
                     use std::io::{BufRead as _, Write as _};
                     if delay_ms > 0 {
@@ -1279,21 +1481,6 @@ mod tests {
                     let mut body = vec![0u8; content_len];
                     use std::io::Read as _;
                     let _ = reader.read_exact(&mut body);
-                    let events = [
-                        r#"event: message_start
-data: {"type":"message_start","message":{"id":"m1","role":"assistant","content":[],"model":"test-model","usage":{"input_tokens":10,"output_tokens":0}}}"#,
-                        r#"event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
-                        r#"event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好,任务完成"}}"#,
-                        r#"event: content_block_stop
-data: {"type":"content_block_stop","index":0}"#,
-                        r#"event: message_delta
-data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
-                        r#"event: message_stop
-data: {"type":"message_stop"}"#,
-                    ];
-                    let sse = events.join("\n\n") + "\n\n";
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                         sse.len(),
@@ -1320,13 +1507,17 @@ data: {"type":"message_stop"}"#,
     /// 隔离 HOME(ohmyagent 配置/会话)与壳配置目录,写配置并起驱动。
     /// 改进程级环境变量,须持 E2E_LOCK 后调用。
     fn e2e_setup(tag: &str, llm_delay_ms: u64) -> (OhmyDriver, PathBuf) {
+        e2e_setup_steps(tag, llm_delay_ms, vec![sse_text("你好,任务完成")])
+    }
+
+    fn e2e_setup_steps(tag: &str, llm_delay_ms: u64, steps: Vec<String>) -> (OhmyDriver, PathBuf) {
         let home = std::env::temp_dir().join(format!("ohmy-e2e-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".ohmyagent")).unwrap();
         std::env::set_var("HOME", &home);
         std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
 
-        let llm = fake_anthropic(llm_delay_ms);
+        let llm = fake_anthropic_steps(llm_delay_ms, steps);
         let settings = json!({
             "default_model": "test-model",
             "permission_mode": "default",
@@ -1450,5 +1641,144 @@ data: {"type":"message_stop"}"#,
             Some("interrupted"),
             "sidecar 未落 interrupted: {meta:?}"
         );
+    }
+
+    /// 轮询帧日志直到谓词命中(100ms × 150 = 15s 上限)。
+    async fn wait_journal(driver: &OhmyDriver, sid: &str, pred: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        let mut journal = vec![];
+        for _ in 0..150 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            journal = driver.read_journal(sid);
+            if pred(&journal) {
+                break;
+            }
+        }
+        journal
+    }
+
+    fn acp_update(f: &Value) -> Option<Value> {
+        if f.get("kind").and_then(|v| v.as_str()) != Some("acp_event") {
+            return None;
+        }
+        let data = f.get("data").and_then(|v| v.as_str())?;
+        frame::b64_decode_json(data)?.get("update").cloned()
+    }
+
+    /// AskUserQuestion 全链路:deferred 工具经 ToolSearch 载入 → 引擎
+    /// question/request → 壳 acp_ask_user_question 帧 → 答复 → 轮次完成。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn e2e_ask_user_question_flow() {
+        if find_ohmyagent().is_none() {
+            eprintln!("skip: 未找到 ohmyagent 二进制");
+            return;
+        }
+        let _g = E2E_LOCK.lock().unwrap();
+        let steps = vec![
+            sse_tool_use("tu_1", "ToolSearch", &json!({ "query": "AskUserQuestion" })),
+            sse_tool_use("tu_2", "AskUserQuestion", &json!({ "questions": [{
+                "question": "选哪个?", "header": "选择",
+                "options": [{"label":"A","description":"甲"},{"label":"B","description":"乙"}],
+                "multiSelect": false }] })),
+            sse_text("好的,按 A 处理"),
+        ];
+        let (driver, home) = e2e_setup_steps("ask", 0, steps);
+        let workdir = home.to_string_lossy().into_owned();
+        let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
+        let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+        driver.session_open(&sid).await.expect("打开会话");
+        driver.session_call(&sid, "session_set_mode", json!({ "mode": "yolo" })).await.expect("yolo");
+        driver
+            .session_send(&sid, "user-input", json!({ "content": frame::b64_text("问我一个问题") }))
+            .await
+            .expect("发送");
+
+        // 提问卡帧落日志,取 request_id
+        let journal = wait_journal(&driver, &sid, |j| {
+            j.iter().any(|f| f.get("kind").and_then(|v| v.as_str()) == Some("acp_ask_user_question"))
+        })
+        .await;
+        let req_id = journal
+            .iter()
+            .filter(|f| f.get("kind").and_then(|v| v.as_str()) == Some("acp_ask_user_question"))
+            .filter_map(|f| f.get("data").and_then(|v| v.as_str()).and_then(frame::b64_decode_json))
+            .filter_map(|v| {
+                v.get("toolCall")
+                    .and_then(|t| t.get("toolCallId"))
+                    .and_then(|i| i.as_str())
+                    .map(String::from)
+            })
+            .next()
+            .unwrap_or_default();
+        assert!(!req_id.is_empty(), "未收到提问卡帧,journal: {journal:?}");
+
+        // 答复 → 轮次完成,答案回显帧在日志(回放可见)
+        driver
+            .session_send(
+                &sid,
+                "reply-question",
+                json!({ "request_id": req_id, "answers_json": "{\"选哪个?\":\"A\"}", "cancelled": false }),
+            )
+            .await
+            .expect("答复");
+        let journal = wait_journal(&driver, &sid, |j| {
+            j.iter().any(|f| f.get("type").and_then(|v| v.as_str()) == Some("task-ended"))
+        })
+        .await;
+        let types: Vec<&str> =
+            journal.iter().filter_map(|f| f.get("type").and_then(|v| v.as_str())).collect();
+        assert!(types.contains(&"reply-question"), "缺答案回显帧: {types:?}");
+        assert!(types.contains(&"task-ended"), "轮次未完成: {types:?}");
+        driver.stop();
+    }
+
+    /// SubAgent 进度:上游转发的子循环事件(未知随机 session_id)被认领到
+    /// 父会话,归一化为 Agent 工具卡的 progress feed(subagent_text 行)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn e2e_subagent_progress() {
+        if find_ohmyagent().is_none() {
+            eprintln!("skip: 未找到 ohmyagent 二进制");
+            return;
+        }
+        let _g = E2E_LOCK.lock().unwrap();
+        let steps = vec![
+            sse_tool_use("tu_1", "Agent", &json!({ "prompt": "调查并汇报", "description": "调查任务" })),
+            sse_text("子代理调查结果:一切正常\n"),
+            sse_text("父任务完成"),
+        ];
+        let (driver, home) = e2e_setup_steps("sub", 0, steps);
+        let workdir = home.to_string_lossy().into_owned();
+        let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
+        let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+        driver.session_open(&sid).await.expect("打开会话");
+        driver.session_call(&sid, "session_set_mode", json!({ "mode": "yolo" })).await.expect("yolo");
+        driver
+            .session_send(&sid, "user-input", json!({ "content": frame::b64_text("派个子代理") }))
+            .await
+            .expect("发送");
+
+        let journal = wait_journal(&driver, &sid, |j| {
+            j.iter().any(|f| f.get("type").and_then(|v| v.as_str()) == Some("task-ended"))
+        })
+        .await;
+        // Agent 工具卡存在且完成
+        let agent_done = journal.iter().filter_map(acp_update).any(|u| {
+            u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("tool_call_update")
+                && u.get("toolCallId").and_then(|v| v.as_str()) == Some("tu_1")
+                && u.get("status").and_then(|v| v.as_str()) == Some("completed")
+        });
+        assert!(agent_done, "Agent 工具未完成: {journal:?}");
+        // 子代理文本行以 progress feed 形态挂在 Agent 工具卡上
+        let has_sub_text = journal.iter().filter_map(acp_update).any(|u| {
+            u.get("toolCallId").and_then(|v| v.as_str()) == Some("tu_1")
+                && u.get("progress").and_then(|p| p.get("kind")).and_then(|v| v.as_str())
+                    == Some("subagent_text")
+                && u.get("progress")
+                    .and_then(|p| p.get("line"))
+                    .and_then(|v| v.as_str())
+                    .map(|l| l.contains("子代理调查结果"))
+                    .unwrap_or(false)
+        });
+        assert!(has_sub_text, "缺子代理进度行: {journal:?}");
+        driver.stop();
     }
 }
