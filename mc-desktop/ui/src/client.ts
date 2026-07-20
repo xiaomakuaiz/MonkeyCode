@@ -125,23 +125,9 @@ export function uploadFileURL(sessionId: string, path: string): Promise<string> 
   return invoke<string>("upload_read", { id: sessionId, path });
 }
 
-// ==================== 浏览器扩展桥(内核进程级状态) ====================
+// ==================== 浏览器扩展桥(壳内 browser/ 模块) ====================
 
-/** kernel_http 代理:仅浏览器扩展桥(/api/browser/*)——扩展桥与 agent 的
- * browser_* 工具深耦合,永驻 mc-agent 进程;其余业务 API 已原生化。 */
-async function api<T>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
-  const r = await invoke<{ status: number; body: (T & { error?: string }) | null }>("kernel_http", {
-    method: opts.method ?? "GET",
-    path,
-    body: opts.body ?? null,
-  });
-  if (r.status < 200 || r.status >= 300) {
-    throw new Error(r.body?.error || "HTTP " + r.status);
-  }
-  return r.body as T;
-}
-
-/** /api/browser/status 应答:扩展桥监听/配对/连接状态(设置页展示)。 */
+/** browser_status 应答:扩展桥监听/配对/连接状态(设置页展示)。 */
 export interface BrowserExtStatus {
   enabled: boolean;
   addr?: string;
@@ -154,11 +140,10 @@ export interface BrowserExtStatus {
   pairing_code?: string;
 }
 
-export const getBrowserExtStatus = () => api<BrowserExtStatus>("/api/browser/status");
+export const getBrowserExtStatus = () => invoke<BrowserExtStatus>("browser_status");
 
 /** 重置配对:吊销扩展长期凭据并生成新配对码(扩展侧需重新配对)。 */
-export const repairBrowserExt = () =>
-  api<BrowserExtStatus>("/api/browser/repair", { method: "POST" });
+export const repairBrowserExt = () => invoke<BrowserExtStatus>("browser_repair");
 
 // ==================== 百智云账号(壳原生;凭证 cookie 不出壳进程) ====================
 

@@ -1621,3 +1621,24 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       mc-agent-linux 资源;三个 CI 钉 OHMYAGENT_REF(commit sha)且
       凭据缺失即失败(审计 B1/B2 核销);win7 用同款 go-win7 工具链编译引擎
 - [x] 验证:cargo test 24/24、UI tsc+38/38+build 全绿;workflows YAML 校验过
+
+## ohmyagent 单引擎化 M2:浏览器桥迁壳 + MCP 暴露(2026-07-20)
+
+- [x] agent/internal/browser(~2300 行 Go)移植为 mc-desktop/src/browser/
+      八模块:protocol(契约逐字,扩展零改动)/bridge(WS server /ext,
+      7440 顺延 10 端口,配对/token/新连顶旧连/20s ping)/cdp/session
+      (refs/notes/对话框自动应答/OOPIF/detach 自愈)/ops(9 工具语义)/
+      keys/refs/snapshot(collectJS 逐字节一致)
+- [x] MCP streamable-http server 手写最小面(实测 go-sdk 客户端契约:
+      POST json 应答、通知 202、GET 405 被容忍):initialize/tools/list/
+      tools/call,截图走 ImageContent;Bearer token 进程级新发,
+      经 mcp.json 内置条目 headers 下发引擎;工具串行锁
+- [x] 会话归属简化:单一共享浏览器会话(MCP 调用不带会话身份,桌面单用户);
+      handoff 队列归全局
+- [x] 装配:browser::init 先于引擎启动(物化配置需 MCP URL/token);
+      browser_status/browser_repair 命令三处登记;caps.browser_ext=true;
+      UI client 弃 kernel_http 改新命令
+- [x] 测试:假扩展 WS 集成(配对码 normalize/32hex token/状态外显/调用往返/
+      错误码中文文案)+ MCP HTTP 冒烟(401/回显协议版本/9 工具/isError/202);
+      cargo 30/30、UI 38/38、build 零告警
+- [ ] 待真机冒烟:真实 Chrome + 扩展(配对→navigate→snapshot→click→截图)

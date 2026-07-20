@@ -276,6 +276,14 @@ fn write_ohmyagent_config(cfg: &DesktopConfig) -> Result<(), String> {
             }
         }
     }
+    // 内置条目:壳的浏览器桥 MCP(browser_* 工具)。Bearer token 进程级
+    // 每次启动新发;mcp.json 随引擎(重)启重写,恒为当前值,无需持久。
+    if let Some((url, token)) = crate::browser::mcp_endpoint() {
+        servers.push(serde_json::json!({
+            "name": "mc-browser", "transport": "streamable-http", "url": url,
+            "headers": { "Authorization": format!("Bearer {token}") },
+        }));
+    }
     write0600(
         &dir.join("mcp.json"),
         serde_json::to_vec_pretty(&serde_json::json!({ "servers": servers })).map_err(|e| e.to_string())?,

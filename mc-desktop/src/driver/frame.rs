@@ -69,6 +69,7 @@ pub fn b64_text(s: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(s)
 }
 
+#[allow(dead_code)] // 测试与回放工具使用
 pub fn b64_decode_json(s: &str) -> Option<Value> {
     let raw = base64::engine::general_purpose::STANDARD.decode(s).ok()?;
     serde_json::from_slice(&raw).ok()

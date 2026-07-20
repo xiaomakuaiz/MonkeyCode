@@ -101,6 +101,7 @@ fn parse_distro_list(out: &str) -> Vec<String> {
 /// 预热 VM + 校验发行版可运行 + 批量把 Windows 路径翻译为发行版内 Linux 路径,
 /// 一次 wsl 调用完成(VM 冷启的秒数在此吸收,45s 预算)。
 /// 返回与 win_paths 一一对应的 Linux 路径。
+#[allow(dead_code)] // M3(ohmy WSL 模式)复用:路径翻译 + 预热
 pub fn prepare(distro: &str, win_paths: &[&Path]) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = vec![
         "-d".into(),

@@ -13,6 +13,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod baizhi;
+mod browser;
 mod config;
 mod driver;
 mod repo;
@@ -584,6 +585,8 @@ fn main() {
             engine_restart,
             probe_log,
             driver::engine_caps,
+            browser::browser_status,
+            browser::browser_repair,
             driver::sessions_list,
             driver::session_create,
             driver::session_delete,
@@ -640,6 +643,8 @@ fn main() {
             // 首启向导由 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
             app.state::<PetEnabled>().0.store(cfg.pet_enabled, Ordering::Relaxed);
+            // 浏览器桥 + MCP server 先于引擎:配置物化要写入 MCP URL/token
+            browser::init(app.handle());
             save_config_files(app.handle(), &cfg)?; // 刷新物化配置
             match driver::start_engine(app.handle(), &cfg) {
                 Ok(engine) => {

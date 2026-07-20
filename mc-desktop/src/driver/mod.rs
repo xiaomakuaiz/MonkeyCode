@@ -53,7 +53,7 @@ impl DriverHost {
 /// 守卫都从这里读,driver 内不得各自硬编码能力判断。
 #[derive(Clone, Copy, serde::Serialize)]
 pub struct Caps {
-    /// M2 浏览器桥迁壳后翻 true
+    /// 浏览器扩展桥(壳内 browser/ 模块,MCP 暴露给引擎)
     pub browser_ext: bool,
     /// 待上游按次调用出 usage(turn/stopped 仅整轮累计,撑不起上下文条)
     pub usage_update: bool,
@@ -62,7 +62,7 @@ pub struct Caps {
 }
 
 pub fn caps() -> Caps {
-    Caps { browser_ext: false, usage_update: false, perm_remember: true, attachments: true }
+    Caps { browser_ext: true, usage_update: false, perm_remember: true, attachments: true }
 }
 
 /// 日志尾部(崩溃外显用;文件缺失返回空)。

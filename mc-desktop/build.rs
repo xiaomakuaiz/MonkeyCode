@@ -17,6 +17,8 @@ fn main() {
                 "probe_log",
                 // 引擎驱动层(driver/mod.rs)
                 "engine_caps",
+                "browser_status",
+                "browser_repair",
                 "sessions_list",
                 "session_create",
                 "session_delete",

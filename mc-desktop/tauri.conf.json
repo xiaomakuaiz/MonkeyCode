@@ -36,6 +36,8 @@
             "allow-open-extension-dir",
             "allow-list-wsl-distros",
             "allow-engine-caps",
+            "allow-browser-status",
+            "allow-browser-repair",
             "allow-sessions-list",
             "allow-session-create",
             "allow-session-delete",
