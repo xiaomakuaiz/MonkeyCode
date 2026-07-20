@@ -143,7 +143,12 @@ impl OhmyDriver {
         let log_path = cfg_dir.join("ohmyagent.log");
         let log_file = std::fs::File::create(&log_path).ok();
 
+        // 进程 cwd 定在主目录:打包应用从 Finder/Dock 启动时壳 cwd 是 "/",
+        // 会漏给引擎的 os.Getwd 兜底与其 spawn 的 MCP stdio 子进程;
+        // 会话工作目录不受影响(session/create 逐会话显式传 cwd)
+        let proc_cwd = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let mut child = Command::new(&bin)
+            .current_dir(&proc_cwd)
             .arg("--stdio")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -860,8 +865,14 @@ impl OhmyDriver {
         let params = if has_history {
             json!({ "resume": eng, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
         } else {
-            let workdir =
+            let mut workdir =
                 self.0.sessions.lock().unwrap().get(id).map(|s| s.workdir.clone()).unwrap_or_default();
+            if workdir.is_empty() {
+                // 空 workdir 会触发引擎的 os.Getwd 兜底(进程 cwd),显式回退主目录
+                workdir = crate::config::home_dir()
+                    .map(|h| h.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+            }
             json!({ "cwd": workdir, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
         };
         let result = self.rpc("session/create", params).await?;

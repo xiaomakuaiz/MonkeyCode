@@ -108,6 +108,11 @@ impl McDriver {
                 "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
             })?;
             let mut cmd = Command::new(&bin);
+            // 进程 cwd 定在主目录(与 ohmy 驱动一致):打包应用启动时壳 cwd
+            // 是 "/",不给内核与其子进程漏一个不可写的工作目录
+            if let Some(home) = crate::config::home_dir() {
+                cmd.current_dir(home);
+            }
             cmd.args(serve_args)
                 .env("MC_AGENT_MODELS", &files.models)
                 .env("MC_AGENT_MCP_CONFIG", &files.mcp);
