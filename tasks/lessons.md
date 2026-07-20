@@ -253,3 +253,14 @@
 - **e2e 手段要跟着架构走**:UI 迁进 Tauri 壳(IPC-only)后,浏览器加载
   构建产物的 Playwright 路线整体失效;时序状态机改用 vitest + mock 壳
   IPC + 假时钟,反而更快更稳。假云端脚本仍可用于内核层回归。
+
+## 修复验证必须走真实执行路径(2026-07-20)
+
+- 事故:tauri beforeBuildCommand 打包失败,我用 `sh -c "cd ui && npm ci"`
+  站在 mc-desktop 目录手动模拟"验证通过",但 tauri v2 hook 的真实 cwd
+  是它自己探测的前端目录 mc-desktop/ui——两次提交都是错的,用户连败两次
+- 规则:环境敏感的修复(cwd/env/shell 差异)禁止用"等价"命令自证;
+  必须用宿主工具本身跑一遍(如 overlay 一个 `pwd && exit 1` 的
+  beforeBuildCommand 探针,失败快、不进 cargo,几秒暴露真实 cwd)
+- 规则:同一条命令在两台机器一败一"成"时,先怀疑自己的验证方式
+  与真实路径不等价,而不是先怀疑机器差异(npm 版本论即是误诊)
