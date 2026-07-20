@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
+use super::frame::{self, PermOutcome, SessionStatus};
 use crate::config::DesktopConfig;
 
 /// driver 对壳的最小依赖(事件发射 + 配置目录),经 trait 解耦以便
@@ -47,37 +48,6 @@ impl ShellCtx for AppHandle {
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_FLUSH_MS: u64 = 30;
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn b64(v: &Value) -> String {
-    base64::engine::general_purpose::STANDARD.encode(v.to_string())
-}
-
-fn b64_text(s: &str) -> String {
-    base64::engine::general_purpose::STANDARD.encode(s)
-}
-
-/// 构造 Frame(data 为 base64(JSON),与内核词汇一致)。
-fn frame(ftype: &str, kind: Option<&str>, payload: Option<Value>, seq: u64) -> Value {
-    let mut f = json!({ "type": ftype, "timestamp": now_ms(), "seq": seq });
-    if let Some(k) = kind {
-        f["kind"] = json!(k);
-    }
-    if let Some(p) = payload {
-        f["data"] = json!(b64(&p));
-    }
-    f
-}
-
-fn acp(update: Value, seq: u64) -> Value {
-    frame("task-running", Some("acp_event"), Some(json!({ "update": update })), seq)
-}
 
 #[derive(Clone)]
 pub struct OhmyDriver(Arc<Inner>);
@@ -211,6 +181,7 @@ impl OhmyDriver {
 
         // reader 线程:逐行路由(RPC 应答 / 通知)
         let inner_r = inner.clone();
+        let crash_log = log_path.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
@@ -236,7 +207,16 @@ impl OhmyDriver {
                     _ => inner_r.handle_notification(method, params),
                 }
             }
-            // stdout EOF = 进程退出
+            // stdout EOF = 进程退出:stop() 未置位即崩溃,外显 + 拒掉在途 RPC
+            if !inner_r.stopped.load(Ordering::Relaxed) {
+                inner_r.pending.lock().unwrap().clear(); // 挂起的 rpc 立即收到"引擎已退出"
+                let tail = super::log_tail(&crash_log, 15);
+                eprintln!("[mc-desktop] ohmyagent 引擎异常退出");
+                inner_r.app.emit_json(
+                    "engine-crashed",
+                    json!({ "engine": "ohmyagent", "detail": "ohmyagent 进程异常退出", "log_tail": tail }),
+                );
+            }
         });
 
         // 批量 flusher:30ms 排空待发帧
@@ -409,7 +389,7 @@ impl OhmyDriver {
         self.write_sidecar(&sid, |m| {
             m["model_name"] = json!(model_name);
             m["workdir"] = json!(workdir);
-            m["status"] = json!("finished");
+            m["status"] = json!(SessionStatus::Finished.as_str());
         });
         Ok(json!({
             "id": sid, "title": "", "workdir": workdir, "model": model_name,
@@ -550,29 +530,51 @@ impl OhmyDriver {
                 if text.is_empty() {
                     return Err("空输入".into());
                 }
-                self.rpc("session/sendMessage", json!({ "session_id": id, "message": text })).await?;
-                // 受理即开轮:task-started + 状态外显;首条输入兼作标题
+                // 忙碌守卫:执行中不再开轮(UI 侧已排队,这里兜底;
+                // 不能靠引擎拒绝——乐观帧先落,误开轮会污染回放)
                 {
                     let mut sessions = self.0.sessions.lock().unwrap();
-                    if let Some(s) = sessions.get_mut(id) {
-                        s.running = true;
-                        if s.title.is_empty() {
-                            s.title = text.lines().next().unwrap_or("").chars().take(40).collect();
-                        }
+                    let Some(s) = sessions.get_mut(id) else {
+                        return Err("会话未打开".into());
+                    };
+                    if s.running {
+                        return Err("当前会话已有任务在执行,请等待完成或先取消".into());
+                    }
+                    s.running = true;
+                    if s.title.is_empty() {
+                        s.title = text.lines().next().unwrap_or("").chars().take(40).collect();
                     }
                 }
+                // 本地先行落帧:sendMessage 的 ack 与首批事件在 stdout 上没有
+                // 先后保证(引擎收到即起 goroutine 跑轮,快模型下整轮事件可能
+                // 先于 ack 到达),回显与开轮不能依赖 ack 时序。
+                // user_message 引擎回显事件相应地在 handle_event 里忽略。
+                self.push_frame(id, |seq| frame::user_input(&text, seq));
+                self.push_frame(id, frame::task_started);
                 let title = self.session_title(id);
                 self.write_sidecar(id, |m| {
-                    m["status"] = json!("running");
+                    m["status"] = json!(SessionStatus::Running.as_str());
                     if m.get("title").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
                         m["title"] = json!(title);
                     }
                     let turns = m.get("turns").and_then(|v| v.as_u64()).unwrap_or(0);
                     m["turns"] = json!(turns + 1);
                 });
-                self.push_frame(id, |seq| frame("task-started", None, None, seq));
-                self.emit_session_event(id, "running");
-                Ok(())
+                self.emit_session_event(id, SessionStatus::Running.as_str());
+                match self.rpc("session/sendMessage", json!({ "session_id": id, "message": text })).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        // 引擎没接活:补终止帧关轮,状态回落,错误上抛(UI 保留输入)
+                        if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
+                            s.running = false;
+                        }
+                        self.push_frame(id, |seq| frame::task_error(&e, seq));
+                        self.push_frame(id, frame::task_ended);
+                        self.write_sidecar(id, |m| m["status"] = json!(SessionStatus::Error.as_str()));
+                        self.emit_session_event(id, SessionStatus::Error.as_str());
+                        Err(e)
+                    }
+                }
             }
             "user-cancel" => {
                 self.rpc("cancel", json!({ "session_id": id })).await.map(|_| ())
@@ -596,7 +598,7 @@ impl OhmyDriver {
                         }
                     }
                 }
-                self.resolve_perm(id, &req_id, if approved { "approved" } else { "denied" });
+                self.resolve_perm(id, &req_id, if approved { PermOutcome::Approved } else { PermOutcome::Denied });
                 Ok(())
             }
             "reply-question" => {
@@ -642,14 +644,7 @@ impl OhmyDriver {
                     json!({ "request_id": req_id, "answers": ua, "cancelled": cancelled }),
                 );
                 // 回显帧入日志(回放可见答案)
-                self.push_frame(id, |seq| {
-                    frame(
-                        "reply-question",
-                        None,
-                        Some(json!({ "request_id": req_id, "answers_json": answers_json, "cancelled": cancelled })),
-                        seq,
-                    )
-                });
+                self.push_frame(id, |seq| frame::reply_question(&req_id, answers_json, cancelled, seq));
                 self.emit_session_ask(id, false);
                 Ok(())
             }
@@ -667,7 +662,7 @@ impl OhmyDriver {
                     s.model_name = name.to_string();
                 }
                 self.write_sidecar(id, |m| m["model_name"] = json!(name));
-                self.push_frame(id, |seq| acp(json!({ "sessionUpdate": "model_update", "model": name }), seq));
+                self.push_frame(id, |seq| frame::model_update(name, seq));
                 Ok(json!({ "result": { "model": name } }))
             }
             "session_set_mode" => {
@@ -677,9 +672,7 @@ impl OhmyDriver {
                     s.mode = mode.to_string();
                 }
                 self.write_sidecar(id, |m| m["mode"] = json!(mode));
-                self.push_frame(id, |seq| {
-                    acp(json!({ "sessionUpdate": "permission_mode_update", "mode": mode }), seq)
-                });
+                self.push_frame(id, |seq| frame::permission_mode_update(mode, seq));
                 Ok(json!({ "result": { "mode": mode } }))
             }
             other => Ok(json!({ "error": format!("ohmyagent 引擎不支持 {other}") })),
@@ -771,7 +764,7 @@ impl OhmyDriver {
         self.0.emit_session_ask(sid, open)
     }
 
-    fn resolve_perm(&self, sid: &str, req_id: &str, outcome: &str) {
+    fn resolve_perm(&self, sid: &str, req_id: &str, outcome: PermOutcome) {
         self.0.resolve_perm(sid, req_id, outcome)
     }
 
@@ -795,7 +788,7 @@ impl Inner {
     fn write_sidecar(&self, id: &str, f: impl FnOnce(&mut Value)) {
         let mut meta = self.read_sidecar(id);
         f(&mut meta);
-        meta["updated_at"] = json!(now_ms());
+        meta["updated_at"] = json!(frame::now_ms());
         let path = self.sidecar_path(id);
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -837,11 +830,9 @@ impl Inner {
         );
     }
 
-    fn resolve_perm(&self, sid: &str, req_id: &str, outcome: &str) {
+    fn resolve_perm(&self, sid: &str, req_id: &str, outcome: PermOutcome) {
         self.pending_perms.lock().unwrap().remove(req_id);
-        self.push_frame(sid, |seq| {
-            frame("permission-resolved", None, Some(json!({ "id": req_id, "outcome": outcome })), seq)
-        });
+        self.push_frame(sid, |seq| frame::permission_resolved(req_id, outcome, seq));
         self.emit_session_ask(sid, false);
     }
 
@@ -868,9 +859,7 @@ impl Inner {
                 let title = perm_title(&tool, &input);
                 self.pending_perms.lock().unwrap().insert(req_id.clone(), sid.clone());
                 self.perm_tools.lock().unwrap().insert(req_id.clone(), tool.clone());
-                self.push_frame(&sid, |seq| {
-                    frame("permission-req", None, Some(json!({ "id": req_id, "tool": tool, "title": title })), seq)
-                });
+                self.push_frame(&sid, |seq| frame::permission_req(&req_id, &tool, &title, seq));
                 self.emit_session_ask(&sid, true);
             }
             "permission/cancelled" => {
@@ -879,7 +868,11 @@ impl Inner {
                 let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("cancelled");
                 self.perm_tools.lock().unwrap().remove(&req_id);
                 if !sid.is_empty() {
-                    self.resolve_perm(&sid, &req_id, if reason == "timeout" { "timeout" } else { "cancelled" });
+                    self.resolve_perm(
+                        &sid,
+                        &req_id,
+                        if reason == "timeout" { PermOutcome::Timeout } else { PermOutcome::Cancelled },
+                    );
                 }
             }
             "question/request" => {
@@ -893,21 +886,9 @@ impl Inner {
                     .lock()
                     .unwrap()
                     .insert(req_id.clone(), (sid.clone(), questions.clone()));
-                // 渲染为提问卡(kind/title 命中 UI 的 isAskToolCall 词汇)
-                self.push_frame(&sid, |seq| {
-                    frame(
-                        "task-running",
-                        Some("acp_ask_user_question"),
-                        Some(json!({ "toolCall": {
-                            "toolCallId": req_id,
-                            "title": "Ask User Question",
-                            "kind": "ask-user-question",
-                            "status": "in_progress",
-                            "rawInput": { "questions": questions },
-                        } })),
-                        seq,
-                    )
-                });
+                // kind=acp_ask_user_question 即一等公民提问卡标记,reduce.ts 据此
+                // 直接消费 rawInput.questions,不走 tool_call 的标题启发式
+                self.push_frame(&sid, |seq| frame::ask_user_question(&req_id, &questions, seq));
                 self.emit_session_ask(&sid, true);
             }
             "question/cancelled" => {
@@ -927,20 +908,20 @@ impl Inner {
                 if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
                     s.running = false;
                 }
-                // 状态词汇对齐 mc-agent(types.ts SessionMeta):取消是 interrupted,
+                // 状态词汇对齐 SessionStatus:取消是 interrupted,
                 // 不能混进 finished(桌宠会当作完成来庆祝)
                 let status = match stop_reason {
-                    "error" => "error",
-                    "interrupted" => "interrupted",
-                    _ => "finished",
+                    "error" => SessionStatus::Error,
+                    "interrupted" => SessionStatus::Interrupted,
+                    _ => SessionStatus::Finished,
                 };
                 if stop_reason == "error" && !err.is_empty() {
-                    self.push_frame(&sid, |seq| frame("task-error", None, Some(json!({ "error": err })), seq));
+                    self.push_frame(&sid, |seq| frame::task_error(&err, seq));
                 }
-                self.push_frame(&sid, |seq| frame("task-ended", None, None, seq));
+                self.push_frame(&sid, frame::task_ended);
                 // sidecar 状态落盘(重启后列表可见;write_sidecar 一并刷 updated_at)
-                self.write_sidecar(&sid, |m| m["status"] = json!(status));
-                self.emit_session_event(&sid, status);
+                self.write_sidecar(&sid, |m| m["status"] = json!(status.as_str()));
+                self.emit_session_event(&sid, status.as_str());
             }
             _ => {}
         }
@@ -955,22 +936,16 @@ impl Inner {
         }
         let data = event.get("data").cloned().unwrap_or(Value::Null);
         match etype {
-            "user_message" => {
-                let msg = data.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                let payload = json!({ "content": b64_text(msg) });
-                self.push_frame(&sid, |seq| frame("user-input", None, Some(payload), seq));
-            }
+            // user_message:引擎回显忽略——session_send 已本地先行落 user-input
+            // 帧(ack 与事件无时序保证,双写会重复气泡)
+            "user_message" => {}
             "model_delta" => {
-                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                self.push_frame(&sid, |seq| {
-                    acp(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } }), seq)
-                });
+                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                self.push_frame(&sid, |seq| frame::agent_text(text, seq));
             }
             "thinking_delta" => {
-                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                self.push_frame(&sid, |seq| {
-                    acp(json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": text } }), seq)
-                });
+                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                self.push_frame(&sid, |seq| frame::agent_thought(text, seq));
             }
             "tool_call" => {
                 let tc_id = event
@@ -982,18 +957,12 @@ impl Inner {
                 let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("工具调用").to_string();
                 let input = data.get("input").cloned().unwrap_or(Value::Null);
                 let title = perm_title(&name, &input);
-                self.push_frame(&sid, |seq| {
-                    acp(json!({ "sessionUpdate": "tool_call", "toolCallId": tc_id, "title": title,
-                        "status": "in_progress", "rawInput": input }), seq)
-                });
+                self.push_frame(&sid, |seq| frame::tool_call(&tc_id, &title, &input, seq));
             }
             "tool_result" => {
                 let tc_id = event.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                self.push_frame(&sid, |seq| {
-                    acp(json!({ "sessionUpdate": "tool_call_update", "toolCallId": tc_id,
-                        "status": "completed", "rawOutput": content }), seq)
-                });
+                let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                self.push_frame(&sid, |seq| frame::tool_call_completed(&tc_id, content, seq));
             }
             "send_user_message" | "task_notification" => {
                 let msg = data
@@ -1005,17 +974,15 @@ impl Inner {
                     return;
                 }
                 let text = if etype == "task_notification" { format!("\n📌 {msg}\n") } else { msg };
-                self.push_frame(&sid, |seq| {
-                    acp(json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": text } }), seq)
-                });
+                self.push_frame(&sid, |seq| frame::agent_text(&text, seq));
             }
             "compaction" => {
-                self.push_frame(&sid, |seq| acp(json!({ "sessionUpdate": "compact_status", "status": "started" }), seq));
-                self.push_frame(&sid, |seq| acp(json!({ "sessionUpdate": "compact_status", "status": "ended" }), seq));
+                self.push_frame(&sid, |seq| frame::compact_status("started", seq));
+                self.push_frame(&sid, |seq| frame::compact_status("ended", seq));
             }
             "error" => {
-                let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("未知错误").to_string();
-                self.push_frame(&sid, |seq| frame("task-error", None, Some(json!({ "error": msg })), seq));
+                let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("未知错误");
+                self.push_frame(&sid, |seq| frame::task_error(msg, seq));
             }
             // model_start/model_done/turn_done:轮次边界以 turn/stopped 为准
             _ => {}
@@ -1186,7 +1153,7 @@ data: {"type":"message_stop"}"#,
         let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
         driver.session_open(&sid).await.expect("打开会话");
 
-        let payload = json!({ "content": b64_text("写个 hello world") });
+        let payload = json!({ "content": frame::b64_text("写个 hello world") });
         driver.session_send(&sid, "user-input", payload).await.expect("发送");
 
         // 轮询帧日志直到 task-ended(假 LLM 一轮即完)

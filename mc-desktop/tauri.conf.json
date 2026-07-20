@@ -44,7 +44,6 @@
             "allow-session-close",
             "allow-session-send",
             "allow-session-call",
-            "allow-repo-call",
             "allow-upload-file",
             "allow-upload-read",
             "allow-kernel-http",
@@ -70,6 +69,7 @@
             "dialog:allow-open",
             "opener:allow-open-url",
             "opener:allow-default-urls",
+            "allow-engine-restart",
             "allow-probe-log"
           ]
         },

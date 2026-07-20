@@ -1079,7 +1079,7 @@ export function SettingsView({
         </div>
         <div style={{ height: 6 }} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "var(--t4)", padding: "2px 9px 6px" }}>设置</span>
-        {NAV.filter((n) => n.key !== "browser" || caps?.browser_ext !== false).map((n) => {
+        {NAV.filter((n) => n.key !== "browser" || caps?.browser_ext === true).map((n) => {
           const activeNow = active === n.key;
           const Icon = n.icon;
           return (

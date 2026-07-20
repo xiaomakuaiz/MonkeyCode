@@ -1423,3 +1423,20 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       driver/mc.rs spawn 参数同步去掉 --no-ui(旗标已不存在,不删内核起不来)
 - [x] 验证:go build+server 测试、UI 38/38、cargo build、无头冒烟(含 save 重启内核)、
       裸内核 / 404 + /healthz 200
+
+## 架构收口(2026-07-20)
+
+- [x] 契约1 帧词汇:driver/frame.rs 唯一 Rust 定义(构造器+SessionStatus/PermOutcome 枚举),
+      ohmy.rs 全部产帧点改构造器,mc.rs 共享 now_ms/b64 助手;types.ts 加 SessionStatus union
+      顺带修:ohmy 轮次开始改本地先行落帧(sendMessage ack 与首批事件在 stdout 无时序保证,
+      快模型下 task-started/user-input 会乱序丢失——E2E flake 暴露的真实缺陷);
+      引擎 user_message 回显相应忽略。全量测试 4 连跑绿
+- [x] 契约2 能力:Caps 强类型单一事实来源,kernel_http 守卫收口到命令层,
+      设置页 browser tab 改 caps 确认后显示;顺带 vision→supports_images 映射
+- [x] 契约3 IPC:repo_* 分派下沉到 session_call 命令层,删 UI 侧 REPO_KINDS 与 repo_call 命令
+- [x] 引擎监督:mc 2s try_wait 监视 + ohmy stdout EOF 检测 → engine-crashed 事件(带日志尾)
+      → App 崩溃横幅 + engine_restart 一键重启(与 save_config 共用 apply_config_and_restart);
+      kill -9 内核实测 watcher 触发 ✓
+- [x] mc-desktop/ARCHITECTURE.md:分层+五契约(帧词汇/能力/IPC/配置所有权/状态机)+
+      引擎数据归属表+上游缺口清单定稿
+- 验证:cargo 21/21(4 连跑)、UI 38/38、tsc、无头探针、崩溃注入实测

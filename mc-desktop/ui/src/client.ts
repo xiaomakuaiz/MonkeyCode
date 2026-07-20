@@ -98,6 +98,22 @@ export interface EngineCaps {
 
 export const engineCaps = () => invoke<EngineCaps>("engine_caps");
 
+/** 引擎崩溃信息(壳的进程监视发现非正常退出时推送)。 */
+export interface EngineCrash {
+  engine: string;
+  detail: string;
+  /** 引擎日志尾部(诊断展示) */
+  log_tail?: string;
+}
+
+/** 订阅引擎崩溃事件;返回退订函数。 */
+export function onEngineCrashed(cb: (info: EngineCrash) => void): () => void {
+  return listen("engine-crashed", (p) => cb(p as EngineCrash));
+}
+
+/** 按当前配置重启引擎(崩溃恢复;成功后调用方整页刷新复位状态)。 */
+export const engineRestart = () => invoke<void>("engine_restart");
+
 // ==================== 附件 ====================
 
 /** 上传对话里粘贴/拖入的文件(图片或任意附件)到会话工作区 .mc-agent/uploads/,
@@ -815,15 +831,6 @@ export interface ConnHandlers {
   onStatus(text: string, connected: boolean): void;
 }
 
-/** repo 只读查询走壳原生实现(不经引擎),其余 call 走引擎会话通道。 */
-const REPO_KINDS = new Set([
-  "repo_file_list",
-  "repo_read_file",
-  "repo_file_changes",
-  "repo_file_diff",
-  "repo_reveal",
-]);
-
 /**
  * 打开会话流:壳侧接引擎并按 ~30ms 批量推 frames:{sid} 事件(历史帧由
  * 引擎回放);断线由壳自动重连,状态经 conn-status:{sid} 事件透传。
@@ -863,9 +870,7 @@ export function connect(sessionId: string, h: ConnHandlers): Conn {
       }
     },
     call<T>(kind: string, payload: unknown = {}): Promise<T> {
-      if (REPO_KINDS.has(kind)) {
-        return invoke<T>("repo_call", { id: sessionId, kind, payload });
-      }
+      // 统一入口:repo_* 由壳命令层分派到原生实现,UI 不感知执行方
       return invoke<T>("session_call", { id: sessionId, kind, payload });
     },
     close() {

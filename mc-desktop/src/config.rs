@@ -224,6 +224,10 @@ fn write_ohmyagent_config(cfg: &DesktopConfig) -> Result<(), String> {
             if let Some(cw) = m.get("context_window").and_then(|v| v.as_i64()).filter(|&c| c > 0) {
                 entry["context_window"] = serde_json::json!(cw);
             }
+            // 视觉标记透传:缺失时 ohmyagent 按不支持处理,读图降级为文本占位
+            if m.get("vision").and_then(|v| v.as_bool()).unwrap_or(false) {
+                entry["supports_images"] = serde_json::json!(true);
+            }
             models_out.push(entry);
         }
         let is_default = m.get("default").and_then(|v| v.as_bool()).unwrap_or(false);

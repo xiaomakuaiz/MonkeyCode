@@ -121,6 +121,18 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// 写清单并(重)启引擎(阻塞流程:优雅停内核 ~10s + 起新内核 ~15s,
+/// 调用方负责丢 blocking 池)。save_config 与 engine_restart 共用。
+fn apply_config_and_restart(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
+    let files = save_config_files(app, config)?;
+    if let Some(engine) = app.state::<DriverHost>().take() {
+        engine.stop();
+    }
+    let engine = driver::start_engine(app, config, &files)?;
+    app.state::<DriverHost>().set(engine);
+    Ok(())
+}
+
 /// 保存配置并重启引擎。内容不做业务校验(壳零字段知识):表单校验在设置
 /// 视图,权威校验在内核。返回后 UI 自行整页刷新(不再有壳侧导航,原
 /// WebKitGTK IPC 重放竞态随之消失)。
@@ -133,18 +145,20 @@ async fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String
         pet_pos: disk.pet_pos,
         ..config
     };
-    // 引擎重启是阻塞流程(优雅停内核 ~10s + 起新内核 ~15s),丢 blocking 池
+    tauri::async_runtime::spawn_blocking(move || apply_config_and_restart(&app, &config))
+        .await
+        .map_err(|e| format!("保存失败: {e}"))?
+}
+
+/// 按当前配置重启引擎(引擎崩溃后 UI 一键恢复;engine-crashed 事件的出口)。
+#[tauri::command]
+async fn engine_restart(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let files = save_config_files(&app, &config)?;
-        if let Some(engine) = app.state::<DriverHost>().take() {
-            engine.stop();
-        }
-        let engine = driver::start_engine(&app, &config, &files)?;
-        app.state::<DriverHost>().set(engine);
-        Ok(())
+        let config = load_config(&app);
+        apply_config_and_restart(&app, &config)
     })
     .await
-    .map_err(|e| format!("保存失败: {e}"))?
+    .map_err(|e| format!("重启失败: {e}"))?
 }
 
 /// 取走(消费)待处理的壳→UI 意图。UI 两处调用:启动完成后补处理错过的
@@ -566,6 +580,7 @@ fn main() {
             update_install,
             open_extension_dir,
             list_wsl_distros,
+            engine_restart,
             probe_log,
             driver::engine_caps,
             driver::sessions_list,
@@ -577,7 +592,6 @@ fn main() {
             driver::session_close,
             driver::session_send,
             driver::session_call,
-            driver::repo_call,
             driver::upload_file,
             driver::upload_read,
             driver::kernel_http,

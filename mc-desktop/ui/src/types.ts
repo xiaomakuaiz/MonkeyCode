@@ -47,6 +47,10 @@ export interface HostConfig {
   agent_engine?: string;
 }
 
+/** 会话状态词汇(与壳 driver/frame.rs 的 SessionStatus 对表;
+ * 桌宠/侧栏/横幅按此渲染,勿散落裸字符串比较之外的新词) */
+export type SessionStatus = "created" | "running" | "finished" | "interrupted" | "error";
+
 /** GET /api/sessions 返回的会话元信息 */
 export interface SessionMeta {
   id: string;
@@ -56,7 +60,7 @@ export interface SessionMeta {
   /** 权限模式("yolo" 全放行;缺省 = default) */
   mode?: string;
   turns: number;
-  status: string; // created | running | finished | interrupted | error
+  status: SessionStatus | string;
   /** 有待答复的审批请求(运行时状态,不落盘;侧栏显示"等待审批") */
   waiting_ask?: boolean;
   updated_at?: string;

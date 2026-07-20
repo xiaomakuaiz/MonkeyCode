@@ -10,12 +10,13 @@
 //
 // 上行统一走 invoke 命令(本文件底部,main.rs 注册)。
 
+pub mod frame;
 pub mod mc;
 pub mod ohmy;
 
 use std::sync::Mutex;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::config::DesktopConfig;
@@ -47,6 +48,17 @@ impl DriverHost {
     }
 }
 
+/// 引擎能力表(对表 mc-desktop/ui/src/client.ts 的 EngineCaps)。
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct Caps {
+    pub engine: &'static str,
+    pub browser_ext: bool,
+    pub worktree: bool,
+    pub usage_update: bool,
+    pub perm_remember: bool,
+    pub attachments: bool,
+}
+
 #[derive(Clone)]
 pub enum Engine {
     Mc(mc::McDriver),
@@ -62,26 +74,27 @@ impl Engine {
         }
     }
 
-    /// 引擎能力(UI 按此降级:ohmyagent 无用量条/浏览器扩展/worktree 等)。
-    pub fn caps(&self) -> Value {
+    /// 引擎能力(单一事实来源:UI 降级与命令层守卫都从这里读,
+    /// driver 内不得再各自硬编码能力判断)。
+    pub fn caps(&self) -> Caps {
         match self {
-            Engine::Mc(_) => json!({
-                "engine": "mc-agent",
-                "browser_ext": true,
-                "worktree": true,
-                "usage_update": true,
-                "perm_remember": true,
-                "attachments": true,
-            }),
+            Engine::Mc(_) => Caps {
+                engine: "mc-agent",
+                browser_ext: true,
+                worktree: true,
+                usage_update: true,
+                perm_remember: true,
+                attachments: true,
+            },
             // browser_ext/worktree/usage_update 是 mc-agent 特有能力,UI 按此降级
-            Engine::Ohmy(_) => json!({
-                "engine": "ohmyagent",
-                "browser_ext": false,
-                "worktree": false,
-                "usage_update": false,
-                "perm_remember": true,
-                "attachments": true,
-            }),
+            Engine::Ohmy(_) => Caps {
+                engine: "ohmyagent",
+                browser_ext: false,
+                worktree: false,
+                usage_update: false,
+                perm_remember: true,
+                attachments: true,
+            },
         }
     }
 
@@ -167,9 +180,21 @@ impl Engine {
     pub async fn kernel_http(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
         match self {
             Engine::Mc(d) => d.kernel_http(method, path, body).await,
-            Engine::Ohmy(_) => Err("ohmyagent 引擎无浏览器扩展桥".into()),
+            // caps 守卫在命令层;此分支仅类型完备性兜底
+            Engine::Ohmy(_) => Err("当前引擎不支持浏览器扩展".into()),
         }
     }
+}
+
+/// 日志尾部(崩溃外显用;文件缺失返回空)。
+pub fn log_tail(path: &std::path::Path, lines: usize) -> String {
+    std::fs::read(path)
+        .map(|b| {
+            let s = crate::wsl::decode_wsl_output(&b);
+            let all: Vec<_> = s.lines().collect();
+            all[all.len().saturating_sub(lines)..].join("\n")
+        })
+        .unwrap_or_default()
 }
 
 /// 按配置启动引擎(阻塞等就绪;setup 与 save_config 共用)。
@@ -184,7 +209,7 @@ pub fn start_engine(app: &AppHandle, cfg: &DesktopConfig, files: &crate::config:
 // ==================== Tauri 命令 ====================
 
 #[tauri::command]
-pub async fn engine_caps(host: State<'_, DriverHost>) -> Result<Value, String> {
+pub async fn engine_caps(host: State<'_, DriverHost>) -> Result<Caps, String> {
     Ok(host.get()?.caps())
 }
 
@@ -241,6 +266,9 @@ pub async fn session_send(
     host.get()?.session_send(&id, &ftype, payload).await
 }
 
+/// 会话 call 统一入口:repo_* 前缀在命令层分派到壳原生实现(双引擎共用,
+/// UI 不感知谁执行),其余交引擎。应答 {result}/{error} 与内核 call-response
+/// 载荷同构。
 #[tauri::command]
 pub async fn session_call(
     host: State<'_, DriverHost>,
@@ -248,28 +276,19 @@ pub async fn session_call(
     kind: String,
     payload: Value,
 ) -> Result<Value, String> {
-    host.get()?.session_call(&id, &kind, payload).await
-}
-
-/// repo 只读查询(文件树/读文件/变更/diff/定位)。原生实现,双引擎共用;
-/// 应答 {result}/{error} 与内核 call-response 载荷同构。
-#[tauri::command]
-pub async fn repo_call(
-    host: State<'_, DriverHost>,
-    id: String,
-    kind: String,
-    payload: Value,
-) -> Result<Value, String> {
     let engine = host.get()?;
-    let workdir = engine.session_workdir(&id).await?;
-    let ctx = RepoCtx { workdir, wsl_distro: engine.wsl_distro() };
-    // git/fs 是阻塞操作,丢 blocking 池;15s 超时对齐旧 WS call 语义——
-    // WSL 睡眠恢复后 wsl.exe 可能挂死,不设限文件面板会永久转圈
-    let task = tauri::async_runtime::spawn_blocking(move || crate::repo::dispatch(&ctx, &kind, &payload));
-    match tokio::time::timeout(std::time::Duration::from_secs(15), task).await {
-        Ok(r) => r.map_err(|e| format!("repo 查询失败: {e}")),
-        Err(_) => Err("repo 查询超时(15s)".into()),
+    if kind.starts_with("repo_") {
+        let workdir = engine.session_workdir(&id).await?;
+        let ctx = RepoCtx { workdir, wsl_distro: engine.wsl_distro() };
+        // git/fs 是阻塞操作,丢 blocking 池;15s 超时对齐旧 WS call 语义——
+        // WSL 睡眠恢复后 wsl.exe 可能挂死,不设限文件面板会永久转圈
+        let task = tauri::async_runtime::spawn_blocking(move || crate::repo::dispatch(&ctx, &kind, &payload));
+        return match tokio::time::timeout(std::time::Duration::from_secs(15), task).await {
+            Ok(r) => r.map_err(|e| format!("repo 查询失败: {e}")),
+            Err(_) => Err("repo 查询超时(15s)".into()),
+        };
     }
+    engine.session_call(&id, &kind, payload).await
 }
 
 #[tauri::command]
@@ -304,6 +323,7 @@ pub async fn upload_read(host: State<'_, DriverHost>, id: String, path: String) 
 
 /// 内核 HTTP 代理:仅浏览器扩展桥(/api/browser/*)保留——扩展桥与 agent 的
 /// browser_* 工具深耦合,永驻 mc-agent 进程;其余业务 API 已原生化(baizhi/)。
+/// 能力守卫统一读 caps,引擎实现内不再各自硬编码能力错误。
 #[tauri::command]
 pub async fn kernel_http(
     host: State<'_, DriverHost>,
@@ -314,5 +334,9 @@ pub async fn kernel_http(
     if !path.starts_with("/api/browser/") {
         return Err("kernel_http 仅允许 /api/browser/ 路径".into());
     }
-    host.get()?.kernel_http(&method, &path, body).await
+    let engine = host.get()?;
+    if !engine.caps().browser_ext {
+        return Err("当前引擎不支持浏览器扩展".into());
+    }
+    engine.kernel_http(&method, &path, body).await
 }

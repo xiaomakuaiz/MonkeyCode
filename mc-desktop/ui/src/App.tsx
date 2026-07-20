@@ -7,6 +7,8 @@ import {
   connect,
   createSession,
   deleteSession,
+  engineRestart,
+  onEngineCrashed,
   inDesktopShell,
   isWindowsShell,
   getHostInfo,
@@ -22,6 +24,7 @@ import {
   subscribeEvents,
   updateCheck,
   type CloudTask,
+  type EngineCrash,
   type UpdateStatus,
 } from "./client";
 import { basename, ChatView } from "./chat";
@@ -100,6 +103,10 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [hostVersion, setHostVersion] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  // 引擎崩溃外显(engine-crashed 事件;重启成功后整页刷新复位)
+  const [engineCrash, setEngineCrash] = useState<EngineCrash | null>(null);
+  const [engineRestarting, setEngineRestarting] = useState(false);
+  useEffect(() => onEngineCrashed(setEngineCrash), []);
   // App 级浮层;文件抽屉 = 工作区资源管理器(cwd 逐层导航 + 文件查看器)
   const [drawerOpen, setDrawerOpen] = useState(false);
   // 两个视角共用同一预览窗格:文件(资源管理器) / 改动(本轮平铺列表)
@@ -675,6 +682,46 @@ export default function App() {
     >
       {/* Windows 壳:装饰栏已去除,自绘 36px 标题栏(拖拽 + 窗口按钮) */}
       {isWindowsShell() && <TitleBar />}
+      {/* 引擎崩溃横幅:进程监视发现非正常退出时外显 + 一键重启
+          (不外显的话会话流只会无限重连,表现为无提示的卡死) */}
+      {engineCrash && (
+        <div
+          style={{
+            flex: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 14px",
+            background: "rgba(248,113,113,.1)",
+            borderBottom: "1px solid var(--err)",
+            fontSize: 12.5,
+          }}
+        >
+          <span style={{ color: "var(--err)", fontWeight: 600, flex: "none" }}>⚠ {engineCrash.detail}</span>
+          {engineCrash.log_tail && (
+            <span className="ellipsis" style={{ color: "var(--t4)", fontSize: 11.5, minWidth: 0, font: `11.5px ${MONO}` }} title={engineCrash.log_tail}>
+              {engineCrash.log_tail.trim().split("\n").pop()}
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          <button
+            className="hv-acc"
+            disabled={engineRestarting}
+            onClick={() => {
+              setEngineRestarting(true);
+              engineRestart()
+                .then(() => location.reload())
+                .catch((e) => {
+                  setEngineRestarting(false);
+                  setEngineCrash((c) => (c ? { ...c, detail: "重启失败: " + String(e) } : c));
+                });
+            }}
+            style={{ height: 26, padding: "0 14px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 600, background: "var(--acc)", color: "var(--onAcc)" }}
+          >
+            {engineRestarting ? "重启中…" : "重启引擎"}
+          </button>
+        </div>
+      )}
       {/* 原根容器降级为内容行:改动抽屉的 absolute 以此为锚,始终盖在标题栏之下 */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
       {/* 设置态:设置视图自带左导航,主侧栏隐藏,设置占满主窗口(单侧栏) */}

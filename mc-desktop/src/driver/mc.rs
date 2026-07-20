@@ -20,13 +20,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio_tungstenite::tungstenite::Message;
 
+use super::frame::{b64_decode_json, b64_json, now_ms};
 use crate::config::{DesktopConfig, KernelFiles};
 use crate::wsl;
 
@@ -67,22 +67,6 @@ enum OutMsg {
     Frame(String),
     /// call 请求:发出后按 kind FIFO 等应答(载荷已 base64 解码为 {result}/{error})
     Call { kind: String, frame: String, resp: oneshot::Sender<Value> },
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn b64(v: &Value) -> String {
-    base64::engine::general_purpose::STANDARD.encode(v.to_string())
-}
-
-fn b64_decode_json(s: &str) -> Option<Value> {
-    let raw = base64::engine::general_purpose::STANDARD.decode(s).ok()?;
-    serde_json::from_slice(&raw).ok()
 }
 
 impl McDriver {
@@ -191,7 +175,44 @@ impl McDriver {
             stopped: Arc::new(AtomicBool::new(false)),
         }));
         driver.spawn_sse();
+        driver.spawn_exit_watch(log_path);
         Ok(driver)
+    }
+
+    /// 内核进程退出监视:非 stop() 引发的退出 = 崩溃,发 engine-crashed
+    /// 事件(带日志尾)让 UI 外显并提供一键重启——否则 WS/SSE 只会无限
+    /// 重连,用户视角就是卡死。
+    fn spawn_exit_watch(&self, log_path: std::path::PathBuf) {
+        let inner = self.0.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if inner.stopped.load(Ordering::Relaxed) {
+                    return;
+                }
+                let exited = {
+                    let mut child = inner.child.lock().unwrap();
+                    match child.as_mut() {
+                        // stop() 已取走 = 正常关停
+                        None => return,
+                        Some(c) => c.try_wait().ok().flatten(),
+                    }
+                };
+                if let Some(status) = exited {
+                    if inner.stopped.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    inner.child.lock().unwrap().take();
+                    let tail = super::log_tail(&log_path, 15);
+                    eprintln!("[mc-desktop] 内核异常退出({status})");
+                    let _ = inner.app.emit(
+                        "engine-crashed",
+                        json!({ "engine": "mc-agent", "detail": format!("内核进程异常退出({status})"), "log_tail": tail }),
+                    );
+                    return;
+                }
+            }
+        });
     }
 
     /// 停止:关 stdin 管道触发内核优雅退出(--watch-stdin 契约:内核取消
@@ -398,14 +419,14 @@ impl McDriver {
     }
 
     pub async fn session_send(&self, id: &str, ftype: &str, payload: Value) -> Result<(), String> {
-        let frame = json!({ "type": ftype, "data": b64(&payload), "timestamp": now_ms() }).to_string();
+        let frame = json!({ "type": ftype, "data": b64_json(&payload), "timestamp": now_ms() }).to_string();
         let sessions = self.0.sessions.lock().await;
         let conn = sessions.get(id).ok_or_else(|| "会话流未打开".to_string())?;
         conn.tx.send(OutMsg::Frame(frame)).map_err(|_| "连接已断开,操作未发送".to_string())
     }
 
     pub async fn session_call(&self, id: &str, kind: &str, payload: Value) -> Result<Value, String> {
-        let frame = json!({ "type": "call", "kind": kind, "data": b64(&payload), "timestamp": now_ms() })
+        let frame = json!({ "type": "call", "kind": kind, "data": b64_json(&payload), "timestamp": now_ms() })
             .to_string();
         let (resp_tx, resp_rx) = oneshot::channel();
         {

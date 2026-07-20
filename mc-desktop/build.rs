@@ -13,6 +13,7 @@ fn main() {
                 "update_install",
                 "open_extension_dir",
                 "list_wsl_distros",
+                "engine_restart",
                 "probe_log",
                 // 引擎驱动层(driver/mod.rs)
                 "engine_caps",
@@ -25,7 +26,6 @@ fn main() {
                 "session_close",
                 "session_send",
                 "session_call",
-                "repo_call",
                 "upload_file",
                 "upload_read",
                 "kernel_http",
