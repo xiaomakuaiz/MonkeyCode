@@ -697,6 +697,28 @@ impl OhmyDriver {
                     let model_id = self.model_id_of(&self.session_model_name(id))?;
                     self.create_resumed(id, &model_id, mode).await?;
                 }
+                // 与 mc-agent setMode 对齐:切到 yolo 自动放行本会话所有挂起审批。
+                // 先切引擎再排空——切换后引擎新的审批直接放行不再产生 ask,
+                // 排空动作不会漏掉切换瞬间的请求
+                if mode == "yolo" {
+                    let drained: Vec<String> = self
+                        .0
+                        .pending_perms
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(_, sid)| sid.as_str() == id)
+                        .map(|(req_id, _)| req_id.clone())
+                        .collect();
+                    for req_id in drained {
+                        self.notify_rpc(
+                            "permission/respond",
+                            json!({ "request_id": req_id, "approved": true }),
+                        );
+                        self.take_perm_tool(&req_id);
+                        self.resolve_perm(id, &req_id, PermOutcome::Approved);
+                    }
+                }
                 if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
                     s.mode = mode.to_string();
                 }

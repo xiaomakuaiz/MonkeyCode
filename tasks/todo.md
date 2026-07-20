@@ -1541,3 +1541,11 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [ ] 桌宠偏好仍触发全量物化(重启已修,物化未拆) main.rs:545
 - [ ] 测试盲区:「监听先于命令」不变式零测试;useSession/connectCloudControl 零测试;
       pet 偏好独立写路径缺测
+
+## yolo 切换排空挂起审批(2026-07-20)
+
+- [x] ohmy 驱动补齐 mc-agent setMode 的既有语义(server.go:1063"切到 yolo
+      自动放行所有 pending 审批"):session_set_mode 切到 yolo 后排空本会话
+      pending_perms——逐个 permission/respond approved + permission-resolved 帧
+      + 清 ask 状态;顺序与 mc 一致(先切引擎再排空,不漏切换瞬间的请求)
+- [x] 验证:cargo test 21/21
