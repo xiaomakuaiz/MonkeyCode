@@ -1458,3 +1458,11 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] 打包经 tauri beforeBuildCommand 自动构建 UI(CI 三 workflow 均有 node);
       直接 cargo build 前需先 npm run build 一次(文档已注明)
 - [x] 验证:构建产出完整 uidist(assets/fonts/壳页面)、cargo build、无头探针 6 项全过
+
+## macOS 白屏修复(2026-07-20)
+
+- [x] 根因(探针 jserr 定位):ohmy 驱动 sessions_list 的 updated_at 返回毫秒数字,
+      契约(types.ts/mc-agent time.Time)是 RFC3339 字符串 → 侧栏排序 .localeCompare
+      TypeError → React 整树崩 → 白屏(仅 ohmy 引擎+有历史会话时触发,Linux 探针环境无会话未踩到)
+- [x] 修复:config.rs 增共享 ms_to_rfc3339(cookies.rs 复用),ohmy sessions_list 输出转字符串;
+      UI 三处 updated_at 排序 String() 加固(历史 sidecar/异构数据不再能炸渲染树)

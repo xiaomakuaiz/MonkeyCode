@@ -36,11 +36,12 @@ export function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
     else map.set(dir, [m]);
   }
   const groups = [...map.entries()].map(([dir, items]) => {
-    items.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    // String():防非字符串 updated_at(异构引擎/历史数据)炸掉整个渲染树
+    items.sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
     return {
       dir,
       name: dir.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || dir,
-      latest: items[0]?.updated_at ?? "",
+      latest: String(items[0]?.updated_at ?? ""),
       items,
     };
   });
@@ -436,7 +437,7 @@ export function Sidebar({
   const list = sessions.filter((m) => !m.archived);
   const archived = sessions
     .filter((m) => m.archived)
-    .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
 
   const row = (m: SessionMeta, inArchived: boolean) => (
     <SessionRow

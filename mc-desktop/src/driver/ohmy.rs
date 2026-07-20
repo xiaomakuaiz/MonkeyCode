@@ -342,7 +342,9 @@ impl OhmyDriver {
                     "turns": meta.get("turns").and_then(|v| v.as_u64()).unwrap_or(0),
                     "status": status,
                     "archived": meta.get("archived").and_then(|v| v.as_bool()).unwrap_or(false),
-                    "updated_at": updated,
+                    // 契约:SessionMeta.updated_at 是 RFC3339 字符串(与 mc-agent 的
+                    // time.Time 序列化对表);sidecar 内部存毫秒,输出时转换
+                    "updated_at": crate::config::ms_to_rfc3339(updated),
                     "waiting_ask": waiting.contains(&id),
                 }),
             ));

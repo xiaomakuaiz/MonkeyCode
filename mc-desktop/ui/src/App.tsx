@@ -327,7 +327,7 @@ export default function App() {
 
   // 新任务默认工作目录:沿用最近会话的目录,没有会话则用 ~/MonkeyCode(用户改过则不再跟随)
   const lastDir =
-    [...sessions].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0]?.workdir ?? "";
+    [...sessions].sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))[0]?.workdir ?? "";
   useEffect(() => {
     if (dirTouchedRef.current) return;
     setNewDir(lastDir || DEFAULT_DIR);

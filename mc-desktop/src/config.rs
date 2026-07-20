@@ -75,6 +75,28 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// unix 毫秒 → RFC3339(UTC)。会话 updated_at 等对 UI 的时间字段统一此
+/// 格式(与 Go 侧 time.Time 的 JSON 序列化对表,字典序即时间序)。
+pub fn ms_to_rfc3339(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    // unix 天数 → 民用历(Howard Hinnant 算法)
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let (y, m) = if mp < 10 { (y, mp + 3) } else { (y + 1, mp - 9) };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60
+    )
+}
+
 /// 展开路径开头的 ~/(或裸 ~)为用户主目录;非 ~ 开头原样返回。
 pub fn expand_tilde(path: &str) -> String {
     if path == "~" {
