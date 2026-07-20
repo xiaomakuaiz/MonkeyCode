@@ -52,7 +52,7 @@ type SyncResult struct {
 const syncKeyName = "MonkeyCode"
 
 // sourceBaizhi 同步条目的 source 标记(UI 按它分组/整组替换)。
-// UI 侧对应常量:agent/ui/src/types.ts 的 SOURCE_BAIZHI,两侧改动需同步。
+// UI 侧对应常量:mc-desktop/ui/src/types.ts 的 SOURCE_BAIZHI,两侧改动需同步。
 const sourceBaizhi = "baizhi"
 
 // Sync 拉模型清单 + 确保推理密钥。要求已登录(有 cookie)。

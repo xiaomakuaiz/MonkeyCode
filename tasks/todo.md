@@ -1411,3 +1411,15 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] 次级:云端 WS 帧上限 16MiB→64MiB(对齐 Go 32MB 意图);home_dir() 统一 HOME/USERPROFILE(Windows cookie 迁移+二进制查找+~ 展开);turn/stopped 复用 write_sidecar(updated_at 不再漏);session_open 回放清批量缓冲+seq 单调(重开不重帧)
 - 验证:cargo test 21/21(含 ohmy E2E 走新 recreate 路径)、UI 31/31、tsc、启动冒烟(探针全过,cookie 迁移顺带实证)
 - 已知未修(记录在案):~/.ohmyagent 接管为声明式设计(UI 已提示);ask 卡经 reduce 启发式词汇匹配的跨层耦合;清理类(urlenc×3/正则热编译/journal 每帧开关文件/UploadImg 无缓存/cookie 全量落盘)留后续
+
+## UI 归位 + 内核 headless 化(2026-07-20)
+
+- [x] agent/ui → mc-desktop/ui(git mv 历史保留;标准 Tauri 布局:壳+前端+产物同属一个应用目录)
+- [x] vite outDir ../uidist;dev server 1420 + /fonts 中间件;tauri.dev.conf.json 开发覆盖
+      (HMR:npx tauri dev --config tauri.dev.conf.json;devUrl 不进主配置——
+      tauri-build 给 debug 构建打 cfg(dev),主配置带 devUrl 会让 cargo run 直连不存在的 dev server)
+- [x] 删除 mc-agent 冻结内嵌 UI:go:embed uidist(21MB)、Options.UI/UIAssets、
+      "/"与"/fonts/"挂载、--no-ui 旗标全部移除,serve 彻底 headless;
+      driver/mc.rs spawn 参数同步去掉 --no-ui(旗标已不存在,不删内核起不来)
+- [x] 验证:go build+server 测试、UI 38/38、cargo build、无头冒烟(含 save 重启内核)、
+      裸内核 / 404 + /healthz 200

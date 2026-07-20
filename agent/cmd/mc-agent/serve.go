@@ -1,10 +1,8 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -20,19 +18,12 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/skills"
 )
 
-// 内嵌 UI:agent/ui(React + Vite)构建的单文件产物 + 手工入库的 webfont
-// 资产(uidist/fonts,HarmonyOS Sans SC / JetBrains Mono 切片),构建产物入库,
-// go build 不依赖 node;改 UI 后在 agent/ui 下执行 npm run build 再编译内核。
-//
-//go:embed uidist
-var uiFS embed.FS
-
 func serveCmd() *cobra.Command {
 	var addr, token, extAddr string
-	var noUI, watchStdin, noBrowser bool
+	var watchStdin, noBrowser bool
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "启动 localhost WS 宿主(桌面/浏览器 UI 通过帧协议直连)",
+		Short: "启动 localhost WS 宿主(headless;桌面壳经帧协议直连)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -155,18 +146,6 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			if !noUI {
-				ui, err := uiFS.ReadFile("uidist/index.html")
-				if err != nil {
-					return fmt.Errorf("内嵌 UI 缺失: %w", err)
-				}
-				assets, err := fs.Sub(uiFS, "uidist")
-				if err != nil {
-					return err
-				}
-				opts.UI = ui
-				opts.UIAssets = assets
-			}
 			srv, err := server.New(opts)
 			if err != nil {
 				return err
@@ -175,9 +154,6 @@ func serveCmd() *cobra.Command {
 			fmt.Printf("mc-agent serve %s\n", version)
 			fmt.Printf("监听:      http://%s\n", srv.Addr())
 			fmt.Printf("访问令牌:  %s\n", srv.Token())
-			if !noUI {
-				fmt.Printf("调试界面:  http://%s/#%s\n", srv.Addr(), srv.Token())
-			}
 			fmt.Fprintln(os.Stderr, "(Ctrl-C 停止)")
 
 			ctx, cancel := signalContext()
@@ -199,7 +175,6 @@ func serveCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:7439", "监听地址(仅允许 loopback)")
 	cmd.Flags().StringVar(&token, "token", "", "访问令牌(默认每次启动随机生成)")
-	cmd.Flags().BoolVar(&noUI, "no-ui", false, "不挂载内嵌调试界面")
 	cmd.Flags().BoolVar(&watchStdin, "watch-stdin", false, "stdin 关闭时退出(供桌面壳托管)")
 	cmd.Flags().StringVar(&extAddr, "ext-addr", "127.0.0.1:7440", "浏览器扩展桥监听地址(默认端口被占时自动顺延)")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "禁用浏览器扩展桥(不注册 browser_ 工具)")

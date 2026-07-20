@@ -1,4 +1,4 @@
-// McAgentDriver:拉起 mc-agent serve --no-ui 并作为其唯一客户端。
+// McAgentDriver:拉起 mc-agent serve(headless)并作为其唯一客户端。
 //
 // - REST:会话管理/模型清单(壳→内核,Bearer token)
 // - WS:每个打开的会话一条连接,下行帧原样透传(已是 Frame 词汇)到
@@ -95,7 +95,7 @@ impl McDriver {
         let token = rand_token();
         let addr = format!("127.0.0.1:{port}");
         let serve_args = [
-            "serve", "--no-ui", "--addr", addr.as_str(), "--token", token.as_str(), "--watch-stdin",
+            "serve", "--addr", addr.as_str(), "--token", token.as_str(), "--watch-stdin",
         ];
 
         // 内核 stdout/stderr 落盘:GUI 壳没有控制台,不落盘的话内核 panic/报错
