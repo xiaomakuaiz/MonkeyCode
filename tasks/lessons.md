@@ -254,6 +254,35 @@
   构建产物的 Playwright 路线整体失效;时序状态机改用 vitest + mock 壳
   IPC + 假时钟,反而更快更稳。假云端脚本仍可用于内核层回归。
 
+## 2026-07-20 win7 Cargo.lock.win7 陈旧 + edition2024 依赖压版
+
+- **锁文件 --locked 挂"needs to be updated"= 锁与 Cargo.toml 不匹配,不是网络问题**:
+  双引擎那次给 Cargo.toml 加了 reqwest/tokio-tungstenite 等直接依赖、更新了主 Cargo.lock,
+  却漏了 Cargo.lock.win7(它落后一个提交)。win7 CI 先 `cp Cargo.lock.win7 Cargo.lock`
+  再 `cargo build -- --locked`,锁缺 7 棵子树 ⇒ 直接被 --locked 拒。判据:比对两个锁里
+  mc-desktop 的 dependencies 节点差了哪些直接依赖,而非去查网络。
+- **win7 锁必须是 lockfile v3**:主锁是 cargo>=1.78 写的 v4,cargo 1.77.2 根本读不了,
+  不能直接复制主锁顶替。只能用 1.77.2 自己解析产出 v3。
+- **"只解析"命令不碰 crate manifest,"要编译/要枚举"的命令才碰**:cargo 1.77.2 的
+  `update -p X --precise`(纯解析、只读 index 摘要)能顺利产出含 edition2024 依赖的锁;
+  但 `cargo metadata/build/fetch/tree` 会下载+解析 manifest,撞上 edition2024(rust>=1.85)
+  就 `feature edition2024 is required` 报错。**本地别拿 `cargo metadata` 当 `build --locked`
+  的等价校验——前者严得多(解析全部 manifest),会误报一堆其实无害的锁。**
+- **锁里能否留 edition2024 依赖,取决于 target 门控 vs feature 门控**(这次最坑的一点):
+  - target 门控(security-framework=macOS、wit-bindgen<-wasip2=wasm)在 windows 目标上被
+    cargo 剪掉、根本不下载 ⇒ 无害。铁证:老 win7 锁一直带着这俩 edition2024 crate,CI 照样
+    构建成功。
+  - feature 门控但 target 满足的可选子树照样被下载解析。reqwest 的 http3/quinn 我们没开、
+    quinn 永不编译,但它 cfg(not(wasm32)) 在 windows 成立 ⇒ cargo 仍拉 quinn-proto 的
+    manifest,而 quinn-proto>=0.11.15 是 edition2024 ⇒ 把 win7 构建打挂。
+  故只压 quinn 可选子树到 edition<=2021(quinn 0.11.9 / quinn-proto 0.11.14,连带 rand 0.9 /
+  getrandom 0.3),security-framework/wit-bindgen 留着不动。
+- **验证要跑真实构建路径而非严格代理**:`cargo +1.77.2 build --locked` 在 linux host 上跑
+  (quinn 的 not(wasm32) 门控 linux/windows 一致,是忠实代理),看它能不能过"下载解析"阶段——
+  实测 370 个 crate 全在 1.77.2 编过、0 次 edition2024、getrandom 0.4 零下载,只在最后因 scratch
+  缺 tauri.conf.json 停(真仓库有)。把过程钉进 scripts/regen-win7-lock.sh + 硬校验,防下次
+  `cargo update` 悄悄把 quinn 顶回 edition2024 重蹈覆辙。
+
 ## 修复验证必须走真实执行路径(2026-07-20)
 
 - 事故:tauri beforeBuildCommand 打包失败,我用 `sh -c "cd ui && npm ci"`

@@ -7,7 +7,10 @@ name: Desktop Windows 7 Build
 #   - updater 指向独立的 latest-win7.json,防止 Win7 用户被推送 Win10-only 更新
 # 维护约束:
 #   - agent/go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
-#   - mc-desktop/Cargo.toml 改依赖后,需重新生成 Cargo.lock.win7(cargo +1.77.2 降级流程)
+#   - mc-desktop/Cargo.toml 改依赖后,跑 mc-desktop/scripts/regen-win7-lock.sh 重新生成
+#     Cargo.lock.win7(cargo 1.77.2 增量解析 + 压回 reqwest 的 http3/quinn 可选子树到
+#     edition<=2021)。直接 `cargo update` 会拉进 edition2024 依赖(rust>=1.85),即便不参与
+#     编译,只要在 windows 目标上"可下载"就会 `feature edition2024 is required` 打挂构建。
 #   - 目标机:Win7 SP1 即可(零 KB 前置)。内核经 go-win7 legacy 工具链覆盖
 #     未打更新的裸机;UCRT 已随包 app-local 分发(无需 KB2999226);Win8+ API 由
 #     YY-Thunks 兜底(无需 KB3080149)。尽管如此仍建议目标机打齐更新(安全)
