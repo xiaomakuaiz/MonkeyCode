@@ -1484,3 +1484,60 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] ARCHITECTURE.md 上游缺口清单同步(三项已补齐移出)
 - [x] 验证:重建 ohmyagent 二进制,cargo test 21/21(E2E 补 switchModel/
       switchMode 真通路断言,对新二进制实测),cargo build 零告警
+
+## 架构再审计:四路并行汇总(2026-07-20)
+
+正面结论:UI 零网络契约成立;命令三处登记逐条一致;agent headless 化无残留;
+无迁移孤儿;async 卫生良好(spawn_blocking 到位);reduce 新帧词汇测试实已覆盖(旧账销)。
+
+### A 会话正确性(最高优先)
+- [ ] ohmy 运行中会话无和解:stop()/崩溃/cancel 超时都不补帧不落状态,
+      会话永久卡 running(不能发/删/切,重启也救不回) ohmy.rs:252,588,937
+- [ ] 状态机缺 Created:frame.rs 枚举没有,ohmy 新会话落 "finished",
+      侧栏打勾+桌宠庆祝(契约 5 违反) frame.rs:15 ohmy.rs:391
+- [ ] ohmy 工具失败渲染为成功:tool_result 一律映射 completed,
+      无 failed 状态 ohmy.rs:990 frame.rs:162
+- [ ] 云端发送队列卸载后定时器无守卫,可开出无主 WS 管道 cloudtask.tsx:329,267
+- [ ] cloud_ws_open pipe 检查跨 await TOCTOU,重连抖动双流交错 monkeycode.rs:383/423
+
+### B 发布链风险
+- [ ] ohmyagent 零钉死:CI clone HEAD 无 ref,壳无版本/能力握手,
+      旧二进制 Method not found 无从归因 desktop-*.yml ohmy.rs:114
+- [ ] 本地 make release 无 ohmyagent 获取路径,updater 会把引擎"更新没了" Makefile:46
+- [ ] Windows CI 与 Makefile 双实现已漂移(python3/python、ldflags 四处) windows.yml:36
+- [ ] 内核版本恒 0.1.0-dev,无 -X 注入,壳↔内核兼容门禁建不起来 main.go:30
+- [ ] beforeBuildCommand 押注 CLI 前端探测启发式 + @^2 浮动版本,
+      加自断言与钉版本 tauri.conf.json:8 Makefile:19
+
+### C 契约名存实亡
+- [ ] Caps 降级只有设置页落地:用量圆环/审批"总是允许"/附件入口全都不看 caps
+      chat.tsx:804 components.tsx:454 useSession.ts:204
+- [ ] 引擎重启生命周期:无 restarting/ready 事件、UI 靠整页 reload、
+      启动窗口崩溃丢横幅、apply_config_and_restart 无互斥 main.rs:126 App.tsx:713
+- [ ] mc_task_rounds 手拼帧(旧账):frame.rs 补 from_cloud_chunk monkeycode.rs:184
+- [ ] engines_list 缺失(旧账):下拉+能力文案硬编码 settings.tsx:1005
+- [ ] 云端管道词汇(ping/cursor/call-response)无权威定义,parseCursor 双格式
+      兼容即烂过的证据;cloudtask 侧第二套 running 记账 client.ts:414 cloudtask.tsx:38
+- [ ] 两 driver 产帧/emit 风格分叉:上行帧手拼、emit_to vs emit、
+      session-event 壳侧无定义;conn-status 语义分叉 mc.rs:422,465 ohmy.rs:846
+- [ ] reply-question 词汇归属不清:frame.go 死常量,mc 侧 server 静默丢弃,
+      契约表未标注 ohmy-only frame.go:63 server.go:1138
+
+### D 结构健康(演进摩擦)
+- [ ] ohmy.rs 1242 行四职责:按 transport/SessionStore/PermMemory/normalize 拆
+- [ ] client.ts 881 行:按 ipc/session/cloud/baizhi/host 五段拆
+- [ ] App.tsx 1061 行:FileDrawer 组件 + useCloudTasks hook 拆出
+- [ ] 模型可用性双真相:物化跳过仅 eprintln,UI 下拉仍展示无凭据模型 config.rs:233
+- [ ] BzErr 到命令边界坍缩 String,401 无法引导重登 baizhi/mod.rs:392
+- [ ] 微信长轮询无取消面,wx 状态仅成功清理 wechat.rs:89
+- [ ] mc_task_create 产品策略硬编码(镜像/资源/skill),Value 透传 monkeycode.rs:224
+- [ ] sync 结果明文密钥往返 UI,应壳侧暂存+掩码句柄 sync.rs:184
+- [ ] journal 无轮转,回放整份单 emit 绕过批量契约 ohmy.rs:777,449
+- [ ] push_frame 写盘失败静默,回放缺帧无征兆 ohmy.rs:836
+- [ ] win7 通道裁剪静默:无 WSL 内核无 ohmy,设置页仍全量展示,包级能力未进 Caps
+- [ ] wsl_distro 经 Engine 转手,ohmy+WSL 下 repo/uploads 铁律不成立 mod.rs:170
+- [ ] cookie 持锁同步落盘在请求路径上 cookies.rs:172
+- [ ] 命令面:mc_ 前缀与 mc-agent 撞车,四条只读可合并 kind 分派
+- [ ] 桌宠偏好仍触发全量物化(重启已修,物化未拆) main.rs:545
+- [ ] 测试盲区:「监听先于命令」不变式零测试;useSession/connectCloudControl 零测试;
+      pet 偏好独立写路径缺测
