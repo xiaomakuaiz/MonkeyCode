@@ -1440,3 +1440,21 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] mc-desktop/ARCHITECTURE.md:分层+五契约(帧词汇/能力/IPC/配置所有权/状态机)+
       引擎数据归属表+上游缺口清单定稿
 - 验证:cargo 21/21(4 连跑)、UI 38/38、tsc、无头探针、崩溃注入实测
+
+## worktree 功能移除(2026-07-20)
+
+- [x] 桌面路径从未暴露该功能(UI 无入口),整体删除降低表面积:
+      内核:workspace 包、worktree 子命令、--worktree 旗标、Meta.Worktree、
+      server 创建/删除的 worktree 分支;壳:Caps.worktree;
+      UI:SessionMeta.worktree、侧栏"隔离"徽标与分组归属、删除确认文案、
+      引擎提示文案;ARCHITECTURE.md 同步
+- [x] 验证:go build/vet/test、cargo build/test 21、UI tsc/38/build 全绿
+
+## uidist 产物策略定型:不入库(2026-07-20)
+
+- [x] 入库的唯一历史理由(go:embed 无 node 构建)已随内核 headless 化消失;
+      改标准做法:壳静态页+webfonts 移 ui/public(源码,Vite 构建拷入),
+      uidist 100% 生成物 → gitignore + emptyOutDir,堆积问题连根消失
+- [x] 打包经 tauri beforeBuildCommand 自动构建 UI(CI 三 workflow 均有 node);
+      直接 cargo build 前需先 npm run build 一次(文档已注明)
+- [x] 验证:构建产出完整 uidist(assets/fonts/壳页面)、cargo build、无头探针 6 项全过

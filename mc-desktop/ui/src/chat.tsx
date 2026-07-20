@@ -594,7 +594,6 @@ export function ChatView({
                   <>
                     <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
                       删除后不可恢复。
-                      {meta?.worktree ? "隔离工作区及未应用改动将一并删除。" : ""}
                     </div>
                     <div style={{ display: "flex", gap: 4 }}>
                       <button

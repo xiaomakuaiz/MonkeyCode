@@ -4,7 +4,8 @@
   "version": "26071401.0.0",
   "identifier": "com.chaitin.baizhi.monkeycode",
   "build": {
-    "frontendDist": "uidist"
+    "frontendDist": "uidist",
+    "beforeBuildCommand": "npm --prefix ui ci && npm --prefix ui run build"
   },
   "app": {
     "windows": [],

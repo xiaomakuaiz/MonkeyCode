@@ -26,11 +26,11 @@ export interface ProjectGroup {
   items: SessionMeta[];
 }
 
-/** 会话按项目(工作区目录)分组;worktree 会话归属原仓库目录 */
+/** 会话按项目(工作区目录)分组 */
 export function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
   const map = new Map<string, SessionMeta[]>();
   for (const m of sessions) {
-    const dir = m.worktree?.repo || m.workdir;
+    const dir = m.workdir;
     const list = map.get(dir);
     if (list) list.push(m);
     else map.set(dir, [m]);
@@ -177,23 +177,6 @@ function SessionRow({
         ) : (
           <span className="ellipsis" style={{ flex: 1 }}>{meta.title || "新任务"}</span>
         )}
-        {meta.worktree && !showActions && (
-          <span
-            title="隔离 worktree 会话"
-            style={{
-              flex: "none",
-              fontSize: 10,
-              fontWeight: 600,
-              color: active ? "var(--onAccDim)" : "var(--acc)",
-              background: active ? "var(--onAccBg)" : "var(--accBg)",
-              borderRadius: 5,
-              padding: "1px 6px",
-              marginRight: 3,
-            }}
-          >
-            隔离
-          </span>
-        )}
         {!showActions ? (
           <span style={{ display: "flex", alignItems: "center", gap: 5, flex: "none", paddingRight: 3 }}>
             {attention && (
@@ -286,7 +269,6 @@ function SessionRow({
               <>
                 <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
                   删除后不可恢复。
-                  {meta.worktree ? "隔离工作区及未应用改动将一并删除。" : ""}
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button

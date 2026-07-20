@@ -13,7 +13,6 @@ import (
 
 	"github.com/chaitin/MonkeyCode/agent/internal/frame"
 	"github.com/chaitin/MonkeyCode/agent/internal/provider"
-	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
 
 // Meta 会话元信息。
@@ -32,8 +31,6 @@ type Meta struct {
 	Turns     int            `json:"turns"`
 	Status    string         `json:"status"` // created | running | finished | interrupted | error
 	Usage     provider.Usage `json:"usage"`
-	// Worktree 非空表示会话运行在隔离 worktree(Workdir 即 worktree 路径)。
-	Worktree *workspace.Worktree `json:"worktree,omitempty"`
 	// Parent 非空表示这是子代理的子会话(值为主会话 ID);
 	// 列表默认隐藏,可独立回放。
 	Parent string `json:"parent,omitempty"`
@@ -119,7 +116,7 @@ func validID(id string) bool {
 }
 
 // Delete 删除会话目录(元信息/事件日志/消息快照)。不可恢复。
-// 调用方负责先回收运行时资源(live 会话/worktree/子会话)。
+// 调用方负责先回收运行时资源(live 会话/子会话)。
 func Delete(root, id string) error {
 	if !validID(id) {
 		return fmt.Errorf("非法会话 ID: %q", id)

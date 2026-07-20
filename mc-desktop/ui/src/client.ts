@@ -58,7 +58,7 @@ export const listModels = () => invoke<ModelInfo[]>("models_list");
 export const createSession = (workdir: string, model: string, createDir = false) =>
   invoke<SessionMeta>("session_create", { workdir, model, createDir });
 
-/** 删除会话(级联子会话与 worktree,不可恢复);运行中壳/内核拒绝。 */
+/** 删除会话(级联子会话,不可恢复);运行中壳/内核拒绝。 */
 export const deleteSession = (id: string) =>
   invoke<{ ok: boolean }>("session_delete", { id });
 
@@ -90,7 +90,6 @@ export function subscribeEvents(onEvent: (e: SessionEvent) => void): () => void 
 export interface EngineCaps {
   engine: string;
   browser_ext: boolean;
-  worktree: boolean;
   usage_update: boolean;
   perm_remember: boolean;
   attachments: boolean;

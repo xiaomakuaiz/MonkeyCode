@@ -1008,8 +1008,8 @@ export function SettingsView({
             </select>
             <span style={{ fontSize: 12, color: "var(--t5)", lineHeight: 1.7 }}>
               执行任务的 agent 内核。切换后保存即重启引擎;两个引擎的会话列表相互独立。
-              ohmyagent 提供 coordinator/team/LSP/memory 等进阶能力,但暂不支持浏览器扩展、
-              worktree 隔离与上下文用量展示;其配置由本应用接管写入 ~/.ohmyagent
+              ohmyagent 提供 coordinator/team/LSP/memory 等进阶能力,但暂不支持浏览器
+              扩展与上下文用量展示;其配置由本应用接管写入 ~/.ohmyagent
               (原有文件首次接管时备份为 .bak)。
             </span>
           </div>

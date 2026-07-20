@@ -49,7 +49,6 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/session"
 	"github.com/chaitin/MonkeyCode/agent/internal/subagent"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
-	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
 
 // Options 服务配置。
@@ -383,7 +382,6 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Workdir   string `json:"workdir"`
-		Worktree  bool   `json:"worktree"`
 		Model     string `json:"model"`      // 空 = 默认模型
 		CreateDir bool   `json:"create_dir"` // 目录不存在时创建(新项目)
 	}
@@ -431,21 +429,6 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
-	}
-	if req.Worktree {
-		wt, err := workspace.Create(workdir, sess.Meta.ID)
-		if err != nil {
-			sess.Close()
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		sess.Meta.Worktree = wt
-		sess.Meta.Workdir = wt.Path
-		if err := sess.SaveMeta(); err != nil {
-			sess.Close()
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
 	}
 	sess.Close() // liveSession 打开时重新持有
 	writeJSON(w, http.StatusOK, sess.Meta)
@@ -504,11 +487,10 @@ func (s *Server) dropChildWatchers(childID string) {
 }
 
 // handleDeleteSession 删除会话:回收 live 资源 → 级联删子会话 →
-// 连带回收 worktree(best-effort)→ 删磁盘目录。运行中 409。
+// 删磁盘目录。运行中 409。
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	meta, err := session.ReadMeta(s.opts.SessionRoot, id)
-	if err != nil {
+	if _, err := session.ReadMeta(s.opts.SessionRoot, id); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
@@ -527,12 +509,6 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			if err := session.Delete(s.opts.SessionRoot, m.ID); err != nil {
 				slog.Warn("删除子会话失败", "id", m.ID, "err", err)
 			}
-		}
-	}
-	// worktree 目录与 git 登记连带回收;失败不阻塞(可经 mc-agent worktree drop 手工清理)
-	if meta.Worktree != nil {
-		if err := meta.Worktree.Remove(); err != nil {
-			slog.Warn("删除会话 worktree 失败", "id", id, "err", err)
 		}
 	}
 	if err := session.Delete(s.opts.SessionRoot, id); err != nil {

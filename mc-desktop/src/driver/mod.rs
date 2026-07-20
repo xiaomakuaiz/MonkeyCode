@@ -53,7 +53,6 @@ impl DriverHost {
 pub struct Caps {
     pub engine: &'static str,
     pub browser_ext: bool,
-    pub worktree: bool,
     pub usage_update: bool,
     pub perm_remember: bool,
     pub attachments: bool,
@@ -81,16 +80,14 @@ impl Engine {
             Engine::Mc(_) => Caps {
                 engine: "mc-agent",
                 browser_ext: true,
-                worktree: true,
                 usage_update: true,
                 perm_remember: true,
                 attachments: true,
             },
-            // browser_ext/worktree/usage_update 是 mc-agent 特有能力,UI 按此降级
+            // browser_ext/usage_update 是 mc-agent 特有能力,UI 按此降级
             Engine::Ohmy(_) => Caps {
                 engine: "ohmyagent",
                 browser_ext: false,
-                worktree: false,
                 usage_update: false,
                 perm_remember: true,
                 attachments: true,
@@ -162,7 +159,7 @@ impl Engine {
         }
     }
 
-    /// 会话工作区(repo 浏览/上传定位用;worktree 会话已指向 worktree 路径)。
+    /// 会话工作区(repo 浏览/上传定位用)。
     pub async fn session_workdir(&self, id: &str) -> Result<String, String> {
         match self {
             Engine::Mc(d) => d.session_workdir(id).await,

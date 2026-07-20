@@ -25,7 +25,6 @@ import (
 	"github.com/chaitin/MonkeyCode/agent/internal/skills"
 	"github.com/chaitin/MonkeyCode/agent/internal/subagent"
 	"github.com/chaitin/MonkeyCode/agent/internal/tools"
-	"github.com/chaitin/MonkeyCode/agent/internal/workspace"
 )
 
 var version = "0.1.0-dev"
@@ -43,7 +42,6 @@ type rootFlags struct {
 	contextBudget int
 	resumeID      string
 	noSession     bool
-	worktree      bool
 }
 
 var flags rootFlags
@@ -69,9 +67,8 @@ func main() {
 	pf.IntVar(&flags.contextBudget, "context-budget", 0, "上下文 token 预算,超 80% 触发压缩(默认 200000)")
 	pf.StringVar(&flags.resumeID, "resume", "", "恢复指定会话继续对话")
 	pf.BoolVar(&flags.noSession, "no-session", false, "不持久化会话")
-	pf.BoolVar(&flags.worktree, "worktree", false, "在隔离的 git worktree 中执行(结束后用 mc-agent worktree apply/drop 处理改动)")
 
-	root.AddCommand(runCmd(), chatCmd(), sessionsCmd(), configCmd(), serveCmd(), evalCmd(), worktreeCmd(), mcpCmd(), loginCmd(), logoutCmd(), skillsCmd())
+	root.AddCommand(runCmd(), chatCmd(), sessionsCmd(), configCmd(), serveCmd(), evalCmd(), mcpCmd(), loginCmd(), logoutCmd(), skillsCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
@@ -188,29 +185,6 @@ func buildApp(interactive bool) (*app, error) {
 			return nil, err
 		}
 		emitters = append(emitters, sess)
-
-		switch {
-		case flags.worktree && flags.resumeID == "":
-			// 新会话 + worktree:执行目录切到隔离 worktree
-			wt, err := workspace.Create(workdir, sess.Meta.ID)
-			if err != nil {
-				return nil, err
-			}
-			sess.Meta.Worktree = wt
-			sess.Meta.Workdir = wt.Path
-			workdir = wt.Path
-			if err := sess.SaveMeta(); err != nil {
-				return nil, err
-			}
-		case sess.Meta.Worktree != nil:
-			// resume 到 worktree 会话:沿用其执行目录
-			if st, err := os.Stat(sess.Meta.Workdir); err != nil || !st.IsDir() {
-				return nil, fmt.Errorf("会话的 worktree 目录已不存在: %s", sess.Meta.Workdir)
-			}
-			workdir = sess.Meta.Workdir
-		}
-	} else if flags.worktree {
-		return nil, fmt.Errorf("--worktree 需要会话持久化,不能与 --no-session 同用")
 	}
 
 	// todo 工具的计划更新外显为 plan 帧
@@ -243,7 +217,7 @@ func buildApp(interactive bool) (*app, error) {
 	reg.Register(sub)
 	pol.AllowTool(sub.Name())
 
-	// 本地技能(项目/全局)与平台资源合并注入;workdir 此时已是最终执行目录(含 worktree)
+	// 本地技能(项目/全局)与平台资源合并注入
 	extras, readRoots := skills.Assemble(workdir, platExtras, platRoots)
 	system := contextmgr.Build(workdir, extras)
 	engine := loop.New(p, reg, pol, emitters, builder, workdir, system,
@@ -355,12 +329,6 @@ func runCmd() *cobra.Command {
 			if a.sess != nil && !quiet {
 				fmt.Fprintf(os.Stderr, "\n会话: %s(继续对话: mc-agent chat --resume %s)\n",
 					a.sess.Meta.ID, a.sess.Meta.ID)
-				if wt := a.sess.Meta.Worktree; wt != nil {
-					if stat, err := wt.DiffStat(); err == nil && stat != "" {
-						fmt.Fprintf(os.Stderr, "\n改动发生在隔离工作区 %s:\n%s\n应用: mc-agent worktree apply %s  丢弃: mc-agent worktree drop %s\n",
-							wt.Path, stat, a.sess.Meta.ID, a.sess.Meta.ID)
-					}
-				}
 			}
 			return nil
 		},
