@@ -1,16 +1,15 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { viteSingleFile } from "vite-plugin-singlefile";
 
-// 打成单文件 index.html:内核 serve 以 []byte 形式 go:embed,
-// 输出目录直接指向 cmd/mc-agent/uidist(构建产物入库,go build 不依赖 node)。
-// emptyOutDir 必须关:uidist/fonts/ 是手工入库的 webfont 资产(约 20MB,
-// 不走 vite 管线以免 public/uidist 在 git 里存两份),清目录会把它抹掉;
-// 单文件构建只产出 index.html,不存在旧产物堆积问题。
+// 构建产物输出到桌面壳的 frontendDist(mc-desktop/uidist,随壳分发,
+// 构建产物入库,cargo build 不依赖 node;改 UI 后在此执行 npm run build)。
+// emptyOutDir 必须关:uidist/ 内有手工入库的 webfont 资产(约 20MB)与壳
+// 自有页面(pet.html/error.html/音效),清目录会把它们抹掉。
+// 注意:hash 命名的旧 assets 会随多次构建堆积,重新构建前可手工清理 uidist/assets。
 export default defineConfig({
-  plugins: [react(), viteSingleFile()],
+  plugins: [react()],
   build: {
-    outDir: "../cmd/mc-agent/uidist",
+    outDir: "../../mc-desktop/uidist",
     emptyOutDir: false,
   },
 });

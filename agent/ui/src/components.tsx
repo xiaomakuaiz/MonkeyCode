@@ -20,6 +20,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { marked } from "marked";
 import {
+  useEffect,
   useMemo,
   useState,
   type CSSProperties,
@@ -205,6 +206,49 @@ function stripWorkdir(text: string, workdir?: string): string {
   return text.split(prefix).join("");
 }
 
+/** 上传/落盘图片:src 经壳异步回读(data URL),就绪前占位不渲染。 */
+function UploadImg({
+  load,
+  alt,
+  title,
+  onClick,
+  style,
+}: {
+  load: () => Promise<string>;
+  alt: string;
+  title?: string;
+  onClick?: () => void;
+  style?: CSSProperties;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    load().then(
+      (u) => alive && setSrc(u),
+      () => alive && setSrc(null),
+    );
+    return () => {
+      alive = false;
+    };
+    // load 闭包按 alt(路径)稳定,不依赖函数身份
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alt]);
+  if (!src) return null;
+  return <img src={src} alt={alt} title={title} onClick={onClick} style={style} />;
+}
+
+/** 附件文件下载:壳回读 data URL 后经 <a download> 落盘。 */
+function downloadUpload(load: () => Promise<string>, name: string): void {
+  load().then((url) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }).catch(() => {});
+}
+
 export function ToolCard({
   item,
   onOpenChild,
@@ -213,8 +257,8 @@ export function ToolCard({
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
   onOpenChild?: (id: string) => void;
-  /** 已上传/落盘图片路径 → 可渲染 URL(工具截图缩略图;不传则不渲染图) */
-  uploadUrl?: (path: string) => string;
+  /** 已上传/落盘图片路径 → 可渲染 URL(异步 data URL;不传则不渲染图) */
+  uploadUrl?: (path: string) => Promise<string>;
   workdir?: string;
 }) {
   const [zoom, setZoom] = useState<string | null>(null);
@@ -289,9 +333,9 @@ export function ToolCard({
       {images.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingLeft: 15 }}>
           {images.map((p) => (
-            <img
+            <UploadImg
               key={p}
-              src={uploadUrl!(p)}
+              load={() => uploadUrl!(p)}
               alt={p}
               title={p}
               onClick={() => setZoom(p)}
@@ -321,8 +365,8 @@ export function ToolCard({
             cursor: "zoom-out",
           }}
         >
-          <img
-            src={uploadUrl!(zoom)}
+          <UploadImg
+            load={() => uploadUrl!(zoom)}
             alt={zoom}
             style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "var(--shadowLg)" }}
           />
@@ -445,7 +489,7 @@ function TurnDivider() {
 const ATT_LINE = /^\[(图片|文件)\] (\S+)$/;
 
 /** 用户气泡:文本 + 附图缩略图(点击看大图)+ 文件 chip(点击下载) */
-function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: string) => string }) {
+function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: string) => Promise<string> }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const lines = text.split("\n");
   const images: string[] = [];
@@ -478,9 +522,9 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
         {(images.length > 0 || files.length > 0) && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: body ? 8 : 2, alignItems: "center" }}>
             {images.map((p) => (
-              <img
+              <UploadImg
                 key={p}
-                src={uploadUrl!(p)}
+                load={() => uploadUrl!(p)}
                 alt={p}
                 title={p}
                 onClick={() => setZoom(p)}
@@ -498,7 +542,7 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
               <span
                 key={p}
                 title={p + "(点击下载)"}
-                onClick={() => openExternal(new URL(uploadUrl!(p), location.origin).href)}
+                onClick={() => downloadUpload(() => uploadUrl!(p), p.split("/").pop() || "附件")}
                 style={{
                   height: 28,
                   display: "flex",
@@ -537,8 +581,8 @@ function UserBubble({ text, uploadUrl }: { text: string; uploadUrl?: (path: stri
             cursor: "zoom-out",
           }}
         >
-          <img
-            src={uploadUrl!(zoom)}
+          <UploadImg
+            load={() => uploadUrl!(zoom)}
             alt={zoom}
             style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "var(--shadowLg)" }}
           />
@@ -557,7 +601,7 @@ function ItemView({
   item: Exclude<LogItem, { kind: "tool" }>;
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
   onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
-  uploadUrl?: (path: string) => string;
+  uploadUrl?: (path: string) => Promise<string>;
 }) {
   switch (item.kind) {
     case "user":
@@ -780,7 +824,7 @@ export function LogList({
   onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
   onOpenChild?: (id: string) => void;
   /** 已上传图片路径 → 可渲染 URL(气泡缩略图;不传则图片行按纯文本展示) */
-  uploadUrl?: (path: string) => string;
+  uploadUrl?: (path: string) => Promise<string>;
   /** 工作区根:工具卡标题里的绝对路径按它收敛为相对路径 */
   workdir?: string;
 }) {

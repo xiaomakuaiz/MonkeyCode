@@ -1,34 +1,38 @@
 // MonkeyCode 本地桌面客户端 —— Tauri 壳。
 //
 // 职责边界:壳持有**应用配置**(模型列表等)与宿主事务(进程生命周期、
-// 托盘、设置窗口);agent 内核只是壳拉起的子进程,配置经环境变量注入
-// (MC_AGENT_MODELS 指向壳写出的模型清单),内核零管理职责。
-// 业务与对话 UI 在 Go 内核;壳与内核经 localhost WS 帧协议解耦。
+// 托盘、桌宠、更新),并承载 UI(agent/ui 构建产物随壳分发,frontendDist)。
+// agent 内核是壳拉起的子进程,UI 只经 Tauri IPC 与壳对话,壳内 driver 层
+// 适配不同引擎(mc-agent REST/WS;ohmyagent stdio JSON-RPC,M3 接入)。
 //
 // 生命周期:
-//   首启无配置 → 设置窗口;保存 → 写清单 → 拉起内核 → 主窗口加载内核 UI。
-//   随时修改 → 托盘"设置" → 保存即重启内核(会话在磁盘,重连自动回放)。
+//   启动 → 拉起引擎(无配置则零模型模式)→ 主窗口加载内置 UI。
+//   设置保存 → 壳写清单 → 重启引擎 → UI 整页刷新(会话在磁盘,重连自动回放)。
 //   关主窗口只隐藏(任务继续跑),托盘"退出"才真正退出并回收内核。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod baizhi;
+mod config;
+mod driver;
+mod repo;
+mod uploads;
 mod wsl;
 
-use std::fs;
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
+
+use config::{load_config, save_config_files, DesktopConfig};
+use driver::DriverHost;
 
 // macOS 桌宠面板类:普通 NSWindow 被点击会激活应用——主窗口被系统提到
 // 最前并拿到焦点,触发"main 聚焦→藏桌宠",表现为"一点猴子主窗口就弹出、
@@ -47,112 +51,7 @@ tauri_panel! {
     })
 }
 
-// ==================== 应用配置(壳持有) ====================
-
-fn json_array() -> serde_json::Value {
-    serde_json::Value::Array(vec![])
-}
-fn json_object() -> serde_json::Value {
-    serde_json::Value::Object(serde_json::Map::new())
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// 应用配置。壳只认顶层两个业务 key(models/mcp_servers),内容**原样透传**
-/// 不做业务校验——schema 的唯一来源是内核(config.LoadModels)与设置视图
-/// 表单(agent/ui),壳零字段知识;非法内容由内核以零模型模式容忍并经 UI
-/// 引导修复。pet_* 是壳自有偏好:设置视图不感知,save_config 时从磁盘合并
-/// 保留(否则每次保存设置都会被 serde 默认值冲掉)。
-#[derive(Clone, Serialize, Deserialize)]
-struct DesktopConfig {
-    #[serde(default = "json_array")]
-    models: serde_json::Value,
-    /// MCP 服务器(name → 配置,与内核 mcp.json 的 mcpServers 同构)
-    #[serde(default = "json_object")]
-    mcp_servers: serde_json::Value,
-    /// 内核运行环境:空 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows)。
-    /// 业务字段(设置视图读写),保存即经 save_config 重启内核生效。
-    #[serde(default)]
-    kernel_env: String,
-    /// 桌宠开关(托盘菜单切换)
-    #[serde(default = "default_true")]
-    pet_enabled: bool,
-    /// 桌宠窗口位置(物理像素;拖动后记忆)
-    #[serde(default)]
-    pet_pos: Option<(i32, i32)>,
-}
-
-impl Default for DesktopConfig {
-    fn default() -> Self {
-        Self {
-            models: json_array(),
-            mcp_servers: json_object(),
-            kernel_env: String::new(),
-            pet_enabled: true,
-            pet_pos: None,
-        }
-    }
-}
-
-fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_config_dir()
-        .map_err(|e| format!("无法定位配置目录: {e}"))
-}
-
-fn load_config(app: &AppHandle) -> DesktopConfig {
-    let Ok(dir) = config_dir(app) else {
-        return DesktopConfig::default();
-    };
-    fs::read(dir.join("config.json"))
-        .ok()
-        .and_then(|data| serde_json::from_slice(&data).ok())
-        .unwrap_or_default()
-}
-
-/// 内核消费的配置文件路径集合。
-struct KernelFiles {
-    models: PathBuf,
-    mcp: PathBuf,
-}
-
-/// 写应用配置 + 内核清单(模型 + MCP,均 0600,含密钥)。
-fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<KernelFiles, String> {
-    let dir = config_dir(app)?;
-    fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
-
-    let write = |path: &PathBuf, data: Vec<u8>| -> Result<(), String> {
-        fs::write(path, data).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-        }
-        Ok(())
-    };
-
-    let cfg_data = serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?;
-    write(&dir.join("config.json"), cfg_data)?;
-
-    let files = KernelFiles {
-        models: dir.join("models.json"),
-        mcp: dir.join("mcp.json"),
-    };
-    let models_data = serde_json::to_vec_pretty(&cfg.models).map_err(|e| e.to_string())?;
-    write(&files.models, models_data)?;
-
-    let mcp_data = serde_json::to_vec_pretty(&serde_json::json!({ "mcpServers": cfg.mcp_servers }))
-        .map_err(|e| e.to_string())?;
-    write(&files.mcp, mcp_data)?;
-    Ok(files)
-}
-
 // ==================== 状态 ====================
-
-/// 内核子进程句柄(退出时回收)。子进程存在 ⇔ 关主窗口隐藏到托盘。
-struct Kernel(Mutex<Option<Child>>);
 
 /// 托盘是否可用;不可用时关窗直接退出(否则窗口藏起来就找不回了)。
 struct TrayReady(AtomicBool);
@@ -161,13 +60,9 @@ struct TrayReady(AtomicBool);
 struct Tray(Mutex<Option<TrayIcon>>);
 
 /// 壳→UI 的待处理意图(如托盘"设置")。事件是发后不管的:webview 未就绪
-/// (内核启动中/保存后整页导航间隙/错误页)时监听器不存在,事件静默丢失。
-/// 意图同时落在这里,UI 启动完成后经 take_ui_intent 取走补处理,两路兜底。
+/// 时监听器不存在,事件静默丢失。意图同时落在这里,UI 启动完成后经
+/// take_ui_intent 取走补处理,两路兜底。
 struct UiIntent(Mutex<Option<String>>);
-
-/// 内核连接信息(端口+令牌):桌宠页经 kernel_info 命令取用,直连内核
-/// 事件流。token 每次内核启动轮换,桌宠断流重连时必须重取。
-struct KernelInfo(Mutex<Option<(u16, String)>>);
 
 /// 桌宠开关的运行时缓存(焦点切换高频读,不每次读盘;真值落 config.json)。
 struct PetEnabled(AtomicBool);
@@ -198,36 +93,7 @@ fn sync_tray_theme(app: &AppHandle, theme: Theme) {
     }
 }
 
-/// 停止内核:关 stdin 管道触发内核优雅退出(--watch-stdin 契约:内核取消
-/// 进行中的轮次并落盘会话消息快照),超时未退再强杀兜底。
-/// 不可直接 kill:messages.json(模型上下文)只在轮次收尾落盘,强杀会丢掉
-/// 执行中轮次的全部消息;而 UI 回放(events.jsonl)逐帧实时落盘看着完好,
-/// 重启后用户发"继续"才发现模型没了上下文。
-/// wsl_distro:内核跑在 WSL 里时传发行版名。强杀杀的是 wsl.exe 中继进程,
-/// 不保证 guest 内的内核退出(会残留占端口),须补 pkill 兜底。
-fn stop_kernel(mut child: Child, wsl_distro: Option<&str>) {
-    drop(child.stdin.take());
-    // 内核侧收尾预算:取消轮次等待 3s + HTTP 优雅关闭 3s,留足余量
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-            Err(_) => break,
-        }
-    }
-    eprintln!("[mc-desktop] 内核未在期限内优雅退出,强制终止");
-    let _ = child.kill();
-    let _ = child.wait();
-    if let Some(d) = wsl_distro {
-        let args: Vec<String> = ["-d", d, "--exec", "pkill", "-x", "mc-agent-linux"]
-            .map(String::from)
-            .into();
-        let _ = wsl::run_wsl(&args, Duration::from_secs(5));
-    }
-}
-
-// ==================== Tauri 命令(内核 UI 的设置视图调用) ====================
+// ==================== Tauri 命令(UI 调用) ====================
 
 #[tauri::command]
 fn get_config(app: AppHandle) -> DesktopConfig {
@@ -255,46 +121,30 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// 保存配置并(重)启内核,主窗口导航到新内核 URL(整页重载)。
-/// 内容不做业务校验(壳零字段知识):表单校验在设置视图,权威校验在内核。
+/// 保存配置并重启引擎。内容不做业务校验(壳零字段知识):表单校验在设置
+/// 视图,权威校验在内核。返回后 UI 自行整页刷新(不再有壳侧导航,原
+/// WebKitGTK IPC 重放竞态随之消失)。
 #[tauri::command]
-fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
+async fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
     // 设置视图载荷只含业务字段,壳自有偏好(桌宠)从磁盘合并保留
     let disk = load_config(&app);
-    // 旧内核按"保存前"的运行环境回收(用户可能这次就在切换运行环境)
-    let old_kernel_env = disk.kernel_env.clone();
     let config = DesktopConfig {
         pet_enabled: disk.pet_enabled,
         pet_pos: disk.pet_pos,
         ..config
     };
-    let files = save_config_files(&app, &config)?;
-
-    // 端口固定复用:必须先停旧内核释放端口,再起新内核(阻塞等就绪,最多 15 秒)。
-    // 若新内核启动失败(仅安装级故障:二进制缺失等),设置视图内联展示错误,
-    // 重试保存即可再次拉起。
-    if let Some(old) = app.state::<Kernel>().0.lock().unwrap().take() {
-        app.state::<KernelInfo>().0.lock().unwrap().take();
-        stop_kernel(old, wsl::distro_of(&old_kernel_env));
-    }
-    let (child, port, token) = start_kernel(&app, &files)?;
-    app.state::<Kernel>().0.lock().unwrap().replace(child);
-    app.state::<KernelInfo>().0.lock().unwrap().replace((port, token.clone()));
-    let url = kernel_ui_url(port, &token);
-    // 导航延后到本命令返回之后:WebKitGTK 会重放"页面导航走时响应尚未送达"
-    // 的 IPC 请求(实测同一 invoke 二次进入本命令→内核被重启两次)。
-    // 先让响应落地,再整页导航到新内核 URL。
-    std::thread::spawn({
-        let app = app.clone();
-        move || {
-            std::thread::sleep(Duration::from_millis(200));
-            let _ = app.run_on_main_thread({
-                let app = app.clone();
-                move || show_kernel_ui(&app, &url)
-            });
+    // 引擎重启是阻塞流程(优雅停内核 ~10s + 起新内核 ~15s),丢 blocking 池
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = save_config_files(&app, &config)?;
+        if let Some(engine) = app.state::<DriverHost>().take() {
+            engine.stop();
         }
-    });
-    Ok(())
+        let engine = driver::start_engine(&app, &config, &files)?;
+        app.state::<DriverHost>().set(engine);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存失败: {e}"))?
 }
 
 /// 取走(消费)待处理的壳→UI 意图。UI 两处调用:启动完成后补处理错过的
@@ -304,20 +154,17 @@ fn take_ui_intent(app: AppHandle) -> Option<String> {
     app.state::<UiIntent>().0.lock().unwrap().take()
 }
 
-/// 宿主信息(内核 UI 的设置视图"关于"卡片展示)。
+/// 宿主信息(设置视图"关于"卡片展示)。
 #[tauri::command]
 fn host_info(app: AppHandle) -> serde_json::Value {
     serde_json::json!({ "version": display_version(&app.package_info().version.to_string()) })
 }
 
-/// 内核地址与令牌(桌宠页直连内核事件流用)。
-/// 内核未运行时报错,桌宠页按离线态展示并稍后重试。
+/// 无头探针的备用上报通道(仅 MC_DESKTOP_IPC_PROBE 下注册使用):
+/// fetch 通道依赖 WebKit 网络进程,其崩溃时经 IPC 落 stderr 仍可观测。
 #[tauri::command]
-fn kernel_info(app: AppHandle) -> Result<serde_json::Value, String> {
-    match app.state::<KernelInfo>().0.lock().unwrap().as_ref() {
-        Some((port, token)) => Ok(serde_json::json!({ "port": port, "token": token })),
-        None => Err("内核未运行".into()),
-    }
+fn probe_log(msg: String) {
+    eprintln!("[probe] {msg}");
 }
 
 /// 唤回主窗口(桌宠点击)。
@@ -402,9 +249,8 @@ fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, Strin
         // Windows 安装器路径由插件直接退进程(不走 RunEvent::Exit),
         // 必须先在这里回收内核,否则 mc-agent.exe 占用文件导致 NSIS 安装失败
         .on_before_exit(move || {
-            if let Some(child) = handle.state::<Kernel>().0.lock().unwrap().take() {
-                let env = load_config(&handle).kernel_env;
-                stop_kernel(child, wsl::distro_of(&env));
+            if let Some(engine) = handle.state::<DriverHost>().take() {
+                engine.stop();
             }
         });
     // 本机测试覆盖清单地址(release 构建强制 https,http 清单只在 debug 下可用)
@@ -477,111 +323,101 @@ async fn check_update(app: AppHandle, manual: bool) {
 
 // ==================== 窗口 ====================
 
-/// 允许 webview 停留的内部地址:内核 UI(loopback)或壳自带页面。
-fn is_internal_url(url: &Url) -> bool {
+/// 允许 webview 停留的内部地址:壳内置页面(app://tauri 协议)。
+/// 其余导航(对话里的外部链接等)一律拒绝并交系统浏览器。
+fn is_internal_url(url: &tauri::Url) -> bool {
     match url.scheme() {
-        "tauri" => true, // 壳自带页面(错误页)
-        "http" | "https" => {
-            matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "tauri.localhost"))
-        }
+        "tauri" => true,
+        // Windows 下 Tauri app 页面以 http(s)://tauri.localhost 承载
+        "http" | "https" => matches!(url.host_str(), Some("tauri.localhost")),
         _ => false,
     }
 }
 
-/// 主窗口显示内核 UI(已存在则导航复用,否则创建)。
-fn show_kernel_ui(app: &AppHandle, url: &str) {
-    let parsed: Url = match url.parse() {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("[mc-desktop] 内核 URL 无效: {e}");
-            return;
-        }
-    };
+/// 创建主窗口并加载壳内置页面(page 如 "index.html" / "error.html#msg")。
+fn create_main_window(app: &AppHandle, page: &str) {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.navigate(parsed);
         let _ = win.show();
         let _ = win.set_focus();
-    } else {
-        let opener = app.clone();
-        let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
-            .title("MonkeyCode")
-            .inner_size(1200.0, 800.0)
-            // 布局下限:设置视图(168px 导航 + 内容列 + 保存条)在极窄窗口下
-            // 保存按钮会被挤出可视区;原独立设置窗口的 min_inner_size 由此接棒
-            .min_inner_size(640.0, 480.0)
-            // Tauri 默认的原生拖放处理器会在窗口层吞掉文件拖拽,HTML5 的
-            // drag/drop 事件到不了页面(对话区拖入图片/文件依赖 DOM 事件);
-            // 禁用后由 UI 侧统一处理
-            .disable_drag_drop_handler()
-            // 导航守卫:webview 只许待在内核 UI(loopback)与壳自带页面;
-            // 其余导航(对话里的外部链接等)一律拒绝并交系统浏览器,
-            // 防止应用被"跳走"后无法返回。UI 侧已拦截点击,这里是兜底。
-            .on_navigation(move |url| {
-                let internal = is_internal_url(url);
-                if !internal {
-                    use tauri_plugin_opener::OpenerExt;
-                    let _ = opener.opener().open_url(url.as_str(), None::<&str>);
-                }
-                internal
-            });
-        // macOS:标题栏悬浮融入侧栏(红绿灯直接落在 UI 上),对齐新设计;
-        // UI 侧在 mac 壳内为侧栏顶部预留拖拽区
-        #[cfg(target_os = "macos")]
-        {
-            builder = builder
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .hidden_title(true);
-        }
-        // Windows:去原生装饰栏,UI 侧自绘 36px 标题栏(拖拽区 + 窗口按钮);
-        // 错误页窗口不受影响(open_error_page 保留原生装饰,无自绘控件可用)
-        #[cfg(target_os = "windows")]
-        {
-            builder = builder.decorations(false);
-        }
-        // 无头冒烟探针:页面加载后自动走一遍 远程页→IPC→壳配置 链路,
-        // 结果经本地回环上报(无头环境唯一可靠的回读通道)
-        if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
-            builder = builder.initialization_script(
-                "const report = (m) => fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
-                 report('script-injected:' + location.search + ':saved=' + (sessionStorage.getItem('mc-probe-saved') || '0')); \
-                 setTimeout(() => { \
-                   if (location.protocol !== 'http:') return; /* 仅在内核 UI 页触发 */ \
-                   if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
-                   window.__TAURI__.core.invoke('get_config') \
-                     .then((cfg) => { report('invoke-ok'); \
-                       /* 保存→重启内核→整页重载 全链路:sessionStorage 跨重载存活, \
-                          第二次加载报 reload-after-save-ok(仅片段变化的导航不会重载,此项会缺失) */ \
-                       if (!sessionStorage.getItem('mc-probe-saved')) { \
-                         sessionStorage.setItem('mc-probe-saved', '1'); \
-                         window.__TAURI__.core.invoke('save_config', {config: cfg}) \
-                           .then(() => report('save-ok')) \
-                           .catch((e) => report('save-err:' + String(e).slice(0, 80))); \
-                       } else { report('reload-after-save-ok'); } \
-                     }) \
-                     .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
-                   /* 托盘设置入口链路的运行期 ACL:take_ui_intent 命令 + event.listen \
-                      (capability 配置只能运行期验证——bb1574e 教训) */ \
-                   window.__TAURI__.core.invoke('take_ui_intent') \
-                     .then(() => report('take-intent-ok')) \
-                     .catch((e) => report('take-intent-err:' + String(e).slice(0, 80))); \
-                   window.__TAURI__.event.listen('mc-probe-evt', () => {}) \
-                     .then(() => report('listen-ok')) \
-                     .catch((e) => report('listen-err:' + String(e).slice(0, 80))); \
-                   /* opener 全链路(命令 ACL + URL scope):无头环境以 BROWSER=/bin/true 承接 */ \
-                   window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
-                     .then(() => report('opener-ok')) \
-                     .catch((e) => report('opener-err:' + String(e).slice(0, 80))); \
-                   /* 导航守卫:外域跳转应被拒;页面存活才能发出上报。 \
-                      延后到 save_config 的整页导航(约 +1.5s)之后:被取消的在途 \
-                      导航会让 WebKitGTK 吞掉紧随其后的程序化 navigate,二者交叠 \
-                      会误杀 reload-after-save 链路的探针信号 */ \
-                   setTimeout(() => { location.href = 'https://nav-guard.invalid/x'; }, 6000); \
-                   setTimeout(() => report('nav-guard-ok'), 7000); \
-                 }, 3000);",
-            );
-        }
-        let _ = builder.build();
+        return;
     }
+    let opener = app.clone();
+    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()))
+        .title("MonkeyCode")
+        .inner_size(1200.0, 800.0)
+        // 布局下限:设置视图(168px 导航 + 内容列 + 保存条)在极窄窗口下
+        // 保存按钮会被挤出可视区
+        .min_inner_size(640.0, 480.0)
+        // Tauri 默认的原生拖放处理器会在窗口层吞掉文件拖拽,HTML5 的
+        // drag/drop 事件到不了页面(对话区拖入图片/文件依赖 DOM 事件);
+        // 禁用后由 UI 侧统一处理
+        .disable_drag_drop_handler()
+        // 导航守卫:webview 只许待在壳内置页面;外部链接交系统浏览器,
+        // 防止应用被"跳走"后无法返回。UI 侧已拦截点击,这里是兜底。
+        .on_navigation(move |url| {
+            let internal = is_internal_url(url);
+            if !internal {
+                use tauri_plugin_opener::OpenerExt;
+                let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+            }
+            internal
+        });
+    // macOS:标题栏悬浮融入侧栏(红绿灯直接落在 UI 上);
+    // UI 侧在 mac 壳内为侧栏顶部预留拖拽区
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+    // Windows:去原生装饰栏,UI 侧自绘 36px 标题栏(拖拽区 + 窗口按钮)
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.decorations(false);
+    }
+    // 无头冒烟探针:页面加载后自动走一遍 UI→IPC→壳配置 链路,
+    // 结果经本地回环上报(无头环境唯一可靠的回读通道)
+    if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
+        builder = builder.initialization_script(
+            "const report = (m) => { fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
+               try { window.__TAURI__ && window.__TAURI__.core.invoke('probe_log', {msg: m}).catch(()=>{}); } catch {} }; \
+             let hb = 0; setInterval(() => report('hb-' + (++hb)), 2000); \
+             window.addEventListener('error', (e) => report('jserr:' + String(e.message).slice(0, 120))); \
+             window.addEventListener('unhandledrejection', (e) => report('rej:' + String(e.reason).slice(0, 120))); \
+             report('script-injected:' + location.search + ':saved=' + (sessionStorage.getItem('mc-probe-saved') || '0')); \
+             setTimeout(() => { \
+               if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
+               window.__TAURI__.core.invoke('get_config') \
+                 .then((cfg) => { report('invoke-ok'); \
+                   /* 保存→重启引擎 链路:save_config 返回即成功(UI 自行 reload)。 \
+                      延后到其他探针都完成之后(引擎重启期间 IPC 不可用) */ \
+                   if (!sessionStorage.getItem('mc-probe-saved')) { \
+                     sessionStorage.setItem('mc-probe-saved', '1'); \
+                     setTimeout(() => { \
+                       window.__TAURI__.core.invoke('save_config', {config: cfg}) \
+                         .then(() => report('save-ok')) \
+                         .catch((e) => report('save-err:' + String(e).slice(0, 80))); \
+                     }, 12000); \
+                   } \
+                 }) \
+                 .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
+               window.__TAURI__.core.invoke('take_ui_intent') \
+                 .then(() => report('take-intent-ok')) \
+                 .catch((e) => report('take-intent-err:' + String(e).slice(0, 80))); \
+               window.__TAURI__.event.listen('mc-probe-evt', () => {}) \
+                 .then(() => report('listen-ok')) \
+                 .catch((e) => report('listen-err:' + String(e).slice(0, 80))); \
+               window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
+                 .then(() => report('opener-ok')) \
+                 .catch((e) => report('opener-err:' + String(e).slice(0, 80))); \
+               /* 导航守卫探测放最后:引擎重启(save)耗时数秒,且取消中的 \
+                  在途导航在 WebKitGTK 有副作用,不能与其他探针交叠 */ \
+               setTimeout(() => { location.href = 'https://nav-guard.invalid/x'; }, 20000); \
+               setTimeout(() => report('nav-guard-ok'), 21000); \
+             }, 3000);",
+        );
+    }
+    let _ = builder.build();
     if let Some(win) = app.get_webview_window("main") {
         if let Ok(theme) = win.theme() {
             sync_tray_theme(app, theme);
@@ -589,13 +425,15 @@ fn show_kernel_ui(app: &AppHandle, url: &str) {
     }
 }
 
-/// 打开错误页(内核启动故障等宿主级错误)。
-fn open_error_page(app: &AppHandle, msg: &str) {
-    let url = PathBuf::from(format!("index.html#{}", urlencode(msg)));
-    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url))
-        .title("MonkeyCode")
-        .inner_size(720.0, 480.0)
-        .build();
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 // ==================== 桌宠 ====================
@@ -672,7 +510,7 @@ fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPo
     tauri::PhysicalPosition::new(mx + mw - w - margin, my + mh - h - margin - taskbar)
 }
 
-/// 按条件显示/隐藏桌宠:显示要求 开关开 && 内核在跑(内核没起时
+/// 按条件显示/隐藏桌宠:显示要求 开关开 && 引擎在跑(引擎没起时
 /// 桌宠只会展示"离线",徒增噪音);隐藏无条件执行。
 fn set_pet_visible(app: &AppHandle, show: bool) {
     let Some(pet) = app.get_webview_window("pet") else {
@@ -683,8 +521,8 @@ fn set_pet_visible(app: &AppHandle, show: bool) {
         return;
     }
     let enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
-    let kernel_running = app.state::<Kernel>().0.lock().unwrap().is_some();
-    if enabled && kernel_running {
+    let engine_running = app.state::<DriverHost>().running();
+    if enabled && engine_running {
         let _ = pet.show();
     }
 }
@@ -711,26 +549,63 @@ fn main() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder
-        .manage(Kernel(Mutex::new(None)))
+        .manage(DriverHost::new())
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(Tray(Mutex::new(None)))
         .manage(UiIntent(Mutex::new(None)))
-        .manage(KernelInfo(Mutex::new(None)))
         .manage(PetEnabled(AtomicBool::new(true)))
         .manage(PetPos(Mutex::new(None)))
+        .manage(baizhi::monkeycode::CloudPipes::new())
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
             take_ui_intent,
             host_info,
-            kernel_info,
             show_main,
             update_check,
             update_install,
             open_extension_dir,
-            list_wsl_distros
+            list_wsl_distros,
+            probe_log,
+            driver::engine_caps,
+            driver::sessions_list,
+            driver::session_create,
+            driver::session_delete,
+            driver::session_patch,
+            driver::models_list,
+            driver::session_open,
+            driver::session_close,
+            driver::session_send,
+            driver::session_call,
+            driver::repo_call,
+            driver::upload_file,
+            driver::upload_read,
+            driver::kernel_http,
+            baizhi::baizhi_status,
+            baizhi::baizhi_send_code,
+            baizhi::baizhi_login,
+            baizhi::baizhi_logout,
+            baizhi::baizhi_wechat_start,
+            baizhi::baizhi_wechat_poll,
+            baizhi::baizhi_sync,
+            baizhi::mc_status,
+            baizhi::mc_login,
+            baizhi::mc_logout,
+            baizhi::mc_tasks,
+            baizhi::mc_task_info,
+            baizhi::mc_task_rounds,
+            baizhi::mc_task_stop,
+            baizhi::mc_task_create,
+            baizhi::mc_task_options,
+            baizhi::monkeycode::cloud_ws_open,
+            baizhi::monkeycode::cloud_ws_send,
+            baizhi::monkeycode::cloud_ws_close
         ])
         .setup(|app| {
+            // 百智云/云端服务(壳级单例;凭证 cookie 与配置同目录)
+            let cfg_dir = config::config_dir(app.handle()).map_err(std::io::Error::other)?;
+            app.manage(baizhi::BaizhiState(std::sync::Arc::new(baizhi::Service::new(cfg_dir))));
+
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle()) {
                 eprintln!("[mc-desktop] 托盘创建失败(关窗将直接退出): {e}");
@@ -747,22 +622,20 @@ fn main() {
                 });
             }
 
-            // 无条件拉起内核:无配置时写出空清单,内核以零模型模式启动,
-            // 首启向导由内核 UI 的设置视图承担(壳无业务页面)。
+            // 无条件拉起引擎:无配置时写出空清单,内核以零模型模式启动,
+            // 首启向导由 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
             app.state::<PetEnabled>().0.store(cfg.pet_enabled, Ordering::Relaxed);
             let files = save_config_files(app.handle(), &cfg)?; // 刷新清单文件
-            match start_kernel(app.handle(), &files) {
-                Ok((child, port, token)) => {
-                    eprintln!("[mc-desktop] 内核就绪: 127.0.0.1:{port}");
-                    app.state::<Kernel>().0.lock().unwrap().replace(child);
-                    app.state::<KernelInfo>().0.lock().unwrap().replace((port, token.clone()));
-                    show_kernel_ui(app.handle(), &kernel_ui_url(port, &token));
+            match driver::start_engine(app.handle(), &cfg, &files) {
+                Ok(engine) => {
+                    app.state::<DriverHost>().set(engine);
+                    create_main_window(app.handle(), "index.html");
                     ensure_pet_window(app.handle());
                 }
                 Err(e) => {
-                    eprintln!("[mc-desktop] 内核启动失败: {e}");
-                    open_error_page(app.handle(), &e);
+                    eprintln!("[mc-desktop] 引擎启动失败: {e}");
+                    create_main_window(app.handle(), &format!("error.html#{}", urlencode(&e)));
                 }
             }
             Ok(())
@@ -790,15 +663,15 @@ fn main() {
                         .replace((pos.x, pos.y));
                 }
             }
-            // 主窗口:内核在跑且托盘可用时关窗只隐藏;设置/错误页正常关闭
+            // 主窗口:引擎在跑且托盘可用时关窗只隐藏;错误页正常关闭
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
                     return;
                 }
                 let app = window.app_handle();
-                let kernel_running = app.state::<Kernel>().0.lock().unwrap().is_some();
+                let engine_running = app.state::<DriverHost>().running();
                 let tray_ready = app.state::<TrayReady>().0.load(Ordering::Relaxed);
-                if kernel_running && tray_ready {
+                if engine_running && tray_ready {
                     let _ = window.hide();
                     api.prevent_close();
                     // hide 不保证在所有平台补发 Focused(false),显式接棒
@@ -818,9 +691,8 @@ fn main() {
             }
             RunEvent::Exit => {
                 persist_pet_prefs(app); // 拖动位置只在退出/开关切换时落盘
-                if let Some(child) = app.state::<Kernel>().0.lock().unwrap().take() {
-                    let env = load_config(app).kernel_env;
-                    stop_kernel(child, wsl::distro_of(&env));
+                if let Some(engine) = app.state::<DriverHost>().take() {
+                    engine.stop();
                 }
             }
             _ => {}
@@ -835,8 +707,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &pet, &update, &quit])?;
-
-    let tray = TrayIconBuilder::with_id("main")
+    let tray = TrayIconBuilder::new()
         .icon(tray_icon_for(Theme::Light))
         // macOS 模板渲染(系统按菜单栏明暗反色);其余平台此标记为空操作
         .icon_as_template(true)
@@ -845,7 +716,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_any_window(app),
-            // 设置在内核 UI 页内:恢复主窗口后发事件让 React 切到设置视图;
+            // 设置在 UI 页内:恢复主窗口后发事件让 React 切到设置视图;
             // 意图同时落待取状态,webview 未就绪丢事件时由 UI 启动后补取
             "settings" => {
                 show_any_window(app);
@@ -886,242 +757,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 恢复主窗口(无条件拉内核后,主窗口=内核 UI 或错误页,总是存在)。
+/// 恢复主窗口。
 fn show_any_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
     }
-}
-
-// ==================== 内核进程 ====================
-
-/// 启动内核:配置经环境变量注入(不走 argv,避免泄漏进 ps)。
-/// kernel_env 为 "wsl:<发行版>" 时经 wsl.exe 在 WSL 内拉起 Linux 内核
-/// (WSL2 localhost 转发让 Windows 侧照常直连 127.0.0.1:port)。
-/// 返回 (子进程, 端口, 令牌)。
-fn start_kernel(app: &AppHandle, files: &KernelFiles) -> Result<(Child, u16, String), String> {
-    let kernel_env = load_config(app).kernel_env;
-    let wsl_distro = wsl::distro_of(&kernel_env).map(str::to_string);
-
-    let port = kernel_port(app)?;
-    let token = rand_token();
-    let addr = format!("127.0.0.1:{port}");
-    // 壳持有内核 stdin 管道:壳以任何方式退出(含被 kill),管道关闭,
-    // 内核随之退出,不留孤儿进程(wsl.exe 透传 stdio,WSL 模式下 EOF
-    // 同样抵达 guest 内核,--watch-stdin 契约保持)
-    let serve_args = ["serve", "--addr", addr.as_str(), "--token", token.as_str(), "--watch-stdin"];
-
-    // 内核 stdout/stderr 落盘:GUI 壳没有控制台,不落盘的话内核 panic/报错
-    // 文本直接丢失,"exit code: N" 无从诊断(Win7 排障教训)。每次启动截断重写。
-    let log_path = config_dir(app)?.join("kernel.log");
-    let log_out = fs::File::create(&log_path).ok();
-    let log_err = log_out.as_ref().and_then(|f| f.try_clone().ok());
-
-    let (mut cmd, bin_desc, ready_secs) = if let Some(distro) = &wsl_distro {
-        let bin = find_agent_linux(app).ok_or_else(|| {
-            "找不到 mc-agent-linux(WSL 内核;查找顺序: MC_AGENT_LINUX_BIN 环境变量 → 应用资源目录 → 应用同目录)".to_string()
-        })?;
-        // 一次调用完成 VM 预热 + 发行版健康检查 + 三个路径的 Windows→Linux 翻译
-        let paths = wsl::prepare(distro, &[&bin, &files.models, &files.mcp])?;
-        let mut cmd = Command::new(wsl::wsl_exe());
-        cmd.args(["-d", distro, "--exec", &paths[0]])
-            .args(serve_args)
-            .env("MC_AGENT_MODELS", &paths[1])
-            .env("MC_AGENT_MCP_CONFIG", &paths[2])
-            // wsl.exe 不透传任意环境变量,须经 WSLENV 白名单;
-            // 值已是 Linux 路径,/u = 仅 Win→WSL 方向、不再做路径翻译
-            .env("WSLENV", "MC_AGENT_MODELS/u:MC_AGENT_MCP_CONFIG/u");
-        // VM 已被 prepare 预热,30s 覆盖内核自身启动
-        (cmd, format!("wsl:{distro} {}", paths[0]), 30u64)
-    } else {
-        let bin = find_agent().ok_or_else(|| {
-            "找不到 mc-agent 可执行文件(查找顺序: MC_AGENT_BIN 环境变量 → 应用同目录 → PATH)".to_string()
-        })?;
-        let mut cmd = Command::new(&bin);
-        cmd.args(serve_args)
-            .env("MC_AGENT_MODELS", &files.models)
-            .env("MC_AGENT_MCP_CONFIG", &files.mcp);
-        (cmd, bin.display().to_string(), 15u64)
-    };
-    cmd.stdin(Stdio::piped())
-        .stdout(log_out.map(Stdio::from).unwrap_or_else(Stdio::inherit))
-        .stderr(log_err.map(Stdio::from).unwrap_or_else(Stdio::inherit));
-    // Windows 下内核是 console 程序,GUI 壳拉起时会弹出控制台窗口,须显式抑制
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动内核失败({bin_desc}): {e}"))?;
-
-    // 等待内核就绪(端口可连接);失败时带上退出状态
-    let deadline = Instant::now() + Duration::from_secs(ready_secs);
-    loop {
-        if TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().unwrap(),
-            Duration::from_millis(200),
-        )
-        .is_ok()
-        {
-            return Ok((child, port, token));
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            // 附上内核日志尾部,让错误页直接可诊断(而不是只有退出码)。
-            // wsl.exe 的报错可能是 UTF-16,经双解码防乱码。
-            let tail = fs::read(&log_path)
-                .map(|b| {
-                    let s = wsl::decode_wsl_output(&b);
-                    let lines: Vec<_> = s.lines().collect();
-                    lines[lines.len().saturating_sub(15)..].join("\n")
-                })
-                .unwrap_or_default();
-            return Err(format!(
-                "内核进程提前退出({status})。日志({}):\n{}",
-                log_path.display(),
-                if tail.is_empty() { "(空)" } else { &tail }
-            ));
-        }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            let mut msg = format!("内核在 {ready_secs} 秒内未就绪");
-            if let Some(distro) = &wsl_distro {
-                // 杀掉的是 wsl.exe 中继,guest 内核可能残活并占住端口,补清理
-                let args: Vec<String> = ["-d", distro, "--exec", "pkill", "-x", "mc-agent-linux"]
-                    .map(String::from)
-                    .into();
-                let _ = wsl::run_wsl(&args, Duration::from_secs(5));
-                msg.push_str(&format!(
-                    "。WSL 模式排查:确认 {distro} 为 WSL2 且未在 .wslconfig 中关闭 \
-                     localhostForwarding;系统睡眠恢复后异常可先执行 `wsl --shutdown` 再重启应用"
-                ));
-            }
-            return Err(msg);
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-}
-
-/// 查找内核二进制:MC_AGENT_BIN → 应用同目录 → PATH。
-fn find_agent() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("MC_AGENT_BIN") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    let name = if cfg!(windows) { "mc-agent.exe" } else { "mc-agent" };
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join(name);
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-    // PATH 查找(含 ~/.local/bin,GUI 环境下 PATH 可能不含它)
-    let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|v| std::env::split_paths(&v).collect())
-        .unwrap_or_default();
-    if let Some(home) = std::env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join(".local/bin"));
-    }
-    paths.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
-}
-
-/// 查找 Linux 内核二进制(WSL 模式;随 Windows 包以资源分发,经 /mnt/c 在
-/// WSL 内直接执行,无需拷入发行版):MC_AGENT_LINUX_BIN → 资源目录 → 应用同目录。
-fn find_agent_linux(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("MC_AGENT_LINUX_BIN") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    if let Ok(p) = app
-        .path()
-        .resolve("mc-agent-linux", tauri::path::BaseDirectory::Resource)
-    {
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("mc-agent-linux");
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
-/// 内核端口:首次分配后持久化(配置目录 port 文件),之后复用。
-/// localStorage 按 origin(协议+主机+端口)隔离,端口一变 UI 本地偏好
-/// (主题/分组折叠等)就全部丢失;仅端口被其他进程占用时才换新并持久化。
-fn kernel_port(app: &AppHandle) -> Result<u16, String> {
-    let dir = config_dir(app)?;
-    let path = dir.join("port");
-    if let Some(p) = fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
-        .filter(|&p| p != 0)
-    {
-        // WSL 内核退出后,Windows 侧的 localhost 转发监听拆除有延迟,
-        // 立即复用端口可能瞬时 bind 失败;短暂重试再放弃(换端口丢 localStorage)
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            if TcpListener::bind(("127.0.0.1", p)).is_ok() {
-                return Ok(p);
-            }
-            if Instant::now() > deadline {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(300));
-        }
-        eprintln!("[mc-desktop] 端口 {p} 被占用,换用新端口(UI 本地偏好将重置)");
-    }
-    let p = free_port().map_err(|e| format!("无法分配本地端口: {e}"))?;
-    let _ = fs::create_dir_all(&dir);
-    if let Err(e) = fs::write(&path, p.to_string()) {
-        eprintln!("[mc-desktop] 持久化端口失败(下次启动将换端口): {e}");
-    }
-    Ok(p)
-}
-
-fn free_port() -> std::io::Result<u16> {
-    Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
-}
-
-fn rand_token() -> String {
-    let mut buf = [0u8; 16];
-    getrandom::getrandom(&mut buf).expect("getrandom");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// 内核 UI 入口 URL。boot 查询参数每次内核启动都不同:端口固定后,
-/// 仅 #token 变化的导航是同文档导航,webview 不会重载页面(设置视图
-/// 会永远停在"保存中");查询串变化才强制整页重载。token 走 fragment,
-/// 不出现在 HTTP 请求行。
-fn kernel_ui_url(port: u16, token: &str) -> String {
-    let mut buf = [0u8; 4];
-    getrandom::getrandom(&mut buf).expect("getrandom");
-    let boot: String = buf.iter().map(|b| format!("{b:02x}")).collect();
-    format!("http://127.0.0.1:{port}/?boot={boot}#{token}")
-}
-
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }

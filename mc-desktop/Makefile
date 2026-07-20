@@ -43,7 +43,7 @@ macos: check-macos kernel-universal browser-extension icons/icon.icns
 # 发布构建:在 macos 基础上叠加 createUpdaterArtifacts(需 TAURI_SIGNING_PRIVATE_KEY
 # 签名),并汇集 updater 产物(带版本文件名的 .app.tar.gz + latest.json)到
 # bundle/updater/,供人工上传 OSS。
-macos-release: EXTRA_TAURI_CONFIG := --config tauri.release.conf.json
+macos-release: EXTRA_TAURI_CONFIG += --config tauri.release.conf.json
 macos-release: check-signing macos
 	python3 scripts/gen-latest-json.py
 

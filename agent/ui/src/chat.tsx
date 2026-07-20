@@ -643,7 +643,7 @@ export function ChatView({
           style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
         >
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
-            <LogList items={chat.items} onPermAnswer={session.answerPerm} onOpenChild={onOpenChild} uploadUrl={session.uploadUrl} workdir={workdir} />
+            <LogList items={chat.items} onPermAnswer={session.answerPerm} onAskAnswer={session.answerAsk} onOpenChild={onOpenChild} uploadUrl={session.uploadUrl} workdir={workdir} />
           </div>
         </div>
       )}

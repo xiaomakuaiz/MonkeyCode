@@ -4,7 +4,7 @@
   "version": "26071401.0.0",
   "identifier": "com.chaitin.baizhi.monkeycode",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "uidist"
   },
   "app": {
     "windows": [],
@@ -13,41 +13,11 @@
       "csp": null,
       "capabilities": [
         {
-          "identifier": "shell-pages",
-          "description": "壳自带的错误页(无 command 调用,仅 core 基础能力)",
+          "identifier": "main-app",
+          "description": "主窗口(壳内置 UI + 错误页):会话/引擎/云端全量 IPC、配置读写、原生目录选择",
           "windows": [
             "main"
           ],
-          "permissions": [
-            "core:default"
-          ]
-        },
-        {
-          "identifier": "pet-page",
-          "description": "桌宠窗口(壳内静态页):读内核地址与令牌、拖动窗口、唤回主窗口",
-          "windows": [
-            "pet"
-          ],
-          "permissions": [
-            "core:default",
-            "core:window:allow-start-dragging",
-            "core:window:allow-set-position",
-            "core:window:allow-outer-position",
-            "allow-kernel-info",
-            "allow-show-main"
-          ]
-        },
-        {
-          "identifier": "kernel-ui",
-          "description": "主窗口加载的内核 UI(127.0.0.1 remote):读写壳持有的配置、原生目录选择",
-          "windows": [
-            "main"
-          ],
-          "remote": {
-            "urls": [
-              "http://127.0.0.1:*"
-            ]
-          },
           "permissions": [
             "core:default",
             "core:window:allow-start-dragging",
@@ -64,9 +34,58 @@
             "allow-update-install",
             "allow-open-extension-dir",
             "allow-list-wsl-distros",
+            "allow-engine-caps",
+            "allow-sessions-list",
+            "allow-session-create",
+            "allow-session-delete",
+            "allow-session-patch",
+            "allow-models-list",
+            "allow-session-open",
+            "allow-session-close",
+            "allow-session-send",
+            "allow-session-call",
+            "allow-repo-call",
+            "allow-upload-file",
+            "allow-upload-read",
+            "allow-kernel-http",
+            "allow-cloud-ws-open",
+            "allow-cloud-ws-send",
+            "allow-cloud-ws-close",
+            "allow-baizhi-status",
+            "allow-baizhi-send-code",
+            "allow-baizhi-login",
+            "allow-baizhi-logout",
+            "allow-baizhi-wechat-start",
+            "allow-baizhi-wechat-poll",
+            "allow-baizhi-sync",
+            "allow-mc-status",
+            "allow-mc-login",
+            "allow-mc-logout",
+            "allow-mc-tasks",
+            "allow-mc-task-info",
+            "allow-mc-task-rounds",
+            "allow-mc-task-stop",
+            "allow-mc-task-create",
+            "allow-mc-task-options",
             "dialog:allow-open",
             "opener:allow-open-url",
-            "opener:allow-default-urls"
+            "opener:allow-default-urls",
+            "allow-probe-log"
+          ]
+        },
+        {
+          "identifier": "pet-page",
+          "description": "桌宠窗口(壳内静态页):会话状态快照与事件、拖动窗口、唤回主窗口",
+          "windows": [
+            "pet"
+          ],
+          "permissions": [
+            "core:default",
+            "core:window:allow-start-dragging",
+            "core:window:allow-set-position",
+            "core:window:allow-outer-position",
+            "allow-sessions-list",
+            "allow-show-main"
           ]
         }
       ]
@@ -79,7 +98,9 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0MTkzMzI3RjhCQzRFMUYKUldRZlRyejRKek1aOUpBME1rRWdvQ1JjMVYzMFlIVEQ4UVVMVmtwWTJLVnM5VHdVeGRTemUrc3kK",
-      "endpoints": ["https://release.monkeycode-ai.com/public/desktop/latest.json"]
+      "endpoints": [
+        "https://release.monkeycode-ai.com/public/desktop/latest.json"
+      ]
     }
   }
 }

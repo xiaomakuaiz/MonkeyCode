@@ -13,6 +13,8 @@ import {
   inDesktopShell,
   isWindowsShell,
   listWslDistros,
+  engineCaps,
+  type EngineCaps,
   openExtensionDir,
   repairBrowserExt,
   saveHostConfig,
@@ -417,6 +419,8 @@ export function SettingsView({
   const [mcpExpanded, setMcpExpanded] = useState<number | null>(null);
   const [baizhiMcpOpen, setBaizhiMcpOpen] = useState(true); // 百智云 MCP 组(默认展开)
   const [kernelEnv, setKernelEnv] = useState(""); // 内核运行环境:"" 本机 / "wsl:<发行版>"
+  const [agentEngine, setAgentEngine] = useState("mc-agent"); // agent 引擎
+  const [caps, setCaps] = useState<EngineCaps | null>(null); // 当前引擎能力(浏览器 tab 按此隐藏)
   const [wslDistros, setWslDistros] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
@@ -440,15 +444,16 @@ export function SettingsView({
   const loggedIn = !!bzStatus?.logged_in;
 
   // 归一化保存载荷:save() 与 dirty 比较共用同一形态(名称 trim、default 重算、MCP 序列化)
-  const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[], ke: string): HostConfig => ({
+  const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[], ke: string, ae: string): HostConfig => ({
     models: ms.map((m, i) => ({ ...m, name: m.name.trim(), default: i === di })),
     mcp_servers: mcpsToServers(mc),
     kernel_env: ke,
+    agent_engine: ae,
   });
 
   // 加载快照:baseline 供 dirty 比较,snapshot 供「放弃更改」复原
   const baseline = useRef("");
-  const snapshot = useRef<{ models: HostModel[]; defaultIdx: number; mcps: McpEntry[]; kernelEnv: string } | null>(null);
+  const snapshot = useRef<{ models: HostModel[]; defaultIdx: number; mcps: McpEntry[]; kernelEnv: string; agentEngine: string } | null>(null);
 
   useEffect(() => {
     if (!desktop) {
@@ -461,25 +466,28 @@ export function SettingsView({
         const di = Math.max(0, ms.findIndex((m) => m.default));
         const mc = serversToMcps(cfg?.mcp_servers ?? {});
         const ke = cfg?.kernel_env ?? "";
+        const ae = cfg?.agent_engine || "mc-agent";
         setModels(ms);
         setDefaultIdx(di);
         setMcps(mc);
         setKernelEnv(ke);
-        snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke };
-        baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke));
+        setAgentEngine(ae);
+        snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke, agentEngine: ae };
+        baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke, ae));
         setLoaded(true);
       })
       .catch((e) => setErr("读取配置失败: " + (e instanceof Error ? e.message : String(e))));
     if (isWindowsShell()) {
       void listWslDistros().then(setWslDistros);
     }
+    void engineCaps().then(setCaps).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktop]);
 
   const dirty = useMemo(
-    () => desktop && loaded && JSON.stringify(payloadOf(models, defaultIdx, mcps, kernelEnv)) !== baseline.current,
+    () => desktop && loaded && JSON.stringify(payloadOf(models, defaultIdx, mcps, kernelEnv, agentEngine)) !== baseline.current,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [desktop, loaded, models, defaultIdx, mcps, kernelEnv],
+    [desktop, loaded, models, defaultIdx, mcps, kernelEnv, agentEngine],
   );
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -498,6 +506,7 @@ export function SettingsView({
     setDefaultIdx(s.defaultIdx);
     setMcps(s.mcps);
     setKernelEnv(s.kernelEnv);
+    setAgentEngine(s.agentEngine);
     setExpanded(null);
     setMcpExpanded(null);
     setAdvOpen({});
@@ -565,8 +574,9 @@ export function SettingsView({
     setErr("");
     setSaving(true);
     try {
-      await saveHostConfig(payloadOf(models, defaultIdx, mcps, kernelEnv));
-      // 成功后壳会重启内核并导航整页,这里保持"保存中"直到卸载
+      await saveHostConfig(payloadOf(models, defaultIdx, mcps, kernelEnv, agentEngine));
+      // 壳已重启引擎:整页刷新复位所有状态并重连(保持"保存中"直到卸载)
+      location.reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setSaving(false);
@@ -989,6 +999,22 @@ export function SettingsView({
           <span style={{ fontSize: 12, color: "var(--t5)" }}>深色模式即将支持。</span>
         </div>
       </Section>
+      {desktop && (
+        <Section label="Agent 引擎">
+          <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+            <select value={agentEngine} onChange={(e) => setAgentEngine(e.target.value)} style={{ ...select, maxWidth: 280 }}>
+              <option value="mc-agent">mc-agent(默认)</option>
+              <option value="ohmyagent">ohmyagent(实验)</option>
+            </select>
+            <span style={{ fontSize: 12, color: "var(--t5)", lineHeight: 1.7 }}>
+              执行任务的 agent 内核。切换后保存即重启引擎;两个引擎的会话列表相互独立。
+              ohmyagent 提供 coordinator/team/LSP/memory 等进阶能力,但暂不支持浏览器扩展、
+              worktree 隔离与上下文用量展示;其配置由本应用接管写入 ~/.ohmyagent
+              (原有文件首次接管时备份为 .bak)。
+            </span>
+          </div>
+        </Section>
+      )}
       {desktop && isWindowsShell() && (
         <Section label="运行环境">
           <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1053,7 +1079,7 @@ export function SettingsView({
         </div>
         <div style={{ height: 6 }} />
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "var(--t4)", padding: "2px 9px 6px" }}>设置</span>
-        {NAV.map((n) => {
+        {NAV.filter((n) => n.key !== "browser" || caps?.browser_ext !== false).map((n) => {
           const activeNow = active === n.key;
           const Icon = n.icon;
           return (

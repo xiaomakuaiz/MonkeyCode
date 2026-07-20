@@ -43,6 +43,8 @@ export interface HostConfig {
   mcp_servers: Record<string, unknown>;
   /** 内核运行环境:空/缺省 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows) */
   kernel_env?: string;
+  /** agent 引擎:"mc-agent"(缺省)| "ohmyagent";保存即重启对应引擎 */
+  agent_engine?: string;
 }
 
 /** GET /api/sessions 返回的会话元信息 */

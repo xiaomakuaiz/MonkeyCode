@@ -34,13 +34,43 @@ jobs:
           npm ci
           npm run build
 
+      # ohmyagent 引擎 sidecar(可选):独立仓库,凭据就绪时才构建并打进包;
+      # 缺失时用户仍可自装 ohmyagent 到 PATH(壳 find_ohmyagent 兜底)
+      - name: Build ohmyagent sidecar (optional)
+        id: ohmy
+        env:
+          OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
+        run: |
+          if [ -z "$OHMYAGENT_REPO_TOKEN" ]; then
+            echo "::notice::OHMYAGENT_REPO_TOKEN 未配置,跳过 ohmyagent sidecar"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git" /tmp/ohmyagent
+          cd /tmp/ohmyagent
+          BIN="$GITHUB_WORKSPACE/mc-desktop/binaries"
+          mkdir -p "$BIN"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" \
+            -o "$BIN/ohmyagent-aarch64-apple-darwin" ./cmd/ohmyagent
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
+            -o "$BIN/ohmyagent-x86_64-apple-darwin" ./cmd/ohmyagent
+          lipo -create -output "$BIN/ohmyagent-universal-apple-darwin" \
+            "$BIN/ohmyagent-aarch64-apple-darwin" "$BIN/ohmyagent-x86_64-apple-darwin"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
       - name: Build app bundle (universal, unsigned)
         working-directory: mc-desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          OHMY_BUILT: ${{ steps.ohmy.outputs.built }}
         # secret 就绪时走发布构建(额外产出签名的 updater tar.gz + latest.json),
         # 否则回退普通打包,CI 不红
         run: |
+          # ohmyagent sidecar 就绪时叠加 externalBin 覆盖配置(Makefile 对
+          # 环境注入的 EXTRA_TAURI_CONFIG 用 += 追加,release 配置不冲掉它)
+          if [ "$OHMY_BUILT" = "true" ]; then
+            export EXTRA_TAURI_CONFIG="--config tauri.ohmy.conf.json"
+          fi
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             make macos-release
           else

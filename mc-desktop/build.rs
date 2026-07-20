@@ -1,6 +1,6 @@
 fn main() {
     // 为应用自定义命令生成 ACL 权限(allow-<command>):
-    // 远程源(主窗口加载的内核 UI,http://127.0.0.1)调用自定义命令必须显式授权。
+    // capability 中引用的每个自定义命令都必须在此登记。
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new().commands(&[
@@ -8,12 +8,47 @@ fn main() {
                 "save_config",
                 "take_ui_intent",
                 "host_info",
-                "kernel_info",
                 "show_main",
                 "update_check",
                 "update_install",
                 "open_extension_dir",
                 "list_wsl_distros",
+                "probe_log",
+                // 引擎驱动层(driver/mod.rs)
+                "engine_caps",
+                "sessions_list",
+                "session_create",
+                "session_delete",
+                "session_patch",
+                "models_list",
+                "session_open",
+                "session_close",
+                "session_send",
+                "session_call",
+                "repo_call",
+                "upload_file",
+                "upload_read",
+                "kernel_http",
+                "cloud_ws_open",
+                "cloud_ws_send",
+                "cloud_ws_close",
+                // 百智云/云端(baizhi/)
+                "baizhi_status",
+                "baizhi_send_code",
+                "baizhi_login",
+                "baizhi_logout",
+                "baizhi_wechat_start",
+                "baizhi_wechat_poll",
+                "baizhi_sync",
+                "mc_status",
+                "mc_login",
+                "mc_logout",
+                "mc_tasks",
+                "mc_task_info",
+                "mc_task_rounds",
+                "mc_task_stop",
+                "mc_task_create",
+                "mc_task_options",
             ]),
         ),
     )

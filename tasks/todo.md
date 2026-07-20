@@ -1336,3 +1336,64 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       按钮 + DOM click 生效(父页面 postMessage 改标题);全绿
 - 取舍:OOPIF 用合成 click/DOM 设值(非 isTrusted),覆盖 99% 按钮;真实鼠标坐标
       累加留待需要时再做。嵌套 OOPIF 靠扩展递归 setAutoAttach + frames.list 全深度返回
+
+## 双引擎架构 M1:UI 重宿主 + AgentDriver(2026-07-19)
+
+> 计划:~/.claude/plans/cheerful-swimming-church.md(双 Agent 引擎:ohmyagent 接入 + 业务下沉 Rust 壳)
+> M1 目标:UI 从 mc-agent 内嵌迁到 Tauri frontendDist,壳内 driver 层收口全部通信,功能与现状等价
+
+- [x] agent/ui 构建改常规多文件产物 → mc-desktop/uidist(fonts/壳页面合并入内,error.html=原错误页);去 vite-plugin-singlefile
+- [x] mc-desktop 模块化:config.rs(DesktopConfig+agent_engine 字段)/ driver/mod.rs(DriverHost+Engine 枚举+全部 IPC 命令)/ driver/mc.rs(McAgentDriver)/ repo.rs / uploads.rs
+- [x] McAgentDriver:spawn mc-agent serve --no-ui(含 WSL 分支迁入)+ REST(sessions/models)+ 每会话 WS client(帧透传→frames:{sid} 事件,30ms 批量;call 按 kind FIFO 配对;断线 2s 重连)+ SSE→session-event 事件
+- [x] repo.rs:file_list/read_file/file_changes/file_diff/reveal 原生移植(应答 {result}/{error} 同构;WSL 经 UNC+wsl.exe git,待 Windows 实测)
+- [x] uploads.rs:.mc-agent/uploads 落盘(命名/清洗/去重对齐 Go 版)+ data URL 回读
+- [x] 临时 kernel_http 代理(/api/baizhi、/api/mc REST)+ cloud_ws_open/send/close 通用 WS 桥(M1 指向内核本地,M2 改拨云端)
+- [x] client.ts 重写:全量 invoke/listen,导出签名不变;uploadFileURL 改异步(components.tsx 加 UploadImg;文件 chip 改 <a download>);cloudterm.tsx 换管道;settings 保存后自行 location.reload
+- [x] pet.html:kernel_info+REST/SSE → sessions_list invoke + session-event 事件 + 10s 探活
+- [x] tauri.conf:frontendDist=uidist,capability 收敛为 main-app(本地)+pet-page;build.rs 登记全部新命令
+- [x] 验证:cargo build ✓;UI npm test 31/31(reduce.test.ts 零改动)✓;npm run build ✓;xvfb 无头探针:页面加载/invoke/listen/opener/save_config→引擎重启→响应到达、页面存活 ✓
+- 已知事项:
+  - 探针发现 WebKitGTK 下"页面加载 3s 内并发 save"与"取消中的导航"会挂掉页面 JS(真实用户时序不触发;probe 脚本已调整时序并留注释)
+  - agent/cmd/mc-agent/uidist 内嵌调试 UI 停止更新(serve 默认 --no-ui 由壳拉起;独立浏览器调试模式仍可用但为旧版 UI)
+  - 待互动验证:真实对话/审批/文件抽屉/附件/云端流(需模型配置,tauri dev 手测)
+
+## 双引擎架构 M2-M4:百智云原生化 + OhmyAgentDriver + 打包(2026-07-19)
+
+### M2 百智云/云端 Rust 原生化
+- [x] baizhi/ 模块移植(对应 agent/internal/baizhi 约 2165 行 Go):pow(FNV-1a+xorshift32+SHA256,参考向量单测)/ cookies(RFC6265-lite 双罐,host-only/Secure/Max-Age 语义单测)/ client(信封解包+PoW 登录)/ wechat(qrconnect 长轮询)/ sync(密钥掩码复用+模型/MCP 网关)/ monkeycode(OAuth 桥手动重定向链+云任务 REST+rounds 归一化 ns→ms)
+- [x] 云端 3 条 WS(stream/control/terminal)改壳直拨 wss(tokio-tungstenite + mc jar Cookie 头),UI 管道协议不变
+- [x] client.ts baizhi_*/mc_* 切原生 invoke;kernel_http 收窄到 /api/browser/*(扩展桥与 browser_ 工具耦合,永驻 mc-agent)
+- [x] cookie 登录态从 ~/.config/mc-agent/ 平滑迁移(格式互通,首启复制)
+- [x] 验证:假服务端集成测试 4 例(登录全链路含 PoW 服务端独立校验/trace_id 清洗/桥接登录双罐分离/rounds 归一化),cargo test 21 全绿
+
+### M3 OhmyAgentDriver + 引擎切换
+- [x] driver/ohmy.rs:stdio JSON-RPC(线程式 reader/writer+oneshot RPC)/ 事件归一化→Frame(映射表见计划)/ 帧日志 events.jsonl 逐帧落盘+打开回放+seq 续接 / sidecar meta(title/archived/workdir/model/status)
+- [x] 关键发现:stdio 模式 ohmyagent 不写 index.json 且 messages.jsonl 无 meta 记录 → sidecar 是桌面版会话索引权威(CLI 会话不进桌面列表=引擎隔离)
+- [x] set_model/set_mode 经 destroy+resume-create 变通(真机协议验证 ✓);perm remember 记忆集(内存+persist 落盘),命中自动放行不上抛
+- [x] config.rs 写 ~/.ohmyagent(settings/mcp,.bak 首次备份;provider 路由冲突默认模型优先+告警;MCP headers 不支持则跳过)
+- [x] 设置页引擎选择器 + caps 降级(browser tab 按 engine_caps 隐藏);ShellCtx trait 解耦壳依赖(可测性)
+- [x] 验证:真机协议冒烟(ready/create/sendMessage/turn-stopped/destroy+resume/带 mode 重建/优雅退出);driver E2E(假 Anthropic SSE + 真 ohmyagent:task-started/user-input/文本帧/task-ended/seq 单调/列表/切模式)✓;桌面启动冒烟(引擎就绪+配置写出)✓
+
+### M4 打包收尾
+- [x] ohmyagent 可选 sidecar:tauri.ohmy.conf.json externalBin 覆盖配置;desktop-windows/macos workflow 加守卫构建步(OHMYAGENT_REPO_TOKEN 就绪才 clone+build+打包,否则跳过,运行时 PATH 兜底);Makefile EXTRA_TAURI_CONFIG 改 += 保环境注入
+- [x] 桌宠:M1 已改壳事件流,双引擎通用(ohmy 的 session-event 全局广播 ✓)
+- [x] 更新器:on_before_exit 经 DriverHost 停引擎(编译验证);win7 不含 ohmyagent(Go 版本不支持)
+- 待真机验证(需凭据/网络/交互):百智云真实登录+同步、云端任务流、ohmyagent 真模型对话、Windows/macOS 打包产物、WSL 回归
+
+## Review 修复轮(2026-07-20)
+
+10 个确认问题(8 视角查找 → 对抗验证)全部修复,附带 5 个次级问题:
+
+- [x] openai 凭据键错位:providers 按 ohmyagent configKey 落盘(openai-chat/openai-responses → "openai"),openai 协议模型恢复可用(config.rs config_key_of)
+- [x] 本地提问卡不可答:useSession 增 answerAsk(reply-question 上行+乐观回写),chat.tsx LogList 接 onAskAnswer
+- [x] mc 会话流 close→reopen 竞态:SessionConn 加 epoch 代际,ws 循环退出只清理自己那一代
+- [x] send() 语义回归:Conn.send → Promise<boolean>,失败保留输入/附件/排队消息;云端 doSend 失败经 onStatus 外显,control call 发送失败立即 reject
+- [x] 云端管道丢头帧:pipe id 改 UI 生成,监听(listenAsync 等注册落地)先于 cloud_ws_open;本地 connect() 同样先等监听再 session_open
+- [x] ohmy 默认工作区断裂:session_create 补 ~ 展开(expand_tilde)+ create_dir 语义
+- [x] 切模型/切模式互相重置:recreate 总是同时带当前 model+permission_mode
+- [x] 取消误报完成:turn/stopped 保留 interrupted 状态(不再触发桌宠庆祝)
+- [x] 中文标题 rename panic:字节 truncate → chars().take(80)
+- [x] repo 查询无超时:repo_call 包 15s tokio timeout(对齐旧 WS call 语义)
+- [x] 次级:云端 WS 帧上限 16MiB→64MiB(对齐 Go 32MB 意图);home_dir() 统一 HOME/USERPROFILE(Windows cookie 迁移+二进制查找+~ 展开);turn/stopped 复用 write_sidecar(updated_at 不再漏);session_open 回放清批量缓冲+seq 单调(重开不重帧)
+- 验证:cargo test 21/21(含 ohmy E2E 走新 recreate 路径)、UI 31/31、tsc、启动冒烟(探针全过,cookie 迁移顺带实证)
+- 已知未修(记录在案):~/.ohmyagent 接管为声明式设计(UI 已提示);ask 卡经 reduce 启发式词汇匹配的跨层耦合;清理类(urlenc×3/正则热编译/journal 每帧开关文件/UploadImg 无缓存/cookie 全量落盘)留后续

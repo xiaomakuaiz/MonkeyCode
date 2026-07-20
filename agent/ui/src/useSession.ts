@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { connect, uploadFile, uploadFileURL, type Conn } from "./client";
 import { b64encode } from "./codec";
-import { answerPerm as applyPermAnswer, initialChat, reduceBatch, type ChatState } from "./reduce";
+import { answerAsk as applyAskAnswer, answerPerm as applyPermAnswer, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Attachment, FileChange, FileEntry, Frame } from "./types";
 
 export type PermAction = "allow" | "always" | "persist" | "deny";
@@ -29,7 +29,7 @@ export interface SessionHandle {
   changes: FileChange[] | null;
   changesErr: string;
   /** 已上传文件的回读 URL(无会话时 undefined) */
-  uploadUrl?: (path: string) => string;
+  uploadUrl?: (path: string) => Promise<string>;
 
   /** 打开会话并接上 WS;firstMessage 在连接就绪后自动发出(新建会话的首个任务) */
   open(id: string, opts?: { model?: string; mode?: string; firstMessage?: string }): void;
@@ -43,6 +43,8 @@ export interface SessionHandle {
   addFiles(files: File[]): Promise<void>;
   removeAtt(i: number): void;
   answerPerm(id: string, action: PermAction): void;
+  /** 答复 AI 提问卡(reply-question 上行;发送成功后乐观回写 UI) */
+  answerAsk(askId: string, answers: Record<string, string | string[]>): void;
   switchModel(name: string): Promise<void>;
   toggleYolo(): Promise<void>;
   refreshChanges(): Promise<FileChange[]>;
@@ -148,12 +150,15 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   }, [chat.permMode]);
 
   // 连接就绪:拉改动计数;若新建会话时带了首个任务,此刻发出
+  // (send 失败时保留 pending,下次 connected 变化重试)
   useEffect(() => {
     if (!connected) return;
     void refreshChanges();
     const pending = pendingMsgRef.current;
-    if (pending && connRef.current?.send("user-input", { content: b64encode(pending) })) {
-      pendingMsgRef.current = null;
+    if (pending) {
+      void connRef.current?.send("user-input", { content: b64encode(pending) }).then((ok) => {
+        if (ok) pendingMsgRef.current = null;
+      });
     }
   }, [connected, refreshChanges]);
 
@@ -165,10 +170,12 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     onSessionsChangedRef.current?.();
   }, [chat.turnEnded, refreshChanges]);
 
-  // 排队的输入:运行结束后自动发送
+  // 排队的输入:运行结束后自动发送(失败保留,可再触发或手动重试)
   useEffect(() => {
     if (chat.running || !queued) return;
-    if (connRef.current?.send("user-input", { content: b64encode(queued) })) setQueued(null);
+    void connRef.current?.send("user-input", { content: b64encode(queued) }).then((ok) => {
+      if (ok) setQueued(null);
+    });
   }, [chat.running, queued]);
 
   // 卸载即断开
@@ -185,10 +192,13 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
       setAtts([]);
       return;
     }
-    if (connRef.current.send("user-input", { content: b64encode(text) })) {
-      setInput("");
-      setAtts([]);
-    }
+    void connRef.current.send("user-input", { content: b64encode(text) }).then((ok) => {
+      // 失败时保留输入与附件(原因已经 onStatus 外显),用户可重试
+      if (ok) {
+        setInput("");
+        setAtts([]);
+      }
+    });
   };
 
   const addFiles = async (files: File[]) => {
@@ -220,16 +230,29 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
 
   const answerPerm = (pid: string, action: PermAction) => {
     const approved = action !== "deny";
-    if (
-      connRef.current?.send("permission-resp", {
+    void connRef.current
+      ?.send("permission-resp", {
         id: pid,
         approved,
         remember: action === "always" || action === "persist",
         persist: action === "persist",
       })
-    ) {
-      setChat((s) => applyPermAnswer(s, pid, approved));
-    }
+      .then((ok) => {
+        if (ok) setChat((s) => applyPermAnswer(s, pid, approved));
+      });
+  };
+
+  // AI 提问卡答复:request_id 即 askId;发送成功即乐观回写(与云端一致)
+  const answerAskCb = (askId: string, answers: Record<string, string | string[]>) => {
+    void connRef.current
+      ?.send("reply-question", {
+        request_id: askId,
+        answers_json: JSON.stringify(answers),
+        cancelled: false,
+      })
+      .then((ok) => {
+        if (ok) setChat((s) => applyAskAnswer(s, askId, answers));
+      });
   };
 
   const switchModel = async (name: string) => {
@@ -316,6 +339,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     addFiles,
     removeAtt: (i: number) => setAtts((a) => a.filter((_, j) => j !== i)),
     answerPerm,
+    answerAsk: answerAskCb,
     switchModel,
     toggleYolo,
     refreshChanges,

@@ -3,9 +3,9 @@
      形象:官方吉祥物 8 帧"点头打盹"精灵图(pet-sprite.webp,88px@2x),
      CSS steps(8) 逐帧播放——待机慢速打盹、运行中快速点头、等审批定格
      摇晃、离线定格在低头睡着帧并灰化。
-     数据流:kernel_info 命令取内核地址与令牌 → /api/sessions 快照 →
-     /api/events SSE 持续更新;断流后重取令牌整体重连(保存设置会重启
-     内核并轮换 token,EventSource 自带重连解决不了令牌失效)。 -->
+     数据流:sessions_list 命令取快照 → session-event 壳事件持续更新
+     (壳聚合引擎状态,引擎重启对本页透明);快照失败视为引擎离线,
+     3s 重试,另有 10s 周期性快照兜底探活。 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -111,7 +111,6 @@
 
   // ---- 聚合状态:会话表(快照 + 事件增量) ----
   const sessions = new Map(); // id -> { status, waiting }
-  let es = null;
   let retryTimer = null;
   let flash = null; // { tone, text } 终态闪现,几秒后回落
   let flashTimer = null;
@@ -154,67 +153,59 @@
 
   function retry() {
     clearTimeout(retryTimer);
-    retryTimer = setTimeout(connect, 3000);
+    retryTimer = setTimeout(snapshot, 3000);
   }
 
-  async function connect() {
-    let info;
+  let online = false;
+  async function snapshot() {
+    let list;
     try {
-      info = await invoke('kernel_info');
+      list = await invoke('sessions_list');
     } catch {
+      online = false;
       render(true);
       return retry();
     }
-    const base = 'http://127.0.0.1:' + info.port;
-    const tk = encodeURIComponent(info.token);
-    try {
-      const r = await fetch(base + '/api/sessions?token=' + tk);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      sessions.clear();
-      for (const m of await r.json()) {
-        sessions.set(m.id, { status: m.status, waiting: !!m.waiting_ask });
-      }
-    } catch {
-      render(true);
-      return retry();
+    sessions.clear();
+    for (const m of list) {
+      sessions.set(m.id, { status: m.status, waiting: !!m.waiting_ask });
     }
+    online = true;
     render(false);
     if (!startPlayed) {
       startPlayed = true;
       play('start');
     }
-    es = new EventSource(base + '/api/events?token=' + tk);
-    es.onmessage = (m) => {
-      let e;
-      try { e = JSON.parse(m.data); } catch { return; }
-      const s = sessions.get(e.id) || { status: '', waiting: false };
-      if (e.type === 'session-status') {
-        s.status = e.status;
-        if (e.status === 'finished') {
-          showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓', true);
-          play('end');
-        } else if (e.status === 'error') {
-          showFlash('err', '「' + (e.title || '任务') + '」出错 ✗');
-          play('error');
-        }
-      } else if (e.type === 'session-ask') {
-        s.waiting = !!e.open;
-        if (e.open) play('ask');
-      } else {
-        return;
-      }
-      sessions.set(e.id, s);
-      render(false);
-    };
-    // 首个 error 即整体重连:内核重启会轮换 token,自带重连无法恢复
-    es.onerror = () => {
-      es.close();
-      es = null;
-      render(true);
-      retry();
-    };
   }
-  connect();
+
+  // 壳事件:引擎重启对本页透明(监听器挂在壳上,始终有效)
+  window.__TAURI__.event.listen('session-event', (evt) => {
+    const e = evt.payload;
+    if (!e || !e.id) return;
+    const s = sessions.get(e.id) || { status: '', waiting: false };
+    if (e.type === 'session-status') {
+      s.status = e.status;
+      if (e.status === 'finished') {
+        showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓', true);
+        play('end');
+      } else if (e.status === 'error') {
+        showFlash('err', '「' + (e.title || '任务') + '」出错 ✗');
+        play('error');
+      }
+    } else if (e.type === 'session-ask') {
+      s.waiting = !!e.open;
+      if (e.open) play('ask');
+    } else {
+      return;
+    }
+    sessions.set(e.id, s);
+    online = true;
+    render(false);
+  });
+
+  // 周期性快照兜底:探活(引擎停了没有任何事件外显)+ 收敛漏掉的状态
+  setInterval(() => { if (online) snapshot(); }, 10000);
+  snapshot();
 
   // ---- 交互:拖动(位移阈值)与点击(唤回主窗口) ----
   // macOS 不能走原生 startDragging:tao 在 mac 上用 performWindowDragWithEvent,
