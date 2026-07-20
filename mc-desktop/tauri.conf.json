@@ -5,7 +5,7 @@
   "identifier": "com.chaitin.baizhi.monkeycode",
   "build": {
     "frontendDist": "uidist",
-    "beforeBuildCommand": "cd ui && npm ci && npm run build"
+    "beforeBuildCommand": "npm ci && npm run build"
   },
   "app": {
     "windows": [],
