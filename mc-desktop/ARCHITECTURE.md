@@ -111,10 +111,15 @@ reduce.test.ts 补对应归约断言。
 
 状态词汇(Rust `frame::SessionStatus` ↔ TS `types.SessionStatus`):
 `created → running → finished | interrupted | error`
+- `created` = 新建未运行,**不是 finished**(否则侧栏/桌宠按完成渲染)。
 - `interrupted` = 用户取消,**不是完成**(桌宠不庆祝、侧栏不打勾)。
 - `waiting_ask` 是运行时叠加位(有待答复的审批/提问),不落盘。
 - 轮次帧序(ohmy 驱动本地先行,不依赖引擎事件时序):
   `user-input → task-started → …engine 事件… → [task-error] → task-ended`。
+- **和解原则:引擎应答是确认,不是前提。** 引擎停止/崩溃/取消无应答时,
+  驱动本地补收尾(未闭合工具 failed 帧 → task-error → task-ended,
+  状态落 interrupted,挂起审批/提问一并失效);引擎迟到的 turn/stopped
+  被 running 幂等守卫吞掉。没有这条,会话会永久卡"执行中"。
 
 ## 引擎监督
 
@@ -132,8 +137,11 @@ usage,但上下文条语义是"当前占用/预算",累计 input 会虚高——
 按次调用出 usage 或直接给 context_tokens,用量条继续隐藏)、
 每模型独立凭据(现同 configKey 冲突跳过)、stdio 模式会话索引
 (现 sidecar 权威)。
+工具错误路径不发 tool_result(错误只进模型消息;壳在轮次收尾对
+未闭合 tool_call 补 failed 帧变通)。
 已补齐并接入:session/switchModel、session/switchMode(替代
-destroy+resume,模式可运行中切)、mcp headers、compaction 事件。
+destroy+resume,模式可运行中切;壳按 system/ready 的 capabilities
+做版本握手,旧引擎自动回退 destroy+resume)、mcp headers、compaction 事件。
 
 ## 开发与构建产物
 

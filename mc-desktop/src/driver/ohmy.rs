@@ -75,6 +75,8 @@ struct Inner {
     pending_perms: StdMutex<HashMap<String, String>>,
     /// 审批请求的工具名(request_id → tool;"始终允许"回写记忆集用)
     perm_tools: StdMutex<HashMap<String, String>>,
+    /// system/ready 宣告的引擎能力(版本握手:缺 switch RPC 时回退 destroy+resume)
+    engine_caps: StdMutex<HashSet<String>>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -86,6 +88,9 @@ struct SessionState {
     created: bool,
     /// UI 是否在听 frames:{sid}(未打开时帧只入日志不 emit)
     opened: bool,
+    /// 已发 tool_call 未见 tool_result 的调用(引擎错误路径不发 tool_result,
+    /// 轮次收尾时对余量补 failed 帧)
+    open_tools: HashSet<String>,
     workdir: String,
     model_name: String,
     mode: String,
@@ -157,6 +162,7 @@ impl OhmyDriver {
             pending_questions: StdMutex::new(HashMap::new()),
             pending_perms: StdMutex::new(HashMap::new()),
             perm_tools: StdMutex::new(HashMap::new()),
+            engine_caps: StdMutex::new(HashSet::new()),
             stopped: Arc::new(AtomicBool::new(false)),
         });
 
@@ -202,6 +208,16 @@ impl OhmyDriver {
                 let params = v.get("params").cloned().unwrap_or(Value::Null);
                 match method {
                     "system/ready" => {
+                        // 版本握手:记录引擎宣告的能力,缺口路径运行时回退
+                        let caps: HashSet<String> = params
+                            .get("capabilities")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                        let version =
+                            params.get("version").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                        eprintln!("[mc-desktop] ohmyagent 就绪 version={version} caps={}", caps.len());
+                        *inner_r.engine_caps.lock().unwrap() = caps;
                         let _ = ready_tx.send(());
                     }
                     _ => inner_r.handle_notification(method, params),
@@ -210,6 +226,7 @@ impl OhmyDriver {
             // stdout EOF = 进程退出:stop() 未置位即崩溃,外显 + 拒掉在途 RPC
             if !inner_r.stopped.load(Ordering::Relaxed) {
                 inner_r.pending.lock().unwrap().clear(); // 挂起的 rpc 立即收到"引擎已退出"
+                inner_r.reconcile_all("引擎进程异常退出"); // 运行中会话本地收尾,不留永久 running
                 let tail = super::log_tail(&crash_log, 15);
                 eprintln!("[mc-desktop] ohmyagent 引擎异常退出");
                 inner_r.app.emit_json(
@@ -220,24 +237,14 @@ impl OhmyDriver {
         });
 
         // 批量 flusher:30ms 排空待发帧
-        let batch = inner.batch.clone();
-        let app2 = inner.app.clone();
-        let stopped = inner.stopped.clone();
+        let inner_f = inner.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(FRAME_FLUSH_MS)).await;
-                if stopped.load(Ordering::Relaxed) {
+                if inner_f.stopped.load(Ordering::Relaxed) {
                     return;
                 }
-                let drained: Vec<(String, Vec<Value>)> = {
-                    let mut b = batch.lock().unwrap();
-                    b.drain().collect()
-                };
-                for (sid, frames) in drained {
-                    if !frames.is_empty() {
-                        app2.emit_json(&format!("frames:{sid}"), Value::Array(frames));
-                    }
-                }
+                inner_f.flush_batch();
             }
         });
 
@@ -250,6 +257,10 @@ impl OhmyDriver {
     }
 
     pub fn stop(&self) {
+        // 先本地和解运行中会话(补收尾帧)并同步排空缓冲——
+        // 此后 flusher 退出也不丢帧,sidecar 不会残留 running
+        self.0.reconcile_all("引擎已停止");
+        self.0.flush_batch();
         self.0.stopped.store(true, Ordering::Relaxed);
         let _ = self.0.stdin_tx.send(None); // 关 stdin → 优雅退出
         let Some(mut child) = self.0.child.lock().unwrap().take() else { return };
@@ -328,7 +339,12 @@ impl OhmyDriver {
             let status = if running {
                 "running".to_string()
             } else {
-                meta.get("status").and_then(|v| v.as_str()).unwrap_or("finished").to_string()
+                match meta.get("status").and_then(|v| v.as_str()).unwrap_or("finished") {
+                    // 历史遗留的 sidecar "running"(和解机制上线前的崩溃残留):
+                    // 内存里没在跑就不是在跑,读取时自愈为 interrupted
+                    "running" => "interrupted".to_string(),
+                    s => s.to_string(),
+                }
             };
             let updated = meta.get("updated_at").and_then(|v| v.as_u64()).unwrap_or(0);
             items.push((
@@ -382,20 +398,22 @@ impl OhmyDriver {
                 running: false,
                 created: true,
                 opened: false,
+                open_tools: HashSet::new(),
                 workdir: workdir.to_string(),
                 model_name: model_name.to_string(),
                 mode: "default".into(),
                 title: String::new(),
             },
         );
+        // 契约 5:新建未运行的会话是 created,不是 finished(否则侧栏打勾、桌宠庆祝)
         self.write_sidecar(&sid, |m| {
             m["model_name"] = json!(model_name);
             m["workdir"] = json!(workdir);
-            m["status"] = json!(SessionStatus::Finished.as_str());
+            m["status"] = json!(SessionStatus::Created.as_str());
         });
         Ok(json!({
             "id": sid, "title": "", "workdir": workdir, "model": model_name,
-            "mode": "default", "turns": 0, "status": "finished",
+            "mode": "default", "turns": 0, "status": SessionStatus::Created.as_str(),
         }))
     }
 
@@ -421,6 +439,7 @@ impl OhmyDriver {
                 running: false,
                 created: true,
                 opened: false,
+                open_tools: HashSet::new(),
                 workdir: meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 model_name: meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 mode: meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default").to_string(),
@@ -586,7 +605,13 @@ impl OhmyDriver {
                 }
             }
             "user-cancel" => {
-                self.rpc("cancel", json!({ "session_id": id })).await.map(|_| ())
+                // 引擎应答是确认而非前提:cancel 无应答(挂死/超时)时本地和解,
+                // 否则会话永卡 running;引擎若事后仍发 turn/stopped,
+                // 幂等守卫(was_running)会吞掉迟到的收尾
+                if let Err(e) = self.rpc("cancel", json!({ "session_id": id })).await {
+                    self.0.reconcile_session(id, &format!("取消未获引擎应答,已本地中断({e})"));
+                }
+                Ok(())
             }
             "permission-resp" => {
                 let req_id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -670,12 +695,16 @@ impl OhmyDriver {
                 if self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false) {
                     return Err("执行中不能切换,请先取消当前任务".into());
                 }
-                if self.session_created(id) {
+                if !self.session_created(id) {
+                    let mode = self.session_mode(id);
+                    self.create_resumed(id, &model_id, &mode).await?;
+                } else if self.has_cap("session/switchModel") {
                     self.rpc("session/switchModel", json!({ "session_id": id, "model": model_id }))
                         .await?;
                 } else {
+                    // 版本握手回退:旧引擎无 switch RPC,destroy+resume 全参重建
                     let mode = self.session_mode(id);
-                    self.create_resumed(id, &model_id, &mode).await?;
+                    self.recreate_fallback(id, &model_id, &mode).await?;
                 }
                 if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
                     s.model_name = name.to_string();
@@ -687,15 +716,22 @@ impl OhmyDriver {
             "session_set_mode" => {
                 // 权限模式运行中也可切(引擎侧即时生效于后续审批)
                 let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
-                if self.session_created(id) {
+                if !self.session_created(id) {
+                    let model_id = self.model_id_of(&self.session_model_name(id))?;
+                    self.create_resumed(id, &model_id, mode).await?;
+                } else if self.has_cap("session/switchMode") {
                     self.rpc(
                         "session/switchMode",
                         json!({ "session_id": id, "permission_mode": ohmy_mode_of(mode) }),
                     )
                     .await?;
                 } else {
+                    // 版本握手回退:旧引擎只能 destroy+resume,那必须空闲
+                    if self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false) {
+                        return Err("当前引擎版本较旧,执行中不能切换权限模式,请先取消任务".into());
+                    }
                     let model_id = self.model_id_of(&self.session_model_name(id))?;
-                    self.create_resumed(id, &model_id, mode).await?;
+                    self.recreate_fallback(id, &model_id, mode).await?;
                 }
                 // 与 mc-agent setMode 对齐:切到 yolo 自动放行本会话所有挂起审批。
                 // 先切引擎再排空——切换后引擎新的审批直接放行不再产生 ask,
@@ -747,6 +783,20 @@ impl OhmyDriver {
 
     fn session_created(&self, id: &str) -> bool {
         self.0.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false)
+    }
+
+    fn has_cap(&self, cap: &str) -> bool {
+        self.0.engine_caps.lock().unwrap().contains(cap)
+    }
+
+    /// 版本握手回退:旧引擎(system/ready 未宣告 switch RPC)用
+    /// destroy + resume 全参重建实现切换(仅空闲时安全)。
+    async fn recreate_fallback(&self, id: &str, model_id: &str, mode: &str) -> Result<(), String> {
+        self.rpc("session/destroy", json!({ "session_id": id })).await?;
+        if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
+            s.created = false;
+        }
+        self.create_resumed(id, model_id, mode).await
     }
 
     fn session_mode(&self, id: &str) -> String {
@@ -887,6 +937,68 @@ impl Inner {
         self.emit_session_ask(sid, false);
     }
 
+    /// 排空批量缓冲(flusher 周期调用;stop 前同步调用,保证收尾帧送达)。
+    fn flush_batch(&self) {
+        let drained: Vec<(String, Vec<Value>)> = {
+            let mut b = self.batch.lock().unwrap();
+            b.drain().collect()
+        };
+        for (sid, frames) in drained {
+            if !frames.is_empty() {
+                self.app.emit_json(&format!("frames:{sid}"), Value::Array(frames));
+            }
+        }
+    }
+
+    /// 引擎不再服务(停止/崩溃/取消无应答)时的本地和解——引擎应答是确认
+    /// 而非前提。运行中会话补收尾帧(未闭合工具 failed → task-error →
+    /// task-ended),sidecar 落 interrupted;不和解会永久卡"执行中"
+    /// (不能发/不能删/不能切,重启也救不回)。
+    fn reconcile_session(&self, sid: &str, reason: &str) {
+        let open = {
+            let mut sessions = self.sessions.lock().unwrap();
+            match sessions.get_mut(sid) {
+                Some(s) if s.running => {
+                    s.running = false;
+                    std::mem::take(&mut s.open_tools)
+                }
+                _ => return,
+            }
+        };
+        for tc in open {
+            self.push_frame(sid, |seq| frame::tool_call_failed(&tc, "已中断", seq));
+        }
+        self.push_frame(sid, |seq| frame::task_error(reason, seq));
+        self.push_frame(sid, frame::task_ended);
+        self.write_sidecar(sid, |m| m["status"] = json!(SessionStatus::Interrupted.as_str()));
+        self.emit_session_event(sid, SessionStatus::Interrupted.as_str());
+    }
+
+    fn reconcile_all(&self, reason: &str) {
+        // 挂起审批/提问随引擎一起失效(resolved 帧先于 task-ended 落日志)
+        let perms: Vec<(String, String)> =
+            self.pending_perms.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (req_id, sid) in perms {
+            self.perm_tools.lock().unwrap().remove(&req_id);
+            self.resolve_perm(&sid, &req_id, PermOutcome::Cancelled);
+        }
+        let questions: Vec<(String, String)> = self
+            .pending_questions
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, (s, _))| (k.clone(), s.clone()))
+            .collect();
+        for (req_id, sid) in questions {
+            self.pending_questions.lock().unwrap().remove(&req_id);
+            self.emit_session_ask(&sid, false);
+        }
+        let ids: Vec<String> = self.sessions.lock().unwrap().keys().cloned().collect();
+        for id in ids {
+            self.reconcile_session(&id, reason);
+        }
+    }
+
     /// stdio 通知路由(reader 线程调用)。
     fn handle_notification(&self, method: &str, params: Value) {
         match method {
@@ -956,8 +1068,27 @@ impl Inner {
                 if sid.is_empty() {
                     return;
                 }
-                if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
-                    s.running = false;
+                let (was_running, open) = {
+                    let mut sessions = self.sessions.lock().unwrap();
+                    match sessions.get_mut(&sid) {
+                        Some(s) => {
+                            let was = s.running;
+                            s.running = false;
+                            (was, std::mem::take(&mut s.open_tools))
+                        }
+                        None => (false, HashSet::new()),
+                    }
+                };
+                if !was_running {
+                    // 已本地和解(取消超时/引擎重启)后迟到的收尾,忽略防重复帧
+                    return;
+                }
+                // 引擎的工具错误路径不发 tool_result(错误只进模型消息),
+                // 未闭合的 tool_call 在此补 failed 帧,否则 UI 永远转圈
+                let tool_msg =
+                    if stop_reason == "interrupted" { "已中断" } else { "执行失败(引擎未回传详情)" };
+                for tc in open {
+                    self.push_frame(&sid, |seq| frame::tool_call_failed(&tc, tool_msg, seq));
                 }
                 // 状态词汇对齐 SessionStatus:取消是 interrupted,
                 // 不能混进 finished(桌宠会当作完成来庆祝)
@@ -1008,11 +1139,19 @@ impl Inner {
                 let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("工具调用").to_string();
                 let input = data.get("input").cloned().unwrap_or(Value::Null);
                 let title = perm_title(&name, &input);
+                if !tc_id.is_empty() {
+                    if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
+                        s.open_tools.insert(tc_id.clone());
+                    }
+                }
                 self.push_frame(&sid, |seq| frame::tool_call(&tc_id, &title, &input, seq));
             }
             "tool_result" => {
                 let tc_id = event.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
+                    s.open_tools.remove(&tc_id);
+                }
                 self.push_frame(&sid, |seq| frame::tool_call_completed(&tc_id, content, seq));
             }
             "send_user_message" | "task_notification" => {
@@ -1108,8 +1247,12 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
-    /// 假 Anthropic SSE 服务:任何 POST /v1/messages 都回一段固定的流式应答。
-    fn fake_anthropic() -> String {
+    /// E2E 串行锁:两个 E2E 都改进程级 HOME/XDG 环境变量,并行会互踩
+    static E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 假 Anthropic SSE 服务:任何 POST /v1/messages 都回一段固定的流式应答;
+    /// delay_ms > 0 时应答前挂起(模拟慢模型,测运行中停止的和解)。
+    fn fake_anthropic(delay_ms: u64) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -1117,6 +1260,9 @@ mod tests {
                 let Ok(mut conn) = conn else { continue };
                 std::thread::spawn(move || {
                     use std::io::{BufRead as _, Write as _};
+                    if delay_ms > 0 {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
                     let mut reader = std::io::BufReader::new(conn.try_clone().unwrap());
                     let mut line = String::new();
                     let _ = reader.read_line(&mut line);
@@ -1163,20 +1309,24 @@ data: {"type":"message_stop"}"#,
     /// 端到端:mock 壳 + 真实 ohmyagent + 假 LLM,验证 create → send → 归一化
     /// 帧日志(user-input/task-started/agent 文本/task-ended)与回放。
     /// 需要 ohmyagent 二进制:MC_OHMYAGENT_BIN 或 PATH;找不到则跳过。
-    #[tokio::test(flavor = "multi_thread")]
-    async fn e2e_chat_normalization() {
-        if find_ohmyagent().is_none() {
-            eprintln!("skip: 未找到 ohmyagent 二进制");
-            return;
+    struct TestCtx(PathBuf);
+    impl ShellCtx for TestCtx {
+        fn emit_json(&self, _event: &str, _payload: Value) {}
+        fn config_dir(&self) -> Result<PathBuf, String> {
+            Ok(self.0.clone())
         }
-        // 隔离 HOME(ohmyagent 配置/会话)与壳配置目录
-        let home = std::env::temp_dir().join(format!("ohmy-e2e-{}", std::process::id()));
+    }
+
+    /// 隔离 HOME(ohmyagent 配置/会话)与壳配置目录,写配置并起驱动。
+    /// 改进程级环境变量,须持 E2E_LOCK 后调用。
+    fn e2e_setup(tag: &str, llm_delay_ms: u64) -> (OhmyDriver, PathBuf) {
+        let home = std::env::temp_dir().join(format!("ohmy-e2e-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".ohmyagent")).unwrap();
         std::env::set_var("HOME", &home);
         std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
 
-        let llm = fake_anthropic();
+        let llm = fake_anthropic(llm_delay_ms);
         let settings = json!({
             "default_model": "test-model",
             "permission_mode": "default",
@@ -1189,13 +1339,6 @@ data: {"type":"message_stop"}"#,
         )
         .unwrap();
 
-        struct TestCtx(PathBuf);
-        impl ShellCtx for TestCtx {
-            fn emit_json(&self, _event: &str, _payload: Value) {}
-            fn config_dir(&self) -> Result<PathBuf, String> {
-                Ok(self.0.clone())
-            }
-        }
         let ctx: Arc<dyn ShellCtx> = Arc::new(TestCtx(home.join("shellcfg")));
         let cfg = DesktopConfig {
             models: json!([{ "name": "测试模型", "provider": "anthropic",
@@ -1203,9 +1346,22 @@ data: {"type":"message_stop"}"#,
             ..Default::default()
         };
         let driver = OhmyDriver::start_with(ctx, &cfg).expect("引擎启动");
+        (driver, home)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn e2e_chat_normalization() {
+        if find_ohmyagent().is_none() {
+            eprintln!("skip: 未找到 ohmyagent 二进制");
+            return;
+        }
+        let _g = E2E_LOCK.lock().unwrap();
+        let (driver, home) = e2e_setup("chat", 0);
 
         let workdir = home.to_string_lossy().into_owned();
         let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
+        // 契约 5:新建未运行的会话是 created(不是 finished)
+        assert_eq!(meta.get("status").and_then(|v| v.as_str()), Some("created"));
         let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
         driver.session_open(&sid).await.expect("打开会话");
 
@@ -1260,5 +1416,39 @@ data: {"type":"message_stop"}"#,
             .expect("切模型");
 
         driver.stop();
+    }
+
+    /// 运行中停止引擎必须本地和解:补收尾帧、sidecar 落 interrupted——
+    /// 否则会话永久卡"执行中"(不能发/不能删/不能切,重启也救不回)。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn e2e_stop_reconciles_running_session() {
+        if find_ohmyagent().is_none() {
+            eprintln!("skip: 未找到 ohmyagent 二进制");
+            return;
+        }
+        let _g = E2E_LOCK.lock().unwrap();
+        // 慢速假 LLM(8s>stop 的 5s 优雅等待):轮次挂在模型调用上
+        let (driver, home) = e2e_setup("stop", 8000);
+
+        let workdir = home.to_string_lossy().into_owned();
+        let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
+        let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+        driver.session_open(&sid).await.expect("打开会话");
+        let payload = json!({ "content": frame::b64_text("会被挂住的任务") });
+        driver.session_send(&sid, "user-input", payload).await.expect("发送");
+
+        driver.stop();
+
+        let journal = driver.read_journal(&sid);
+        let types: Vec<&str> = journal.iter().filter_map(|f| f.get("type").and_then(|v| v.as_str())).collect();
+        assert!(types.contains(&"task-started"), "缺 task-started: {types:?}");
+        assert!(types.contains(&"task-error"), "停止未补 task-error: {types:?}");
+        assert!(types.contains(&"task-ended"), "停止未补 task-ended: {types:?}");
+        let meta = driver.0.read_sidecar(&sid);
+        assert_eq!(
+            meta.get("status").and_then(|v| v.as_str()),
+            Some("interrupted"),
+            "sidecar 未落 interrupted: {meta:?}"
+        );
     }
 }

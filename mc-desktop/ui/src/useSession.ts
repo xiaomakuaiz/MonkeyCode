@@ -17,8 +17,13 @@ export interface SessionHandle {
   /** 当前会话 ID(null = 未打开) */
   id: string | null;
   chat: ChatState;
-  /** 连接状态/告警文案(侧栏状态行) */
+  /** 连接状态文案(侧栏状态行,只反映连接) */
   status: string;
+  /** 操作失败告警(会话区横幅展示,自动消退;与连接状态分渠道——
+   * 此前混用状态行,一条"切换失败"一闪即被 conn-status 覆盖,
+   * 表现为"点了没反应") */
+  notice: string | null;
+  dismissNotice(): void;
   connected: boolean;
   /** 会话当前模型(空 = 未知,调用方回退默认模型展示) */
   model: string;
@@ -56,7 +61,7 @@ export interface SessionHandle {
   readFile(path: string): Promise<{ result?: { content?: string }; error?: string }>;
   /** repo_reveal:在系统文件管理器中定位(内核本机执行,浏览器模式同样可用) */
   reveal(path: string): Promise<{ result?: { ok?: boolean }; error?: string }>;
-  /** 在状态行外显一条告警(App 级操作失败与连接状态同渠道展示) */
+  /** 外显一条操作告警(App 级操作失败共用 notice 渠道) */
   notify(text: string): void;
 }
 
@@ -64,9 +69,17 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   const [id, setId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatState>(initialChat);
   const [status, setStatus] = useState("未连接");
-  // 连接态取 onStatus 回调的权威布尔,不从 status 文案推导:
-  // status 还兼作告警渠道(notify),文案匹配会把告警误判成断线
+  // 连接态取 onStatus 回调的权威布尔,不从 status 文案推导
   const [connected, setConnected] = useState(false);
+  // 操作告警独立渠道(自动消退),不占用连接状态行
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
+  const pushNotice = (text: string) => {
+    setNotice(text);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 8000);
+  };
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
   const [model, setModel] = useState("");
   const [yolo, setYolo] = useState(false);
   const [input, setInput] = useState("");
@@ -205,7 +218,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     if (!id) return;
     for (const f of files) {
       if (f.size > 20 * 1024 * 1024) {
-        setStatus(`⚠ ${f.name || "文件"} 过大(上限 20MB)`);
+        pushNotice(`⚠ ${f.name || "文件"} 过大(上限 20MB)`);
         continue;
       }
       try {
@@ -223,7 +236,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
           { path, isImage, name: f.name || path.split("/").pop() || "", preview: isImage ? dataURL : undefined },
         ]);
       } catch (e) {
-        setStatus("⚠ 附件上传失败: " + (e instanceof Error ? e.message : String(e)));
+        pushNotice("⚠ 附件上传失败: " + (e instanceof Error ? e.message : String(e)));
       }
     }
   };
@@ -263,13 +276,13 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
         { model: name },
       );
       if (r.error) {
-        setStatus("⚠ 切换模型失败: " + r.error);
+        pushNotice("⚠ 切换模型失败: " + r.error);
         return;
       }
       setModel(name); // model_update 帧也会到达并渲染系统行
       onSessionsChangedRef.current?.();
     } catch (e) {
-      setStatus("⚠ 切换模型失败: " + (e instanceof Error ? e.message : e));
+      pushNotice("⚠ 切换模型失败: " + (e instanceof Error ? e.message : e));
     }
   };
 
@@ -285,11 +298,11 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
       );
       if (r.error) {
         setYolo(prev);
-        setStatus("⚠ 切换权限模式失败: " + r.error);
+        pushNotice("⚠ 切换权限模式失败: " + r.error);
       }
     } catch (e) {
       setYolo(prev);
-      setStatus("⚠ 切换权限模式失败: " + (e instanceof Error ? e.message : e));
+      pushNotice("⚠ 切换权限模式失败: " + (e instanceof Error ? e.message : e));
     }
   };
 
@@ -321,6 +334,8 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     id,
     chat,
     status,
+    notice,
+    dismissNotice: () => setNotice(null),
     connected,
     model,
     yolo,
@@ -347,6 +362,6 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     listFiles,
     readFile,
     reveal,
-    notify: setStatus,
+    notify: pushNotice,
   };
 }

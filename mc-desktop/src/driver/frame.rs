@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 /// 对表 mc-desktop/ui/src/types.ts 的 SessionStatus。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SessionStatus {
+    Created,
     Running,
     Finished,
     Interrupted,
@@ -23,6 +24,7 @@ pub enum SessionStatus {
 impl SessionStatus {
     pub fn as_str(self) -> &'static str {
         match self {
+            SessionStatus::Created => "created",
             SessionStatus::Running => "running",
             SessionStatus::Finished => "finished",
             SessionStatus::Interrupted => "interrupted",
@@ -163,6 +165,17 @@ pub fn tool_call_completed(tc_id: &str, raw_output: &str, seq: u64) -> Value {
     acp(
         json!({ "sessionUpdate": "tool_call_update", "toolCallId": tc_id,
             "status": "completed", "rawOutput": raw_output }),
+        seq,
+    )
+}
+
+/// 工具失败/中断收尾。ohmyagent 的工具错误路径不发 tool_result 事件
+/// (错误只进模型消息),由驱动在轮次结束时对未闭合的 tool_call 补此帧,
+/// 否则 UI 工具卡永远转圈。
+pub fn tool_call_failed(tc_id: &str, raw_output: &str, seq: u64) -> Value {
+    acp(
+        json!({ "sessionUpdate": "tool_call_update", "toolCallId": tc_id,
+            "status": "failed", "rawOutput": raw_output }),
         seq,
     )
 }

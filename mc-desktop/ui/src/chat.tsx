@@ -651,6 +651,32 @@ export function ChatView({
           width 扣掉 16px:对话列在滚动容器内被 scrollbar-gutter 双侧各让 8px,
           composer 在容器外,同步扣减后两列在任意窗口宽度下公式一致、像素对齐 */}
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* 操作告警横幅(切模型/权限/附件失败;独立于连接状态行,自动消退) */}
+        {session.notice && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 12px",
+              borderRadius: 9,
+              border: "1px solid var(--errBd)",
+              background: "var(--errBg, transparent)",
+              color: "var(--err)",
+              fontSize: 12.5,
+              animation: "mcin .12s ease",
+            }}
+          >
+            <span className="ellipsis" style={{ flex: 1 }}>{session.notice}</span>
+            <button
+              onClick={session.dismissNotice}
+              style={{ border: "none", background: "transparent", color: "var(--err)", cursor: "pointer", fontSize: 13, padding: 0 }}
+              title="关闭"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         {chat.running && (
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span className="spinner" />

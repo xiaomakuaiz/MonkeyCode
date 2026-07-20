@@ -1549,3 +1549,25 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       pending_perms——逐个 permission/respond approved + permission-resolved 帧
       + 清 ask 状态;顺序与 mc 一致(先切引擎再排空,不漏切换瞬间的请求)
 - [x] 验证:cargo test 21/21
+
+## A 组会话正确性收官 + 错误外显 + 版本握手(2026-07-20)
+
+- [x] 和解原则落地(契约 5 新增条款):stop()/stdout EOF 崩溃/cancel 无应答
+      三路都本地补收尾(未闭合工具 failed 帧 → task-error → task-ended,
+      sidecar 落 interrupted,挂起审批/提问一并失效);turn/stopped 加
+      running 幂等守卫吞迟到收尾;stop 前同步 flush_batch 不丢帧;
+      sessions_list 对历史残留的 sidecar "running" 读取时自愈 interrupted
+- [x] 状态机补 created:frame.rs 枚举 + ohmy session_create 落 created,
+      新会话不再显示"已完成"(侧栏 default 分支天然正确渲染)
+- [x] 工具失败不再绿勾/永久转圈:上游工具错误路径不发 tool_result,
+      驱动跟踪 open_tools,轮次收尾对未闭合 tool_call 补 failed 帧
+      (reduce 已有 fail 渲染);上游缺口清单补记
+- [x] 错误外显分渠道:useSession 新增 notice(自动消退 8s + 手动关),
+      切模型/权限/附件失败与 App 级告警全走 notice,ChatView composer 上方
+      红色横幅展示;状态行回归纯连接语义
+- [x] 版本握手:system/ready 的 capabilities 落 engine_caps,
+      切模型/模式缺 RPC 时自动回退 destroy+resume(旧二进制不再 Method not found;
+      回退路径模式切换要求空闲,给友好错误)
+- [x] 验证:cargo test 22/22 三连跑(新增 e2e_stop_reconciles_running_session:
+      8s 慢速假 LLM 挂住轮次 → stop → 断言收尾帧与 interrupted;
+      E2E_LOCK 串行防 HOME 互踩);UI tsc + 38/38;E2E 补 created 断言
