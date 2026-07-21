@@ -1715,3 +1715,16 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       Read 查看(Read 图片文件出 Images,vision 可见)
 - [ ] 待上游:mcp/client.go 解析 {type:"image",data,mimeType} →
       tools.ToolResult.Images(ImageSource{Data,MediaType}),模型直收截图
+
+## 上游集成:MCP 图片/父归属/错误 tool_result(2026-07-21)
+
+- [x] c1d8482 MCP image → 模型:截图闭环(壳落盘路径继续供 UI 工具卡)
+- [x] dab1b85 事件带 parent_session_id/parent_tool_call_id:子代理精确
+      认领(父 sid 经 shell_sid_of 反查兼容 engine_id 换绑),
+      启发式降为旧引擎回退;E2E 实测走标记路径
+- [x] b02fc77 工具错误发 tool_result("Error: " 前缀,无独立错误位)→
+      壳按前缀转 failed 帧,防失败渲染绿勾;轮次收尾 failed 兜底保留;
+      deferred 工具直调自动提升(AskUserQuestion 不再依赖先 ToolSearch)
+- [x] OHMYAGENT_REF 钉 c1d8482;重建二进制,cargo 31/31
+- [ ] 上游愿望:tool_result 加独立 is_error 位(现前缀约定,正常输出
+      以 "Error: " 开头会误判)

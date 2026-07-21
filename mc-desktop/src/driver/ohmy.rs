@@ -1281,26 +1281,58 @@ impl Inner {
         }
     }
 
-    /// 子代理认领 + 物化。上游转发子循环事件不带父归属(session_id 是
-    /// 子循环随机 id),首见时用"运行中且持有未闭合 Agent 工具的会话"
-    /// 启发式认领,并把子代理物化为**壳侧子会话**(sidecar 带 parent,
-    /// 可回放可跟流)——展示与 mc-agent 对齐:父卡 feed 预览 +
-    /// child_session 链接点开完整对话。认领不到(迟到事件)返回 false。
-    fn claim_subagent(&self, child_sid: &str) -> bool {
+    /// 子代理认领 + 物化。上游 dab1b85 起事件自带 parent_session_id/
+    /// parent_tool_call_id,精确认领;旧引擎无标记时回退"运行中且持有
+    /// 未闭合 Agent 工具的会话"启发式。物化为**壳侧子会话**(sidecar 带
+    /// parent,可回放可跟流)——父卡 feed 预览 + child_session 链接
+    /// 点开完整对话。认领不到(迟到事件)返回 false。
+    fn claim_subagent(&self, child_sid: &str, event: &Value) -> bool {
         if self.subagents.lock().unwrap().contains_key(child_sid) {
             return true;
         }
-        let claimed = {
-            let sessions = self.sessions.lock().unwrap();
-            sessions.iter().find_map(|(sid, s)| {
-                if !s.running {
-                    return None;
-                }
-                s.open_tools
-                    .iter()
-                    .find(|(_, name)| name.as_str() == "Agent")
-                    .map(|(tc, _)| (sid.clone(), tc.clone(), s.workdir.clone(), s.model_name.clone()))
-            })
+        // 事件自带父归属:父 sid 经 shell_sid_of 反查(engine_id 换绑兼容)
+        let stamped = event
+            .get("parent_session_id")
+            .and_then(|v| v.as_str())
+            .filter(|p| !p.is_empty())
+            .map(|p| {
+                let psid = self.shell_sid_of(p);
+                let ptc = event
+                    .get("parent_tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                (psid, ptc)
+            });
+        let claimed = match stamped {
+            Some((psid, ptc)) => {
+                let sessions = self.sessions.lock().unwrap();
+                sessions.get(&psid).map(|s| {
+                    // 父工具 id 缺省时兜底找未闭合 Agent 工具
+                    let ptc = if !ptc.is_empty() {
+                        ptc
+                    } else {
+                        s.open_tools
+                            .iter()
+                            .find(|(_, n)| n.as_str() == "Agent")
+                            .map(|(tc, _)| tc.clone())
+                            .unwrap_or_default()
+                    };
+                    (psid.clone(), ptc, s.workdir.clone(), s.model_name.clone())
+                })
+            }
+            None => {
+                let sessions = self.sessions.lock().unwrap();
+                sessions.iter().find_map(|(sid, s)| {
+                    if !s.running {
+                        return None;
+                    }
+                    s.open_tools
+                        .iter()
+                        .find(|(_, name)| name.as_str() == "Agent")
+                        .map(|(tc, _)| (sid.clone(), tc.clone(), s.workdir.clone(), s.model_name.clone()))
+                })
+            }
         };
         let Some((psid, ptc, workdir, model_name)) = claimed else { return false };
         let (title, prompt) = self
@@ -1521,7 +1553,7 @@ impl Inner {
         let data = event.get("data").cloned().unwrap_or(Value::Null);
         // 未知 session_id = 上游转发的子代理事件(子循环随机 id):
         // 认领并物化为壳侧子会话,后续事件走正常帧路径;认领不到(迟到)丢弃
-        if !self.sessions.lock().unwrap().contains_key(&sid) && !self.claim_subagent(&sid) {
+        if !self.sessions.lock().unwrap().contains_key(&sid) && !self.claim_subagent(&sid, &event) {
             return;
         }
         // 子代理事件在父卡进度窗同步一份内联预览(非子代理为 no-op)
@@ -1574,9 +1606,17 @@ impl Inner {
                 }
                 // Agent 工具闭合:清对应子代理路由(残留行缓冲先冲洗成尾行)
                 self.close_subagents_of(&sid, &tc_id);
-                // 结果文本里的工作区上传路径(浏览器截图等)→ 工具卡内联图
-                let images = extract_upload_paths(content);
-                self.push_frame(&sid, |seq| frame::tool_call_completed(&tc_id, content, &images, seq));
+                // 错误收尾(b02fc77:错误也发 tool_result,约定 "Error: " 前缀,
+                // 无独立错误位)→ failed 帧,否则失败工具渲染成绿勾
+                if content.starts_with("Error: ") {
+                    self.push_frame(&sid, |seq| frame::tool_call_failed(&tc_id, content, seq));
+                } else {
+                    // 结果文本里的工作区上传路径(浏览器截图等)→ 工具卡内联图
+                    let images = extract_upload_paths(content);
+                    self.push_frame(&sid, |seq| {
+                        frame::tool_call_completed(&tc_id, content, &images, seq)
+                    });
+                }
             }
             "send_user_message" | "task_notification" => {
                 let msg = data

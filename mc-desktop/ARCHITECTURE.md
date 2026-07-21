@@ -149,12 +149,13 @@ Op/Ev/错误码、proto:1、20s ping。
 协议缺口与对应的壳侧变通,上游补齐后应删壳侧实现:
 permission remember(现壳记忆集自动应答)、每模型独立凭据
 (现同 configKey 冲突跳过)、stdio 会话索引(现 sidecar 权威)、
-工具错误不发 tool_result(壳轮次收尾补 failed 帧)、子代理事件无父归属
-(壳启发式认领 + 物化子会话)、空会话 resume 不容忍(壳 engine_id 换绑)。
-已补齐:OHMYAGENT_CONFIG_DIR(私有目录)、子代理权限实时继承父模式、
-上下文用量(turn/stopped.context 轮后占用 + create 结果 resume 即显,
-296176a)、附件(提示词内图片路径自动内联 ContentImage,相对路径按
-会话 cwd 解析,壳的 [图片] 约定零改动兼容,37feef2)。
+空会话 resume 不容忍(壳 engine_id 换绑)、工具错误无独立错误位
+(现 "Error: " 前缀约定,壳按前缀转 failed 帧;轮次收尾兜底保留)。
+已补齐:OHMYAGENT_CONFIG_DIR、子代理权限实时继承、上下文用量
+(turn/stopped.context)、附件(提示词图片路径内联)、MCP image 结果
+直达模型(c1d8482)、工具错误发 tool_result(b02fc77,含 deferred
+直调自动提升)、子代理事件带 parent_session_id/parent_tool_call_id
+(dab1b85,壳精确认领,启发式降为旧引擎回退)。
 
 ## 开发与构建产物
 

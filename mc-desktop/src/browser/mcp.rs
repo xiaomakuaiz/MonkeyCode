@@ -185,9 +185,9 @@ async fn call_tool(
         "browser_take_screenshot" => {
             let full = args.get("full_page").and_then(|v| v.as_bool()).unwrap_or(false);
             let (png, mut note) = sess.screenshot(full).await?;
-            // 截图同时落当前会话工作区:UI 工具卡内联显示(驱动按路径转
-            // images),模型也可经 Read 按路径查看(引擎 MCP 客户端目前
-            // 丢弃 image 块,文本路径是双保险)
+            // 截图同时落当前会话工作区:UI 工具卡按路径内联显示
+            // (帧协议传路径不传 base64);模型侧走 MCP image 块直达
+            // (上游 c1d8482 起)
             if let Some(wd) = workdir() {
                 let name = format!("browser-{}.png", crate::driver::frame::now_ms());
                 match crate::uploads::save_raw(&wd, None, &name, &png) {
