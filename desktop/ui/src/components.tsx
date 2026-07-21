@@ -164,7 +164,23 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
   const [open, setOpen] = useState(true);
   const done = entries.filter((e) => e.status === "completed").length;
   const current = entries.find((e) => e.status === "in_progress") ?? entries.find((e) => e.status === "pending");
-  const mark = (s: string) => (s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐");
+  // 依赖提示(上游 todo_update 携带 id/depends_on 时):id → 序号与标题,
+  // blocked 缺省按"有未完成依赖"本地推导
+  const byId = new Map(entries.map((e, i) => [e.id ?? "", { idx: i + 1, e }]));
+  const unfinishedDeps = (e: PlanEntry) =>
+    (e.depends_on ?? []).filter((d) => byId.get(d)?.e.status !== "completed");
+  const isBlocked = (e: PlanEntry) =>
+    e.status !== "completed" && (e.blocked ?? unfinishedDeps(e).length > 0);
+  const depHint = (e: PlanEntry) => {
+    const deps = unfinishedDeps(e);
+    if (!deps.length) return null;
+    const names = deps.map((d) => byId.get(d)).filter(Boolean).map((x) => `#${x!.idx}`);
+    return names.length ? `等 ${names.join(" ")}` : null;
+  };
+  const mark = (s: string, blocked: boolean) =>
+    blocked ? "⊘" : s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐";
+  // 有任何依赖关系时全员编号,"等 #N" 才有落点
+  const numbered = entries.some((e) => e.depends_on?.length);
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden", animation: "mcin .18s ease" }}>
       <button
@@ -191,17 +207,25 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
       </button>
       {open && (
         <div style={{ maxHeight: 176, overflowY: "auto", padding: "0 12px 9px", display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5 }}>
-          {entries.map((e, i) => (
-            <div
-              key={i}
-              style={{
-                color: e.status === "completed" ? "var(--t5)" : e.status === "in_progress" ? "var(--acc)" : "var(--t2)",
-                textDecoration: e.status === "completed" ? "line-through" : "none",
-              }}
-            >
-              <span style={{ display: "inline-block", width: 18 }}>{mark(e.status)}</span> {e.content}
-            </div>
-          ))}
+          {entries.map((e, i) => {
+            const blocked = isBlocked(e);
+            const hint = depHint(e);
+            return (
+              <div
+                key={i}
+                style={{
+                  color: e.status === "completed" ? "var(--t5)" : blocked ? "var(--t4)" : e.status === "in_progress" ? "var(--acc)" : "var(--t2)",
+                  textDecoration: e.status === "completed" ? "line-through" : "none",
+                }}
+                title={hint ? `依赖未完成: ${hint}` : undefined}
+              >
+                <span style={{ display: "inline-block", width: 18 }}>{mark(e.status, blocked)}</span>
+                {numbered && <span style={{ color: "var(--t5)", marginRight: 5, fontSize: 11 }}>#{i + 1}</span>}
+                {e.content}
+                {hint && <span style={{ color: "var(--t5)", fontSize: 11, marginLeft: 6 }}>· {hint}</span>}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

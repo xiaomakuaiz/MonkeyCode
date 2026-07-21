@@ -116,7 +116,13 @@ export type SubEntry =
 
 export interface PlanEntry {
   content: string;
-  status: string; // pending | in_progress | completed
+  status: string;
+  /** 任务 id(上游 todo_update 携带时,依赖引用用) */
+  id?: string;
+  /** 依赖的任务 id(上游携带时面板渲染依赖提示) */
+  depends_on?: string[];
+  /** 被未完成依赖阻塞(上游携带;缺省时按 depends_on 本地推导) */
+  blocked?: boolean;
 }
 
 export type PermOutcome = "approved" | "denied" | "timeout" | "cancelled";
