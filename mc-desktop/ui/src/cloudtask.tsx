@@ -136,13 +136,26 @@ export function CloudTaskView({
     setChat(reduceBatch(initialChat, [...historyRef.current, ...liveRef.current]));
   }, []);
 
+  // attach 生命周期与轮询解耦:vmStatus 抖动不能反复拆建连接——每次重建
+  // 都会把 connectCloudTask 内部的重连上限(dialFails/dropCount)清零,
+  // 3s/10s 的轮询节奏快于内部 ~30s 的放弃阈值,表现为永久"断开重连"。
+  // 休眠期间不发起(effect 内读 ref);唤醒完成经 attachEpoch 触发一次重建。
+  const [attachEpoch, setAttachEpoch] = useState(0);
+  // attach 已收束/放弃(onIdle):不再自动重建;发消息(mode=new)或唤醒重新武装
+  const attachIdleRef = useRef(false);
+  const sendFailsRef = useRef(0); // 连续投递失败计数(超限暂停自动重试)
+
   const refreshInfo = useCallback(async () => {
     try {
       const info = await mcTaskInfo(id);
       setMeta(info);
-      // VM 唤醒完成:休眠期间压着的排队消息可以投递了
+      // VM 唤醒完成:休眠期间压着的排队消息可以投递了;attach 也重新武装
+      // (唤醒 = 新的活动窗口,给一次重建机会——按转变触发,不随轮询抖)
       if (info.virtualmachine?.status === "online" && hibernatedRef.current) {
         hibernatedRef.current = false;
+        attachIdleRef.current = false;
+        sendFailsRef.current = 0;
+        setAttachEpoch((e) => e + 1);
         setTimeout(() => trySendRef.current(), 100);
       }
       return info;
@@ -152,7 +165,8 @@ export function CloudTaskView({
     }
   }, [id]);
 
-  // 进入/切任务:复位 + 拉详情;结束态任务直接回放最近一轮
+  // 进入/切任务:复位 + 拉详情;结束态任务直接回放最近一轮;
+  // 运行中任务也从 REST 播种历史(见下)
   useEffect(() => {
     historyRef.current = [];
     liveRef.current = [];
@@ -161,6 +175,8 @@ export function CloudTaskView({
     setErr("");
     setInput("");
     pinnedRef.current = true;
+    attachIdleRef.current = false;
+    sendFailsRef.current = 0;
     let alive = true;
     void (async () => {
       const info = await refreshInfo();
@@ -175,6 +191,22 @@ export function CloudTaskView({
           setStatus("已结束,只读回放");
         } catch (e) {
           setErr(e instanceof Error ? e.message : String(e));
+        }
+      } else if (info.status === "processing") {
+        // processing 此前完全依赖 attach 回放当前轮:attach 空闲关闭/失败时
+        // 对话区全空,且收不到 cursor 帧,"加载更早"也永不可达。这里从 REST
+        // 播种已完成轮 + 翻页游标兜底;活跃轮的尾巴丢弃(最后一个 task-ended
+        // 之后的帧),当前轮以 attach 整轮回放为权威,避免与回放重复
+        try {
+          const r = await mcTaskRounds(id, "", 2);
+          if (!alive) return;
+          const frames = r.frames ?? [];
+          const lastEnd = frames.map((f) => f.type).lastIndexOf("task-ended");
+          historyRef.current = frames.slice(0, lastEnd + 1);
+          setCursor(r.next_cursor ? { cursor: r.next_cursor, hasMore: !!r.has_more } : null);
+          if (historyRef.current.length) rebuild();
+        } catch {
+          // 播种失败不致命:attach 回放仍在,保持原行为
         }
       }
     })();
@@ -226,6 +258,7 @@ export function CloudTaskView({
       }
       if (!frames.length) return;
       sendingRef.current = false; // 收到帧 = 上一条直发已被云端接收
+      sendFailsRef.current = 0; // 通路恢复,投递失败计数归零
       liveRef.current.push(...frames);
       setChat((s) => reduceBatch(s, frames));
       if (turnEnded) {
@@ -253,20 +286,32 @@ export function CloudTaskView({
       },
       onEnded: () => void refreshInfo().then(() => onTasksChangedRef.current?.()),
       // 空闲关闭(云端对"当前轮已结束"的 attach 直接关连接):不是断线,
-      // 转就绪态——可直接发消息(届时另建 mode=new 连接)
+      // 转就绪态——可直接发消息(届时另建 mode=new 连接)。
+      // 收束即撤下自动重建武装并清掉死连接引用:引用不清,attach effect 的
+      // connRef 守卫会永远挡住唤醒后的重建
       onIdle: () => {
+        attachIdleRef.current = true;
+        connRef.current = null;
         syncedRef.current = true;
         runningRef.current = false;
         setConnected(false);
         setStatus("已就绪,可继续对话");
         setTimeout(() => trySendRef.current(), 100);
       },
-      // 首条输入未送达(拨号失败/零回显被关):放回队列头,绝不静默丢
+      // 首条输入未送达(拨号失败/零回显被关):放回队列头,绝不静默丢。
+      // 该连接已死,引用一并清掉;连续失败超限后暂停自动重试(内容仍在
+      // 队列),否则"投递→被拒→2s 再投"会自持死循环
       onSendFailed: (text: string) => {
         sendingRef.current = false;
+        connRef.current = null;
         setQueued(queuedRef.current ? text + "\n" + queuedRef.current : text);
-        setStatus("消息未送达,已重新排队");
-        setTimeout(() => trySendRef.current(), 2000);
+        sendFailsRef.current += 1;
+        if (sendFailsRef.current < 3) {
+          setStatus("消息未送达,已重新排队");
+          setTimeout(() => trySendRef.current(), 2000);
+        } else {
+          setStatus("⚠ 消息多次未送达,已暂停自动重试;等环境就绪或点发送再试");
+        }
       },
       // 断线重连(降级 attach)会整轮回放当前轮:清本地当前轮缓存,回放为权威
       onReconnect: () => {
@@ -278,11 +323,16 @@ export function CloudTaskView({
   );
 
   // 运行中:WS attach 跟看(内核代理带 monkeycode 会话拨云端)。
-  // 依赖全部稳定(id/taskStatus/稳定回调),只在进入 processing 时建一次。
+  // 依赖刻意不含 vmWaking:vmStatus 由轮询刷新,抖动会反复拆建连接,
+  // 每次重建把 connectCloudTask 内部的重连上限清零 → 永久"断开重连"。
+  // 休眠与否在 effect 内读 ref;唤醒完成由 refreshInfo 按转变 bump
+  // attachEpoch 触发一次重建。
   useEffect(() => {
     if (taskStatus !== "processing") return;
-    // VM 休眠/唤醒中不发起 attach(必被拒,徒增重连噪音);唤醒完成后 effect 重跑
-    if (vmWaking) return;
+    // VM 休眠/唤醒中不发起 attach(必被拒,徒增重连噪音)
+    if (hibernatedRef.current) return;
+    // attach 已收束/放弃:不自动重建(发消息走 mode=new;唤醒经 epoch 重新武装)
+    if (attachIdleRef.current) return;
     if (connRef.current) return; // 发消息时已切换为 mode=new 连接,不重复建
     // attach 会整轮回放当前轮:清掉本地当前轮缓存,以服务端回放为权威
     liveRef.current = [];
@@ -292,7 +342,7 @@ export function CloudTaskView({
       connRef.current?.close();
       connRef.current = null;
     };
-  }, [id, taskStatus, vmWaking, connHandlers]);
+  }, [id, taskStatus, attachEpoch, connHandlers]);
 
   // 贴底跟随(简化版:仅程序滚动,不做锚点恢复——云端流为跟看场景)
   useEffect(() => {
@@ -353,6 +403,7 @@ export function CloudTaskView({
     const text = input.trim();
     if (!text || ended) return;
     setInput("");
+    sendFailsRef.current = 0; // 手动发送 = 用户明确要投递,重试机会重置
     const idle =
       statusRef.current === "processing" &&
       syncedRef.current &&
