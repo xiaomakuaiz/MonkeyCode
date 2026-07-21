@@ -1,12 +1,14 @@
 // 帧 → 对话流渲染项的归约:流式文本聚合、工具状态回写、审批卡片终态、
 // AI 提问卡(ask_user_question)等。纯函数,不触 DOM。
 import { b64decode, frameData } from "./codec";
-import type { AcpUpdate, AskQuestion, Frame, LogItem, PermOutcome, SubEntry, ToolProgress, Usage } from "./types";
+import type { AcpUpdate, AskQuestion, Frame, LogItem, PermOutcome, PlanEntry, SubEntry, ToolProgress, Usage } from "./types";
 
 export interface ChatState {
   items: LogItem[];
   running: boolean;
   usage: Usage | null;
+  /** 实时任务清单(todo_update 全量重发;钉在 composer 上方的面板,不进对话流) */
+  plan: PlanEntry[];
   /** 流式聚合目标:'agent' | 'thought' | ''(断流) */
   streamKind: string;
   /** 本轮结束时需要刷新改动计数 */
@@ -21,6 +23,7 @@ export const initialChat: ChatState = {
   items: [],
   running: false,
   usage: null,
+  plan: [],
   streamKind: "",
   turnEnded: false,
   model: "",
@@ -251,15 +254,11 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       }
       return { ...s, items };
     }
-    case "plan": {
-      // 实时勾选卡:全流唯一一张,每次更新移到末尾跟随当前进度——
-      // 引擎在每次 Task*/TodoWrite 后全量重发清单:逐次追加会堆快照
-      // 刷屏,固定在首现位置则后续更新没人看得见;跟随式与 TUI 的
-      // 钉底面板(c9fcb4c)同效
-      const items: typeof s.items = s.items.filter((it) => it.kind !== "plan");
-      items.push({ kind: "plan", entries: u.entries ?? [] });
-      return { ...s, items, streamKind: "" };
-    }
+    case "plan":
+      // 实时任务清单不进对话流:钉在 composer 上方的面板整卡更新
+      // (引擎每次 Task*/TodoWrite 后全量重发;流内呈现无论追加还是
+      // 原地更新都别扭——追加刷屏、固定没人看、跟随会跳)
+      return { ...s, plan: u.entries ?? [] };
     case "llm_call_retry":
       return push(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
     case "usage_update":

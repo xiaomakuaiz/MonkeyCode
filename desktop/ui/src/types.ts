@@ -157,7 +157,6 @@ export type LogItem =
       /** 子代理子会话 ID(可打开完整回放) */
       childSessionId?: string;
     }
-  | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "sys"; text: string; error?: boolean }
   | { kind: "perm"; id: string; title: string; tool: string; state: PermState }
   /** AI 提问卡片(云端 ask_user_question;askId 即回传 reply 的 request_id) */

@@ -12,7 +12,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { LogList, MONO } from "./components";
+import { LogList, MONO, TaskPanel } from "./components";
 import {
   IconArchive,
   IconChevronDown,
@@ -651,6 +651,8 @@ export function ChatView({
           width 扣掉 16px:对话列在滚动容器内被 scrollbar-gutter 双侧各让 8px,
           composer 在容器外,同步扣减后两列在任意窗口宽度下公式一致、像素对齐 */}
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* 实时任务面板(todo_update 驱动;钉住,不进对话流) */}
+        {chat.plan.length > 0 && <TaskPanel entries={chat.plan} />}
         {/* 操作告警横幅(切模型/权限/附件失败;独立于连接状态行,自动消退) */}
         {session.notice && (
           <div

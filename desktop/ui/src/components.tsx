@@ -158,21 +158,52 @@ function ThoughtView({ text }: { text: string }) {
   );
 }
 
-function PlanCard({ entries }: { entries: PlanEntry[] }) {
+/** 实时任务面板:钉在 composer 上方,不进对话流。收起 = 一行摘要
+ * (进度 + 当前项),展开 = 限高滚动的勾选列表;整卡随 todo_update 更新。 */
+export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
+  const [open, setOpen] = useState(true);
+  const done = entries.filter((e) => e.status === "completed").length;
+  const current = entries.find((e) => e.status === "in_progress") ?? entries.find((e) => e.status === "pending");
   const mark = (s: string) => (s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐");
   return (
-    <div className="card" style={{ padding: "11px 14px", fontSize: 12.5, display: "flex", flexDirection: "column", gap: 4, animation: "mcin .25s ease" }}>
-      {entries.map((e, i) => (
-        <div
-          key={i}
-          style={{
-            color: e.status === "completed" ? "var(--t5)" : e.status === "in_progress" ? "var(--acc)" : "var(--t2)",
-            textDecoration: e.status === "completed" ? "line-through" : "none",
-          }}
-        >
-          <span style={{ display: "inline-block", width: 18 }}>{mark(e.status)}</span> {e.content}
+    <div className="card" style={{ padding: 0, overflow: "hidden", animation: "mcin .18s ease" }}>
+      <button
+        className="hv2"
+        onClick={() => setOpen(!open)}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8,
+          padding: "7px 12px", border: "none", background: "transparent",
+          cursor: "pointer", font: "inherit", fontSize: 12, textAlign: "left",
+        }}
+      >
+        <span style={{ color: done === entries.length && entries.length > 0 ? "var(--t5)" : "var(--acc)", fontWeight: 700 }}>
+          {done === entries.length && entries.length > 0 ? "☑" : "◐"}
+        </span>
+        <span style={{ fontWeight: 600 }}>
+          任务 {done}/{entries.length}
+        </span>
+        {!open && current && (
+          <span className="ellipsis" style={{ color: "var(--t4)", flex: 1, minWidth: 0 }}>
+            · {current.status === "in_progress" ? "正在" : "接下来"}:{current.content}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", color: "var(--t5)", fontSize: 10 }}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div style={{ maxHeight: 176, overflowY: "auto", padding: "0 12px 9px", display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5 }}>
+          {entries.map((e, i) => (
+            <div
+              key={i}
+              style={{
+                color: e.status === "completed" ? "var(--t5)" : e.status === "in_progress" ? "var(--acc)" : "var(--t2)",
+                textDecoration: e.status === "completed" ? "line-through" : "none",
+              }}
+            >
+              <span style={{ display: "inline-block", width: 18 }}>{mark(e.status)}</span> {e.content}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -628,8 +659,6 @@ function ItemView({
       );
     case "thought":
       return <ThoughtView text={item.text} />;
-    case "plan":
-      return <PlanCard entries={item.entries} />;
     case "sys":
       if (item.text === "— 本轮结束 —") return <TurnDivider />;
       return (

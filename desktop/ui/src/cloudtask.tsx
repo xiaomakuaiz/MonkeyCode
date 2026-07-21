@@ -22,7 +22,7 @@ import { CloudFilesDrawer } from "./cloudfiles";
 import { CloudTerminal } from "./cloudterm";
 import { b64decode } from "./codec";
 import { COL_MAX, isImeEnter, markImeEnd } from "./chat";
-import { LogList } from "./components";
+import { LogList, TaskPanel } from "./components";
 import { IconCheck, IconChevronDown, IconClock, IconCloud, IconDots, IconFolder, IconGlobe, IconMonitor, IconSend, IconStop, IconX } from "./icons";
 import { answerAsk, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Frame } from "./types";
@@ -411,11 +411,18 @@ export function CloudTaskView({
     if (!text || ended) return;
     setInput("");
     sendFailsRef.current = 0; // 手动发送 = 用户明确要投递,重试机会重置
-    if (!runningRef.current && !sendingRef.current) {
-      dispatch(text);
-    } else {
+    // 上一条直发还没回执:合并入队,别把在途连接顶掉
+    if (sendingRef.current) {
       setQueued(queuedRef.current ? queuedRef.current + "\n" + text : text);
+      return;
     }
+    // 手动发送不看本地 running 推断:被打断的轮(VM 休眠等)回放里只有
+    // task-started 没有 task-ended,runningRef 永远卡 true,消息全进队列
+    // 死等。轮是否真在跑由服务端裁决——真在跑 mode=new 会被拒,走
+    // onSendFailed 回队;已死的轮则直接开新轮。队列里压着的一并带上
+    const full = [queuedRef.current, text].filter(Boolean).join("\n");
+    setQueued("");
+    dispatch(full);
   };
 
   // 任务结束时还压着排队消息:外显提醒,不静默丢
@@ -739,6 +746,8 @@ export function CloudTaskView({
 
       {/* ==== 运行条 + 终端卡 + composer:与 ChatView 同列宽同出血 ==== */}
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {/* 实时任务面板(与本地会话同款,钉住不进流) */}
+        {chat.plan.length > 0 && <TaskPanel entries={chat.plan} />}
         {/* 终端:对话列同宽的圆角深色悬浮卡(与 composer 同出血),融入卡片语言 */}
         {termOpen && vmId && !ended && (
           <div
