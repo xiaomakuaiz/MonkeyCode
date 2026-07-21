@@ -13,6 +13,23 @@ export type PermAction = "allow" | "always" | "persist" | "deny";
 const LAST_SESSION_KEY = "mc.lastSession";
 export const lastSessionId = () => localStorage.getItem(LAST_SESSION_KEY);
 
+/** 单附件上传:File → base64 → 壳命令落盘工作区 uploads 目录,返回附件
+ * 描述(超限/读取/上传失败抛出)。会话内 addFiles 与新建会话的首条消息
+ * 附件共用。 */
+async function uploadAtt(sid: string, f: File): Promise<Attachment> {
+  if (f.size > 20 * 1024 * 1024) throw new Error(`${f.name || "文件"} 过大(上限 20MB)`);
+  const dataURL = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(new Error("读取文件失败"));
+    r.readAsDataURL(f);
+  });
+  const b64 = dataURL.slice(dataURL.indexOf(",") + 1);
+  const isImage = f.type.startsWith("image/");
+  const { path } = await uploadFile(sid, f.name, f.type, b64);
+  return { path, isImage, name: f.name || path.split("/").pop() || "", preview: isImage ? dataURL : undefined };
+}
+
 export interface SessionHandle {
   /** 当前会话 ID(null = 未打开) */
   id: string | null;
@@ -36,8 +53,10 @@ export interface SessionHandle {
   /** 已上传文件的回读 URL(无会话时 undefined) */
   uploadUrl?: (path: string) => Promise<string>;
 
-  /** 打开会话并接上 WS;firstMessage 在连接就绪后自动发出(新建会话的首个任务) */
-  open(id: string, opts?: { model?: string; mode?: string; firstMessage?: string }): void;
+  /** 打开会话并接上 WS;firstMessage 在连接就绪后自动发出(新建会话的
+   * 首个任务);firstFiles 此刻上传落盘,按 send() 同款「[图片] 路径」
+   * 约定拼进首条消息(新建任务页的附件——那时会话还不存在,传不了) */
+  open(id: string, opts?: { model?: string; mode?: string; firstMessage?: string; firstFiles?: File[] }): void;
   /** 断开并复位;forget 时一并清掉"上次会话"记忆(删除流程) */
   close(forget?: boolean): void;
   setInput(v: string): void;
@@ -90,6 +109,9 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
 
   const connRef = useRef<Conn | null>(null);
   const pendingMsgRef = useRef<string | null>(null); // 新建会话时输入的首个任务,连上后发出
+  // 新建会话时暂存的附件:连上后上传,附件行并入 pendingMsg(只上传一次,
+  // 带会话 id 避免闭包对不上)
+  const pendingFilesRef = useRef<{ sid: string; files: File[] } | null>(null);
   // 回调经 ref 转发,避免调用方每次渲染的新函数搅动下方 effect 依赖
   const onSessionsChangedRef = useRef(opts.onSessionsChanged);
   onSessionsChangedRef.current = opts.onSessionsChanged;
@@ -115,7 +137,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     }
   }, []);
 
-  const open = useCallback((sid: string, o: { model?: string; mode?: string; firstMessage?: string } = {}) => {
+  const open = useCallback((sid: string, o: { model?: string; mode?: string; firstMessage?: string; firstFiles?: File[] } = {}) => {
     connRef.current?.close();
     setId(sid);
     setChat(initialChat);
@@ -126,6 +148,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     setModel(o.model ?? "");
     setYolo(o.mode === "yolo");
     pendingMsgRef.current = o.firstMessage ?? null;
+    pendingFilesRef.current = o.firstFiles?.length ? { sid, files: o.firstFiles } : null;
     localStorage.setItem(LAST_SESSION_KEY, sid);
     connRef.current = connect(sid, {
       onFrames: (batch: Frame[]) => setChat((s) => reduceBatch(s, batch)),
@@ -141,6 +164,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     connRef.current?.close();
     connRef.current = null;
     pendingMsgRef.current = null;
+    pendingFilesRef.current = null;
     setId(null);
     setChat(initialChat);
     setStatus("未连接");
@@ -162,17 +186,35 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     if (chat.permMode) setYolo(chat.permMode === "yolo");
   }, [chat.permMode]);
 
-  // 连接就绪:拉改动计数;若新建会话时带了首个任务,此刻发出
-  // (send 失败时保留 pending,下次 connected 变化重试)
+  // 连接就绪:拉改动计数;若新建会话时带了首个任务/附件,此刻发出。
+  // 附件先上传拿到工作区路径,附件行按 send() 同款约定并入正文;上传结果
+  // (含失败后的残句)回写 pendingMsgRef,send 失败时下次 connected 重试
+  // 只重发文本,不重复上传。
   useEffect(() => {
     if (!connected) return;
     void refreshChanges();
-    const pending = pendingMsgRef.current;
-    if (pending) {
-      void connRef.current?.send("user-input", { content: b64encode(pending) }).then((ok) => {
-        if (ok) pendingMsgRef.current = null;
-      });
-    }
+    if (!pendingMsgRef.current && !pendingFilesRef.current) return;
+    void (async () => {
+      let text = pendingMsgRef.current ?? "";
+      const pf = pendingFilesRef.current;
+      if (pf) {
+        pendingFilesRef.current = null;
+        const lines: string[] = [];
+        for (const f of pf.files) {
+          try {
+            const a = await uploadAtt(pf.sid, f);
+            lines.push(`${a.isImage ? "[图片]" : "[文件]"} ${a.path}`);
+          } catch (e) {
+            pushNotice("⚠ 附件上传失败: " + (e instanceof Error ? e.message : String(e)));
+          }
+        }
+        text = [text, ...lines].filter(Boolean).join("\n");
+        pendingMsgRef.current = text || null;
+      }
+      if (!text) return;
+      const ok = await connRef.current?.send("user-input", { content: b64encode(text) });
+      if (ok) pendingMsgRef.current = null;
+    })();
   }, [connected, refreshChanges]);
 
   // 本轮结束:刷新改动计数与会话列表
@@ -217,24 +259,9 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   const addFiles = async (files: File[]) => {
     if (!id) return;
     for (const f of files) {
-      if (f.size > 20 * 1024 * 1024) {
-        pushNotice(`⚠ ${f.name || "文件"} 过大(上限 20MB)`);
-        continue;
-      }
       try {
-        const dataURL = await new Promise<string>((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(r.result as string);
-          r.onerror = () => reject(new Error("读取文件失败"));
-          r.readAsDataURL(f);
-        });
-        const b64 = dataURL.slice(dataURL.indexOf(",") + 1);
-        const isImage = f.type.startsWith("image/");
-        const { path } = await uploadFile(id, f.name, f.type, b64);
-        setAtts((a) => [
-          ...a,
-          { path, isImage, name: f.name || path.split("/").pop() || "", preview: isImage ? dataURL : undefined },
-        ]);
+        const a = await uploadAtt(id, f);
+        setAtts((x) => [...x, a]);
       } catch (e) {
         pushNotice("⚠ 附件上传失败: " + (e instanceof Error ? e.message : String(e)));
       }

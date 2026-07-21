@@ -1,7 +1,7 @@
 // 新建任务视图:居中卡片(文件夹选择 + 任务输入 + 本地/云端 + 模型 + 开始)。
 // 布局与数值取自设计稿 New Task 屏。云端模式:选仓库(可不选=快速开始)+ 云端模型,
 // 经内核代理真实创建 monkeycode 云端任务,成功后进桌面内详情视图跟看。
-import { useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
 import { basename, isImeEnter, markImeEnd, ModelPicker } from "./chat";
 import { MONO } from "./components";
 import { inDesktopShell, mcTaskCreate, mcTaskOptions, pickDirectory, workdirPickBase, type CloudTask } from "./client";
@@ -22,6 +22,7 @@ import {
   IconMonitor,
   IconPlus,
   IconSend,
+  IconX,
 } from "./icons";
 import logoUrl from "./logo.png";
 import type { ModelInfo } from "./types";
@@ -55,13 +56,78 @@ export function NewTaskView({
   onDirChange: (dir: string) => void;
   onTextChange: (v: string) => void;
   onModelChange: (name: string) => void;
-  onCreate: (createDir?: boolean) => void;
+  /** files:随首条消息上传的附件(会话创建后由 useSession 上传并拼接) */
+  onCreate: (createDir?: boolean, files?: File[]) => void;
   /** 云端任务创建成功:App 打开桌面内详情视图跟看 */
   onCloudCreated: (t: CloudTask) => void;
 }) {
   const [folderOpen, setFolderOpen] = useState(false);
   const [mode, setMode] = useState<"local" | "cloud">("local");
   const [manualDir, setManualDir] = useState("");
+
+  // ===== 附件暂存(仅本地模式;云端任务不支持附件)=====
+  // 此刻会话还没创建,File 只能留在内存;提交后经 onCreate 传给 App,
+  // 会话建好、WS 连上时由 useSession 上传落盘并随首条消息发出
+  const [atts, setAtts] = useState<{ file: File; preview?: string }[]>([]);
+  const [attErr, setAttErr] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+
+  const addFiles = (files: File[]) => {
+    setAttErr("");
+    for (const f of files) {
+      if (f.size > 20 * 1024 * 1024) {
+        setAttErr(`${f.name || "文件"} 过大(上限 20MB)`);
+        continue;
+      }
+      if (f.type.startsWith("image/")) {
+        const r = new FileReader();
+        r.onload = () => setAtts((a) => [...a, { file: f, preview: r.result as string }]);
+        r.readAsDataURL(f);
+      } else {
+        setAtts((a) => [...a, { file: f }]);
+      }
+    }
+  };
+
+  // 粘贴附件:剪贴板里的 file item(截图/复制的文件),文本粘贴不受影响
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (mode !== "local") return;
+    const files: File[] = [];
+    for (const item of e.clipboardData.items) {
+      if (item.kind === "file") {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length) {
+      e.preventDefault();
+      addFiles(files);
+    }
+  };
+
+  // 拖拽文件进页面(与 ChatView 同款热区交互)
+  const onDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    if (mode !== "local" || ![...e.dataTransfer.items].some((i) => i.kind === "file")) return;
+    e.preventDefault();
+    dragDepth.current++;
+    setDragging(true);
+  };
+  const onDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (--dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  };
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    if (mode !== "local") return;
+    const files = [...e.dataTransfer.files];
+    if (files.length) addFiles(files);
+  };
 
   // ===== 云端模式:选项数据(模型/镜像/项目)+ 选择态 =====
   const [cloudOpts, setCloudOpts] = useState<McTaskOptions | null>(null);
@@ -128,7 +194,7 @@ export function NewTaskView({
 
   const submit = () => {
     if (mode === "cloud") void createCloud();
-    else onCreate();
+    else onCreate(undefined, atts.map((a) => a.file));
   };
 
   const pick = (p: string) => {
@@ -166,8 +232,40 @@ export function NewTaskView({
   });
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ margin: "0 auto", width: "100%", maxWidth: 640, padding: "max(40px,14vh) 36px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
+    <div
+      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 8,
+            zIndex: 20,
+            border: "2px dashed var(--acc)",
+            borderRadius: 14,
+            background: "var(--accBgSoft)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            fontSize: 14,
+            fontWeight: 700,
+            color: "var(--acc)",
+          }}
+        >
+          松开以添加文件
+        </div>
+      )}
+      {/* macOS Overlay 标题栏带:本页没有 chat 那样的头栏,补一条拖拽热区
+          (data-tauri-drag-region 不被子元素继承,必须有专属元素;高度同
+          MacDragSpacer,已从下方 14vh 顶距中扣除,视觉位置不变) */}
+      <div data-tauri-drag-region="" style={{ height: 50, flex: "none" }} />
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div style={{ margin: "0 auto", width: "100%", maxWidth: 640, padding: "max(0px, 14vh - 50px) 36px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <img src={logoUrl} alt="" draggable={false} style={{ width: 52, height: 52 }} />
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.2, marginTop: 6 }}>开始一个新任务</div>
@@ -329,6 +427,60 @@ export function NewTaskView({
             )}
           </div>
 
+          {mode === "local" && atts.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
+              {atts.map((a, i) => (
+                <span key={i} style={{ position: "relative", display: "flex" }}>
+                  {a.preview ? (
+                    <img
+                      src={a.preview}
+                      alt={a.file.name}
+                      title={a.file.name}
+                      style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: "1px solid var(--cardBd)" }}
+                    />
+                  ) : (
+                    <span
+                      title={a.file.name}
+                      style={{
+                        height: 30,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "0 10px",
+                        borderRadius: 8,
+                        border: "1px solid var(--cardBd)",
+                        background: "var(--codeBg)",
+                        fontSize: 12,
+                        color: "var(--t2)",
+                        maxWidth: 220,
+                      }}
+                    >
+                      <IconFolder size={12} color="var(--t4)" />
+                      <span className="ellipsis">{a.file.name}</span>
+                    </span>
+                  )}
+                  <button
+                    className="icon-btn"
+                    title="移除"
+                    onClick={() => setAtts((x) => x.filter((_, j) => j !== i))}
+                    style={{
+                      position: "absolute",
+                      top: -5,
+                      right: -5,
+                      width: 17,
+                      height: 17,
+                      border: "1px solid var(--line)",
+                      borderRadius: "50%",
+                      background: "var(--card)",
+                      boxShadow: "var(--cardSh)",
+                    }}
+                  >
+                    <IconX size={8} color="var(--t3)" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             value={text}
             autoFocus
@@ -336,7 +488,8 @@ export function NewTaskView({
             onChange={(e) => onTextChange(e.target.value)}
             onCompositionEnd={markImeEnd}
             onKeyDown={onKey}
-            placeholder="描述要做的事…留空则先建会话"
+            onPaste={onPaste}
+            placeholder={mode === "local" ? "描述要做的事…粘贴或拖入图片/文件可作为附件,留空则先建会话" : "描述要做的事…留空则先建会话"}
             style={{
               border: "none",
               outline: "none",
@@ -434,16 +587,22 @@ export function NewTaskView({
           )}
         </div>
 
+        {attErr && <div style={{ fontSize: 12, color: "var(--err)", lineHeight: 1.6 }}>⚠ {attErr}</div>}
         {err && (
           <div style={{ fontSize: 12, color: "var(--err)", lineHeight: 1.6 }}>
             {err}
             {offerCreate && (
-              <span className="hv-t1" onClick={() => onCreate(true)} style={{ cursor: "pointer", color: "var(--warn)", marginLeft: 8 }}>
+              <span
+                className="hv-t1"
+                onClick={() => onCreate(true, atts.map((a) => a.file))}
+                style={{ cursor: "pointer", color: "var(--warn)", marginLeft: 8 }}
+              >
                 创建该目录并继续 →
               </span>
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

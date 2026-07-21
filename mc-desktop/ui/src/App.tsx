@@ -233,8 +233,8 @@ export default function App() {
   );
 
   // 打开会话 = 接上句柄 + 复位 App 级浮层(无消费方需要稳定引用,不做 memo)
-  const openSession = (m: { id: string; model?: string; mode?: string }, firstMessage?: string) => {
-    session.open(m.id, { model: m.model, mode: m.mode, firstMessage });
+  const openSession = (m: { id: string; model?: string; mode?: string }, firstMessage?: string, firstFiles?: File[]) => {
+    session.open(m.id, { model: m.model, mode: m.mode, firstMessage, firstFiles });
     setAttention((prev) => {
       if (!prev.has(m.id)) return prev;
       const next = new Set(prev);
@@ -486,7 +486,7 @@ export default function App() {
     void loadChildren("", true);
   };
 
-  const createTask = async (createDir = false) => {
+  const createTask = async (createDir = false, files?: File[]) => {
     const dir = newDir.trim();
     if (!dir || busy) return;
     setBusy(true);
@@ -498,7 +498,8 @@ export default function App() {
       const first = newText.trim();
       setNewText("");
       await refreshSessions();
-      openSession(meta, first || undefined);
+      // 附件在会话连上后由 useSession 上传并随首条消息发出
+      openSession(meta, first || undefined, files);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setNewErr("创建失败: " + msg);
@@ -798,7 +799,7 @@ export default function App() {
             }}
             onTextChange={setNewText}
             onModelChange={setNewModel}
-            onCreate={(createDir) => void createTask(createDir)}
+            onCreate={(createDir, files) => void createTask(createDir, files)}
           />
         ) : (
           <ChatView
