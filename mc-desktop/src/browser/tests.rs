@@ -152,7 +152,7 @@ async fn mcp_smoke_initialize_list_call() {
     assert!(resp.contains(r#""protocolVersion":"2025-06-18""#), "initialize 应答不对: {resp}");
     assert!(resp.contains("mc-browser"));
 
-    // tools/list:9 个工具,名字与 mc-agent 契约一致
+    // tools/list:9 个工具,名字与扩展契约一致
     let resp = post(
         json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         Some(token.clone()),

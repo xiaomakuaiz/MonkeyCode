@@ -1,4 +1,4 @@
-// 浏览器扩展桥(自 mc-agent 迁入壳):自研 MV3 扩展经本地 WS 桥接,
+// 浏览器扩展桥:自研 MV3 扩展经本地 WS 桥接,
 // agent 在用户真实浏览器(Chrome/Edge)中执行 CDP 操作。
 //
 // 分层:
@@ -12,7 +12,7 @@
 //   mcp.rs       MCP streamable-http server:把工具暴露给 ohmyagent
 //                (Bearer 鉴权,URL+token 经 mcp.json 内置条目物化下发)
 //
-// 会话归属简化(与 mc-agent 的差异):MCP 工具调用不带会话身份,桥为
+// 会话归属简化:MCP 工具调用不带会话身份,桥为
 // 单一共享浏览器会话(桌面单用户);handoff 队列归全局。
 
 pub mod bridge;

@@ -98,7 +98,7 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 | 引擎模型上下文 | app_config_dir/ohmyagent/sessions/<engine_id>/messages.jsonl |
 | 会话索引/标题/归档/**帧日志**/engine_id 别名 | 壳 sidecar:app_config_dir/ohmy-sessions/<sid>/ |
 | 子代理子会话(壳侧实体,仅回放) | 同上(sidecar 带 parent) |
-| 附件 | <workdir>/.monkeycode/uploads(会话工作区内,模型经相对路径可读;旧 .mc-agent 附件按消息内路径回读) |
+| 附件 | <workdir>/.monkeycode/uploads(会话工作区内,模型经相对路径可读;旧目录约定的附件按消息内路径回读) |
 | 百智云/云端凭证 | app_config_dir/*-cookies.json(双罐,互不牵连) |
 | 浏览器扩展配对凭据 | app_config_dir/ext-auth.json |
 
@@ -127,14 +127,14 @@ app_config_dir 走,首启自动迁移旧接管目录的 sessions。
 
 ## 浏览器扩展桥(browser/)
 
-自 mc-agent 迁入的壳原生服务(Go 版在 git 历史 e8666a8 前的
-agent/internal/browser/)。扩展side 契约对表 browser-extension/src/protocol.ts,
+壳原生服务(移植自旧 Go 内核,git 历史 e8666a8 前可查)。
+扩展side 契约对表 browser-extension/src/protocol.ts,
 **扩展零改动**:`ws://127.0.0.1:{7440-7449}/ext`、hello/token/一次性配对码、
 Op/Ev/错误码、proto:1、20s ping。
 
 - 9 个 browser_* 工具经壳内 MCP streamable-http server 暴露给引擎
   (Bearer 鉴权;手写最小面:POST json 应答/通知 202/GET 405)。
-- **单一共享浏览器会话**(与 mc-agent 按 agent 会话隔离标签页不同):
+- **单一共享浏览器会话**(不按 agent 会话隔离标签页):
   MCP 工具调用不带会话身份,桌面单用户下可接受;handoff 队列归全局。
 - 错误码→中文可行动文案是产品契约(模型行为依赖),改动需过 e2e 断言。
 

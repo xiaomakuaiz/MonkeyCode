@@ -1744,3 +1744,11 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       task_notification data 结构化为纯增量(message 保留),壳零改动
 - [x] 4e6193a 空 tool-call id 引擎侧回填,壳既有空 id 守卫自然受益
 - [x] OHMYAGENT_REF 钉 4e6193a;cargo 31/31
+
+## mc-agent 残留终清(2026-07-21)
+
+- [x] 全仓 grep 清零(除 uploads 回读守卫的旧目录兼容前缀,功能性保留):
+      Cargo.toml 描述、扩展断连文案与 README(改指桌面应用)、
+      frame.rs/ohmy.rs/browser/* 全部注释、client.ts 注释、
+      ARCHITECTURE 三处、fake-wsl.sh 用法注释
+- [x] 验证:cargo 31/31、UI tsc+41/41、扩展构建通过

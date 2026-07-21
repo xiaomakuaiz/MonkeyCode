@@ -114,7 +114,7 @@ export const engineRestart = () => invoke<void>("engine_restart");
 
 // ==================== 附件 ====================
 
-/** 上传对话里粘贴/拖入的文件(图片或任意附件)到会话工作区 .mc-agent/uploads/,
+/** 上传对话里粘贴/拖入的文件(图片或任意附件)到会话工作区 .monkeycode/uploads/,
  * 返回工作区相对路径。原始文件名尽量保留(壳清洗);剪贴板截图可传空名。 */
 export const uploadFile = (sessionId: string, name: string, mediaType: string, dataB64: string) =>
   invoke<{ path: string }>("upload_file", { id: sessionId, name, mediaType, data: dataB64 });

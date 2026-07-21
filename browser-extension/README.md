@@ -1,6 +1,6 @@
 # MonkeyCode 浏览器助手(MV3 扩展)
 
-MonkeyCode 本地 agent 内核(mc-agent)的浏览器侧桥接:**带鉴权的 chrome.debugger 哑代理 + 标签页授权 UI**。
+MonkeyCode 桌面应用的浏览器侧桥接:**带鉴权的 chrome.debugger 哑代理 + 标签页授权 UI**。
 一切浏览器语义(快照、ref、坐标点击、键序列)在 Go 侧实现,扩展只负责:
 
 - 经 WebSocket(`ws://127.0.0.1:<port>/ext`)连接内核并配对鉴权;
@@ -24,7 +24,7 @@ npm test          # vitest 纯函数单测
 
 ## 配对步骤
 
-1. 启动 mc-agent(mc-desktop 会自动拉起);
+1. 启动 MonkeyCode 桌面应用(内置扩展桥);
 2. 在 mc-desktop 设置页获取一次性**配对码**;
 3. 点扩展图标 → "去设置页配对"(或右键扩展图标 → 选项);
 4. 填入配对码(连字符、大小写不敏感),端口留空即自动扫描 7440-7449,点击"连接并配对";

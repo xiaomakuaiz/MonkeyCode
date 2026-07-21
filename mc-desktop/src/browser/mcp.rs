@@ -8,8 +8,8 @@
 // 鉴权:随机 Bearer token,经 mcp.json 内置条目的 headers 下发给引擎——
 // MCP 面能驱动用户浏览器,不能对本机任意进程裸奔。
 //
-// 工具串行:所有 browser_* 共享一个浏览器会话与 debugger 连接,并行会竞争
-// (与 mc-agent 的工具不声明 Parallelizable 同语义),用互斥锁保证。
+// 工具串行:所有 browser_* 共享一个浏览器会话与 debugger 连接,并行会竞争,
+// 用互斥锁保证。
 
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};

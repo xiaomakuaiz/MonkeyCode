@@ -1,7 +1,7 @@
 // OhmyAgentDriver:拉起 ohmyagent --stdio(行分隔 JSON-RPC)并把其事件
-// 归一化为 mc-agent Frame 词汇,UI 归约层零改动。
+// 归一化为 Frame 词汇(frame.rs),UI 归约层零改动。
 //
-// 与 McAgentDriver 的关键差异:
+// 关键设计:
 // - ohmyagent 无帧日志 → driver 自记 events.jsonl(<app_config>/ohmy-sessions/
 //   <sid>/),打开会话时回放,与实时渲染同一词汇
 // - 无会话中途切模型/权限模式协议 → 空闲时 destroy + create{resume, …} 变通
@@ -372,7 +372,7 @@ impl OhmyDriver {
                 continue; // 无 sidecar 的目录不是本壳建的会话
             }
             if meta.get("parent").and_then(|v| v.as_str()).map(|p| !p.is_empty()).unwrap_or(false) {
-                continue; // 子代理子会话不进列表(经父会话工具卡点开,与 mc-agent 一致)
+                continue; // 子代理子会话不进列表(经父会话工具卡点开)
             }
             let running = sessions.get(&id).map(|s| s.running).unwrap_or(false);
             let status = if running {
@@ -397,7 +397,7 @@ impl OhmyDriver {
                     "turns": meta.get("turns").and_then(|v| v.as_u64()).unwrap_or(0),
                     "status": status,
                     "archived": meta.get("archived").and_then(|v| v.as_bool()).unwrap_or(false),
-                    // 契约:SessionMeta.updated_at 是 RFC3339 字符串(与 mc-agent 的
+                    // 契约:SessionMeta.updated_at 是 RFC3339 字符串(与 Go time.Time 的
                     // time.Time 序列化对表);sidecar 内部存毫秒,输出时转换
                     "updated_at": crate::config::ms_to_rfc3339(updated),
                     "waiting_ask": waiting.contains(&id),
@@ -410,7 +410,7 @@ impl OhmyDriver {
 
     pub async fn session_create(&self, workdir: &str, model_name: &str, create_dir: bool) -> Result<Value, String> {
         let model_id = self.model_id_of(model_name)?;
-        // ohmyagent 不展开 ~ 也不校验/创建目录(mc-agent 内核会做),壳补齐:
+        // ohmyagent 不展开 ~ 也不校验/创建目录,壳补齐:
         // 展开主目录、按需创建,否则前置校验——避免建出 cwd 不存在的会话
         let workdir = crate::config::expand_tilde(workdir);
         let workdir = workdir.as_str();
@@ -526,7 +526,7 @@ impl OhmyDriver {
                 self.0.push_usage(id, used, window);
             }
         }
-        // 回放日志(重开页面/重连:整份重放,行为与 mc-agent 回放一致)。
+        // 回放日志(重开页面/重连:整份重放)。
         // 顺序保证不重帧:先置 opened=false 并清掉该会话的批量缓冲(其中的帧
         // 已在日志里,会随回放送达),读日志期间新帧只入日志不入缓冲,
         // 最后才置 opened=true 接实时流。seq 取 max 防回放期间并发帧的序号回卷。
@@ -556,7 +556,7 @@ impl OhmyDriver {
         if let Some(s) = self.0.sessions.lock().unwrap().get_mut(id) {
             s.opened = false;
         }
-        // 不 destroy:后台任务继续跑(与 mc-agent 关闭页面语义一致)
+        // 不 destroy:后台任务继续跑(关闭页面 ≠ 结束任务)
     }
 
     pub async fn session_delete(&self, id: &str) -> Result<Value, String> {
@@ -838,7 +838,7 @@ impl OhmyDriver {
                     let model_id = self.model_id_of(&self.session_model_name(id))?;
                     self.recreate_fallback(id, &model_id, mode).await?;
                 }
-                // 与 mc-agent setMode 对齐:切到 yolo 自动放行本会话所有挂起审批。
+                // 切到 yolo 自动放行本会话所有挂起审批。
                 // 先切引擎再排空——切换后引擎新的审批直接放行不再产生 ask,
                 // 排空动作不会漏掉切换瞬间的请求
                 if mode == "yolo" {
@@ -1649,7 +1649,7 @@ impl Inner {
     }
 }
 
-/// 工具标题:「名称 主参数」(对齐 mc-agent「动词 目标」的可读形态)。
+/// 工具标题:「名称 主参数」(「动词 目标」的可读形态)。
 /// 从工具结果文本提取工作区上传路径(.monkeycode/uploads/…):
 /// 浏览器截图等壳内生成物经文本路径外显,驱动转成工具卡 images。
 fn extract_upload_paths(content: &str) -> Vec<String> {
@@ -2194,7 +2194,7 @@ mod tests {
         for t in ["user-input", "task-started", "task-ended"] {
             assert!(ctypes.iter().any(|x| x == t), "子会话缺 {t}: {ctypes:?}");
         }
-        // 子会话不进会话列表(经父卡点开,与 mc-agent 一致)
+        // 子会话不进会话列表(经父卡点开)
         let list = driver.sessions_list().await.unwrap();
         assert!(
             list.as_array()

@@ -101,7 +101,7 @@ export class Bridge {
           // 网络不通:继续尝试下一个端口
         }
       }
-      await this.setStatus("disconnected", "未找到本地 agent,请确认 mc-agent 已启动");
+      await this.setStatus("disconnected", "未找到本地服务,请确认 MonkeyCode 桌面应用已启动");
       this.scheduleRetry();
     } finally {
       this.connecting = false;
