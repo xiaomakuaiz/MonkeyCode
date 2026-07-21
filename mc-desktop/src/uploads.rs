@@ -1,6 +1,5 @@
 // 对话附件上传/回读。落盘 <workdir>/.monkeycode/uploads/(会话工作区内,
-// 模型经相对路径 Read 查看;旧目录约定(.mc-agent/uploads)的既有附件
-// 仍按消息内路径回读,不迁移)。回读返回 data URL(Tauri 下 <img> 无法带鉴权头,
+// 模型经相对路径 Read 查看)。回读返回 data URL(Tauri 下 <img> 无法带鉴权头,
 // 又不想开 asset scope 到任意工作区,小图 base64 内联最稳)。
 
 use std::path::PathBuf;
@@ -118,11 +117,10 @@ pub fn save(workdir: &str, wsl_distro: Option<&str>, name: &str, media_type: &st
 
 /// 回读已上传文件为 data URL(UI 气泡缩略图)。仅允许 uploads 目录内的文件名。
 pub fn read_data_url(workdir: &str, wsl_distro: Option<&str>, path: &str) -> Result<String, String> {
-    // 回读按消息内存储的相对路径走(兼容旧目录约定的附件);
-    // 只放行工作区内的上传目录(新旧两代),拒绝越界与绝对路径
+    // 回读按消息内存储的相对路径走;只放行工作区内的上传目录,
+    // 拒绝越界与绝对路径
     let rel = path.trim_start_matches("./");
-    let in_uploads =
-        rel.starts_with(".monkeycode/uploads/") || rel.starts_with(".mc-agent/uploads/");
+    let in_uploads = rel.starts_with(".monkeycode/uploads/");
     if !in_uploads || rel.contains('\\') || rel.split('/').any(|seg| seg == "..") {
         return Err("非法附件路径".into());
     }
