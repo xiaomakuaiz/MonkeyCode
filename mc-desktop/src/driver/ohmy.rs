@@ -1668,7 +1668,9 @@ fn ohmy_mode_of(mode: &str) -> &'static str {
 }
 
 fn perm_title(tool: &str, input: &Value) -> String {
-    let arg = ["file_path", "path", "command", "pattern", "url", "cwd"]
+    // description 兜底:Agent/任务类工具的 3-5 词任务描述作卡片标签
+    // (与引擎 TUI 的子代理活动面板同源,6a61cfd)
+    let arg = ["file_path", "path", "command", "pattern", "url", "cwd", "description"]
         .iter()
         .find_map(|k| input.get(k).and_then(|v| v.as_str()))
         .unwrap_or("");
@@ -2139,13 +2141,19 @@ mod tests {
             j.iter().any(|f| f.get("type").and_then(|v| v.as_str()) == Some("task-ended"))
         })
         .await;
-        // Agent 工具卡存在且完成
+        // Agent 工具卡存在且完成;标题带 description 标签(TUI 面板同源)
         let agent_done = journal.iter().filter_map(acp_update).any(|u| {
             u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("tool_call_update")
                 && u.get("toolCallId").and_then(|v| v.as_str()) == Some("tu_1")
                 && u.get("status").and_then(|v| v.as_str()) == Some("completed")
         });
         assert!(agent_done, "Agent 工具未完成: {journal:?}");
+        let agent_titled = journal.iter().filter_map(acp_update).any(|u| {
+            u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("tool_call")
+                && u.get("toolCallId").and_then(|v| v.as_str()) == Some("tu_1")
+                && u.get("title").and_then(|v| v.as_str()).map(|t| t.contains("调查任务")).unwrap_or(false)
+        });
+        assert!(agent_titled, "Agent 卡标题缺 description 标签: {journal:?}");
         // 子代理文本行以 progress feed 形态挂在 Agent 工具卡上
         let has_sub_text = journal.iter().filter_map(acp_update).any(|u| {
             u.get("toolCallId").and_then(|v| v.as_str()) == Some("tu_1")

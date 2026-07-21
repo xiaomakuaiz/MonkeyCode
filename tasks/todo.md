@@ -1728,3 +1728,11 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] OHMYAGENT_REF 钉 c1d8482;重建二进制,cargo 31/31
 - [ ] 上游愿望:tool_result 加独立 is_error 位(现前缀约定,正常输出
       以 "Error: " 开头会误判)
+
+## 上游集成:子代理活动标签(2026-07-21)
+
+- [x] 6a61cfd 是引擎 TUI 的并行子代理活动面板(协议无变化);桌面对齐点:
+      perm_title 取参键补 description——Agent 卡标题显示任务描述标签
+      (与 TUI 面板同源),TaskCreate 等带描述工具通用受益;E2E 锁行为
+- [x] cd9c683 并行 Agent 加固(worktree 锁/注册表锁)对壳无感;
+      OHMYAGENT_REF 钉 6a61cfd;cargo 31/31
