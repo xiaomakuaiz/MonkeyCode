@@ -23,6 +23,7 @@ import {
   setSessionTitle,
   subscribeEvents,
   updateCheck,
+  updateInstall,
   type CloudTask,
   type EngineCrash,
   type UpdateStatus,
@@ -103,6 +104,18 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [hostVersion, setHostVersion] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  // 侧栏更新横幅:下载安装并重启(成功不返回;失败解除忙态并外显)
+  const installUpdate = async () => {
+    if (updateBusy) return;
+    setUpdateBusy(true);
+    try {
+      await updateInstall();
+    } catch (e) {
+      setUpdateBusy(false);
+      session.notify("⚠ 更新失败: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
   // 引擎崩溃外显(engine-crashed 事件;重启成功后整页刷新复位)
   const [engineCrash, setEngineCrash] = useState<EngineCrash | null>(null);
   const [engineRestarting, setEngineRestarting] = useState(false);
@@ -315,13 +328,21 @@ export default function App() {
         });
       })
       .catch((e) => session.notify("无法连接服务: " + (e instanceof Error ? e.message : e)));
+    let updateTimer: ReturnType<typeof setInterval> | undefined;
     if (inDesktopShell()) {
       void getHostInfo().then((info) => setHostVersion(info?.version ?? null));
-      updateCheck()
-        .then(setUpdate)
-        .catch(() => {}); // 静默:自动检查失败不打扰
+      const silentCheck = () =>
+        updateCheck()
+          .then(setUpdate)
+          .catch(() => {}); // 静默:自动检查失败不打扰
+      silentCheck();
+      // 长驻应用不重启就永远发现不了新版:每 4 小时静默复查一次
+      updateTimer = setInterval(silentCheck, 4 * 3600_000);
     }
-    return () => offSettings();
+    return () => {
+      offSettings();
+      clearInterval(updateTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -734,7 +755,9 @@ export default function App() {
           sessionActive={view === "session"}
           connected={session.connected}
           status={session.status}
-          updateAvailable={!!update?.available}
+          update={update}
+          updateBusy={updateBusy}
+          onUpdate={() => void installUpdate()}
           cloudTasks={cloudTasks}
           activeCloudId={view === "cloud" ? cloudTask?.id ?? null : null}
           cloudSyncing={cloudSyncing}

@@ -717,7 +717,7 @@ export function Sidebar({
           onClick={onOpenSettings}
           style={{ position: "relative", width: 26, height: 26, borderRadius: 7, background: "transparent" }}
         >
-          {updateAvailable && (
+          {update?.available && (
             <span
               style={{
                 position: "absolute",
