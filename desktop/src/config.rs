@@ -160,78 +160,47 @@ pub fn engine_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
 fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("创建引擎配置目录失败: {e}"))?;
 
+    // 协议 → 引擎 wire 类型(e792858 起扁平 per-model schema:每条模型
+    // 自带 type/api_key/base_url,按别名作键——壳清单一一对应物化,
+    // 旧 providers 槽位与冲突跳过逻辑随之消亡)
     let route_of = |provider: &str| match provider {
         "openai" => "openai-chat",
         "openai_responses" => "openai-responses",
         _ => "anthropic",
     };
-    // providers 表的键是 ohmyagent 的 configKey(provider.go providerRoutes),
-    // 与模型条目的路由 id 不同:openai-chat/openai-responses 都查 "openai"。
-    fn config_key_of(route: &str) -> &str {
-        match route {
-            "openai-chat" | "openai-responses" => "openai",
-            other => other,
-        }
-    }
 
-    // 默认模型优先占路由:先按 default 排序再逐个落 provider 槽位
     let empty = vec![];
     let models_arr = cfg.models.as_array().unwrap_or(&empty);
-    let mut ordered: Vec<&serde_json::Value> = models_arr.iter().collect();
-    ordered.sort_by_key(|m| !m.get("default").and_then(|v| v.as_bool()).unwrap_or(false));
-
-    let mut providers = serde_json::Map::new();
-    let mut models_out: Vec<serde_json::Value> = Vec::new();
+    let mut models_out = serde_json::Map::new();
     let mut default_model = String::new();
-    let mut seen_ids: std::collections::HashSet<String> = Default::default();
-    for m in ordered {
+    for m in models_arr {
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (name, provider, base_url, api_key, model) =
             (get("name"), get("provider"), get("base_url"), get("api_key"), get("model"));
         if name.is_empty() || model.is_empty() {
             continue;
         }
-        let route = route_of(&provider);
-        let config_key = config_key_of(route);
-        match providers.get(config_key) {
-            None => {
-                providers.insert(
-                    config_key.to_string(),
-                    serde_json::json!({ "api_key": api_key, "base_url": base_url }),
-                );
-            }
-            Some(existing) => {
-                let same = existing.get("api_key").and_then(|v| v.as_str()) == Some(api_key.as_str())
-                    && existing.get("base_url").and_then(|v| v.as_str()) == Some(base_url.as_str());
-                if !same {
-                    eprintln!(
-                        "[desktop] ohmyagent 引擎限制:{config_key} 凭据槽已被占用,模型「{name}」的网关配置被跳过"
-                    );
-                    continue;
-                }
-            }
+        let mut entry = serde_json::json!({
+            "type": route_of(&provider), "model": model,
+            "base_url": base_url, "api_key": api_key,
+        });
+        if let Some(cw) = m.get("context_window").and_then(|v| v.as_i64()).filter(|&c| c > 0) {
+            entry["context_window"] = serde_json::json!(cw);
         }
-        if seen_ids.insert(model.clone()) {
-            let mut entry = serde_json::json!({ "id": model, "provider": route });
-            if let Some(cw) = m.get("context_window").and_then(|v| v.as_i64()).filter(|&c| c > 0) {
-                entry["context_window"] = serde_json::json!(cw);
-            }
-            // 视觉标记透传:缺失时 ohmyagent 按不支持处理,读图降级为文本占位
-            if m.get("vision").and_then(|v| v.as_bool()).unwrap_or(false) {
-                entry["supports_images"] = serde_json::json!(true);
-            }
-            models_out.push(entry);
+        // 视觉标记透传:缺失时 ohmyagent 按不支持处理,读图降级为文本占位
+        if m.get("vision").and_then(|v| v.as_bool()).unwrap_or(false) {
+            entry["supports_images"] = serde_json::json!(true);
         }
+        models_out.insert(name.clone(), entry);
         let is_default = m.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
         if default_model.is_empty() || is_default {
-            default_model = model.clone();
+            default_model = name; // 别名即选择键(session/create、switchModel 同)
         }
     }
 
     let settings = serde_json::json!({
         "default_model": default_model,
         "permission_mode": "default",
-        "providers": providers,
         "models": models_out,
     });
     let write0600 = |path: &PathBuf, data: Vec<u8>| -> Result<(), String> {

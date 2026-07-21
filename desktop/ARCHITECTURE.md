@@ -147,10 +147,13 @@ Op/Ev/错误码、proto:1、20s ping。
 ## 已知上游缺口(ohmyagent)
 
 协议缺口与对应的壳侧变通,上游补齐后应删壳侧实现:
-permission remember(现壳记忆集自动应答)、每模型独立凭据
-(现同 configKey 冲突跳过)、stdio 会话索引(现 sidecar 权威)、
-空会话 resume 不容忍(壳 engine_id 换绑)、工具错误无独立错误位
-(现 "Error: " 前缀约定,壳按前缀转 failed 帧;轮次收尾兜底保留)。
+permission remember(现壳记忆集自动应答)、stdio 会话索引
+(现 sidecar 权威)、空会话 resume 不容忍(壳 engine_id 换绑)、
+工具错误无独立错误位(现 "Error: " 前缀约定,壳按前缀转 failed 帧)。
+已补齐(近期):每模型独立凭据(e792858 扁平 per-model schema,
+按别名作键,壳一一对应物化,槽位冲突逻辑消亡;壳一律传别名选模型,
+防同 wire id 多网关撞 wireIndex)、会话交互性声明(8afc338,
+壳 session/create 带 interactive:true,引擎给持久 Task 工具族)。
 已补齐:OHMYAGENT_CONFIG_DIR、子代理权限实时继承、上下文用量
 (turn/stopped.context)、附件(提示词图片路径内联)、MCP image 结果
 直达模型(c1d8482)、工具错误发 tool_result(b02fc77,含 deferred

@@ -1766,3 +1766,16 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       tauri 打包不受影响(productName=MonkeyCode 决定安装名)
 - [x] cargo clean 重建(旧缓存存绝对路径);cargo 31/31、UI 43/43、
       workflows YAML 校验过
+
+## 上游集成:扁平 per-model schema + interactive(2026-07-21)
+
+- [x] e792858 providers map 删除 → models 按别名作键、每条自带
+      type/api_key/base_url:物化重写为一一对应,configKey 槽位/冲突
+      跳过/默认占槽逻辑整体删除——每模型独立凭据缺口销账
+      (claude-opus-4-6 类多网关同协议场景解锁)
+- [x] 模型选择改传别名(model_id_of 返回 name):引擎双解析但同 wire id
+      多网关撞 wireIndex,别名唯一;default_model 亦别名
+- [x] 8afc338 会话交互性:四处 session/create 带 interactive:true
+      (桌面是有人的 UI,引擎给持久 Task 工具族而非 TodoWrite)
+- [x] E2E 换新 schema(别名"测试模型"全链路);OHMYAGENT_REF 钉 06f945e;
+      cargo 31/31、零告警

@@ -423,7 +423,7 @@ impl OhmyDriver {
             }
         }
         let result = self
-            .rpc("session/create", json!({ "cwd": workdir, "model": model_id }))
+            .rpc("session/create", json!({ "cwd": workdir, "model": model_id, "interactive": true }))
             .await?;
         let sid = result
             .get("session_id")
@@ -482,10 +482,10 @@ impl OhmyDriver {
                 let has_history =
                     self.0.engine_dir.join("sessions").join(&engine_id).join("messages.jsonl").is_file();
                 let mut params = if has_history {
-                    json!({ "resume": engine_id, "permission_mode": ohmy_mode_of(mode) })
+                    json!({ "resume": engine_id, "permission_mode": ohmy_mode_of(mode), "interactive": true })
                 } else {
                     json!({ "cwd": meta.get("workdir").and_then(|v| v.as_str()).unwrap_or(""),
-                        "permission_mode": ohmy_mode_of(mode) })
+                        "permission_mode": ohmy_mode_of(mode), "interactive": true })
                 };
                 let model_name = meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
                 if let Ok(model_id) = self.model_id_of(model_name) {
@@ -878,7 +878,7 @@ impl OhmyDriver {
         let eng = self.engine_id(id);
         let has_history = self.0.engine_dir.join("sessions").join(&eng).join("messages.jsonl").is_file();
         let params = if has_history {
-            json!({ "resume": eng, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
+            json!({ "resume": eng, "model": model_id, "permission_mode": ohmy_mode_of(mode), "interactive": true })
         } else {
             let mut workdir =
                 self.0.sessions.lock().unwrap().get(id).map(|s| s.workdir.clone()).unwrap_or_default();
@@ -888,7 +888,7 @@ impl OhmyDriver {
                     .map(|h| h.to_string_lossy().into_owned())
                     .unwrap_or_default();
             }
-            json!({ "cwd": workdir, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
+            json!({ "cwd": workdir, "model": model_id, "permission_mode": ohmy_mode_of(mode), "interactive": true })
         };
         let result = self.rpc("session/create", params).await?;
         let new_eng =
@@ -972,6 +972,9 @@ impl OhmyDriver {
 
     // ==================== 辅助 ====================
 
+    /// 模型选择键:e792858 起 settings.models 按**别名**作键,引擎双解析
+    /// (别名优先,wire id 回退)——但同 wire id 多网关会撞 wireIndex,
+    /// 壳一律传别名。
     fn model_id_of(&self, name: &str) -> Result<String, String> {
         if name.is_empty() {
             return self
@@ -980,14 +983,14 @@ impl OhmyDriver {
                 .iter()
                 .find(|m| m.default)
                 .or(self.0.models.first())
-                .map(|m| m.model.clone())
+                .map(|m| m.name.clone())
                 .ok_or_else(|| "尚未配置模型,请先在设置中添加".into());
         }
         self.0
             .models
             .iter()
             .find(|m| m.name == name)
-            .map(|m| m.model.clone())
+            .map(|m| m.name.clone())
             .ok_or_else(|| format!("未知模型 {name:?}"))
     }
 
@@ -1910,10 +1913,11 @@ mod tests {
 
         let llm = fake_anthropic_steps(llm_delay_ms, steps);
         let settings = json!({
-            "default_model": "test-model",
+            "default_model": "测试模型",
             "permission_mode": "default",
-            "providers": { "anthropic": { "api_key": "sk-fake", "base_url": format!("{llm}/api/anthropic") } },
-            "models": [{ "id": "test-model", "provider": "anthropic", "context_window": 200000 }],
+            "models": { "测试模型": { "type": "anthropic", "model": "test-model",
+                "api_key": "sk-fake", "base_url": format!("{llm}/api/anthropic"),
+                "context_window": 200000 } },
         });
         std::fs::write(
             home.join("shellcfg/ohmyagent/settings.json"),
