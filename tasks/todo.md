@@ -1736,3 +1736,11 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       (与 TUI 面板同源),TaskCreate 等带描述工具通用受益;E2E 锁行为
 - [x] cd9c683 并行 Agent 加固(worktree 锁/注册表锁)对壳无感;
       OHMYAGENT_REF 钉 6a61cfd;cargo 31/31
+
+## 上游集成:子代理标签戳 + 空 tc_id 回填(2026-07-21)
+
+- [x] 939e03e 事件戳 parent_description:子会话标题优先取戳记(后台代理
+      跨轮续跑时 tc_id 暂存已清,戳记恒在),tc_id 暂存降为回退;
+      task_notification data 结构化为纯增量(message 保留),壳零改动
+- [x] 4e6193a 空 tool-call id 引擎侧回填,壳既有空 id 守卫自然受益
+- [x] OHMYAGENT_REF 钉 4e6193a;cargo 31/31

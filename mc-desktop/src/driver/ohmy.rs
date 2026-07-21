@@ -1335,13 +1335,18 @@ impl Inner {
             }
         };
         let Some((psid, ptc, workdir, model_name)) = claimed else { return false };
-        let (title, prompt) = self
+        let (mut title, prompt) = self
             .agent_inputs
             .lock()
             .unwrap()
             .get(&ptc)
             .cloned()
             .unwrap_or_else(|| ("子代理".into(), String::new()));
+        // 事件戳的 parent_description 优先(939e03e):后台代理跨轮续跑时
+        // tc_id 暂存可能已清,戳记恒在
+        if let Some(d) = event.get("parent_description").and_then(|v| v.as_str()).filter(|d| !d.is_empty()) {
+            title = d.to_string();
+        }
         self.sessions.lock().unwrap().insert(
             child_sid.to_string(),
             SessionState {
