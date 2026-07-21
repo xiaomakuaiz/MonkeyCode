@@ -121,7 +121,6 @@ struct SessionState {
 #[derive(Clone)]
 struct ManifestModel {
     name: String,
-    model: String,
     default: bool,
     source: String,
 }
@@ -1717,10 +1716,8 @@ fn parse_manifest_models(models: &Value) -> Vec<ManifestModel> {
     arr.iter()
         .filter_map(|m| {
             let name = m.get("name").and_then(|v| v.as_str())?.to_string();
-            let model = m.get("model").and_then(|v| v.as_str()).unwrap_or(&name).to_string();
             Some(ManifestModel {
                 name,
-                model,
                 default: m.get("default").and_then(|v| v.as_bool()).unwrap_or(false),
                 source: m.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             })

@@ -363,7 +363,9 @@ export function Sidebar({
   sessionActive,
   connected,
   status,
-  updateAvailable,
+  update,
+  updateBusy,
+  onUpdate,
   cloudTasks,
   activeCloudId,
   cloudSyncing,
@@ -384,7 +386,12 @@ export function Sidebar({
   sessionActive: boolean;
   connected: boolean;
   status: string;
-  updateAvailable: boolean;
+  /** 新版本信息(available 时左下角出常驻横幅;设置齿轮同步亮点) */
+  update?: { available: boolean; latest?: string } | null;
+  /** 更新下载安装中(横幅置忙态防重复点击) */
+  updateBusy?: boolean;
+  /** 点击更新横幅:下载安装并重启 */
+  onUpdate?: () => void;
   /** 云端任务:null = 未同步云端账号(空态给登录引导),[] = 已同步无任务 */
   cloudTasks: CloudTask[] | null;
   /** 当前在主区打开的云端任务(行高亮) */
@@ -651,6 +658,45 @@ export function Sidebar({
           </Group>
         )}
       </div>
+
+      {/* 左下角更新横幅:有新版常驻可见,点击直接下载安装(设置页深处
+          的更新区仍在,这里是显眼入口) */}
+      {update?.available && (
+        <div
+          className="hv2"
+          onClick={() => !updateBusy && onUpdate?.()}
+          title={updateBusy ? "正在下载更新…" : `新版本 ${update.latest ?? ""} 可用,点击下载安装并重启`}
+          style={{
+            flex: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            margin: "6px 8px",
+            padding: "7px 10px",
+            borderRadius: 9,
+            border: "1px solid var(--line)",
+            background: "var(--card)",
+            cursor: updateBusy ? "default" : "pointer",
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: "var(--notice)",
+              flex: "none",
+              animation: updateBusy ? "mcpulse 1.2s infinite" : "none",
+            }}
+          />
+          <span className="ellipsis" style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)", flex: 1, minWidth: 0 }}>
+            {updateBusy ? "正在下载更新…" : `新版本 ${update.latest ?? ""} 可用`}
+          </span>
+          {!updateBusy && (
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--acc)", flex: "none" }}>更新</span>
+          )}
+        </div>
+      )}
 
       <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 7, padding: "0 14px", borderTop: "1px solid var(--line)" }}>
         <span
