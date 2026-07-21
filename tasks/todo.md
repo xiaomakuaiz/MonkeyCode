@@ -1752,3 +1752,8 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       frame.rs/ohmy.rs/browser/* 全部注释、client.ts 注释、
       ARCHITECTURE 三处、fake-wsl.sh 用法注释
 - [x] 验证:cargo 31/31、UI tsc+41/41、扩展构建通过
+
+## 旧 Electron 桌面端删除(2026-07-21)
+
+- [x] desktop/(旧 Electron 客户端)与 electron-release.yml 删除,
+      mc-desktop(Tauri)正式接任;无其他引用(根级无 workspace 配置)
