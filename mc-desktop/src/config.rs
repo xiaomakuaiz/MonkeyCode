@@ -24,7 +24,7 @@ fn default_true() -> bool {
 }
 
 fn default_engine() -> String {
-    "mc-agent".into()
+    String::new() // 字段已废弃,仅兼容旧 config.json 反序列化
 }
 
 #[derive(Clone, Serialize, Deserialize)]

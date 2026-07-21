@@ -1679,3 +1679,15 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       轮次里对"当前占用/预算"语义严重虚高,会假报"接近上限"
 - [ ] 待上游一行:loop.go 的 l.emit(EventModelDone, turnID, nil) 改为
       map[string]any{"usage": usage}(consumeStream 已返回单次 usage)
+
+## 附件目录去 mc-agent 化 + 空 workdir 硬错误(2026-07-21)
+
+- [x] 上传目录 <workdir>/.mc-agent/uploads → <workdir>/.monkeycode/uploads;
+      回读改按消息内相对路径解析(旧 .mc-agent 附件继续可读),
+      新增越界守卫(仅放行新旧两代上传目录,拒 ../ 与绝对路径)
+- [x] 空 workdir 硬错误:相对路径落进程 cwd(终端启动=当前目录,
+      打包启动=/)的静默错位改为显式报错"会话缺少工作目录"
+- [x] mc-agent 残留清扫:baizhi env MC_AGENT_* → MC_DESKTOP_*;
+      删 ~/.config/mc-agent 旧 cookie 迁移;agent_engine 废弃默认值清空;
+      设置页两处宿主文案与"项目级 .mc-agent/mcp.json"文案;types.ts 注释;
+      ui 包名 mc-agent-ui → monkeycode-ui;ARCHITECTURE 附件行

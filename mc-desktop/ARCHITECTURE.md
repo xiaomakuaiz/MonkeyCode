@@ -98,7 +98,7 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 | 引擎模型上下文 | app_config_dir/ohmyagent/sessions/<engine_id>/messages.jsonl |
 | 会话索引/标题/归档/**帧日志**/engine_id 别名 | 壳 sidecar:app_config_dir/ohmy-sessions/<sid>/ |
 | 子代理子会话(壳侧实体,仅回放) | 同上(sidecar 带 parent) |
-| 附件 | <workdir>/.mc-agent/uploads(历史目录约定,保持兼容) |
+| 附件 | <workdir>/.monkeycode/uploads(会话工作区内,模型经相对路径可读;旧 .mc-agent 附件按消息内路径回读) |
 | 百智云/云端凭证 | app_config_dir/*-cookies.json(双罐,互不牵连) |
 | 浏览器扩展配对凭据 | app_config_dir/ext-auth.json |
 

@@ -1,7 +1,7 @@
-// 对话附件上传/回读(agent/internal/server handleUpload 的 Rust 移植)。
-// 落盘 <workdir>/.mc-agent/uploads/(目录约定与 mc-agent 一致:双引擎共用,
-// 模型经 read_file 按路径查看)。回读返回 data URL(Tauri 下 <img> 无法带
-// 鉴权头,又不想开 asset scope 到任意工作区,小图 base64 内联最稳)。
+// 对话附件上传/回读。落盘 <workdir>/.monkeycode/uploads/(会话工作区内,
+// 模型经相对路径 Read 查看;旧 .mc-agent/uploads 的既有附件仍按消息内
+// 路径回读,不迁移)。回读返回 data URL(Tauri 下 <img> 无法带鉴权头,
+// 又不想开 asset scope 到任意工作区,小图 base64 内联最稳)。
 
 use std::path::PathBuf;
 
@@ -42,12 +42,20 @@ fn sanitize_name(name: &str) -> Option<String> {
 }
 
 /// 工作区 uploads 目录(WSL 模式下 workdir 转 UNC 访问)。
-fn uploads_dir(workdir: &str, wsl_distro: Option<&str>) -> PathBuf {
-    let root = match wsl_distro {
+/// 工作区根(WSL 模式下映射 UNC)。空 workdir 会让相对路径落到进程 cwd
+/// (打包应用下是主目录)——硬错误。
+fn uploads_root(workdir: &str, wsl_distro: Option<&str>) -> Result<PathBuf, String> {
+    if workdir.trim().is_empty() {
+        return Err("会话缺少工作目录,无法定位附件目录".into());
+    }
+    Ok(match wsl_distro {
         Some(d) => PathBuf::from(format!(r"\\wsl$\{}{}", d, workdir.replace('/', r"\"))),
         None => PathBuf::from(workdir),
-    };
-    root.join(".mc-agent").join("uploads")
+    })
+}
+
+fn uploads_dir(workdir: &str, wsl_distro: Option<&str>) -> Result<PathBuf, String> {
+    Ok(uploads_root(workdir, wsl_distro)?.join(".monkeycode").join("uploads"))
 }
 
 /// 保存附件,返回 {path: 工作区相对路径}。
@@ -62,7 +70,7 @@ pub fn save(workdir: &str, wsl_distro: Option<&str>, name: &str, media_type: &st
         return Err(format!("文件过大({} 字节,上限 {})", raw.len(), UPLOAD_MAX_BYTES));
     }
 
-    let dir = uploads_dir(workdir, wsl_distro);
+    let dir = uploads_dir(workdir, wsl_distro)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建上传目录失败: {e}"))?;
     // uploads 不入库:目录内放自免疫的 .gitignore(仅首次创建)
     let gi = dir.join(".gitignore");
@@ -93,16 +101,20 @@ pub fn save(workdir: &str, wsl_distro: Option<&str>, name: &str, media_type: &st
         i += 1;
     }
     std::fs::write(dir.join(&fname), &raw).map_err(|e| format!("写入文件失败: {e}"))?;
-    Ok(json!({ "path": format!(".mc-agent/uploads/{fname}") }))
+    Ok(json!({ "path": format!(".monkeycode/uploads/{fname}") }))
 }
 
 /// 回读已上传文件为 data URL(UI 气泡缩略图)。仅允许 uploads 目录内的文件名。
 pub fn read_data_url(workdir: &str, wsl_distro: Option<&str>, path: &str) -> Result<String, String> {
-    let name = path.rsplit('/').next().unwrap_or("");
-    if name.is_empty() || name.contains("..") || name.contains('\\') {
-        return Err("非法文件名".into());
+    // 回读按消息内存储的相对路径走(兼容旧 .mc-agent/uploads 附件);
+    // 只放行工作区内的上传目录(新旧两代),拒绝越界与绝对路径
+    let rel = path.trim_start_matches("./");
+    let in_uploads =
+        rel.starts_with(".monkeycode/uploads/") || rel.starts_with(".mc-agent/uploads/");
+    if !in_uploads || rel.contains('\\') || rel.split('/').any(|seg| seg == "..") {
+        return Err("非法附件路径".into());
     }
-    let p = uploads_dir(workdir, wsl_distro).join(name);
+    let p = uploads_root(workdir, wsl_distro)?.join(rel);
     let data = std::fs::read(&p).map_err(|e| format!("读取失败: {e}"))?;
     let mime = match p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
         "png" => "image/png",

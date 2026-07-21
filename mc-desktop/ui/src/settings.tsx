@@ -766,7 +766,7 @@ export function SettingsView({
     if (!desktop) {
       return (
         <div className="card card-lg" style={{ color: "var(--t4)", fontSize: 12.5, lineHeight: 1.7 }}>
-          浏览器模式下配置只读:模型与 MCP 由启动 mc-agent 的宿主(桌面应用或环境变量)管理。
+          浏览器模式下配置只读:模型与 MCP 由桌面应用宿主管理。
         </div>
       );
     }
@@ -916,7 +916,7 @@ export function SettingsView({
     if (!desktop) {
       return (
         <div className="card card-lg" style={{ color: "var(--t4)", fontSize: 12.5, lineHeight: 1.7 }}>
-          浏览器模式下配置只读:模型与 MCP 由启动 mc-agent 的宿主(桌面应用或环境变量)管理。
+          浏览器模式下配置只读:模型与 MCP 由桌面应用宿主管理。
         </div>
       );
     }
@@ -942,7 +942,7 @@ export function SettingsView({
           setMcpExpanded(mcps.length); // 新行追加末尾,直接展开
         })}>
           {custom.length === 0 ? (
-            <div style={emptyCard}>未配置自定义 MCP 服务器(可选)。项目级 .mc-agent/mcp.json 仍随仓库生效。</div>
+            <div style={emptyCard}>未配置自定义 MCP 服务器(可选)。</div>
           ) : (
             groupCard(custom, mcpRow)
           )}

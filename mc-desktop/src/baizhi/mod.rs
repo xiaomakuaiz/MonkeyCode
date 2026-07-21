@@ -44,10 +44,10 @@ fn env_or(env: &str, def: &str) -> String {
 impl Endpoints {
     pub fn resolve() -> Self {
         Self {
-            account: env_or("MC_AGENT_BAIZHI_URL", "https://baizhi.cloud"),
-            model_gateway: env_or("MC_AGENT_BAIZHI_MODEL_GATEWAY", "https://ai-api-gateway.app.baizhi.cloud"),
-            mcp_gateway: env_or("MC_AGENT_BAIZHI_MCP_GATEWAY", "https://agent-toolkit.app.baizhi.cloud"),
-            monkeycode: env_or("MC_AGENT_MONKEYCODE_URL", "https://monkeycode-ai.com"),
+            account: env_or("MC_DESKTOP_BAIZHI_URL", "https://baizhi.cloud"),
+            model_gateway: env_or("MC_DESKTOP_BAIZHI_MODEL_GATEWAY", "https://ai-api-gateway.app.baizhi.cloud"),
+            mcp_gateway: env_or("MC_DESKTOP_BAIZHI_MCP_GATEWAY", "https://agent-toolkit.app.baizhi.cloud"),
+            monkeycode: env_or("MC_DESKTOP_MONKEYCODE_URL", "https://monkeycode-ai.com"),
         }
     }
 }
@@ -116,23 +116,6 @@ impl Service {
                 .build()
                 .expect("构建 HTTP 客户端失败")
         };
-        // 登录态从 mc-agent 时代平滑迁移:壳路径缺失而内核旧路径
-        // (~/.config/mc-agent/)存在时复制过来,免得升级后要重新登录。
-        // 格式互通(同一 JSON 结构,Rust 侧 serde 与 Go 侧字段一致)。
-        for name in ["baizhi-cookies.json", "monkeycode-cookies.json"] {
-            let dst = config_dir.join(name);
-            if dst.exists() {
-                continue;
-            }
-            // Go 侧 os.UserHomeDir 在 Windows 是 %USERPROFILE%(HOME 通常未设)
-            if let Some(home) = crate::config::home_dir() {
-                let old = home.join(".config").join("mc-agent").join(name);
-                if old.is_file() {
-                    let _ = std::fs::create_dir_all(&config_dir);
-                    let _ = std::fs::copy(&old, &dst);
-                }
-            }
-        }
         Self {
             ep: Endpoints::resolve(),
             http: mk(30),
