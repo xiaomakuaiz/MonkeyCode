@@ -147,6 +147,21 @@ describe("执行期进度(in_progress progress)", () => {
 });
 
 describe("计划卡片", () => {
+  it("工具卡插在中间时 plan 唯一且移到末尾跟随进度", () => {
+    const s = reduceBatch(initialChat, [
+      acp({ sessionUpdate: "plan", entries: [{ content: "任务一", status: "pending" }] }),
+      acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "TaskCreate", status: "in_progress" }),
+      acp({ sessionUpdate: "plan", entries: [
+        { content: "任务一", status: "pending" },
+        { content: "任务二", status: "pending" },
+      ] }),
+    ]);
+    const plans = s.items.filter((it) => it.kind === "plan");
+    expect(plans.length).toBe(1);
+    expect((plans[0] as { entries: unknown[] }).entries.length).toBe(2);
+    expect(s.items[s.items.length - 1].kind).toBe("plan");
+  });
+
   it("连续 plan 帧合并进末尾卡片", () => {
     const s = run([
       acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "pending" }] }),
@@ -156,15 +171,14 @@ describe("计划卡片", () => {
     expect(plans).toEqual([{ kind: "plan", entries: [{ content: "步骤一", status: "completed" }] }]);
   });
 
-  it("中间隔了其他内容后,plan 在当前位置新建卡片,旧卡片保留原快照", () => {
+  it("中间隔了其他内容后,plan 移到末尾且不留旧快照", () => {
     const s = run([
       acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "pending" }] }),
       acp({ sessionUpdate: "agent_message_chunk", content: { text: "开始干活" } }),
       acp({ sessionUpdate: "plan", entries: [{ content: "步骤一", status: "completed" }] }),
     ]);
-    expect(s.items.map((it) => it.kind)).toEqual(["plan", "agent", "plan"]);
-    expect(s.items[0]).toEqual({ kind: "plan", entries: [{ content: "步骤一", status: "pending" }] });
-    expect(s.items[2]).toEqual({ kind: "plan", entries: [{ content: "步骤一", status: "completed" }] });
+    expect(s.items.map((it) => it.kind)).toEqual(["agent", "plan"]);
+    expect(s.items[1]).toEqual({ kind: "plan", entries: [{ content: "步骤一", status: "completed" }] });
   });
 });
 

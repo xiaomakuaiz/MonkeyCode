@@ -252,15 +252,13 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       return { ...s, items };
     }
     case "plan": {
-      // 计划卡片跟随对话流:仅当卡片仍在流末尾时原地更新(合并连续的状态翻转),
-      // 中间隔了其他内容则在当前位置追加新卡片,旧卡片留作当时的快照
-      const items = s.items.slice();
-      const last = items[items.length - 1];
-      if (last && last.kind === "plan") {
-        items[items.length - 1] = { kind: "plan", entries: u.entries ?? [] };
-        return { ...s, items, streamKind: "" };
-      }
-      return push(s, { kind: "plan", entries: u.entries ?? [] });
+      // 实时勾选卡:全流唯一一张,每次更新移到末尾跟随当前进度——
+      // 引擎在每次 Task*/TodoWrite 后全量重发清单:逐次追加会堆快照
+      // 刷屏,固定在首现位置则后续更新没人看得见;跟随式与 TUI 的
+      // 钉底面板(c9fcb4c)同效
+      const items: typeof s.items = s.items.filter((it) => it.kind !== "plan");
+      items.push({ kind: "plan", entries: u.entries ?? [] });
+      return { ...s, items, streamKind: "" };
     }
     case "llm_call_retry":
       return push(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
