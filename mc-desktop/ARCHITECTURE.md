@@ -85,25 +85,27 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 ## 契约 4:配置所有权
 
 `DesktopConfig`(config.json)是唯一权威;引擎配置是它的**纯函数物化**,
-在引擎(重)启时重写:`~/.ohmyagent/settings.json + mcp.json`(接管式,
-首次 .bak;mcp.json 含壳注入的 mc-browser 内置条目,URL/Bearer 进程级新发)。
+在引擎(重)启时重写:`app_config_dir/ohmyagent/{settings,mcp}.json`
+(经 OHMYAGENT_CONFIG_DIR 注入引擎,桌面版私有目录,不碰用户全局
+~/.ohmyagent;mcp.json 含壳注入的 mc-browser 内置条目,URL/Bearer
+进程级新发)。
 壳自有偏好(桌宠)走 save_config_json,只写权威、不触发物化。
 
 数据归属:
 
 | 数据 | 权威 |
 |---|---|
-| 引擎模型上下文 | ~/.ohmyagent/sessions/<engine_id>/messages.jsonl |
+| 引擎模型上下文 | app_config_dir/ohmyagent/sessions/<engine_id>/messages.jsonl |
 | 会话索引/标题/归档/**帧日志**/engine_id 别名 | 壳 sidecar:app_config_dir/ohmy-sessions/<sid>/ |
 | 子代理子会话(壳侧实体,仅回放) | 同上(sidecar 带 parent) |
 | 附件 | <workdir>/.mc-agent/uploads(历史目录约定,保持兼容) |
 | 百智云/云端凭证 | app_config_dir/*-cookies.json(双罐,互不牵连) |
 | 浏览器扩展配对凭据 | app_config_dir/ext-auth.json |
 
-已知妥协:~/.ohmyagent 是与 CLI 共享的全局目录,桌面版声明式接管
-(设置页已提示);退出条件 = 上游 OHMYAGENT_CONFIG_DIR(进行中,
-落地后配置随 app_config_dir 走,M3/WSL 的前置)。
-**不可**用覆盖 HOME 隔离——bash 工具会把错误 HOME 泄给用户命令。
+历史妥协已退出:上游 OHMYAGENT_CONFIG_DIR(969311a)落地后配置随
+app_config_dir 走,首启自动迁移旧接管目录的 sessions。
+(当年**不可**用覆盖 HOME 隔离的原因仍成立:bash 工具会把错误 HOME
+泄给用户命令——env 注入是正解。)
 
 引擎 id 与壳 sid 解耦:壳 sid 是目录/UI 通道的稳定标识;engine_id 是
 可替换属性(空会话无法 resume 时 destroy+全新 create 换绑),出站 RPC
@@ -150,9 +152,9 @@ permission remember(现壳记忆集自动应答)、sendMessage 附件
 用量条隐藏,需按次 usage 或 context_tokens)、每模型独立凭据
 (现同 configKey 冲突跳过)、stdio 会话索引(现 sidecar 权威)、
 工具错误不发 tool_result(壳轮次收尾补 failed 帧)、子代理事件无父归属
-(壳启发式认领 + 物化子会话)、子代理权限顶棚构建时快照(壳空闲切模式
-一律重建)、空会话 resume 不容忍(壳 engine_id 换绑)、
-OHMYAGENT_CONFIG_DIR(用户实现中,M3 前置)。
+(壳启发式认领 + 物化子会话)、空会话 resume 不容忍(壳 engine_id 换绑)。
+已补齐:OHMYAGENT_CONFIG_DIR(私有目录,969311a)、子代理权限实时
+继承父模式(同批,壳撤销"空闲切模式一律重建"变通,恢复原生 switchMode)。
 
 ## 开发与构建产物
 

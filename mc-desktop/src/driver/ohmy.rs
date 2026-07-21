@@ -66,6 +66,8 @@ struct Inner {
     models: Vec<ManifestModel>,
     /// sidecar 根(<app_config>/ohmy-sessions)
     data_dir: PathBuf,
+    /// 引擎私有配置目录(<app_config>/ohmyagent;messages.jsonl 存在性检查用)
+    engine_dir: PathBuf,
     /// 审批记忆:工具名集合(内存 = 引擎生命周期;persist 追加落盘)
     perm_remember: StdMutex<HashSet<String>>,
     perm_persist_path: PathBuf,
@@ -143,12 +145,19 @@ impl OhmyDriver {
         let log_path = cfg_dir.join("ohmyagent.log");
         let log_file = std::fs::File::create(&log_path).ok();
 
+        // 引擎私有配置目录(OHMYAGENT_CONFIG_DIR):settings/sessions/mcp 等
+        // 全部派生路径随之落在 app_config_dir/ohmyagent,不再接管全局 ~/.ohmyagent。
+        // 一次性迁移:旧接管目录的 sessions 拷过来(sidecar 权威过滤,多拷无害)。
+        let engine_dir = cfg_dir.join("ohmyagent");
+        migrate_legacy_sessions(&engine_dir);
+
         // 进程 cwd 定在主目录:打包应用从 Finder/Dock 启动时壳 cwd 是 "/",
         // 会漏给引擎的 os.Getwd 兜底与其 spawn 的 MCP stdio 子进程;
         // 会话工作目录不受影响(session/create 逐会话显式传 cwd)
         let proc_cwd = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let mut child = Command::new(&bin)
             .current_dir(&proc_cwd)
+            .env("OHMYAGENT_CONFIG_DIR", &engine_dir)
             .arg("--stdio")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -181,6 +190,7 @@ impl OhmyDriver {
             batch: Arc::new(StdMutex::new(HashMap::new())),
             models,
             data_dir,
+            engine_dir,
             perm_remember: StdMutex::new(perm_remember),
             perm_persist_path,
             pending_questions: StdMutex::new(HashMap::new()),
@@ -468,9 +478,8 @@ impl OhmyDriver {
                 // resume 必失败,改全新 create 换绑 engine_id(壳 sid 不变)。
                 // 模型已从配置移除时不带 model,退化引擎默认(不阻断打开)
                 let mode = meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
-                let has_history = crate::config::home_dir()
-                    .map(|h| h.join(".ohmyagent/sessions").join(&engine_id).join("messages.jsonl").is_file())
-                    .unwrap_or(false);
+                let has_history =
+                    self.0.engine_dir.join("sessions").join(&engine_id).join("messages.jsonl").is_file();
                 let mut params = if has_history {
                     json!({ "resume": engine_id, "permission_mode": ohmy_mode_of(mode) })
                 } else {
@@ -571,8 +580,8 @@ impl OhmyDriver {
             let _ = std::fs::remove_dir_all(self.0.data_dir.join(&cid));
         }
         // 删 ohmyagent 会话目录(messages.jsonl,目录名是引擎 id)+ 壳 sidecar(含帧日志)
-        if let Some(home) = crate::config::home_dir() {
-            let root = home.join(".ohmyagent").join("sessions");
+        {
+            let root = self.0.engine_dir.join("sessions");
             let _ = std::fs::remove_dir_all(root.join(&eng));
         }
         let _ = std::fs::remove_dir_all(self.0.data_dir.join(id));
@@ -799,19 +808,12 @@ impl OhmyDriver {
                 Ok(json!({ "result": { "model": name } }))
             }
             "session_set_mode" => {
-                // 权限模式切换。空闲时总是 destroy+resume 全参重建——上游
-                // subagent 权限顶棚在会话构建时快照,switchMode 只改父评估器,
-                // 热切后子代理仍按旧模式全拒(headless prompter);重建才能带新顶棚。
-                // 运行中退而求其次热切(父会话即时生效;子代理顶棚不变,上游缺口)。
+                // 权限模式切换:运行中也可热切(上游子代理评估器已实时继承
+                // 父模式,969311a 起热切对后续子代理同样生效)。
                 let mode = payload.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
-                let running =
-                    self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false);
                 if !self.session_created(id) {
                     let model_id = self.model_id_of(&self.session_model_name(id))?;
                     self.create_resumed(id, &model_id, mode).await?;
-                } else if !running {
-                    let model_id = self.model_id_of(&self.session_model_name(id))?;
-                    self.recreate_fallback(id, &model_id, mode).await?;
                 } else if self.has_cap("session/switchMode") {
                     self.rpc(
                         "session/switchMode",
@@ -819,7 +821,12 @@ impl OhmyDriver {
                     )
                     .await?;
                 } else {
-                    return Err("当前引擎版本较旧,执行中不能切换权限模式,请先取消任务".into());
+                    // 版本握手回退:旧引擎只能 destroy+resume,那必须空闲
+                    if self.0.sessions.lock().unwrap().get(id).map(|s| s.running).unwrap_or(false) {
+                        return Err("当前引擎版本较旧,执行中不能切换权限模式,请先取消任务".into());
+                    }
+                    let model_id = self.model_id_of(&self.session_model_name(id))?;
+                    self.recreate_fallback(id, &model_id, mode).await?;
                 }
                 // 与 mc-agent setMode 对齐:切到 yolo 自动放行本会话所有挂起审批。
                 // 先切引擎再排空——切换后引擎新的审批直接放行不再产生 ask,
@@ -859,9 +866,7 @@ impl OhmyDriver {
     /// 引擎发新 id,壳 sid/目录/UI 通道不变,engine_id 换绑并落 sidecar。
     async fn create_resumed(&self, id: &str, model_id: &str, mode: &str) -> Result<(), String> {
         let eng = self.engine_id(id);
-        let has_history = crate::config::home_dir()
-            .map(|h| h.join(".ohmyagent/sessions").join(&eng).join("messages.jsonl").is_file())
-            .unwrap_or(false);
+        let has_history = self.0.engine_dir.join("sessions").join(&eng).join("messages.jsonl").is_file();
         let params = if has_history {
             json!({ "resume": eng, "model": model_id, "permission_mode": ohmy_mode_of(mode) })
         } else {
@@ -1587,6 +1592,34 @@ fn parse_manifest_models(models: &Value) -> Vec<ManifestModel> {
 }
 
 /// 查找 ohmyagent 二进制:MC_OHMYAGENT_BIN → 应用同目录 → PATH(含 ~/.local/bin)。
+/// 一次性迁移:接管时代写在 ~/.ohmyagent 的会话搬进私有目录
+/// (仅当私有目录还没有 sessions;拷贝失败静默,最坏丢历史不丢功能)。
+fn migrate_legacy_sessions(engine_dir: &std::path::Path) {
+    let new_sessions = engine_dir.join("sessions");
+    if new_sessions.exists() {
+        return;
+    }
+    let Some(home) = crate::config::home_dir() else { return };
+    let old_sessions = home.join(".ohmyagent").join("sessions");
+    if !old_sessions.is_dir() {
+        return;
+    }
+    fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+        let _ = std::fs::create_dir_all(dst);
+        let Ok(entries) = std::fs::read_dir(src) else { return };
+        for e in entries.flatten() {
+            let (s, d) = (e.path(), dst.join(e.file_name()));
+            if s.is_dir() {
+                copy_dir(&s, &d);
+            } else {
+                let _ = std::fs::copy(&s, &d);
+            }
+        }
+    }
+    copy_dir(&old_sessions, &new_sessions);
+    eprintln!("[mc-desktop] 已迁移 ~/.ohmyagent/sessions → {}", new_sessions.display());
+}
+
 fn find_ohmyagent() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MC_OHMYAGENT_BIN") {
         let p = PathBuf::from(p);
@@ -1736,7 +1769,8 @@ mod tests {
     fn e2e_setup_steps(tag: &str, llm_delay_ms: u64, steps: Vec<String>) -> (OhmyDriver, PathBuf) {
         let home = std::env::temp_dir().join(format!("ohmy-e2e-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".ohmyagent")).unwrap();
+        // 引擎配置写进壳私有目录(driver 会以 OHMYAGENT_CONFIG_DIR 注入)
+        std::fs::create_dir_all(home.join("shellcfg/ohmyagent")).unwrap();
         std::env::set_var("HOME", &home);
         std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
 
@@ -1748,7 +1782,7 @@ mod tests {
             "models": [{ "id": "test-model", "provider": "anthropic", "context_window": 200000 }],
         });
         std::fs::write(
-            home.join(".ohmyagent/settings.json"),
+            home.join("shellcfg/ohmyagent/settings.json"),
             serde_json::to_vec_pretty(&settings).unwrap(),
         )
         .unwrap();

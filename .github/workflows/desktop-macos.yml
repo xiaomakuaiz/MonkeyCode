@@ -6,7 +6,7 @@ on:
 
 env:
   # 引擎版本钉死:升级引擎 = 改这里(配合壳的 system/ready 能力握手)
-  OHMYAGENT_REF: 317755865b376b3fd739ed40d956e6f2ce5cccca
+  OHMYAGENT_REF: f7eea63c9a6379214161e9f5547ed4786c86c891
 
 jobs:
   build:

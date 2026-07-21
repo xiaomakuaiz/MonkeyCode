@@ -102,7 +102,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
-          OHMYAGENT_REF: 317755865b376b3fd739ed40d956e6f2ce5cccca
+          OHMYAGENT_REF: f7eea63c9a6379214161e9f5547ed4786c86c891
         run: |
           go version
           # 断言用的是 go-win7 而非 runner 预装的官方 Go(官方产物 Win7 上直接崩,

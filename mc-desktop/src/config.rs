@@ -135,14 +135,20 @@ pub fn save_config_json(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), Stri
     Ok(())
 }
 
-/// 写应用配置(权威 config.json)+ 物化引擎配置(~/.ohmyagent,0600 含密钥)。
+/// 写应用配置(权威 config.json)+ 物化引擎配置(engine_config_dir,0600 含密钥)。
 /// 引擎(重)启路径专用;桌宠偏好等壳自有字段用 save_config_json。
 pub fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), String> {
     save_config_json(app, cfg)?;
-    write_ohmyagent_config(cfg)
+    write_ohmyagent_config(&engine_config_dir(app)?, cfg)
 }
 
-/// 壳清单 → ~/.ohmyagent/settings.json + mcp.json。
+/// 引擎配置目录:app_config_dir/ohmyagent(经 OHMYAGENT_CONFIG_DIR 注入引擎)。
+/// 桌面版自此拥有私有引擎目录,不再接管用户全局 ~/.ohmyagent(CLI 不受影响)。
+pub fn engine_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("ohmyagent"))
+}
+
+/// 壳清单 → <engine_config_dir>/settings.json + mcp.json。
 ///
 /// 映射:HostModel{name,provider,base_url,api_key,model} →
 ///   settings.providers{<route>: {api_key, base_url}} + settings.models[{id,provider,context_window}]
@@ -151,22 +157,8 @@ pub fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), Str
 ///
 /// 已知限制(引擎协议决定):每个 provider 路由只有一组 endpoint/key,
 /// 同协议多网关时默认模型所在网关生效,其余条目跳过(stderr 告警)。
-///
-/// 首次接管前把用户已有文件备份为 .bak(仅当 .bak 不存在,保留最初原件)。
-fn write_ohmyagent_config(cfg: &DesktopConfig) -> Result<(), String> {
-    let home = home_dir().ok_or("无法定位用户主目录")?;
-    let dir = home.join(".ohmyagent");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建 ~/.ohmyagent 失败: {e}"))?;
-
-    let backup = |name: &str| {
-        let p = dir.join(name);
-        let bak = dir.join(format!("{name}.bak"));
-        if p.exists() && !bak.exists() {
-            let _ = fs::copy(&p, &bak);
-        }
-    };
-    backup("settings.json");
-    backup("mcp.json");
+fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| format!("创建引擎配置目录失败: {e}"))?;
 
     let route_of = |provider: &str| match provider {
         "openai" => "openai-chat",

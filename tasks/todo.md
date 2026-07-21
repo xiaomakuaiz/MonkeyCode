@@ -1655,3 +1655,17 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] 审计清单核销:双 driver 产帧分叉/engines_list/驱动风格统一/
       settings 引擎硬编码——随单引擎化蒸发
 - [ ] M3(WSL)待上游 OHMYAGENT_CONFIG_DIR 就绪后启动
+
+## 上游集成:OHMYAGENT_CONFIG_DIR + 子代理权限实时继承(2026-07-21)
+
+- [x] 引擎配置迁私有目录:app_config_dir/ohmyagent 经 OHMYAGENT_CONFIG_DIR
+      注入,settings/sessions/mcp 全派生路径跟随;退出 ~/.ohmyagent 全局
+      接管妥协(.bak 逻辑删除);首启一次性迁移旧接管目录 sessions
+      (sidecar 权威过滤,多拷无害);三处 messages.jsonl 检查/删除路径
+      随 engine_dir 走;E2E 脚手架同步(全程压过注入链)
+- [x] 撤销"空闲切模式一律 destroy+重建"变通:上游 969311a 子代理评估器
+      改读父模式实时值,yolo 热切对后续子代理生效 → set_mode 恢复原生
+      switchMode(旧引擎回退保留)
+- [x] OHMYAGENT_REF 钉新:3177558 → f7eea63(三个 workflow;单源化仍在
+      评审待办)
+- [x] 验证:重建二进制,cargo test 30/30;ARCHITECTURE 契约 4 与缺口清单更新
