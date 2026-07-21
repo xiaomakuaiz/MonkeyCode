@@ -21,9 +21,12 @@ use serde_json::{json, Value};
 use super::ops::tool_metas;
 use super::session::BrowserSession;
 
+/// 当前运行会话的工作区(截图落盘定位;None = 无运行中会话,跳过落盘)。
+pub type WorkdirFn = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
 /// 启动 MCP server(随机端口),返回 (url, bearer_token)。
 /// 阻塞式 HTTP 处理跑在独立线程(请求频率 = 工具调用频率,极低)。
-pub fn serve(sess: BrowserSession) -> Result<(String, String), String> {
+pub fn serve(sess: BrowserSession, workdir: WorkdirFn) -> Result<(String, String), String> {
     let listener =
         TcpListener::bind("127.0.0.1:0").map_err(|e| format!("MCP 监听失败: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
@@ -39,7 +42,8 @@ pub fn serve(sess: BrowserSession) -> Result<(String, String), String> {
             let sess = sess.clone();
             let tok = tok.clone();
             let mu = call_mu.clone();
-            std::thread::spawn(move || handle_conn(conn, &sess, &tok, &mu));
+            let wd = workdir.clone();
+            std::thread::spawn(move || handle_conn(conn, &sess, &tok, &mu, &wd));
         }
     });
     Ok((url, token))
@@ -78,7 +82,7 @@ fn getrandom(buf: &mut [u8]) {
     }
 }
 
-fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tokio::sync::Mutex<()>) {
+fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tokio::sync::Mutex<()>, workdir: &WorkdirFn) {
     let Some(req) = read_http_request(&mut conn) else { return };
 
     if req.bearer.as_deref() != Some(token) {
@@ -105,7 +109,7 @@ fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tok
     let params = rpc.get("params").cloned().unwrap_or(Value::Null);
 
     // 工具执行是 async(桥 call 走 tokio);当前线程无 runtime,借 tauri 全局
-    let result = tauri::async_runtime::block_on(dispatch(sess, mu, &method, params));
+    let result = tauri::async_runtime::block_on(dispatch(sess, mu, workdir, &method, params));
     let resp = match result {
         Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
         Err((code, msg)) => {
@@ -118,6 +122,7 @@ fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tok
 async fn dispatch(
     sess: &BrowserSession,
     mu: &tokio::sync::Mutex<()>,
+    workdir: &WorkdirFn,
     method: &str,
     params: Value,
 ) -> Result<Value, (i64, String)> {
@@ -151,7 +156,7 @@ async fn dispatch(
             // 单次工具调用总超时:导航等待/整页截图都在其内
             let out = tokio::time::timeout(
                 std::time::Duration::from_secs(180),
-                call_tool(sess, &name, &args),
+                call_tool(sess, workdir, &name, &args),
             )
             .await
             .unwrap_or_else(|_| Err("浏览器操作超时(180s)".into()));
@@ -166,7 +171,12 @@ async fn dispatch(
 }
 
 /// 工具分派:名称/入参形态对齐 ops.rs 的 tool_metas(即 Go tools.go)。
-async fn call_tool(sess: &BrowserSession, name: &str, args: &Value) -> Result<Vec<Value>, String> {
+async fn call_tool(
+    sess: &BrowserSession,
+    workdir: &WorkdirFn,
+    name: &str,
+    args: &Value,
+) -> Result<Vec<Value>, String> {
     let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let text_block = |t: String| vec![json!({ "type": "text", "text": t })];
     match name {
@@ -174,7 +184,17 @@ async fn call_tool(sess: &BrowserSession, name: &str, args: &Value) -> Result<Ve
         "browser_snapshot" => sess.snapshot().await.map(text_block),
         "browser_take_screenshot" => {
             let full = args.get("full_page").and_then(|v| v.as_bool()).unwrap_or(false);
-            let (png, note) = sess.screenshot(full).await?;
+            let (png, mut note) = sess.screenshot(full).await?;
+            // 截图同时落当前会话工作区:UI 工具卡内联显示(驱动按路径转
+            // images),模型也可经 Read 按路径查看(引擎 MCP 客户端目前
+            // 丢弃 image 块,文本路径是双保险)
+            if let Some(wd) = workdir() {
+                let name = format!("browser-{}.png", crate::driver::frame::now_ms());
+                match crate::uploads::save_raw(&wd, None, &name, &png) {
+                    Ok(rel) => note.push_str(&format!("\n截图已保存: {rel}")),
+                    Err(e) => eprintln!("[mc-desktop] 截图落盘失败: {e}"),
+                }
+            }
             Ok(vec![
                 json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(&png), "mimeType": "image/png" }),
                 json!({ "type": "text", "text": note }),

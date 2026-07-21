@@ -162,12 +162,14 @@ pub fn tool_call(tc_id: &str, title: &str, raw_input: &Value, seq: u64) -> Value
     )
 }
 
-pub fn tool_call_completed(tc_id: &str, raw_output: &str, seq: u64) -> Value {
-    acp(
-        json!({ "sessionUpdate": "tool_call_update", "toolCallId": tc_id,
-            "status": "completed", "rawOutput": raw_output }),
-        seq,
-    )
+/// images:工具产出图片的工作区相对路径(UI 工具卡内联渲染,经 upload_read 回读)。
+pub fn tool_call_completed(tc_id: &str, raw_output: &str, images: &[String], seq: u64) -> Value {
+    let mut u = json!({ "sessionUpdate": "tool_call_update", "toolCallId": tc_id,
+        "status": "completed", "rawOutput": raw_output });
+    if !images.is_empty() {
+        u["images"] = json!(images);
+    }
+    acp(u, seq)
 }
 
 /// 工具执行期进度(status=in_progress + progress 载荷;词汇见 types.ts

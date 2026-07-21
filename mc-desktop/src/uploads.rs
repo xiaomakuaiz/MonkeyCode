@@ -58,6 +58,18 @@ fn uploads_dir(workdir: &str, wsl_distro: Option<&str>) -> Result<PathBuf, Strin
     Ok(uploads_root(workdir, wsl_distro)?.join(".monkeycode").join("uploads"))
 }
 
+/// 保存原始字节到上传目录(浏览器截图等壳内生成物),返回工作区相对路径。
+pub fn save_raw(workdir: &str, wsl_distro: Option<&str>, name: &str, data: &[u8]) -> Result<String, String> {
+    let dir = uploads_dir(workdir, wsl_distro)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建上传目录失败: {e}"))?;
+    let gi = dir.join(".gitignore");
+    if !gi.exists() {
+        let _ = std::fs::write(&gi, "*\n");
+    }
+    std::fs::write(dir.join(name), data).map_err(|e| format!("写入失败: {e}"))?;
+    Ok(format!(".monkeycode/uploads/{name}"))
+}
+
 /// 保存附件,返回 {path: 工作区相对路径}。
 pub fn save(workdir: &str, wsl_distro: Option<&str>, name: &str, media_type: &str, data_b64: &str) -> Result<Value, String> {
     let raw = base64::engine::general_purpose::STANDARD

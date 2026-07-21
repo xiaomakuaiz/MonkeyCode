@@ -1702,3 +1702,16 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       (vision 模型,25K 预算;相对路径按会话 cwd 解析)——壳的
       [图片] .monkeycode/uploads/x.png 约定零改动兼容
 - [x] OHMYAGENT_REF 钉 296176a(三处);重建二进制,cargo 30/30
+
+## 浏览器截图显示修复(2026-07-21)
+
+- [x] 根因:ohmyagent MCP 客户端只拼 text 内容块,image 块直接丢弃
+      (mcp/client.go:188)——截图既没进模型也没进 UI
+- [x] 壳侧双保险:MCP screenshot 同时把 PNG 落当前运行会话的
+      <workdir>/.monkeycode/uploads/browser-<ms>.png(active_workdir 惰性
+      查运行中主会话,跳过子代理),结果文本带"截图已保存: <相对路径>";
+      驱动 tool_result 提取上传路径 → tool_call_completed 帧 images 字段
+      → UI 工具卡内联渲染(upload_read 守卫天然放行);模型也可按路径
+      Read 查看(Read 图片文件出 Images,vision 可见)
+- [ ] 待上游:mcp/client.go 解析 {type:"image",data,mimeType} →
+      tools.ToolResult.Images(ImageSource{Data,MediaType}),模型直收截图

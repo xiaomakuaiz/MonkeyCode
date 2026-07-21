@@ -910,6 +910,19 @@ impl OhmyDriver {
         Ok(())
     }
 
+    /// 当前正在执行轮次的(父)会话工作区——浏览器截图落盘定位用。
+    /// 桌面单用户下同一时刻通常只有一个运行中的主会话;子代理子会话跳过。
+    pub fn active_workdir(&self) -> Option<String> {
+        let subs = self.0.subagents.lock().unwrap();
+        self.0
+            .sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(sid, s)| s.running && !s.workdir.is_empty() && !subs.contains_key(*sid))
+            .map(|(_, s)| s.workdir.clone())
+    }
+
     fn session_created(&self, id: &str) -> bool {
         self.0.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false)
     }
@@ -1561,7 +1574,9 @@ impl Inner {
                 }
                 // Agent 工具闭合:清对应子代理路由(残留行缓冲先冲洗成尾行)
                 self.close_subagents_of(&sid, &tc_id);
-                self.push_frame(&sid, |seq| frame::tool_call_completed(&tc_id, content, seq));
+                // 结果文本里的工作区上传路径(浏览器截图等)→ 工具卡内联图
+                let images = extract_upload_paths(content);
+                self.push_frame(&sid, |seq| frame::tool_call_completed(&tc_id, content, &images, seq));
             }
             "send_user_message" | "task_notification" => {
                 let msg = data
@@ -1590,6 +1605,23 @@ impl Inner {
 }
 
 /// 工具标题:「名称 主参数」(对齐 mc-agent「动词 目标」的可读形态)。
+/// 从工具结果文本提取工作区上传路径(.monkeycode/uploads/…):
+/// 浏览器截图等壳内生成物经文本路径外显,驱动转成工具卡 images。
+fn extract_upload_paths(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = content;
+    while let Some(i) = rest.find(".monkeycode/uploads/") {
+        let tail = &rest[i..];
+        let end = tail.find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == ',').unwrap_or(tail.len());
+        let p = &tail[..end];
+        if p.len() > ".monkeycode/uploads/".len() && !out.iter().any(|x| x == p) {
+            out.push(p.to_string());
+        }
+        rest = &rest[i + end.max(1)..];
+    }
+    out
+}
+
 /// 壳模式词汇 → ohmyagent permission_mode
 fn ohmy_mode_of(mode: &str) -> &'static str {
     if mode == "yolo" { "bypassPermissions" } else { "default" }

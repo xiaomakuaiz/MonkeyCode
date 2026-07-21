@@ -115,7 +115,7 @@ async fn mcp_smoke_initialize_list_call() {
     let b = ExtBridge::new(27460, &dir);
     // 不 spawn 桥监听:MCP 面不依赖扩展在线
     let sess = BrowserSession::new(b);
-    let (url, token) = mcp::serve(sess).expect("MCP 启动");
+    let (url, token) = mcp::serve(sess, std::sync::Arc::new(|| None)).expect("MCP 启动");
 
     let post = |body: Value, auth: Option<String>| {
         let url = url.clone();

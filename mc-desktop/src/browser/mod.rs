@@ -59,7 +59,14 @@ pub fn init(app: &AppHandle) {
     let b = bridge::ExtBridge::new(7440, &data_dir);
     b.spawn();
     let sess = session::BrowserSession::new(b.clone());
-    match mcp::serve(sess.clone()) {
+    // 截图落盘定位:惰性查当前运行会话的工作区(引擎晚于桥启动,调用时才读)
+    let app2 = app.clone();
+    let wd: mcp::WorkdirFn = std::sync::Arc::new(move || {
+        app2.try_state::<crate::driver::DriverHost>()
+            .and_then(|h| h.get().ok())
+            .and_then(|d| d.active_workdir())
+    });
+    match mcp::serve(sess.clone(), wd) {
         Ok((url, token)) => {
             let _ = MCP_ENDPOINT.set((url, token));
         }
