@@ -69,10 +69,16 @@ struct PetEnabled(AtomicBool);
 /// 退出与托盘开关切换时经 persist_pet_prefs 落盘。
 struct PetPos(Mutex<Option<(i32, i32)>>);
 
-/// 托盘图标:全平台共用彩色透明图形(不走 macOS 模板渲染——模板会
-/// 抹掉颜色只按 alpha 涂黑/白,深色菜单栏下整只猴子被反色成白剪影;
-/// 彩色图自带绿描边,明暗菜单栏下轮廓均可辨,无需随主题换图)。
+/// 托盘图标:彩色透明图形(不走 macOS 模板渲染——模板会抹掉颜色只按
+/// alpha 涂黑/白,深色菜单栏下整只猴子被反色成白剪影;彩色图自带绿描边,
+/// 明暗菜单栏下轮廓均可辨,无需随主题换图)。
+/// macOS 用紧裁版(内容占满画布):tray-icon 0.24.1 把菜单栏图标高度
+/// 硬编码 18pt 并按整张画布等比缩放,方形画布的上下透明边会白白吃掉
+/// 尺寸;其余平台托盘位是方形槽,继续用方形画布居中版。
 fn tray_icon() -> Image<'static> {
+    #[cfg(target_os = "macos")]
+    return Image::from_bytes(include_bytes!("../icons/tray-mac.png")).expect("托盘图标解码失败");
+    #[cfg(not(target_os = "macos"))]
     Image::from_bytes(include_bytes!("../icons/tray.png")).expect("托盘图标解码失败")
 }
 
