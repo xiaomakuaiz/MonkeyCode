@@ -96,6 +96,13 @@ export function Markdown({ text }: { text: string }) {
   return <div className="md" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/** 单行内联 markdown(子代理 feed 行:加粗/行内代码等,不产生块级元素,
+ * 保持单行 ellipsis 布局)。 */
+function MarkdownInline({ text, style }: { text: string; style?: CSSProperties }) {
+  const html = useMemo(() => DOMPurify.sanitize(marked.parseInline(text, { async: false }) as string), [text]);
+  return <span className="ellipsis mdi" style={style} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 /** 思考块:单行折叠(✦ 思考 + 摘要省略),点击在下方展开完整文本的缩进块。
  * 全文不放进标题 flex 行:多行文本会把居中的图标顶到段落中部,标签与内容挤作一团。 */
 function ThoughtView({ text }: { text: string }) {
@@ -265,6 +272,10 @@ export function ToolCard({
   const images = uploadUrl ? (item.images ?? []) : [];
   const feed = item.feed ?? [];
   const visible = feed.slice(-FEED_WINDOW);
+  // 子代理卡(有进度窗/子会话):完成后把最终产出全文按 markdown 展示,
+  // 不再只给首行 160 字符的 ellipsis;普通工具卡维持首行摘要
+  const isAgentCard = !!(item.childSessionId || feed.length);
+  const summary = isAgentCard && item.status !== "run" ? (item.result ?? "").trim() : "";
   // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
   const title = stripWorkdir(item.title, workdir);
   const sp = title.indexOf(" ");
@@ -289,7 +300,7 @@ export function ToolCard({
           {target}
         </span>
         <span style={{ flex: 1 }} />
-        {item.out && (
+        {item.out && !summary && (
           <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%" }}>
             {item.out}
           </span>
@@ -317,12 +328,15 @@ export function ToolCard({
                   <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{stripWorkdir(s.title, workdir)}</span>
                 </>
               ) : (
-                <span className="ellipsis" style={{ color: "var(--t5)", flex: 1, minWidth: 0 }}>
-                  {s.text}
-                </span>
+                <MarkdownInline text={s.text} style={{ color: "var(--t5)", flex: 1, minWidth: 0 }} />
               )}
             </div>
           ))}
+        </div>
+      )}
+      {summary && (
+        <div style={{ marginLeft: 5, borderLeft: "2px solid var(--line)", padding: "2px 0 2px 13px" }}>
+          <Markdown text={summary} />
         </div>
       )}
       {item.status === "run" && item.lastLine && (

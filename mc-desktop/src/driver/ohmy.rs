@@ -1606,9 +1606,24 @@ impl Inner {
             "tool_result" => {
                 let tc_id = event.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                if let Some(s) = self.sessions.lock().unwrap().get_mut(&sid) {
-                    s.open_tools.remove(&tc_id);
-                }
+                let name = self
+                    .sessions
+                    .lock()
+                    .unwrap()
+                    .get_mut(&sid)
+                    .and_then(|s| s.open_tools.remove(&tc_id));
+                // Agent 工具结果是 {status,agentId,agentType,content} JSON:
+                // 取 content(子代理最终文本,UI 按 markdown 展示);引擎对
+                // tool_result 截断 500 字符,JSON 可能破损——解析失败原样退回
+                let content: String = if name.as_deref() == Some("Agent") && !content.starts_with("Error: ") {
+                    serde_json::from_str::<Value>(content)
+                        .ok()
+                        .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(str::to_string))
+                        .unwrap_or_else(|| content.to_string())
+                } else {
+                    content.to_string()
+                };
+                let content = content.as_str();
                 // Agent 工具闭合:清对应子代理路由(残留行缓冲先冲洗成尾行)
                 self.close_subagents_of(&sid, &tc_id);
                 // 错误收尾(b02fc77:错误也发 tool_result,约定 "Error: " 前缀,
@@ -1634,6 +1649,12 @@ impl Inner {
                 }
                 let text = if etype == "task_notification" { format!("\n📌 {msg}\n") } else { msg };
                 self.push_frame(&sid, |seq| frame::agent_text(&text, seq));
+            }
+            // TodoWrite 全量清单:引擎专发 todo_update 事件供 host 渲染实时
+            // 勾选卡(tool_result 只有截断 500 字符的纯文本,不能用来渲染)
+            "todo_update" => {
+                let todos = data.get("todos").cloned().unwrap_or_else(|| serde_json::json!([]));
+                self.push_frame(&sid, |seq| frame::plan(&todos, seq));
             }
             "compaction" => {
                 self.push_frame(&sid, |seq| frame::compact_status("started", seq));

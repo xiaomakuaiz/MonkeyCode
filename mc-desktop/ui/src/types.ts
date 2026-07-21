@@ -146,6 +146,8 @@ export type LogItem =
       title: string;
       status: "run" | "ok" | "fail";
       out: string;
+      /** 完整结果文本(子代理卡按 markdown 展示最终产出;普通卡不消费) */
+      result?: string;
       /** 工具产出的图片(截图/读图)工作区相对路径,工具卡渲染缩略图 */
       images?: string[];
       /** 子代理进度窗口(工具步骤 + 回复文本行,时间序) */

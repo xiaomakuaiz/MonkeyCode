@@ -88,7 +88,10 @@ function normalizeAskQuestions(raw: unknown, defaultMultiple: boolean): AskQuest
       question: o?.question ?? "",
       header: o?.header,
       multiSelect: !!(o?.multiple ?? o?.multiSelect ?? defaultMultiple),
-      custom: !!o?.custom,
+      // 自定义答案默认开启:引擎(ohmyagent)对答复零校验,任意文本都接受,
+      // 且 UserQuestion schema 根本没有 custom 字段(它只是 UserAnswer 的
+      // 回传标记)——按 !!custom 判定入口永远不亮;显式 false 才关闭
+      custom: o?.custom !== false,
       options: (Array.isArray(o?.options) ? o.options : []).map((x) => ({
         label: x?.label ?? "",
         description: x?.description,
@@ -237,9 +240,12 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
         if (it.kind === "tool" && it.tcId === u.toolCallId) {
-          const out = typeof u.rawOutput === "string" ? u.rawOutput.split("\n")[0].slice(0, 160) : "";
+          const raw = typeof u.rawOutput === "string" ? u.rawOutput : "";
+          const out = raw.split("\n")[0].slice(0, 160);
           const images = Array.isArray(u.images) ? (u.images as string[]) : it.images;
-          items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, images, lastLine: undefined };
+          // 完整结果一并保留:子代理卡把最终产出按 markdown 展示,
+          // 普通工具卡仍只显示首行摘要
+          items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, result: raw, images, lastLine: undefined };
           break;
         }
       }

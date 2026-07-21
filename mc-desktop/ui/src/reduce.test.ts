@@ -65,6 +65,16 @@ describe("工具调用生命周期", () => {
     expect(toolItem(s, "t1").out).toBe("x".repeat(160));
   });
 
+  it("completed 保留完整 rawOutput 到 result(子代理卡全文 markdown 展示)", () => {
+    const full = "# 结论\n第一行摘要\n完整正文…";
+    const s = run([
+      acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Agent 排查问题" }),
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: full }),
+    ]);
+    expect(toolItem(s, "t1").result).toBe(full);
+    expect(toolItem(s, "t1").out).toBe("# 结论");
+  });
+
   it("非 completed 终态置 fail;结束时清掉 lastLine", () => {
     const progress: ToolProgress = { kind: "output", line: "运行中输出…" };
     const s = run([
@@ -268,6 +278,17 @@ describe("AI 提问卡(ask_user_question)", () => {
     expect(ask.questions[0].multiSelect).toBe(false);
     expect(ask.questions[0].custom).toBe(true);
     expect(ask.questions[1].multiSelect).toBe(true);
+  });
+
+  it("custom 缺省开启(引擎 schema 无此字段且答复零校验),显式 false 才关闭", () => {
+    const qs = [
+      { question: "缺省?", options: [{ label: "A" }] },
+      { question: "关闭?", custom: false, options: [{ label: "B" }] },
+    ];
+    const s = run([acp({ sessionUpdate: "tool_call", toolCallId: "ask-c", title: "Question", rawInput: { questions: qs } })]);
+    const ask = s.items[0] as Extract<LogItem, { kind: "ask" }>;
+    expect(ask.questions[0].custom).toBe(true);
+    expect(ask.questions[1].custom).toBe(false);
   });
 
   it("acp_ask_user_question 帧(toolCall 包裹)同样出卡;同 askId 更新不重复", () => {

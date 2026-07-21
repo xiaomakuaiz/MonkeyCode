@@ -261,6 +261,8 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   font-size: 12px;
 }
 .md pre code { background: transparent; padding: 0; }
+/* 内联 markdown(子代理 feed 行):行内代码样式对齐 .md,不引入块级规则 */
+.mdi code { background: var(--codeBg); border-radius: 4px; padding: 0 4px; font-size: 0.95em; }
 /* 代码块容器:接管 pre 的默认外边距(:first/:last-child 归零规则落在容器上),复制按钮悬停浮现 */
 .mdcode { position: relative; margin: 1em 0; }
 .mdcode pre { margin: 0; }

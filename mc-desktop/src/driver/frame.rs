@@ -154,6 +154,12 @@ pub fn agent_thought(delta: &str, seq: u64) -> Value {
     acp(json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": delta } }), seq)
 }
 
+/// TodoWrite 计划清单(引擎 todo_update 事件的 todos 数组,条目
+/// {content,status[,activeForm]})→ ACP plan 帧,UI 渲染 PlanCard 勾选卡。
+pub fn plan(entries: &Value, seq: u64) -> Value {
+    acp(json!({ "sessionUpdate": "plan", "entries": entries }), seq)
+}
+
 pub fn tool_call(tc_id: &str, title: &str, raw_input: &Value, seq: u64) -> Value {
     acp(
         json!({ "sessionUpdate": "tool_call", "toolCallId": tc_id, "title": title,
