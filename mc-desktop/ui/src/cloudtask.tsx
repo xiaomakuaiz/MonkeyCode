@@ -117,7 +117,6 @@ export function CloudTaskView({
     setQueuedState(v);
   }, []);
   const runningRef = useRef(false); // chat.running 镜像(稳定回调里读)
-  const syncedRef = useRef(false); // attach 至少连上过一次:running 状态才可信
   const sendingRef = useRef(false); // 直发后等首帧回执,期间再发只入队
   const trySendRef = useRef<() => void>(() => {}); // 解循环依赖:投递入口经 ref 调用
 
@@ -279,7 +278,6 @@ export function CloudTaskView({
         setStatus(text);
         setConnected(ok);
         if (ok) {
-          syncedRef.current = true;
           // 连上后稍等回放揭示轮状态,再尝试投递排队消息
           setTimeout(() => trySendRef.current(), 400);
         }
@@ -292,7 +290,6 @@ export function CloudTaskView({
       onIdle: () => {
         attachIdleRef.current = true;
         connRef.current = null;
-        syncedRef.current = true;
         runningRef.current = false;
         setConnected(false);
         setStatus("已就绪,可继续对话");
@@ -306,6 +303,10 @@ export function CloudTaskView({
         connRef.current = null;
         setQueued(queuedRef.current ? text + "\n" + queuedRef.current : text);
         sendFailsRef.current += 1;
+        // 重建 attach 拿回观察通道:被拒大多因为轮在跑/环境未就绪,
+        // attach 回放能揭示真实轮状态(收到帧会把失败计数归零),
+        // 轮结束后排队消息自动投递
+        setAttachEpoch((e) => e + 1);
         if (sendFailsRef.current < 3) {
           setStatus("消息未送达,已重新排队");
           setTimeout(() => trySendRef.current(), 2000);
@@ -387,30 +388,30 @@ export function CloudTaskView({
     [id, connHandlers],
   );
 
-  // 投递排队消息:任务在跑/流未同步/上一条未回执/VM 休眠中都按兵不动,条件齐了再发
+  // 投递排队消息(对齐 mobile handleSend:直接建 mode=new 连接上行,服务端
+  // 才是运行互斥/休眠唤醒的权威,被拒会 onSendFailed 回队重试)。此前还要求
+  // attach 已同步(syncedRef)、VM 非休眠(hibernatedRef)、任务 processing:
+  // 三者全是本地推断,attach 连不上 / 详情接口 VM 状态不同步时永远为假,
+  // 消息卡在"已排队"死等——发送与 attach 生命周期必须彻底解耦
   const trySendQueued = useCallback(() => {
     if (!queuedRef.current) return;
-    if (statusRef.current !== "processing") return;
-    if (!syncedRef.current || runningRef.current || sendingRef.current || hibernatedRef.current) return;
+    if (statusRef.current === "finished" || statusRef.current === "error") return;
+    if (runningRef.current || sendingRef.current) return; // 可见在跑/未回执才等
+    if (sendFailsRef.current >= 3) return; // 连败暂停:收到帧/唤醒/手动发送解除
     const q = queuedRef.current;
     setQueued("");
     dispatch(q);
   }, [dispatch, setQueued]);
   trySendRef.current = trySendQueued;
 
-  // 发送:随时可按。空闲且已同步 → 直发;否则入队(多条合并),就绪自动投递
+  // 发送:随时可按。本轮可见在跑/上一条未回执 → 入队(多条合并,轮结束自动
+  // 投递);其余一律直发,交服务端裁决
   const sendMsg = () => {
     const text = input.trim();
     if (!text || ended) return;
     setInput("");
     sendFailsRef.current = 0; // 手动发送 = 用户明确要投递,重试机会重置
-    const idle =
-      statusRef.current === "processing" &&
-      syncedRef.current &&
-      !runningRef.current &&
-      !sendingRef.current &&
-      !hibernatedRef.current;
-    if (idle) {
+    if (!runningRef.current && !sendingRef.current) {
       dispatch(text);
     } else {
       setQueued(queuedRef.current ? queuedRef.current + "\n" + text : text);
