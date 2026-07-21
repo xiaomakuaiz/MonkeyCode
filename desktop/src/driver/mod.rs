@@ -48,7 +48,7 @@ impl DriverHost {
     }
 }
 
-/// 引擎能力表(对表 mc-desktop/ui/src/client.ts 的 EngineCaps)。
+/// 引擎能力表(对表 desktop/ui/src/client.ts 的 EngineCaps)。
 /// 能力仍是渐进的(随上游补齐翻位),单一事实来源:UI 降级与命令层
 /// 守卫都从这里读,driver 内不得各自硬编码能力判断。
 #[derive(Clone, Copy, serde::Serialize)]

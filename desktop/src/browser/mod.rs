@@ -52,7 +52,7 @@ pub fn init(app: &AppHandle) {
     let data_dir = match crate::config::config_dir(app) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("[mc-desktop] 浏览器桥初始化失败(配置目录): {e}");
+            eprintln!("[desktop] 浏览器桥初始化失败(配置目录): {e}");
             return;
         }
     };
@@ -70,7 +70,7 @@ pub fn init(app: &AppHandle) {
         Ok((url, token)) => {
             let _ = MCP_ENDPOINT.set((url, token));
         }
-        Err(e) => eprintln!("[mc-desktop] 浏览器 MCP server 启动失败: {e}"),
+        Err(e) => eprintln!("[desktop] 浏览器 MCP server 启动失败: {e}"),
     }
     app.manage(BrowserHost { bridge: b, session: sess });
 }

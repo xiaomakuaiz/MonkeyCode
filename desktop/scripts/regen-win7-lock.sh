@@ -21,7 +21,7 @@
 # tauri 栈版本一字不变。
 
 set -euo pipefail
-cd "$(dirname "$0")/.."   # -> mc-desktop/
+cd "$(dirname "$0")/.."   # -> desktop/
 
 TOOLCHAIN=1.77.2
 LOCK=Cargo.lock

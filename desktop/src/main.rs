@@ -210,12 +210,12 @@ async fn update_install(app: AppHandle) -> Result<(), String> {
         Ok(None) => return Err("当前已是最新版本".into()),
         Err(e) => return Err(format!("检查更新失败: {e}")),
     };
-    eprintln!("[mc-desktop] 更新: UI 内触发下载安装 {}", update.version);
+    eprintln!("[desktop] 更新: UI 内触发下载安装 {}", update.version);
     update
-        .download_and_install(|_, _| {}, || eprintln!("[mc-desktop] 更新: 下载完成,安装中"))
+        .download_and_install(|_, _| {}, || eprintln!("[desktop] 更新: 下载完成,安装中"))
         .await
         .map_err(|e| format!("更新失败: {e}"))?;
-    eprintln!("[mc-desktop] 更新: 安装完成,重启应用");
+    eprintln!("[desktop] 更新: 安装完成,重启应用");
     app.restart();
 }
 
@@ -233,7 +233,7 @@ fn display_version(v: &str) -> String {
 /// 更新流程中的提示(manual=托盘手动检查;自动检查失败只打日志不打扰)。
 fn update_notice(app: &AppHandle, manual: bool, error: bool, msg: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-    eprintln!("[mc-desktop] 更新: {msg}");
+    eprintln!("[desktop] 更新: {msg}");
     if manual {
         let kind = if error { MessageDialogKind::Error } else { MessageDialogKind::Info };
         app.dialog().message(msg).title("检查更新").kind(kind).show(|_| {});
@@ -287,7 +287,7 @@ async fn check_update(app: AppHandle, manual: bool) {
         display_version(&update.version),
         display_version(&update.current_version),
     );
-    eprintln!("[mc-desktop] 更新: 发现新版本 {}(当前 {})", update.version, update.current_version);
+    eprintln!("[desktop] 更新: 发现新版本 {}(当前 {})", update.version, update.current_version);
     app.dialog()
         .message(msg)
         .title("发现新版本")
@@ -304,16 +304,16 @@ async fn check_update(app: AppHandle, manual: bool) {
                         .download_and_install(
                             move |_chunk, total| {
                                 if !announced {
-                                    eprintln!("[mc-desktop] 更新: 开始下载({total:?} 字节)");
+                                    eprintln!("[desktop] 更新: 开始下载({total:?} 字节)");
                                     announced = true;
                                 }
                             },
-                            || eprintln!("[mc-desktop] 更新: 下载完成,安装中"),
+                            || eprintln!("[desktop] 更新: 下载完成,安装中"),
                         )
                         .await;
                     match result {
                         Ok(()) => {
-                            eprintln!("[mc-desktop] 更新: 安装完成,重启应用");
+                            eprintln!("[desktop] 更新: 安装完成,重启应用");
                             app.restart();
                         }
                         // 用户已确认过更新,失败必须外显
@@ -473,10 +473,10 @@ fn ensure_pet_window(app: &AppHandle) {
                 Ok(panel) => {
                     panel.set_style_mask(StyleMask::empty().borderless().nonactivating_panel().into());
                 }
-                Err(e) => eprintln!("[mc-desktop] 桌宠转 NSPanel 失败(点击会激活应用): {e}"),
+                Err(e) => eprintln!("[desktop] 桌宠转 NSPanel 失败(点击会激活应用): {e}"),
             }
         }
-        Err(e) => eprintln!("[mc-desktop] 桌宠窗口创建失败: {e}"),
+        Err(e) => eprintln!("[desktop] 桌宠窗口创建失败: {e}"),
     }
 }
 
@@ -534,12 +534,12 @@ fn persist_pet_prefs(app: &AppHandle) {
         cfg.pet_pos = Some(pos);
     }
     if let Err(e) = config::save_config_json(app, &cfg) {
-        eprintln!("[mc-desktop] 桌宠偏好保存失败: {e}");
+        eprintln!("[desktop] 桌宠偏好保存失败: {e}");
     }
 }
 
 fn main() {
-    eprintln!("[mc-desktop] main 进入");
+    eprintln!("[desktop] main 进入");
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -607,7 +607,7 @@ fn main() {
 
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle()) {
-                eprintln!("[mc-desktop] 托盘创建失败(关窗将直接退出): {e}");
+                eprintln!("[desktop] 托盘创建失败(关窗将直接退出): {e}");
                 app.state::<TrayReady>().0.store(false, Ordering::Relaxed);
             }
 
@@ -635,7 +635,7 @@ fn main() {
                     ensure_pet_window(app.handle());
                 }
                 Err(e) => {
-                    eprintln!("[mc-desktop] 引擎启动失败: {e}");
+                    eprintln!("[desktop] 引擎启动失败: {e}");
                     create_main_window(app.handle(), &format!("error.html#{}", urlencode(&e)));
                 }
             }

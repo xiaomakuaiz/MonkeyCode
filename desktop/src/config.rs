@@ -205,7 +205,7 @@ fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), Stri
                     && existing.get("base_url").and_then(|v| v.as_str()) == Some(base_url.as_str());
                 if !same {
                     eprintln!(
-                        "[mc-desktop] ohmyagent 引擎限制:{config_key} 凭据槽已被占用,模型「{name}」的网关配置被跳过"
+                        "[desktop] ohmyagent 引擎限制:{config_key} 凭据槽已被占用,模型「{name}」的网关配置被跳过"
                     );
                     continue;
                 }

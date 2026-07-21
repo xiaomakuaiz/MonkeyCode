@@ -1,4 +1,4 @@
-# mc-desktop 构建与打包。
+# desktop 构建与打包。
 #
 # 引擎 sidecar 来自独立的 ohmyagent 仓库(不入本仓),打包前须指定源码位置:
 #   export OHMYAGENT_SRC=/path/to/ohmyagent
@@ -29,7 +29,7 @@ dev:
 	cargo build
 
 run: dev
-	./target/debug/mc-desktop
+	./target/debug/monkeycode-desktop
 
 # ---------- macOS 打包(universal .app/.dmg,引擎 sidecar)----------
 

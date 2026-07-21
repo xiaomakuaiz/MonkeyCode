@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 假 wsl.exe:在无 Windows 的开发机上冒烟壳的 WSL 代码路径。
 # 用法:MC_WSL_EXE=$(pwd)/scripts/fake-wsl.sh MC_OHMYAGENT_LINUX_BIN=<本机引擎二进制>(M3 接入)\\
-#       且 config.json 写 "kernel_env": "wsl:Ubuntu-22.04",启动 mc-desktop。
+#       且 config.json 写 "kernel_env": "wsl:Ubuntu-22.04",启动 desktop。
 # 仅覆盖壳实际使用的三种调用形态;开发工具,不随包分发。
 set -u
 

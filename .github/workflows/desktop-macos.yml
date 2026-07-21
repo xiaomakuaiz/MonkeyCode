@@ -28,7 +28,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: mc-desktop
+          workspaces: desktop
 
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
       - name: Build browser extension
@@ -51,7 +51,7 @@ jobs:
           git checkout -q FETCH_HEAD
 
       - name: Build app bundle (universal, unsigned)
-        working-directory: mc-desktop
+        working-directory: desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           OHMYAGENT_SRC: /tmp/ohmyagent
@@ -66,13 +66,13 @@ jobs:
           fi
 
       - name: Zip .app
-        working-directory: mc-desktop/target/universal-apple-darwin/release/bundle
+        working-directory: desktop/target/universal-apple-darwin/release/bundle
         run: ditto -c -k --keepParent macos/MonkeyCode.app MonkeyCode-macos-universal.app.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: MonkeyCode-macos-universal
           path: |
-            mc-desktop/target/universal-apple-darwin/release/bundle/MonkeyCode-macos-universal.app.zip
-            mc-desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-            mc-desktop/target/universal-apple-darwin/release/bundle/updater/*
+            desktop/target/universal-apple-darwin/release/bundle/MonkeyCode-macos-universal.app.zip
+            desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            desktop/target/universal-apple-darwin/release/bundle/updater/*

@@ -1,5 +1,5 @@
 [package]
-name = "mc-desktop"
+name = "monkeycode-desktop"
 # 版本 = YYMMDDNN(日期+两位序号)占主版本位,与 tauri.conf.json 保持一致
 version = "26071401.0.0"
 description = "MonkeyCode 本地桌面客户端(Tauri 壳 + ohmyagent 引擎)"

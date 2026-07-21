@@ -252,7 +252,7 @@ impl OhmyDriver {
                             .unwrap_or_default();
                         let version =
                             params.get("version").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-                        eprintln!("[mc-desktop] ohmyagent 就绪 version={version} caps={}", caps.len());
+                        eprintln!("[desktop] ohmyagent 就绪 version={version} caps={}", caps.len());
                         *inner_r.engine_caps.lock().unwrap() = caps;
                         let _ = ready_tx.send(());
                     }
@@ -264,7 +264,7 @@ impl OhmyDriver {
                 inner_r.pending.lock().unwrap().clear(); // 挂起的 rpc 立即收到"引擎已退出"
                 inner_r.reconcile_all("引擎进程异常退出"); // 运行中会话本地收尾,不留永久 running
                 let tail = super::log_tail(&crash_log, 15);
-                eprintln!("[mc-desktop] ohmyagent 引擎异常退出");
+                eprintln!("[desktop] ohmyagent 引擎异常退出");
                 inner_r.app.emit_json(
                     "engine-crashed",
                     json!({ "engine": "ohmyagent", "detail": "ohmyagent 进程异常退出", "log_tail": tail }),
@@ -288,7 +288,7 @@ impl OhmyDriver {
         ready_rx
             .recv_timeout(Duration::from_secs(15))
             .map_err(|_| "ohmyagent 未在 15 秒内就绪(查看 ohmyagent.log)".to_string())?;
-        eprintln!("[mc-desktop] ohmyagent 引擎就绪");
+        eprintln!("[desktop] ohmyagent 引擎就绪");
         Ok(OhmyDriver(inner))
     }
 
@@ -308,7 +308,7 @@ impl OhmyDriver {
                 Err(_) => break,
             }
         }
-        eprintln!("[mc-desktop] ohmyagent 未在期限内优雅退出,强制终止");
+        eprintln!("[desktop] ohmyagent 未在期限内优雅退出,强制终止");
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -1751,7 +1751,7 @@ fn migrate_legacy_sessions(engine_dir: &std::path::Path) {
         }
     }
     copy_dir(&old_sessions, &new_sessions);
-    eprintln!("[mc-desktop] 已迁移 ~/.ohmyagent/sessions → {}", new_sessions.display());
+    eprintln!("[desktop] 已迁移 ~/.ohmyagent/sessions → {}", new_sessions.display());
 }
 
 fn find_ohmyagent() -> Option<PathBuf> {

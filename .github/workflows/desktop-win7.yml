@@ -7,7 +7,7 @@ name: Desktop Windows 7 Build
 #   - updater 指向独立的 latest-win7.json,防止 Win7 用户被推送 Win10-only 更新
 # 维护约束:
 #   - ohmyagent go.mod 升 Go 版本时,同步升 GO_WIN7_VERSION(go-win7 通常滞后上游 3-7 天)
-#   - mc-desktop/Cargo.toml 改依赖后,跑 mc-desktop/scripts/regen-win7-lock.sh 重新生成
+#   - desktop/Cargo.toml 改依赖后,跑 desktop/scripts/regen-win7-lock.sh 重新生成
 #     Cargo.lock.win7(cargo 1.77.2 增量解析 + 压回 reqwest 的 http3/quinn 可选子树到
 #     edition<=2021)。直接 `cargo update` 会拉进 edition2024 依赖(rust>=1.85),即便不参与
 #     编译,只要在 windows 目标上"可下载"就会 `feature edition2024 is required` 打挂构建。
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
   push:
     branches: [feat-local-version]
-    paths: ["mc-desktop/**", ".github/workflows/desktop-win7.yml"]
+    paths: ["desktop/**", ".github/workflows/desktop-win7.yml"]
 
 env:
   GO_WIN7_VERSION: patched-1.26.5 # 与 ohmyagent go.mod 的 go 版本对应
@@ -40,7 +40,7 @@ jobs:
 
       # 先换锁再装缓存:rust-cache 的 key 取自 Cargo.lock,必须是 win7 锁
       - name: Use win7 dependency lock
-        working-directory: mc-desktop
+        working-directory: desktop
         run: cp Cargo.lock.win7 Cargo.lock
 
       - uses: dtolnay/rust-toolchain@master
@@ -53,7 +53,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: mc-desktop
+          workspaces: desktop
           key: win7
 
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
@@ -114,12 +114,12 @@ jobs:
           git remote add origin "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git"
           git fetch -q --depth 1 origin "$OHMYAGENT_REF"
           git checkout -q FETCH_HEAD
-          mkdir -p "$GITHUB_WORKSPACE/mc-desktop/binaries"
+          mkdir -p "$GITHUB_WORKSPACE/desktop/binaries"
           go build -trimpath -ldflags "-s -w" \
-            -o "$GITHUB_WORKSPACE/mc-desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
+            -o "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
 
       - name: Download WebView2 fixed runtime 109
-        working-directory: mc-desktop
+        working-directory: desktop
         run: |
           curl -sL -o webview2.cab \
             "https://github.com/westinyang/WebView2RuntimeArchive/releases/download/${WEBVIEW2_VERSION}/Microsoft.WebView2.FixedVersionRuntime.${WEBVIEW2_VERSION}.x64.cab"
@@ -141,7 +141,7 @@ jobs:
       # (Chromium 本身依赖 UCRT)都起不来。从 runner 的 Windows SDK 取可再分发的
       # UCRT DLL:壳 exe 旁(bundle.resources)+ WebView2 固定版目录各放一份
       - name: Bundle app-local UCRT
-        working-directory: mc-desktop
+        working-directory: desktop
         run: |
           UCRT_SRC=$(ls -d "/c/Program Files (x86)/Windows Kits/10/Redist/"*/ucrt/DLLs/x64 2>/dev/null | sort | tail -1)
           [ -n "$UCRT_SRC" ] || UCRT_SRC="/c/Program Files (x86)/Windows Kits/10/Redist/ucrt/DLLs/x64"
@@ -155,7 +155,7 @@ jobs:
       # EventSetInformation)替换为本地 thunk(运行时 GetProcAddress,缺失时优雅降级),
       # 一次性消除整类"无法定位程序输入点"启动失败,目标机无需补 KB
       - name: Download YY-Thunks
-        working-directory: mc-desktop
+        working-directory: desktop
         run: |
           curl -sL -o yy-thunks.zip \
             "https://github.com/Chuyu-Team/YY-Thunks/releases/download/${YY_THUNKS_VERSION}/YY-Thunks-Objs.zip"
@@ -167,7 +167,7 @@ jobs:
       # secret 就绪时走发布构建(额外产出签名的 updater setup.exe + latest-win7.json),
       # 否则回退普通打包,CI 不红
       - name: Build NSIS installer
-        working-directory: mc-desktop
+        working-directory: desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
@@ -193,5 +193,5 @@ jobs:
         with:
           name: MonkeyCode-win7-x64
           path: |
-            mc-desktop/target/release/bundle/nsis/*.exe
-            mc-desktop/target/release/bundle/updater/*
+            desktop/target/release/bundle/nsis/*.exe
+            desktop/target/release/bundle/updater/*

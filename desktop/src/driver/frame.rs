@@ -1,7 +1,7 @@
 // Frame 词汇的唯一定义(产帧权威;词汇源自旧 Go 内核的 frame.go,
 // git 历史可查)。
 //
-// 对表:本模块产帧、UI 消费(mc-desktop/ui/src/{types.ts,reduce.ts})——
+// 对表:本模块产帧、UI 消费(desktop/ui/src/{types.ts,reduce.ts})——
 // 任何新帧类型/字段先改这里与 types.ts,driver 禁止手拼 Frame JSON。
 //
 // 帧结构:{ type, kind?, data?(base64 JSON), timestamp(ms), seq }
@@ -11,7 +11,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 /// 会话状态词汇(SessionMeta.status;UI/桌宠按此渲染,勿用裸字符串)。
-/// 对表 mc-desktop/ui/src/types.ts 的 SessionStatus。
+/// 对表 desktop/ui/src/types.ts 的 SessionStatus。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SessionStatus {
     Created,

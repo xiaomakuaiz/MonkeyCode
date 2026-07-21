@@ -83,7 +83,7 @@ pub fn list_distros() -> Vec<String> {
     match run_wsl(&["-l".into(), "-q".into()], Duration::from_secs(10)) {
         Ok(out) => parse_distro_list(&out),
         Err(e) => {
-            eprintln!("[mc-desktop] 枚举 WSL 发行版失败: {e}");
+            eprintln!("[desktop] 枚举 WSL 发行版失败: {e}");
             Vec::new()
         }
     }

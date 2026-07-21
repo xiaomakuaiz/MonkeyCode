@@ -1,4 +1,4 @@
-# mc-desktop — MonkeyCode 本地桌面客户端(Tauri 壳)
+# desktop — MonkeyCode 本地桌面客户端(Tauri 壳)
 
 单引擎架构:壳(Rust)承载 UI(`ui/` React SPA,构建产物随壳分发)与
 全部平台服务(百智云/云端任务/文件浏览/上传/浏览器扩展桥),引擎
@@ -17,7 +17,7 @@ CI 按 OHMYAGENT_REF 钉版本)。
 export OHMYAGENT_SRC=~/dev/chaitin/ai/monkeycode/ohmyagent
 
 cd ui && npm ci && npm run build   # 生成 uidist(cargo build 的前置)
-cd .. && cargo build && ./target/debug/mc-desktop
+cd .. && cargo build && ./target/debug/monkeycode-desktop
 
 # HMR 开发(devUrl overlay)
 npx tauri dev --config tauri.dev.conf.json

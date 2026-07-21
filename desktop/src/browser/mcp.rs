@@ -192,7 +192,7 @@ async fn call_tool(
                 let name = format!("browser-{}.png", crate::driver::frame::now_ms());
                 match crate::uploads::save_raw(&wd, None, &name, &png) {
                     Ok(rel) => note.push_str(&format!("\n截图已保存: {rel}")),
-                    Err(e) => eprintln!("[mc-desktop] 截图落盘失败: {e}"),
+                    Err(e) => eprintln!("[desktop] 截图落盘失败: {e}"),
                 }
             }
             Ok(vec![

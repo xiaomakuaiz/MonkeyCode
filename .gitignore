@@ -27,4 +27,4 @@ dist
 
 # ai
 .superpowers/
-mc-desktop/uidist/
+desktop/uidist/

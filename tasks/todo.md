@@ -1757,3 +1757,12 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 
 - [x] desktop/(旧 Electron 客户端)与 electron-release.yml 删除,
       mc-desktop(Tauri)正式接任;无其他引用(根级无 workspace 配置)
+
+## mc-desktop → desktop 目录改名(2026-07-21)
+
+- [x] git mv + 全量引用重写(18 文件):workflow 路径过滤/工作目录、
+      .gitignore、Cargo 包名 mc-desktop → monkeycode-desktop(产物路径
+      随之)、日志前缀 [mc-desktop] → [desktop]、文档与注释;
+      tauri 打包不受影响(productName=MonkeyCode 决定安装名)
+- [x] cargo clean 重建(旧缓存存绝对路径);cargo 31/31、UI 43/43、
+      workflows YAML 校验过
