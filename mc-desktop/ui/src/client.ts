@@ -282,7 +282,15 @@ export const mcTaskOptions = () => invoke<McTaskOptions>("mc_task_options");
 
 // ==================== 云端 WS 桥(壳做纯文本管道,协议逻辑在本层) ====================
 
-/** 打开一条云端 WS 管道:onText 收下行文本帧,onClose 收断开。
+/** ws-closed 事件载荷:服务端 Close 帧的 code/reason(壳透传);
+ * 异常断开(无 Close 帧)或壳侧主动断为 null。 */
+export interface WsCloseInfo {
+  code?: number;
+  reason?: string;
+}
+
+/** 打开一条云端 WS 管道:onText 收下行文本帧,onClose 收断开(带服务端
+ * 关闭原因,异常断开为 null)。
  * 返回 {send, close};open 失败时 reject。send 返回 Promise,发送失败会
  * reject(调用方决定如何外显——静默吞掉会让用户消息无声丢失)。
  * pipe id 由本层生成并**先注册监听再开管道**:attach 回放在连上瞬间就
@@ -292,17 +300,17 @@ async function openPipe(
   id: string,
   params: Record<string, unknown>,
   onText: (text: string) => void,
-  onClose: () => void,
+  onClose: (info: WsCloseInfo | null) => void,
 ): Promise<{ send(text: string): Promise<void>; close(): void }> {
   const pipe = crypto.randomUUID();
   let closed = false;
   const unMsg = await listenAsync(`ws-msg:${pipe}`, (p) => onText(p as string));
-  const unClosed = await listenAsync(`ws-closed:${pipe}`, () => {
+  const unClosed = await listenAsync(`ws-closed:${pipe}`, (p) => {
     if (closed) return;
     closed = true;
     unMsg();
     unClosed();
-    onClose();
+    onClose((p as WsCloseInfo | null) ?? null);
   });
   try {
     await invoke("cloud_ws_open", { kind, id, params, pipe });
@@ -365,6 +373,8 @@ export function connectCloudTask(
   let openedThisAttempt = false; // 本次尝试是否成功建立过管道
   let framesThisOpen = 0; // 本次连接收到的业务帧数(区分"空闲关闭"与"断流")
   let dialFails = 0; // 连续拨号失败次数(指数退避,超限放弃)
+  let dropCount = 0; // 连续短命断流次数(收过流又快速被关;超限转就绪兜底)
+  let openedAt = 0; // 本次管道建立时刻(存活超 1 分钟视为健康,断流计数归零)
   let sentFirstText: string | null = null; // 已上行但尚无任何回显的首条输入
 
   function flush() {
@@ -396,23 +406,29 @@ export function connectCloudTask(
       return;
     }
     if (f.type === "ping") return;
+    // task-ended 判定先于 seq 去重:回放中控制帧可能把 seq 水位顶高,
+    // 后到的 task-ended 会被当重叠帧丢弃,ended 永不置真 → 断开后被
+    // 误判断流而无限重连
+    if (f.type === "task-ended" && !ended) {
+      ended = true;
+      h.onEnded?.();
+    }
     if (typeof f.seq === "number" && f.seq > 0) {
       if (f.seq <= lastSeq) return; // 重连回放重叠帧去重
       lastSeq = f.seq;
     }
-    // cursor(翻页游标)/error(拒绝提示)不算"轮活跃":空闲 attach 云端也会
-    // 先发 cursor 再关连接,计入会让空闲关闭被误判成断流而无限重连
-    if (f.type !== "cursor" && f.type !== "error") {
+    // cursor(翻页游标)/task-error(拒绝提示,含旧词 error)不算"轮活跃":
+    // 空闲 attach 云端也会先发 cursor 再关连接,计入会让空闲关闭被误判
+    // 成断流而无限重连
+    if (f.type !== "cursor" && f.type !== "error" && f.type !== "task-error") {
       framesThisOpen += 1;
       sentFirstText = null; // 有回显 = 首条输入已被云端接收
     }
-    if (f.type === "task-ended") ended = true;
     queue.push(f);
     schedule();
-    if (f.type === "task-ended") h.onEnded?.();
   }
 
-  function onPipeClose() {
+  function onPipeClose(info: WsCloseInfo | null = null) {
     pipe = null;
     if (closed) return;
     if (ended) {
@@ -420,7 +436,11 @@ export function connectCloudTask(
       h.onStatus("本轮已结束,可继续对话", false);
       return;
     }
-    if (openedThisAttempt && framesThisOpen === 0) {
+    // 服务端正常关闭(Close 1000/1001)= 云端主动收束,不是断线:
+    // 对"当前轮已结束"的 attach,云端回放完整轮帧后就正常关连接——
+    // 只按 framesThisOpen 猜会误判成断流,陷入"重连→回放→被关"死循环
+    const cleanClose = info?.code === 1000 || info?.code === 1001;
+    if (openedThisAttempt && (cleanClose || framesThisOpen === 0)) {
       closed = true;
       if (sentFirstText !== null) {
         // mode=new 发了首条输入却零回显被关:大概率被拒(休眠/运行互斥),
@@ -428,8 +448,8 @@ export function connectCloudTask(
         h.onSendFailed?.(sentFirstText);
         return;
       }
-      // 连上了但一帧未发就被关:云端对"当前轮已结束"的 attach 就是这么处理的。
-      // 不是断线,停止重连,转"就绪"——发消息时会另建 mode=new 连接
+      // 云端收束/一帧未发就被关:停止重连,转"就绪"——发消息时会另建
+      // mode=new 连接
       h.onIdle?.();
       return;
     }
@@ -452,6 +472,17 @@ export function connectCloudTask(
       }
     } else {
       dialFails = 0; // 曾成功收流的断开:从头开始退避
+      // 短命断流计数:这条路径没有拨号失败那样的自然上限,若服务端每次
+      // 都在回放后快速关闭(且没带 Close 帧可识别),会永远 2 秒循环。
+      // 存活超 1 分钟视为健康连接,计数归零;连续短命断流超限转就绪兜底
+      if (Date.now() - openedAt > 60_000) dropCount = 0;
+      dropCount += 1;
+      if (dropCount >= 5) {
+        closed = true;
+        h.onStatus("⚠ 云端流反复断开,发送消息时会重试", false);
+        h.onIdle?.();
+        return;
+      }
     }
     const delay = Math.min(2000 * 2 ** Math.max(0, dialFails - 1), 30_000);
     h.onStatus(`⚠ 云端连接断开,${Math.round(delay / 1000)} 秒后自动重连…`, false);
@@ -478,6 +509,7 @@ export function connectCloudTask(
         }
         pipe = p;
         openedThisAttempt = true;
+        openedAt = Date.now();
         dialFails = 0;
         h.onStatus("已连接云端", true);
         // 新一轮:云端等第一条 user-input 才开跑;content 需再包一层 base64

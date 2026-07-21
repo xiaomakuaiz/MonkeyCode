@@ -23,9 +23,11 @@ function pushFrame(f: Record<string, unknown>, pipeIdx = -1) {
   const pipe = openPipes.at(pipeIdx);
   emit(`ws-msg:${pipe}`, JSON.stringify(f));
 }
-function closePipe(pipeIdx = -1) {
+/** 关闭第 n 条(默认最新)管道;info 模拟壳透传的服务端 Close 帧
+ * (如 {code:1000} 正常关闭),缺省 null = 异常断开 */
+function closePipe(pipeIdx = -1, info: { code?: number; reason?: string } | null = null) {
   const pipe = openPipes.at(pipeIdx);
-  emit(`ws-closed:${pipe}`, null);
+  emit(`ws-closed:${pipe}`, info);
 }
 
 beforeEach(() => {
@@ -116,6 +118,47 @@ describe("connectCloudTask 重连状态机", () => {
     expect(events).toContain("ended");
     expect(openCalls).toBe(1);
     expect(events.some((e) => e.includes("本轮已结束"))).toBe(true);
+  });
+
+  it("回放整轮业务帧后服务端正常关闭(1000)→ onIdle,绝不重连", async () => {
+    // 用户实测死循环的变体:当前轮已结束但任务仍 processing,attach 回放
+    // 历史帧(framesThisOpen>0)后云端正常关连接——不是断线
+    script.opens = [true];
+    const { events } = await makeConn("attach");
+    pushFrame({ type: "task-started", seq: 1 });
+    pushFrame({ type: "task-running", kind: "acp_event", seq: 2 });
+    closePipe(-1, { code: 1000 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(events).toContain("idle");
+    expect(openCalls).toBe(1);
+    expect(events.join()).not.toContain("自动重连");
+  });
+
+  it("task-ended 的 seq 低于回放水位(被去重)也要停机,不得重连", async () => {
+    // 单调 seq 去重不能误杀停机信号:控制帧把水位顶高后 task-ended 后到
+    script.opens = [true];
+    const { events } = await makeConn("attach");
+    pushFrame({ type: "task-started", seq: 10 });
+    pushFrame({ type: "task-ended", seq: 5 }); // seq 低于水位,帧本身被去重
+    closePipe();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(events).toContain("ended");
+    expect(openCalls).toBe(1);
+    expect(events.some((e) => e.includes("本轮已结束"))).toBe(true);
+  });
+
+  it("连续短命断流(无 Close 帧可识别)达上限 → 转 onIdle 兜底", async () => {
+    // 兜底闸:即便服务端异常关闭不带原因码,也不能永远 2 秒循环
+    script.opens = [true, true, true, true, true, true];
+    const { events } = await makeConn("attach");
+    for (let i = 0; i < 5; i++) {
+      pushFrame({ type: "task-running", kind: "acp_event", seq: 1 }); // 重连后水位归零,seq=1 均有效
+      closePipe();
+      await vi.advanceTimersByTimeAsync(2100);
+    }
+    expect(openCalls).toBe(5); // 第 5 次断流后放弃,不再第 6 次
+    expect(events).toContain("idle");
+    expect(events.some((e) => e.includes("反复断开"))).toBe(true);
   });
 
   it("活跃流中途断开 → 按 2s 重连并回放归零(onReconnect)", async () => {

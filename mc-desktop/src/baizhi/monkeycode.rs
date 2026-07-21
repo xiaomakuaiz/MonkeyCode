@@ -429,6 +429,10 @@ pub async fn cloud_ws_open(
     };
     tauri::async_runtime::spawn(async move {
         let (mut sink, mut stream) = ws.split();
+        // 服务端 Close 帧的 code/reason:必须透传给 UI——正常关闭(1000,如
+        // attach 回放完当前轮)与异常断流的重连决策完全不同,丢掉原因码
+        // UI 只能靠帧数猜,曾导致"回放→被关→重连"死循环
+        let mut close_info: Option<Value> = None;
         loop {
             tokio::select! {
                 msg = rx.recv() => match msg {
@@ -443,6 +447,12 @@ pub async fn cloud_ws_open(
                     Some(Ok(Message::Text(t))) => {
                         let _ = pipes_map.emit_to("main", &format!("ws-msg:{pid}"), t.to_string());
                     }
+                    Some(Ok(Message::Close(c))) => {
+                        close_info = c.map(|f| {
+                            serde_json::json!({ "code": u16::from(f.code), "reason": f.reason.to_string() })
+                        });
+                        break;
+                    }
                     Some(Ok(_)) => {} // 二进制/ping 等忽略(云端协议均为文本 JSON)
                     _ => break,
                 },
@@ -450,7 +460,7 @@ pub async fn cloud_ws_open(
         }
         use tauri::Manager;
         pipes_map.state::<CloudPipes>().pipes.lock().unwrap().remove(&pid);
-        let _ = pipes_map.emit_to("main", &format!("ws-closed:{pid}"), ());
+        let _ = pipes_map.emit_to("main", &format!("ws-closed:{pid}"), close_info);
     });
     Ok(pipe_id)
 }
