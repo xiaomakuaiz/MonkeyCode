@@ -124,8 +124,6 @@ struct ManifestModel {
     model: String,
     default: bool,
     source: String,
-    /// 上下文预算(tokens;0 = 清单未配置,用量环不点亮)
-    context_window: i64,
 }
 
 impl OhmyDriver {
@@ -465,6 +463,7 @@ impl OhmyDriver {
             let sessions = self.0.sessions.lock().unwrap();
             !sessions.get(id).map(|s| s.created).unwrap_or(false)
         };
+        let mut resume_ctx: Option<(i64, i64)> = None;
         if need_create {
             let meta = self.read_sidecar(id);
             let is_child =
@@ -500,6 +499,11 @@ impl OhmyDriver {
                     let e = engine_id.clone();
                     self.write_sidecar(id, |m| m["engine_id"] = json!(e));
                 }
+                // resume 结果带恢复历史的占用估计,立即可显示(296176a)
+                resume_ctx = Some((
+                    result.get("context_used").and_then(|v| v.as_i64()).unwrap_or(0),
+                    result.get("context_window").and_then(|v| v.as_i64()).unwrap_or(0),
+                ));
             }
             // 子代理子会话是壳侧实体(仅回放),登记但不向引擎 resume
             let mut sessions = self.0.sessions.lock().unwrap();
@@ -517,6 +521,10 @@ impl OhmyDriver {
             });
             entry.created = true;
             entry.engine_id = engine_id.clone();
+            drop(sessions);
+            if let Some((used, window)) = resume_ctx.take() {
+                self.0.push_usage(id, used, window);
+            }
         }
         // 回放日志(重开页面/重连:整份重放,行为与 mc-agent 回放一致)。
         // 顺序保证不重帧:先置 opened=false 并清掉该会话的批量缓冲(其中的帧
@@ -893,6 +901,12 @@ impl OhmyDriver {
             let e = new_eng.clone();
             self.write_sidecar(id, |m| m["engine_id"] = json!(e));
         }
+        // resume 结果带恢复历史的占用估计(296176a)
+        self.0.push_usage(
+            id,
+            result.get("context_used").and_then(|v| v.as_i64()).unwrap_or(0),
+            result.get("context_window").and_then(|v| v.as_i64()).unwrap_or(0),
+        );
         Ok(())
     }
 
@@ -1227,6 +1241,14 @@ impl Inner {
                 for (tc, _name) in open {
                     self.push_frame(&sid, |seq| frame::tool_call_failed(&tc, tool_msg, seq));
                 }
+                // 轮后上下文占用(见 push_usage 注释)
+                if let Some(c) = params.get("context") {
+                    self.push_usage(
+                        &sid,
+                        c.get("used_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                        c.get("window_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                    );
+                }
                 // 状态词汇对齐 SessionStatus:取消是 interrupted,
                 // 不能混进 finished(桌宠会当作完成来庆祝)
                 let status = match stop_reason {
@@ -1394,27 +1416,13 @@ impl Inner {
         }
     }
 
-    /// model_done 携带单次调用 usage 时点亮上下文用量环。
-    /// 上游现状:model_done data 为 null(缺口);一旦其携带
-    /// {"usage":{input_tokens,cache_creation_input_tokens,cache_read_input_tokens}},
-    /// prompt 侧三项之和≈该次调用的上下文占用,即为环的 used。
-    /// (turn/stopped 的 usage 是整轮累计,对上下文环语义虚高,不用。)
-    fn maybe_usage_frame(&self, sid: &str, data: &Value) {
-        let Some(u) = data.get("usage").filter(|u| u.is_object()) else { return };
-        let used: i64 = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
-            .iter()
-            .map(|k| u.get(*k).and_then(|v| v.as_i64()).unwrap_or(0))
-            .sum();
-        if used <= 0 {
-            return;
-        }
-        let size = {
-            let name = self.sessions.lock().unwrap().get(sid).map(|s| s.model_name.clone());
-            name.and_then(|n| self.models.iter().find(|m| m.name == n).map(|m| m.context_window))
-                .unwrap_or(0)
-        };
-        if size > 0 {
-            self.push_frame(sid, |seq| frame::usage_update(used, size, seq));
+    /// 上下文占用 → usage 帧。上游 296176a 起:turn/stopped 带
+    /// context:{used_tokens,window_tokens}(轮后整会话历史+系统提示的
+    /// token 估计),session/create 结果带 context_used/context_window
+    /// (resume 时立即可显示占用)。
+    fn push_usage(&self, sid: &str, used: i64, window: i64) {
+        if used > 0 && window > 0 {
+            self.push_frame(sid, |seq| frame::usage_update(used, window, seq));
         }
     }
 
@@ -1575,8 +1583,7 @@ impl Inner {
                 let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("未知错误");
                 self.push_frame(&sid, |seq| frame::task_error(msg, seq));
             }
-            "model_done" => self.maybe_usage_frame(&sid, &data),
-            // model_start/turn_done:轮次边界以 turn/stopped 为准
+            // model_start/model_done/turn_done:轮次边界以 turn/stopped 为准
             _ => {}
         }
     }
@@ -1613,7 +1620,6 @@ fn parse_manifest_models(models: &Value) -> Vec<ManifestModel> {
                 model,
                 default: m.get("default").and_then(|v| v.as_bool()).unwrap_or(false),
                 source: m.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                context_window: m.get("context_window").and_then(|v| v.as_i64()).unwrap_or(0),
             })
         })
         .collect()
@@ -1870,6 +1876,22 @@ mod tests {
                 && v["update"]["content"]["text"].as_str().map(|t| t.contains("任务完成")).unwrap_or(false)
         });
         assert!(has_text, "缺 agent 文本帧: {journal:?}");
+        // 轮后上下文占用帧(turn/stopped.context,296176a):used>0,window=清单值
+        let has_usage = journal
+            .iter()
+            .filter_map(|f| {
+                if f.get("kind").and_then(|v| v.as_str()) != Some("acp_event") {
+                    return None;
+                }
+                let data = f.get("data").and_then(|v| v.as_str())?;
+                frame::b64_decode_json(data)?.get("update").cloned()
+            })
+            .any(|u| {
+                u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("usage_update")
+                    && u.get("used").and_then(|v| v.as_i64()).unwrap_or(0) > 0
+                    && u.get("size").and_then(|v| v.as_i64()) == Some(200000)
+            });
+        assert!(has_usage, "缺上下文占用帧: {journal:?}");
         // seq 单调
         let seqs: Vec<u64> = journal.iter().filter_map(|f| f.get("seq").and_then(|v| v.as_u64())).collect();
         assert!(seqs.windows(2).all(|w| w[0] < w[1]), "seq 不单调: {seqs:?}");

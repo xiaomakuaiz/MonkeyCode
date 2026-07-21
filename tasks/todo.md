@@ -1691,3 +1691,14 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       删 ~/.config/mc-agent 旧 cookie 迁移;agent_engine 废弃默认值清空;
       设置页两处宿主文案与"项目级 .mc-agent/mcp.json"文案;types.ts 注释;
       ui 包名 mc-agent-ui → monkeycode-ui;ARCHITECTURE 附件行
+
+## 上游集成:上下文用量 + 图片输入(2026-07-21)
+
+- [x] 用量落地(上游 296176a):turn/stopped.context{used_tokens,window_tokens}
+      → usage_update 帧;session/create 结果 context_used/window → resume/
+      重建后环立即显示;删壳侧 model_done 推测路径与 ManifestModel.context_window
+      双真相;caps.usage_update=true;E2E 补占用帧断言(真引擎实测)
+- [x] 附件缺口闭合(上游 37feef2):提示词内图片路径自动内联 ContentImage
+      (vision 模型,25K 预算;相对路径按会话 cwd 解析)——壳的
+      [图片] .monkeycode/uploads/x.png 约定零改动兼容
+- [x] OHMYAGENT_REF 钉 296176a(三处);重建二进制,cargo 30/30

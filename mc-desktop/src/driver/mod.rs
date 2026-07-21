@@ -55,14 +55,14 @@ impl DriverHost {
 pub struct Caps {
     /// 浏览器扩展桥(壳内 browser/ 模块,MCP 暴露给引擎)
     pub browser_ext: bool,
-    /// 待上游按次调用出 usage(turn/stopped 仅整轮累计,撑不起上下文条)
+    /// 上下文用量(turn/stopped 携带轮后占用估计,296176a 起)
     pub usage_update: bool,
     pub perm_remember: bool,
     pub attachments: bool,
 }
 
 pub fn caps() -> Caps {
-    Caps { browser_ext: true, usage_update: false, perm_remember: true, attachments: true }
+    Caps { browser_ext: true, usage_update: true, perm_remember: true, attachments: true }
 }
 
 /// 日志尾部(崩溃外显用;文件缺失返回空)。
