@@ -249,6 +249,11 @@ fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), Stri
     let mut servers: Vec<serde_json::Value> = Vec::new();
     if let Some(map) = cfg.mcp_servers.as_object() {
         for (name, v) in map {
+            // 设置页「停用」的 server 不物化:mcp.json 是引擎 MCP 的唯一
+            // 来源,此处过滤即全链路生效(保存配置随即重启引擎重读)
+            if v.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false) {
+                continue;
+            }
             if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
                 let mut entry = serde_json::json!({ "name": name, "transport": "stdio", "command": cmd });
                 if let Some(args) = v.get("args") {
@@ -281,4 +286,38 @@ fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), Stri
         serde_json::to_vec_pretty(&serde_json::json!({ "servers": servers })).map_err(|e| e.to_string())?,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 设置页停用的 MCP 不得物化进引擎 mcp.json(mcp.json 是引擎 MCP
+    /// 的唯一来源,漏过滤 = 禁用不生效)。
+    #[test]
+    fn disabled_mcp_excluded_from_mcp_json() {
+        let dir = std::env::temp_dir().join(format!("mc-mcp-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cfg = DesktopConfig {
+            mcp_servers: serde_json::json!({
+                "on-stdio": { "command": "npx", "args": ["-y", "some-mcp"] },
+                "off-stdio": { "command": "npx", "disabled": true },
+                "off-http": { "url": "https://example.invalid/mcp", "disabled": true },
+            }),
+            ..Default::default()
+        };
+        write_ohmyagent_config(&dir, &cfg).unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("mcp.json")).unwrap()).unwrap();
+        let names: Vec<&str> = mcp["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(names.contains(&"on-stdio"), "未禁用的 server 应保留: {names:?}");
+        assert!(!names.contains(&"off-stdio"), "禁用的 stdio server 应被过滤: {names:?}");
+        assert!(!names.contains(&"off-http"), "禁用的 http server 应被过滤: {names:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
