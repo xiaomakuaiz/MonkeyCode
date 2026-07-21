@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, Theme, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
 
@@ -57,9 +57,6 @@ tauri_panel! {
 /// 托盘是否可用;不可用时关窗直接退出(否则窗口藏起来就找不回了)。
 struct TrayReady(AtomicBool);
 
-/// 托盘句柄(系统明暗主题切换时换图标)。
-struct Tray(Mutex<Option<TrayIcon>>);
-
 /// 壳→UI 的待处理意图(如托盘"设置")。事件是发后不管的:webview 未就绪
 /// 时监听器不存在,事件静默丢失。意图同时落在这里,UI 启动完成后经
 /// take_ui_intent 取走补处理,两路兜底。
@@ -72,26 +69,11 @@ struct PetEnabled(AtomicBool);
 /// 退出与托盘开关切换时经 persist_pet_prefs 落盘。
 struct PetPos(Mutex<Option<(i32, i32)>>);
 
-/// 托盘图标:macOS 用模板剪影(黑 + alpha,紧裁占满菜单栏高度;配合
-/// icon_as_template 由系统按菜单栏明暗自动反色),其余平台用彩色透明图形。
-fn tray_icon_for(_theme: Theme) -> Image<'static> {
-    #[cfg(target_os = "macos")]
-    return Image::from_bytes(include_bytes!("../icons/tray-mac.png")).expect("托盘图标解码失败");
-    #[cfg(not(target_os = "macos"))]
+/// 托盘图标:全平台共用彩色透明图形(不走 macOS 模板渲染——模板会
+/// 抹掉颜色只按 alpha 涂黑/白,深色菜单栏下整只猴子被反色成白剪影;
+/// 彩色图自带绿描边,明暗菜单栏下轮廓均可辨,无需随主题换图)。
+fn tray_icon() -> Image<'static> {
     Image::from_bytes(include_bytes!("../icons/tray.png")).expect("托盘图标解码失败")
-}
-
-/// 主题变化时更新托盘图标(仅非 macOS)。
-/// macOS 必须跳过:模板图标由系统按菜单栏明暗自动反色,无需换图;
-/// 且 tray-icon 0.24.1 的 set_icon 会把模板标记硬编码重置为 false,
-/// 一旦换图,黑色剪影在深色菜单栏按字面渲染 = 图标"消失"。
-fn sync_tray_theme(app: &AppHandle, theme: Theme) {
-    #[cfg(target_os = "macos")]
-    let _ = (app, theme);
-    #[cfg(not(target_os = "macos"))]
-    if let Some(tray) = app.state::<Tray>().0.lock().unwrap().as_ref() {
-        let _ = tray.set_icon(Some(tray_icon_for(theme)));
-    }
 }
 
 // ==================== Tauri 命令(UI 调用) ====================
@@ -433,11 +415,6 @@ fn create_main_window(app: &AppHandle, page: &str) {
         );
     }
     let _ = builder.build();
-    if let Some(win) = app.get_webview_window("main") {
-        if let Ok(theme) = win.theme() {
-            sync_tray_theme(app, theme);
-        }
-    }
 }
 
 fn urlencode(s: &str) -> String {
@@ -567,7 +544,6 @@ fn main() {
     builder
         .manage(DriverHost::new())
         .manage(TrayReady(AtomicBool::new(true)))
-        .manage(Tray(Mutex::new(None)))
         .manage(UiIntent(Mutex::new(None)))
         .manage(PetEnabled(AtomicBool::new(true)))
         .manage(PetPos(Mutex::new(None)))
@@ -660,9 +636,6 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::ThemeChanged(theme) = event {
-                sync_tray_theme(window.app_handle(), *theme);
-            }
             // 主窗口前台与否 = 桌宠退场/接棒:在前台看得见状态,桌宠隐藏;
             // 失焦(切去别的应用)则桌宠出场外显任务状态
             if let WindowEvent::Focused(focused) = event {
@@ -727,9 +700,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &pet, &update, &quit])?;
     let tray = TrayIconBuilder::new()
-        .icon(tray_icon_for(Theme::Light))
-        // macOS 模板渲染(系统按菜单栏明暗反色);其余平台此标记为空操作
-        .icon_as_template(true)
+        .icon(tray_icon())
         .tooltip("MonkeyCode")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -771,8 +742,8 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_any_window(tray.app_handle());
             }
         });
-    let handle = tray.build(app)?;
-    app.state::<Tray>().0.lock().unwrap().replace(handle);
+    // 托盘句柄由 Tauri 内部登记持有(tray_by_id 可取),无需自存
+    tray.build(app)?;
     Ok(())
 }
 
