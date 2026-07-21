@@ -415,8 +415,16 @@ pub async fn cloud_ws_open(
         tokio_tungstenite::connect_async_with_config(req, Some(ws_config), false),
     )
     .await
-    .map_err(|_| "连接云端任务流超时".to_string())?
-    .map_err(|e| format!("连接云端任务流失败: {e}"))?;
+    .map_err(|_| {
+        // 失败必须落壳日志:UI 只拿到 invoke 错误串,循环重连时无从追查
+        eprintln!("[desktop] 云端 WS({kind}) 连接超时 url={ws_url}");
+        "连接云端任务流超时".to_string()
+    })?
+    .map_err(|e| {
+        let msg = format!("连接云端任务流失败: {e}");
+        eprintln!("[desktop] 云端 WS({kind}) {msg} url={ws_url}");
+        msg
+    })?;
 
     let pipe_id = pipe;
     let (tx, mut rx) = mpsc::unbounded_channel::<PipeMsg>();

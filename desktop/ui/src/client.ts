@@ -373,6 +373,7 @@ export function connectCloudTask(
   let openedThisAttempt = false; // 本次尝试是否成功建立过管道
   let framesThisOpen = 0; // 本次连接收到的业务帧数(区分"空闲关闭"与"断流")
   let dialFails = 0; // 连续拨号失败次数(指数退避,超限放弃)
+  let dialErr = ""; // 最近一次拨号失败原因(状态行外显,不能吞——否则无从诊断)
   let dropCount = 0; // 连续短命断流次数(收过流又快速被关;超限转就绪兜底)
   let openedAt = 0; // 本次管道建立时刻(存活超 1 分钟视为健康,断流计数归零)
   let sentFirstText: string | null = null; // 已上行但尚无任何回显的首条输入
@@ -466,7 +467,7 @@ export function connectCloudTask(
       if (dialFails >= 5) {
         // 连不上云端流(网络/环境异常):放弃自动重连,转就绪模式兜底
         closed = true;
-        h.onStatus("⚠ 云端流连接失败,发送消息时会重试", false);
+        h.onStatus(`⚠ 云端流连接失败${dialErr ? `: ${dialErr}` : ""},发送消息时会重试`, false);
         h.onIdle?.();
         return;
       }
@@ -485,7 +486,10 @@ export function connectCloudTask(
       }
     }
     const delay = Math.min(2000 * 2 ** Math.max(0, dialFails - 1), 30_000);
-    h.onStatus(`⚠ 云端连接断开,${Math.round(delay / 1000)} 秒后自动重连…`, false);
+    h.onStatus(
+      `⚠ 云端连接断开${dialErr ? `(${dialErr})` : ""},${Math.round(delay / 1000)} 秒后自动重连…`,
+      false,
+    );
     curMode = "attach"; // 重连降级为跟看,避免误开新轮(对齐移动端)
     reconnectTimer = setTimeout(open, delay);
   }
@@ -511,6 +515,7 @@ export function connectCloudTask(
         openedThisAttempt = true;
         openedAt = Date.now();
         dialFails = 0;
+        dialErr = "";
         h.onStatus("已连接云端", true);
         // 新一轮:云端等第一条 user-input 才开跑;content 需再包一层 base64
         if (pendingFirst !== undefined) {
@@ -519,7 +524,12 @@ export function connectCloudTask(
           pendingFirst = undefined;
         }
       })
-      .catch(() => onPipeClose());
+      .catch((e) => {
+        // 拨号失败原因必须留痕:吞掉的话"云端连接断开"循环无从诊断
+        dialErr = String(e instanceof Error ? e.message : e).slice(0, 140);
+        console.error(`[cloud-stream] 拨号失败(${taskId}):`, e);
+        onPipeClose();
+      });
   }
 
   open();
@@ -617,7 +627,10 @@ export function connectCloudControl(taskId: string): CloudControl {
         sendQueue = [];
         for (const m of q) void p.send(m).catch(() => {});
       })
-      .catch(() => onPipeClose());
+      .catch((e) => {
+        console.error(`[cloud-control] 拨号失败(${taskId}):`, e);
+        onPipeClose();
+      });
   }
 
   open();
