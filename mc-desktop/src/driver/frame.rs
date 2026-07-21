@@ -192,6 +192,12 @@ pub fn tool_call_failed(tc_id: &str, raw_output: &str, seq: u64) -> Value {
     )
 }
 
+/// 上下文用量(环形指示):used = 最近一次模型调用的 prompt 侧 token
+/// (input + cache 写/读),size = 模型上下文预算。
+pub fn usage_update(used: i64, size: i64, seq: u64) -> Value {
+    acp(json!({ "sessionUpdate": "usage_update", "used": used, "size": size }), seq)
+}
+
 pub fn compact_status(status: &str, seq: u64) -> Value {
     acp(json!({ "sessionUpdate": "compact_status", "status": status }), seq)
 }

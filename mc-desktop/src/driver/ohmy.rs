@@ -124,6 +124,8 @@ struct ManifestModel {
     model: String,
     default: bool,
     source: String,
+    /// 上下文预算(tokens;0 = 清单未配置,用量环不点亮)
+    context_window: i64,
 }
 
 impl OhmyDriver {
@@ -1392,6 +1394,30 @@ impl Inner {
         }
     }
 
+    /// model_done 携带单次调用 usage 时点亮上下文用量环。
+    /// 上游现状:model_done data 为 null(缺口);一旦其携带
+    /// {"usage":{input_tokens,cache_creation_input_tokens,cache_read_input_tokens}},
+    /// prompt 侧三项之和≈该次调用的上下文占用,即为环的 used。
+    /// (turn/stopped 的 usage 是整轮累计,对上下文环语义虚高,不用。)
+    fn maybe_usage_frame(&self, sid: &str, data: &Value) {
+        let Some(u) = data.get("usage").filter(|u| u.is_object()) else { return };
+        let used: i64 = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+            .iter()
+            .map(|k| u.get(*k).and_then(|v| v.as_i64()).unwrap_or(0))
+            .sum();
+        if used <= 0 {
+            return;
+        }
+        let size = {
+            let name = self.sessions.lock().unwrap().get(sid).map(|s| s.model_name.clone());
+            name.and_then(|n| self.models.iter().find(|m| m.name == n).map(|m| m.context_window))
+                .unwrap_or(0)
+        };
+        if size > 0 {
+            self.push_frame(sid, |seq| frame::usage_update(used, size, seq));
+        }
+    }
+
     /// 入站事件的壳会话反查(引擎 session_id → 壳 sid)。通常同名;
     /// 空会话重建换绑后不同。未命中原样返回(供子代理未知 id 认领)。
     fn shell_sid_of(&self, engine: &str) -> String {
@@ -1549,7 +1575,8 @@ impl Inner {
                 let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("未知错误");
                 self.push_frame(&sid, |seq| frame::task_error(msg, seq));
             }
-            // model_start/model_done/turn_done:轮次边界以 turn/stopped 为准
+            "model_done" => self.maybe_usage_frame(&sid, &data),
+            // model_start/turn_done:轮次边界以 turn/stopped 为准
             _ => {}
         }
     }
@@ -1586,6 +1613,7 @@ fn parse_manifest_models(models: &Value) -> Vec<ManifestModel> {
                 model,
                 default: m.get("default").and_then(|v| v.as_bool()).unwrap_or(false),
                 source: m.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                context_window: m.get("context_window").and_then(|v| v.as_i64()).unwrap_or(0),
             })
         })
         .collect()

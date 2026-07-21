@@ -148,8 +148,9 @@ Op/Ev/错误码、proto:1、20s ping。
 
 协议缺口与对应的壳侧变通,上游补齐后应删壳侧实现:
 permission remember(现壳记忆集自动应答)、sendMessage 附件
-(现 [图片] 路径文本约定)、上下文用量(turn/stopped 仅整轮累计,
-用量条隐藏,需按次 usage 或 context_tokens)、每模型独立凭据
+(现 [图片] 路径文本约定)、上下文用量(壳侧已就绪:model_done 携带
+{"usage":{input_tokens,cache_*}} 即点亮上下文环;turn/stopped 的整轮
+累计对环语义虚高,不用)、每模型独立凭据
 (现同 configKey 冲突跳过)、stdio 会话索引(现 sidecar 权威)、
 工具错误不发 tool_result(壳轮次收尾补 failed 帧)、子代理事件无父归属
 (壳启发式认领 + 物化子会话)、空会话 resume 不容忍(壳 engine_id 换绑)。

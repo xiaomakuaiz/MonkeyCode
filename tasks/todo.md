@@ -1669,3 +1669,13 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
 - [x] OHMYAGENT_REF 钉新:3177558 → f7eea63(三个 workflow;单源化仍在
       评审待办)
 - [x] 验证:重建二进制,cargo test 30/30;ARCHITECTURE 契约 4 与缺口清单更新
+
+## 上下文用量:壳侧就绪(2026-07-21)
+
+- [x] frame.rs 增 usage_update(used,size);ManifestModel 带 context_window;
+      ohmy handle_event 的 model_done 一旦携带 usage(input+cache 写/读三项
+      之和≈该次调用上下文占用)即产 usage_update 帧点亮 UI 上下文环
+- [x] 为何不用 turn/stopped:那是整轮累计(loop totalUsage.Add),多步工具
+      轮次里对"当前占用/预算"语义严重虚高,会假报"接近上限"
+- [ ] 待上游一行:loop.go 的 l.emit(EventModelDone, turnID, nil) 改为
+      map[string]any{"usage": usage}(consumeStream 已返回单次 usage)
