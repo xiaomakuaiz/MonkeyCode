@@ -2,12 +2,12 @@
 // 登录后从模型网关拉模型清单并确保有一把可用的推理密钥,产出可直接落盘的
 // 清单(models.json 条目 + mcp.json servers)。UI 拿到后交用户确认再保存重启。
 //
-// 密钥策略:列表只给掩码,明文只在创建时返回一次 → 优先用调用方已持有的密钥
-// (掩码前后缀匹配 + 必要时 PATCH 重新启用),都对不上才新建一把并启用。
+// 密钥策略:ai-models 列表会返回完整 api_key → 优先复用调用方已持有的同一把,
+// 其次复用 MonkeyCode 自有条目,都没有才新建并启用。
 
 use serde_json::{json, Value};
 
-use super::{code_is_zero, other, unwrap_envelope, BzResult, Envelope, Service};
+use super::{clean_message, code_is_zero, other, unwrap_envelope, BzErr, BzResult, Envelope, Service};
 
 /// 同步新建密钥的名字(网关控制台里用户可见)。
 const SYNC_KEY_NAME: &str = "MonkeyCode";
@@ -17,7 +17,7 @@ const SOURCE_BAIZHI: &str = "baizhi";
 const MCP_ENTRY_NAME: &str = "baizhi-toolkit";
 
 /// 拉模型清单 + 确保推理密钥。要求已登录(有 cookie)。
-/// known_keys 是调用方已持有的候选明文密钥,能对上网关掩码就复用。
+/// known_keys 是调用方已持有的候选明文密钥,能对上 ai-models 返回值就复用。
 pub async fn sync(svc: &Service, known_keys: &[String]) -> BzResult<Value> {
     let (key, key_name, created) = ensure_api_key(svc, known_keys).await?;
     let (models, mut notes) = gateway_models(svc, &key).await?;
@@ -32,7 +32,7 @@ pub async fn sync(svc: &Service, known_keys: &[String]) -> BzResult<Value> {
     }))
 }
 
-/// 模型网关包壳:标准 code=0 判定,无 success 字段。
+/// ai-models 包壳:{data,error};成功 data 直接是数组,不再套 items 分页对象。
 pub(crate) const ENV_CONSOLE: Envelope = Envelope {
     label: "网关",
     code_ok: code_is_zero,
@@ -42,34 +42,73 @@ pub(crate) const ENV_CONSOLE: Envelope = Envelope {
     whole_body_fallback: false,
 };
 
-/// 模型网关请求(带 cookie),解包 {code,data,message}。
+/// ai-models 请求(带 cookie),解包 {data,error}。
 async fn console_call(svc: &Service, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
     let target = format!("{}{}", svc.ep.model_gateway, path);
     let (data, status) = svc.do_store(&svc.store, method, &target, body).await?;
+    if let Ok(v) = serde_json::from_slice::<Value>(&data) {
+        if let Some(err) = v.get("error").filter(|err| !err.is_null()) {
+            let msg = clean_message(err.get("message").and_then(Value::as_str).unwrap_or(""));
+            let msg = if msg.is_empty() {
+                format!("模型服务请求失败(HTTP {status})")
+            } else {
+                msg
+            };
+            return if status == 401 {
+                Err(BzErr::Unauthorized(msg))
+            } else {
+                Err(other(msg))
+            };
+        }
+    }
     unwrap_envelope(&data, status, &ENV_CONSOLE)
+}
+
+/// ai-models 的列表 data 必须直接是数组;契约漂移时报错,不能再静默同步成空列表。
+fn console_items(data: &Value) -> BzResult<Vec<Value>> {
+    data.as_array()
+        .cloned()
+        .ok_or_else(|| other("模型服务列表响应格式异常"))
+}
+
+fn api_key_secret(item: &Value) -> &str {
+    item.get("api_key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn api_key_active(item: &Value) -> bool {
+    item.get("status").and_then(Value::as_str) == Some("active")
+}
+
+fn sync_key_name(name: &str) -> bool {
+    name == SYNC_KEY_NAME
+        || name
+            .strip_prefix(SYNC_KEY_NAME)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .map(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+            .unwrap_or(false)
 }
 
 /// 确保拿到一把可用(存在且启用)的明文推理密钥。返回 (key, 密钥名, 是否新建)。
 async fn ensure_api_key(svc: &Service, known_keys: &[String]) -> BzResult<(String, String, bool)> {
-    let list = console_call(svc, reqwest::Method::GET, "/api/console/api-keys?page=1&pageSize=200", None)
+    let list = console_call(svc, reqwest::Method::GET, "/api/console/api-keys", None)
         .await
         .map_err(|e| other(format!("获取密钥列表失败: {}", e.msg())))?;
-    let items: Vec<Value> = list.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let items = console_items(&list)?;
 
-    // 已持有的明文密钥能对上网关掩码 → 复用(停用的先重新启用)
+    // ai-models 会返回完整 api_key。优先复用调用方已持有的同一把 key。
     for k in known_keys {
         let k = k.trim();
         if !k.starts_with("sk-") {
             continue;
         }
         for it in &items {
-            let masked = it.get("maskedKey").and_then(|v| v.as_str()).unwrap_or("");
-            if !masked_match(masked, k) {
+            if api_key_secret(it) != k {
                 continue;
             }
             let name = it.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let enabled = it.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-            if !enabled {
+            if !api_key_active(it) {
                 enable_api_key(svc, it)
                     .await
                     .map_err(|e| other(format!("重新启用密钥「{name}」失败: {}", e.msg())))?;
@@ -78,24 +117,49 @@ async fn ensure_api_key(svc: &Service, known_keys: &[String]) -> BzResult<(Strin
         }
     }
 
-    // 新建 + 启用(新建的密钥默认停用)。密钥名全局唯一;同名旧 key 的明文
-    // 已不可恢复,只能换名新建(不能动旧 key——它可能正被别的设备使用)。
+    // 新接口可读回完整密钥:复用已有 MonkeyCode 系列条目,无需重复创建。
+    if let Some(it) = items.iter().find(|it| {
+        it.get("name")
+            .and_then(Value::as_str)
+            .map(sync_key_name)
+            .unwrap_or(false)
+            && !api_key_secret(it).is_empty()
+    }) {
+        let name = it.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+        if !api_key_active(it) {
+            enable_api_key(svc, it)
+                .await
+                .map_err(|e| other(format!("重新启用密钥「{name}」失败: {}", e.msg())))?;
+        }
+        return Ok((api_key_secret(it).to_string(), name, false));
+    }
+
+    // 没有自家密钥才新建。ai-models 新建条目默认启用并直接返回 api_key。
     let name = pick_key_name(&items)?;
     let created = console_call(
         svc,
         reqwest::Method::POST,
         "/api/console/api-keys",
-        Some(&json!({ "name": name })),
+        Some(&json!({
+            "name": name,
+            "quota_enabled": false,
+            "remaining_quota": 0,
+            "ip_whitelist": [],
+            "rpm_limit": 0,
+            "tpm_limit": 0,
+        })),
     )
     .await
     .map_err(|e| other(format!("创建密钥失败: {}", e.msg())))?;
-    let key = created.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let key = api_key_secret(&created).to_string();
     if key.is_empty() {
         return Err(other("创建密钥成功但响应未含明文密钥"));
     }
-    enable_api_key(svc, &created)
-        .await
-        .map_err(|e| other(format!("启用新建密钥失败: {}", e.msg())))?;
+    if !api_key_active(&created) {
+        enable_api_key(svc, &created)
+            .await
+            .map_err(|e| other(format!("启用新建密钥失败: {}", e.msg())))?;
+    }
     Ok((key, name, true))
 }
 
@@ -117,62 +181,40 @@ fn pick_key_name(existing: &[Value]) -> BzResult<String> {
     Err(other(format!("网关中 {SYNC_KEY_NAME} 系列密钥过多,请在百智云控制台清理后重试")))
 }
 
-/// 启用密钥。PATCH 要求 name 必填(真机 400 实测)。
+/// ai-models 通过 PUT 更新密钥状态,支持只传 status。
 async fn enable_api_key(svc: &Service, item: &Value) -> BzResult<()> {
-    let id = item.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let id = id_path(item);
+    if id.is_empty() {
+        return Err(other("密钥响应未含 id"));
+    }
     console_call(
         svc,
-        reqwest::Method::PATCH,
+        reqwest::Method::PUT,
         &format!("/api/console/api-keys/{id}"),
-        Some(&json!({ "name": name, "enabled": true })),
+        Some(&json!({ "status": "active" })),
     )
     .await
     .map(|_| ())
 }
 
-/// 明文密钥与网关掩码是否指同一把 key(掩码形如 sk-7c263***…***27e2)。
-fn masked_match(masked: &str, key: &str) -> bool {
-    let (Some(i), Some(j)) = (masked.find('*'), masked.rfind('*')) else {
-        return masked == key;
-    };
-    if i == 0 || j < i {
-        return masked == key;
-    }
-    let (prefix, suffix) = (&masked[..i], &masked[j + 1..]);
-    key.len() >= prefix.len() + suffix.len() && key.starts_with(prefix) && key.ends_with(suffix)
-}
-
-/// 拉模型列表并映射为同步条目。协议优先 anthropic(multi/anthropic 走
-/// anthropic 端点;纯 openai 走 openai 端点)。停用模型跳过;不健康仍同步但记 note。
+/// 拉模型列表并映射为同步条目。ai-models 的公开 LLM 同时支持 OpenAI 与
+/// Anthropic,桌面统一使用后者;非 LLM 跳过。
 async fn gateway_models(svc: &Service, key: &str) -> BzResult<(Vec<Value>, Vec<String>)> {
-    let data = console_call(svc, reqwest::Method::GET, "/api/console/models?page=1&pageSize=200", None)
+    let data = console_call(svc, reqwest::Method::GET, "/api/console/models", None)
         .await
         .map_err(|e| other(format!("获取模型列表失败: {}", e.msg())))?;
-    let items: Vec<Value> = data.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let items = console_items(&data)?;
     let mut models = Vec::new();
     let mut notes = Vec::new();
-    let mut unhealthy = 0;
     for m in &items {
         let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let enabled = m.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-        if !enabled || name.is_empty() {
+        if m.get("type").and_then(Value::as_str) != Some("llm") || name.is_empty() {
             continue;
-        }
-        let iface = m.get("interfaceType").and_then(|v| v.as_str()).unwrap_or("");
-        let (provider, base_url) = if iface == "openai" {
-            ("openai", format!("{}/api/openai", svc.ep.model_gateway))
-        } else {
-            ("anthropic", format!("{}/api/anthropic", svc.ep.model_gateway))
-        };
-        let health = m.get("healthStatus").and_then(|v| v.as_str()).unwrap_or("");
-        if !health.is_empty() && health != "healthy" {
-            unhealthy += 1;
         }
         models.push(json!({
             "name": name,
-            "provider": provider,
-            "base_url": base_url,
+            "provider": "anthropic",
+            "base_url": format!("{}/api/anthropic", svc.ep.model_gateway),
             "api_key": key,
             "model": name,
             "source": SOURCE_BAIZHI,
@@ -180,9 +222,6 @@ async fn gateway_models(svc: &Service, key: &str) -> BzResult<(Vec<Value>, Vec<S
     }
     if models.is_empty() {
         notes.push("网关下没有已启用的模型".to_string());
-    }
-    if unhealthy > 0 {
-        notes.push(format!("其中 {unhealthy} 个模型当前健康检查未通过(仍会同步,可能临时抖动)"));
     }
     Ok((models, notes))
 }
@@ -363,23 +402,32 @@ async fn ensure_mcp_key(svc: &Service, tool_codes: &[String]) -> (String, String
 mod tests {
     use super::*;
 
-    // 对照 Go sync_test.go 的 maskedMatch 断言
-    #[test]
-    fn masked_match_cases() {
-        assert!(masked_match("sk-7c263***27e2", "sk-7c263abcdef27e2"));
-        assert!(!masked_match("sk-7c263***27e2", "sk-9999abcdef27e2"));
-        assert!(!masked_match("sk-7c263***27e2", "sk-7c263abcdefffff"));
-        // 无掩码 = 全等比较
-        assert!(masked_match("sk-full", "sk-full"));
-        assert!(!masked_match("sk-full", "sk-other"));
-        // 明文过短(短于前缀+后缀)不匹配
-        assert!(!masked_match("sk-7c263***27e2", "sk-7"));
-    }
-
     #[test]
     fn pick_name_skips_taken() {
         let items = vec![json!({"name": "MonkeyCode"}), json!({"name": "MonkeyCode-2"})];
         assert_eq!(pick_key_name(&items).map_err(|e| e.msg()).unwrap(), "MonkeyCode-3");
         assert_eq!(pick_key_name(&[]).map_err(|e| e.msg()).unwrap(), "MonkeyCode");
+    }
+
+    #[test]
+    fn ai_models_console_contract() {
+        let models = json!([
+            {"name": "model-a", "type": "llm", "reasoning": true},
+            {"name": "embed-a", "type": "embedding"}
+        ]);
+        assert_eq!(console_items(&models).map_err(|e| e.msg()).unwrap().len(), 2);
+        assert!(console_items(&json!({"items": []})).is_err());
+
+        let key = json!({
+            "id": "key-1",
+            "name": "MonkeyCode",
+            "api_key": "sk-live",
+            "status": "active"
+        });
+        assert_eq!(api_key_secret(&key), "sk-live");
+        assert!(api_key_active(&key));
+        assert!(sync_key_name("MonkeyCode"));
+        assert!(sync_key_name("MonkeyCode-2"));
+        assert!(!sync_key_name("MonkeyCode-test"));
     }
 }

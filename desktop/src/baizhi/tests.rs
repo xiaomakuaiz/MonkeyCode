@@ -100,6 +100,68 @@ fn body_json(b: &[u8]) -> Value {
     serde_json::from_slice(b).unwrap_or(Value::Null)
 }
 
+#[test]
+fn official_model_and_mcp_gateways_are_pinned() {
+    assert_eq!(super::DEFAULT_MODEL_GATEWAY, "https://ai-models.app.baizhi.cloud");
+    assert_eq!(super::DEFAULT_MCP_GATEWAY, "https://agent-toolkit.app.baizhi.cloud");
+}
+
+/// ai-models 真机契约:data 直接是数组、密钥字段 api_key/status、新建默认启用;
+/// 同步须过滤非 LLM,并把可用模型落为官方 anthropic 推理地址。
+#[tokio::test(flavor = "multi_thread")]
+async fn ai_models_sync_contract() {
+    let (url, _stop) = serve(Arc::new(|req: Req| {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("GET", "/api/console/api-keys") => Resp::json(200, json!({ "data": [] })),
+            ("POST", "/api/console/api-keys") => {
+                let body = body_json(&req.body);
+                assert_eq!(body.get("name").and_then(Value::as_str), Some("MonkeyCode"));
+                assert_eq!(body.get("quota_enabled").and_then(Value::as_bool), Some(false));
+                assert_eq!(body.get("ip_whitelist").and_then(Value::as_array).map(Vec::len), Some(0));
+                Resp::json(
+                    200,
+                    json!({
+                        "data": {
+                            "id": "key-1",
+                            "name": "MonkeyCode",
+                            "api_key": "sk-live",
+                            "status": "active"
+                        }
+                    }),
+                )
+            }
+            ("GET", "/api/console/models") => Resp::json(
+                200,
+                json!({
+                    "data": [
+                        {"name": "coding-model", "type": "llm", "reasoning": true},
+                        {"name": "embedding-model", "type": "embedding"}
+                    ]
+                }),
+            ),
+            ("GET", "/") => Resp::json(200, json!({})),
+            ("GET", "/api/v1/services") => Resp::redirect("/apply"),
+            _ => Resp::json(404, json!({ "error": {"message": "not found"} })),
+        }
+    }));
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url.clone(),
+    });
+
+    let synced = super::sync::sync(&svc, &[]).await.map_err(|e| e.msg()).unwrap();
+    assert_eq!(synced.get("key_created").and_then(Value::as_bool), Some(true));
+    let models = synced.get("models").and_then(Value::as_array).unwrap();
+    assert_eq!(models.len(), 1, "非 LLM 不应导入");
+    assert_eq!(models[0].get("name").and_then(Value::as_str), Some("coding-model"));
+    assert_eq!(models[0].get("provider").and_then(Value::as_str), Some("anthropic"));
+    let expected_base_url = format!("{url}/api/anthropic");
+    assert_eq!(models[0].get("base_url").and_then(Value::as_str), Some(expected_base_url.as_str()));
+    assert_eq!(models[0].get("api_key").and_then(Value::as_str), Some("sk-live"));
+}
+
 /// prng 复刻(服务端独立校验 PoW 解;与 pow.rs 实现同协议)。
 fn prng(seed: &str, length: usize) -> String {
     let mut hash: u32 = 0x811c9dc5;

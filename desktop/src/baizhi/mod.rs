@@ -19,12 +19,14 @@ use tauri::State;
 
 use cookies::CookieStore;
 
-/// 百智云的四个可配地址。私有化部署时都会变,独立可配,默认官方云。
-/// 优先级:环境变量 > 默认。
+const DEFAULT_MODEL_GATEWAY: &str = "https://ai-models.app.baizhi.cloud";
+const DEFAULT_MCP_GATEWAY: &str = "https://agent-toolkit.app.baizhi.cloud";
+
+/// 百智云服务地址。模型与 MCP 服务固定走官方云;账号和 MonkeyCode 地址可覆盖。
 pub struct Endpoints {
     /// 账号/登录域(验证码、手机号/微信登录、profile)
     pub account: String,
-    /// 模型网关:/api/console/* 取 key 与模型列表;/api/openai、/api/anthropic 为推理 base_url
+    /// 模型服务:/api/console/* 取 key 与模型列表;/api/openai、/api/anthropic 推理
     pub model_gateway: String,
     /// Agent 工具包(MCP 服务)
     pub mcp_gateway: String,
@@ -45,8 +47,8 @@ impl Endpoints {
     pub fn resolve() -> Self {
         Self {
             account: env_or("MC_DESKTOP_BAIZHI_URL", "https://baizhi.cloud"),
-            model_gateway: env_or("MC_DESKTOP_BAIZHI_MODEL_GATEWAY", "https://ai-api-gateway.app.baizhi.cloud"),
-            mcp_gateway: env_or("MC_DESKTOP_BAIZHI_MCP_GATEWAY", "https://agent-toolkit.app.baizhi.cloud"),
+            model_gateway: DEFAULT_MODEL_GATEWAY.to_string(),
+            mcp_gateway: DEFAULT_MCP_GATEWAY.to_string(),
             monkeycode: env_or("MC_DESKTOP_MONKEYCODE_URL", "https://monkeycode-ai.com"),
         }
     }
