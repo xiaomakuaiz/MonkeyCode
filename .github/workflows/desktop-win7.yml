@@ -16,10 +16,9 @@ name: Desktop Windows 7 Build
 #     YY-Thunks 兜底(无需 KB3080149)。尽管如此仍建议目标机打齐更新(安全)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [feat-local-version]
-    paths: ["desktop/**", "agent", ".gitmodules", ".github/workflows/desktop-win7.yml"]
+    # 发布只认 vYYMMDDNN tag，例如 v26072208。
+    tags: ["v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"]
 
 env:
   GO_WIN7_VERSION: patched-1.26.5 # 与 ohmyagent go.mod 的 go 版本对应
@@ -55,6 +54,12 @@ jobs:
         with:
           workspaces: desktop
           key: win7
+
+      # 与主 Windows 通道共用 tag 版本；在换好 Win7 lockfile 且恢复缓存后
+      # 再注入，避免每个发布 tag 都产生一套新的依赖缓存。
+      - name: Set release version from tag
+        working-directory: desktop
+        run: python scripts/set_release_version.py "${GITHUB_REF_NAME}"
 
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
       - name: Build browser extension
@@ -186,10 +191,13 @@ jobs:
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             python scripts/gen-latest-json.py win7
           fi
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          EXPECTED="target/release/bundle/nsis/MonkeyCode_${RELEASE_VERSION}.0.0_x64-setup.exe"
+          test -f "$EXPECTED" || { echo "::error::安装包版本未与 tag 对齐，缺少 $EXPECTED"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MonkeyCode-win7-x64
+          name: MonkeyCode-win7-x64-${{ github.ref_name }}
           path: |
             desktop/target/release/bundle/nsis/*.exe
             desktop/target/release/bundle/updater/*

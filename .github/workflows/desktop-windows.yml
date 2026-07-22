@@ -1,10 +1,9 @@
 name: Desktop Windows Build
 
 on:
-  workflow_dispatch:
   push:
-    branches: [feat-local-version]
-    paths: ["desktop/**", "agent", ".gitmodules", ".github/workflows/desktop-windows.yml"]
+    # 发布只认 vYYMMDDNN tag，例如 v26072208。
+    tags: ["v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"]
 
 # 引擎版本 = agent/ submodule 的 gitlink(仓库内单一来源);
 # 升级引擎 = bump submodule(配合壳的 system/ready 能力握手)
@@ -31,6 +30,13 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: desktop
+
+      # 仓库内版本只作开发占位；发布构建以 tag 为唯一真值。
+      # Tauri/Cargo 内部需要合法 SemVer，v26072208 会写成 26072208.0.0，
+      # 应用 UI 与 updater 文件名会按既有逻辑展示为 26072208。
+      - name: Set release version from tag
+        working-directory: desktop
+        run: python scripts/set_release_version.py "${GITHUB_REF_NAME}"
 
       # 浏览器扩展:随包分发(tauri bundle.resources 引用 dist,缺失会打包失败)
       - name: Build browser extension
@@ -69,10 +75,13 @@ jobs:
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY 未配置,跳过 updater 产物"
             npx --yes @tauri-apps/cli@^2 build --config tauri.windows.conf.json
           fi
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          EXPECTED="target/release/bundle/nsis/MonkeyCode_${RELEASE_VERSION}.0.0_x64-setup.exe"
+          test -f "$EXPECTED" || { echo "::error::安装包版本未与 tag 对齐，缺少 $EXPECTED"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MonkeyCode-windows-x64
+          name: MonkeyCode-windows-x64-${{ github.ref_name }}
           path: |
             desktop/target/release/bundle/nsis/*.exe
             desktop/target/release/bundle/updater/*
