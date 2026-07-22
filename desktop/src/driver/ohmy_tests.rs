@@ -637,14 +637,22 @@ async fn e2e_perm_remember_engine_rules() {
         j.iter().any(|f| f.get("type").and_then(|v| v.as_str()) == Some("permission-req"))
     })
     .await;
-    let req_id = journal
+    let req_data = journal
         .iter()
         .filter(|f| f.get("type").and_then(|v| v.as_str()) == Some("permission-req"))
         .filter_map(|f| f.get("data").cloned())
-        .filter_map(|v| v.get("id").and_then(|i| i.as_str()).map(String::from))
         .next()
         .unwrap_or_default();
+    let req_id =
+        req_data.get("id").and_then(|i| i.as_str()).map(String::from).unwrap_or_default();
     assert!(!req_id.is_empty(), "未收到审批卡帧: {journal:?}");
+    // permissionToolCallId 透传:引擎审批请求带 provider 工具调用 id,
+    // 壳原样进帧(UI 据此把审批按钮锚到 tool_call 帧建的那张工具卡)
+    assert_eq!(
+        req_data.get("tool_call_id").and_then(|v| v.as_str()),
+        Some("tu_1"),
+        "审批帧缺 tool_call_id 透传: {req_data}"
+    );
 
     // 批准并勾选"记住"(persist 档与 remember 档同映射引擎单档)
     driver

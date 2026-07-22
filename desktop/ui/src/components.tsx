@@ -30,6 +30,7 @@ import {
 } from "react";
 import { openExternal } from "./host";
 import { IconCheck, IconChevronRight, IconDots, IconFolder, IconSpark, IconTrash } from "./icons";
+import { permAnchors } from "./reduce";
 import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -316,12 +317,18 @@ export function ToolCard({
   onOpenChild,
   uploadUrl,
   workdir,
+  perm,
+  onPermAnswer,
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
   onOpenChild?: (id: string) => void;
   /** 已上传/落盘图片路径 → 可渲染 URL(异步 data URL;不传则不渲染图) */
   uploadUrl?: (path: string) => Promise<string>;
   workdir?: string;
+  /** 锚定到本卡的待决审批(permAnchors 判定):头部 ⏸ + 底部内嵌按钮行,
+   * 独立审批大卡随之不渲染;已决后由调用方不再传入,卡片回归常态 */
+  perm?: Extract<LogItem, { kind: "perm" }>;
+  onPermAnswer?: PermAnswerFn;
 }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const images = uploadUrl ? (item.images ?? []) : [];
@@ -349,7 +356,13 @@ export function ToolCard({
   return (
     <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
-        <StatusDot status={item.status} />
+        {/* 待审批:⏸ 顶掉运行点(与 ✗/◐/⊘ 同属符号词汇,非 emoji),
+            解答后回到 run/ok/fail 常规流转 */}
+        {perm ? (
+          <span style={{ color: "var(--warn)", fontSize: 11, flex: "none" }}>⏸</span>
+        ) : (
+          <StatusDot status={item.status} />
+        )}
         {verb && <span style={{ fontWeight: 600, flex: "none", color: "var(--t1)" }}>{verb}</span>}
         <span className="ellipsis" style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0 }}>
           {target}
@@ -399,6 +412,14 @@ export function ToolCard({
           {item.lastLine}
         </div>
       )}
+      {/* 内嵌审批:按钮行长在卡内底部(独立大卡不再出现);虚线分隔 +
+          警示色标题保住"这是要你拍板"的视觉信号,不给整卡换底色 */}
+      {perm && onPermAnswer && (
+        <div style={{ borderTop: "1px dashed var(--warnBd)", paddingTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--warn)" }}>需要确认 · {perm.tool || "执行操作"}</div>
+          <PermActions id={perm.id} onAnswer={onPermAnswer} />
+        </div>
+      )}
       {images.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingLeft: 15 }}>
           {images.map((p) => (
@@ -445,20 +466,13 @@ export function ToolCard({
   );
 }
 
-function PermCard({
-  item,
-  onAnswer,
-}: {
-  item: Extract<LogItem, { kind: "perm" }>;
-  onAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
-}) {
-  // 已允许/已拒绝的审批卡直接消失(用户拍板):决策后紧跟的工具卡(或
-  // 拒绝后的轮次收尾)本身就说明了结果,残留任何形态都嫌多。例外:
-  // 拒绝/过期之外的异常终态不多见,同样静默——状态机仍在 reduce 里
-  // 完整落盘,journal 回放只是不渲染,不丢审计数据。
-  if (item.state !== "open") {
-    return null;
-  }
+/** 审批答复回调(独立审批卡与工具卡内嵌按钮行共用签名) */
+type PermAnswerFn = (id: string, action: "allow" | "always" | "persist" | "deny") => void;
+
+/** 审批按钮行:允许/本会话始终/此项目永久/拒绝 + 快捷键提示。
+ * 从 PermCard 抽出与工具卡内嵌(锚定态)共用——同一套按钮样式与动作
+ * 词汇只维护一份,两处渲染不漂移。 */
+function PermActions({ id, onAnswer }: { id: string; onAnswer: PermAnswerFn }) {
   const btn: CSSProperties = {
     height: 28,
     display: "flex",
@@ -474,6 +488,47 @@ function PermCard({
     userSelect: "none",
     whiteSpace: "nowrap",
   };
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <div
+        className="hv-acc"
+        onClick={() => onAnswer(id, "allow")}
+        style={{ ...btn, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)" }}
+      >
+        允许
+      </div>
+      <div className="hv" onClick={() => onAnswer(id, "always")} style={btn}>
+        本会话始终
+      </div>
+      <div className="hv" onClick={() => onAnswer(id, "persist")} style={btn}>
+        此项目永久
+      </div>
+      <div
+        className="hv-errbg"
+        onClick={() => onAnswer(id, "deny")}
+        style={{ ...btn, background: "transparent", border: "1px solid var(--errBd)", color: "var(--err)" }}
+      >
+        拒绝
+      </div>
+      <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>⏎ 允许 · esc 拒绝</span>
+    </div>
+  );
+}
+
+function PermCard({
+  item,
+  onAnswer,
+}: {
+  item: Extract<LogItem, { kind: "perm" }>;
+  onAnswer: PermAnswerFn;
+}) {
+  // 已允许/已拒绝的审批卡直接消失(用户拍板):决策后紧跟的工具卡(或
+  // 拒绝后的轮次收尾)本身就说明了结果,残留任何形态都嫌多。例外:
+  // 拒绝/过期之外的异常终态不多见,同样静默——状态机仍在 reduce 里
+  // 完整落盘,journal 回放只是不渲染,不丢审计数据。
+  if (item.state !== "open") {
+    return null;
+  }
   return (
     <div
       style={{
@@ -502,29 +557,7 @@ function PermCard({
       >
         {item.title}
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <div
-          className="hv-acc"
-          onClick={() => onAnswer(item.id, "allow")}
-          style={{ ...btn, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)" }}
-        >
-          允许
-        </div>
-        <div className="hv" onClick={() => onAnswer(item.id, "always")} style={btn}>
-          本会话始终
-        </div>
-        <div className="hv" onClick={() => onAnswer(item.id, "persist")} style={btn}>
-          此项目永久
-        </div>
-        <div
-          className="hv-errbg"
-          onClick={() => onAnswer(item.id, "deny")}
-          style={{ ...btn, background: "transparent", border: "1px solid var(--errBd)", color: "var(--err)" }}
-        >
-          拒绝
-        </div>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>⏎ 允许 · esc 拒绝</span>
-      </div>
+      <PermActions id={item.id} onAnswer={onAnswer} />
     </div>
   );
 }
@@ -906,6 +939,11 @@ export function LogList({
   /** 工作区根:工具卡标题里的绝对路径按它收敛为相对路径 */
   workdir?: string;
 }) {
+  // 审批锚定:待决 perm 带 toolCallId 且有同 id 工具卡时,按钮行嵌进
+  // 那张卡(见 reduce.ts::permAnchors),对应的独立审批项跳过不渲染;
+  // 无锚点(旧引擎/云端任务流/找不到卡)仍走独立 PermCard,行为不变
+  const anchors = permAnchors(items);
+  const anchored = new Set(anchors.values());
   const out: ReactElement[] = [];
   for (let i = 0; i < items.length; ) {
     const it = items[i];
@@ -921,11 +959,23 @@ export function LogList({
       out.push(
         <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {group.map((t, j) => (
-            <ToolCard key={t.tcId || j} item={t} onOpenChild={onOpenChild} uploadUrl={uploadUrl} workdir={workdir} />
+            <ToolCard
+              key={t.tcId || j}
+              item={t}
+              onOpenChild={onOpenChild}
+              uploadUrl={uploadUrl}
+              workdir={workdir}
+              perm={anchors.get(t.tcId)}
+              onPermAnswer={onPermAnswer}
+            />
           ))}
         </div>,
       );
     } else {
+      if (it.kind === "perm" && anchored.has(it)) {
+        i++; // 已嵌进工具卡,独立卡不渲染
+        continue;
+      }
       out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} onAskAnswer={onAskAnswer} uploadUrl={uploadUrl} />);
       i++;
     }

@@ -36,9 +36,13 @@ impl Inner {
                     return;
                 }
                 let title = perm_title(&tool, &input);
+                // provider 工具调用 id 原样透传(UI 把审批锚到对应工具卡);
+                // 旧引擎/空 id 不带字段,UI 回退独立审批卡
+                let tc_id =
+                    params.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 self.sess.pending_perms.lock().unwrap().insert(req_id.clone(), sid.clone());
                 self.sess.perm_tools.lock().unwrap().insert(req_id.clone(), tool.clone());
-                self.push_frame(&sid, |seq| frame::permission_req(&req_id, &tool, &title, seq));
+                self.push_frame(&sid, |seq| frame::permission_req(&req_id, &tool, &title, &tc_id, seq));
                 self.emit_session_ask(&sid, true);
             }
             "permission/cancelled" => {

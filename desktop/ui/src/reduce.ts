@@ -323,9 +323,18 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
       return push(s, { kind: "user", text });
     }
     case "permission-req": {
-      const data = frameData<{ id?: string; title?: string; tool?: string }>(f);
+      const data = frameData<{ id?: string; title?: string; tool?: string; tool_call_id?: string }>(f);
       if (!data?.id) return s;
-      return push(s, { kind: "perm", id: data.id, title: data.title ?? "", tool: data.tool ?? "", state: "open" });
+      return push(s, {
+        kind: "perm",
+        id: data.id,
+        title: data.title ?? "",
+        tool: data.tool ?? "",
+        state: "open",
+        // 有才写:undefined 键会污染测试的 toEqual 全等比较,且语义上
+        // "没有锚点"就该是字段缺席而非空值
+        ...(data.tool_call_id ? { toolCallId: data.tool_call_id } : {}),
+      });
     }
     case "permission-resolved": {
       const data = frameData<{ id?: string; outcome?: string }>(f);
@@ -395,6 +404,24 @@ export function reduceBatch(s: ChatState, batch: Frame[]): ChatState {
   let next = s;
   for (const f of batch) next = reduceFrame(next, f);
   return next;
+}
+
+/** 待决审批 → 工具卡锚定(tcId → perm 项)。审批 UX 终态:perm 带
+ * toolCallId 且流里存在同 id 的工具卡(引擎保证 tool_call 帧先于
+ * permission-req 到达)时,审批按钮嵌进那张工具卡内部,独立审批大卡
+ * 不再渲染;已决(state 非 open)即解除锚定,按钮行消失、卡片回归
+ * 正常 run/ok/fail 流转。纯函数放归约层而非组件:锚定是状态推导,
+ * LogList 与测试共用同一份判定。 */
+export function permAnchors(items: LogItem[]): Map<string, Extract<LogItem, { kind: "perm" }>> {
+  const tools = new Set<string>();
+  for (const it of items) if (it.kind === "tool" && it.tcId) tools.add(it.tcId);
+  const map = new Map<string, Extract<LogItem, { kind: "perm" }>>();
+  for (const it of items) {
+    if (it.kind === "perm" && it.state === "open" && it.toolCallId && tools.has(it.toolCallId)) {
+      map.set(it.toolCallId, it);
+    }
+  }
+  return map;
 }
 
 /** 本地答复审批卡片(点击按钮后立即回写 UI,不等 resolved 帧) */

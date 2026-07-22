@@ -176,7 +176,17 @@ export type LogItem =
       childSessionId?: string;
     }
   | { kind: "sys"; text: string; error?: boolean }
-  | { kind: "perm"; id: string; title: string; tool: string; state: PermState }
+  | {
+      kind: "perm";
+      id: string;
+      title: string;
+      tool: string;
+      state: PermState;
+      /** 引擎透传的 provider 工具调用 id(permission-req.tool_call_id):
+       * 流里存在同 id 工具卡时审批按钮嵌进那张卡,独立审批卡不渲染;
+       * 缺省(旧引擎/云端任务流)回退独立卡,行为不变 */
+      toolCallId?: string;
+    }
   /** AI 提问卡片(云端 ask_user_question;askId 即回传 reply 的 request_id) */
   | { kind: "ask"; askId: string; state: "open" | "done" | "expired"; questions: AskQuestion[] };
 

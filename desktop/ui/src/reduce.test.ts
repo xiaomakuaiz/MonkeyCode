@@ -4,7 +4,7 @@
 // 回归用例见文末「旧格式帧兼容」。
 import { describe, expect, it } from "vitest";
 import { b64encode } from "./codec";
-import { answerAsk, answerPerm, initialChat, permStateLabel, reduceBatch, reduceFrame } from "./reduce";
+import { answerAsk, answerPerm, initialChat, permAnchors, permStateLabel, reduceBatch, reduceFrame } from "./reduce";
 import type { AcpUpdate, Frame, LogItem, ToolProgress } from "./types";
 
 const frame = (type: string, data?: unknown, kind?: string): Frame => ({
@@ -260,6 +260,54 @@ describe("审批卡片状态机", () => {
     expect(permStateLabel("allowed")).toBe("已允许");
     expect(permStateLabel("timeout")).toBe("已超时(按拒绝处理)");
     expect(permStateLabel("未知态")).toBe("未知态");
+  });
+});
+
+describe("审批锚定到工具卡(permission-req.tool_call_id)", () => {
+  // 事件序契约:引擎先发 tool_call 帧、后发 permission-req,
+  // 审批到达时对应工具卡必已存在(running 态)
+  const tool = acp({ sessionUpdate: "tool_call", toolCallId: "tu_1", title: "Bash git push origin main" });
+  const reqAnchored = frame("permission-req", { id: "p1", title: "Bash git push origin main", tool: "Bash", tool_call_id: "tu_1" });
+  const permOf = (s: ReturnType<typeof run>) =>
+    s.items.find((it) => it.kind === "perm") as Extract<LogItem, { kind: "perm" }>;
+
+  it("带 tool_call_id 的 perm 存入 toolCallId 并锚定到同 id 工具卡(独立卡不渲染)", () => {
+    const s = run([tool, reqAnchored]);
+    const perm = permOf(s);
+    expect(perm.toolCallId).toBe("tu_1");
+    const anchors = permAnchors(s.items);
+    expect(anchors.get("tu_1")).toBe(perm); // LogList 据此嵌按钮行、跳过独立卡
+  });
+
+  it("无 tool_call_id(旧引擎/云端任务流)不写字段、不锚定,回退独立卡", () => {
+    const s = run([tool, frame("permission-req", { id: "p2", title: "rm x", tool: "Bash" })]);
+    expect("toolCallId" in permOf(s)).toBe(false);
+    expect(permAnchors(s.items).size).toBe(0);
+  });
+
+  it("带 tool_call_id 但流里找不到对应工具卡时同样回退独立卡", () => {
+    const s = run([frame("permission-req", { id: "p3", title: "rm x", tool: "Bash", tool_call_id: "无此卡" })]);
+    expect(permOf(s).toolCallId).toBe("无此卡");
+    expect(permAnchors(s.items).size).toBe(0);
+  });
+
+  it("锚定后 resolve 即解除(按钮行消失),拒绝路径工具卡走 failed 流转", () => {
+    const s = run([tool, reqAnchored]);
+    // 本地应答拒绝 → open 解除 → 锚定消失
+    const answered = answerPerm(s, "p1", false);
+    expect(permAnchors(answered.items).size).toBe(0);
+    // 引擎拒绝后回 is_error 的 tool_result → 驱动产 failed 帧,卡片自然转 fail
+    const failed = reduceFrame(
+      answered,
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "tu_1", status: "failed", rawOutput: "Error: tool Bash denied: user denied" }),
+    );
+    expect(toolItem(failed, "tu_1").status).toBe("fail");
+    // resolved 帧到达(approved)同样解除锚定,工具卡照常 completed
+    const resolved = reduceFrame(s, frame("permission-resolved", { id: "p1", outcome: "approved" }));
+    expect(permAnchors(resolved.items).size).toBe(0);
+    expect(permOf(resolved).state).toBe("approved");
+    // 轮次结束把开放审批过期,锚定同步解除
+    expect(permAnchors(run([tool, reqAnchored, frame("task-ended")]).items).size).toBe(0);
   });
 });
 

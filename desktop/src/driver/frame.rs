@@ -143,8 +143,15 @@ pub fn user_input(text: &str, seq: u64) -> Value {
     build("user-input", None, Some(json!({ "content": b64_text(text) })), seq)
 }
 
-pub fn permission_req(id: &str, tool: &str, title: &str, seq: u64) -> Value {
-    build("permission-req", None, Some(json!({ "id": id, "tool": tool, "title": title })), seq)
+/// tool_call_id:引擎透传的 provider 工具调用 id(permissionToolCallId cap,
+/// 与先行到达的 tool_call 帧同 id)。UI 据此把审批按钮嵌进对应工具卡;
+/// 空则省略字段(旧引擎/provider 未给 id),UI 回退独立审批大卡。
+pub fn permission_req(id: &str, tool: &str, title: &str, tool_call_id: &str, seq: u64) -> Value {
+    let mut d = json!({ "id": id, "tool": tool, "title": title });
+    if !tool_call_id.is_empty() {
+        d["tool_call_id"] = json!(tool_call_id);
+    }
+    build("permission-req", None, Some(d), seq)
 }
 
 pub fn permission_resolved(id: &str, outcome: PermOutcome, seq: u64) -> Value {
