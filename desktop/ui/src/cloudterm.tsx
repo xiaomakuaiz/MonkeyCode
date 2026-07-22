@@ -39,6 +39,11 @@ export function CloudTerminal({ vmId }: { vmId: string }) {
     const sendJSON = (v: unknown) => void pipe?.send(JSON.stringify(v)).catch(() => {});
     const sendResize = () => sendJSON({ type: "resize", data: JSON.stringify({ row: term.rows, col: term.cols }) });
 
+    // 诊断覆盖层:首个 data 帧写入前显示连接/收帧进度——黑屏时凭这行字
+    // 就能区分"帧没到 webview"(计数不动)与"xterm 没渲染"(计数在涨)
+    let frames = 0;
+    let gotData = false;
+
     connectCloudTerminal(vmId, crypto.randomUUID(), {
       onText(text) {
         let m: { type?: string; data?: string };
@@ -47,17 +52,26 @@ export function CloudTerminal({ vmId }: { vmId: string }) {
         } catch {
           return;
         }
+        frames += 1;
+        if (frames <= 5) console.debug(`[cloudterm] 帧#${frames}:`, text.slice(0, 120));
         switch (m.type) {
           case "data":
-            if (m.data) term.write(b64.dec(m.data));
+            if (m.data) {
+              term.write(b64.dec(m.data));
+              if (!gotData) {
+                gotData = true;
+                setStatus("");
+              }
+            }
             break;
           case "connected":
-            setStatus("");
+            if (!gotData) setStatus(`终端已连接,等待输出…(${frames} 帧)`);
             break;
           case "error":
             setStatus(m.data || "终端出错");
             break;
           default: // ping/resize 等
+            if (!gotData) setStatus(`终端已连接,等待输出…(${frames} 帧)`);
         }
       },
       onClose() {
@@ -70,8 +84,14 @@ export function CloudTerminal({ vmId }: { vmId: string }) {
           return;
         }
         pipe = p;
-        setStatus("");
-        sendResize();
+        if (!gotData) setStatus("终端已连接,等待输出…(0 帧)");
+        // 对齐 web 端:连接后等 DOM 落定再 fit + 上报尺寸,过早 fit 的
+        // 行列数可能失真;顺带聚焦,光标可见
+        requestAnimationFrame(() => {
+          fit.fit();
+          sendResize();
+          term.focus();
+        });
         ping = setInterval(() => sendJSON({ type: "ping" }), 5000);
       })
       .catch((e) => {
