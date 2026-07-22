@@ -212,6 +212,19 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .hrow .row-acts { opacity: 0; transition: opacity 0.12s ease; }
 .hrow:hover .row-acts { opacity: 1; }
 
+/* 消息时间放在消息外侧留白区:常态只保留弱提示,悬停消息时才提亮。 */
+.mc-message-time {
+  color: var(--t6);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  opacity: 0.5;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.12s ease, opacity 0.12s ease;
+}
+.mc-message-row:hover > .mc-message-time { color: var(--t4); opacity: 1; }
+
 /* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */
 .hl .hljs-comment, .hl .hljs-quote { color: var(--t5); font-style: italic; }
 .hl .hljs-keyword, .hl .hljs-selector-tag, .hl .hljs-meta, .hl .hljs-doctag { color: var(--hlKw); }

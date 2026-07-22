@@ -577,18 +577,25 @@ function TurnDivider() {
 /** 用户消息里的附件行:`[图片]/[文件] <工作区相对路径>`(composer 发送时拼接的约定格式) */
 const ATT_LINE = /^\[(图片|文件)\] (\S+)$/;
 
-/** 消息时间:按系统本地时区展示,悬停可查看完整日期。 */
-function MessageTime({ timestamp, align }: { timestamp?: number; align: "left" | "right" }) {
+/** 消息时间:贴在消息外侧留白区,不占正文高度;悬停可查看完整日期。 */
+function MessageTime({ timestamp, side }: { timestamp?: number; side: "left-bottom" | "right-top" }) {
   if (timestamp === undefined || !Number.isFinite(timestamp)) return null;
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return null;
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   return (
-    <div
+    <time
+      className="mc-message-time"
+      dateTime={date.toISOString()}
       title={date.toLocaleString()}
-      style={{ marginTop: 4, color: "var(--t6)", fontSize: 10.5, lineHeight: 1.2, textAlign: align }}
+      style={
+        side === "left-bottom"
+          ? { position: "absolute", right: "calc(100% + 8px)", bottom: 4 }
+          : { position: "absolute", left: "calc(100% + 8px)", top: 7 }
+      }
     >
-      {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-    </div>
+      {time}
+    </time>
   );
 }
 
@@ -615,71 +622,72 @@ function UserBubble({
   const body = rest.join("\n").trim();
   return (
     <div style={{ display: "flex", justifyContent: "flex-end" }}>
-      <div style={{ maxWidth: "70%" }}>
-        <div
-          style={{
-            background: "var(--userBg)",
-            border: "1px solid var(--accBd)",
-            borderRadius: "12px 12px 3px 12px",
-            padding: "9px 15px",
-            fontSize: 13.5,
-            lineHeight: 1.6,
-            color: "var(--t1)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            animation: "mcin .25s ease",
-          }}
-        >
-          {body}
-          {(images.length > 0 || files.length > 0) && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: body ? 8 : 2, alignItems: "center" }}>
-              {images.map((p) => (
-                <UploadImg
-                  key={p}
-                  load={() => uploadUrl!(p)}
-                  alt={p}
-                  title={p}
-                  onClick={() => setZoom(p)}
-                  style={{
-                    maxWidth: 150,
-                    maxHeight: 120,
-                    borderRadius: 8,
-                    border: "1px solid var(--accBd)",
-                    cursor: "zoom-in",
-                    display: "block",
-                  }}
-                />
-              ))}
-              {files.map((p) => (
-                <span
-                  key={p}
-                  title={p + "(点击下载)"}
-                  onClick={() => downloadUpload(() => uploadUrl!(p), p.split("/").pop() || "附件")}
-                  style={{
-                    height: 28,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "0 10px",
-                    borderRadius: 8,
-                    border: "1px solid var(--accBd)",
-                    background: "var(--card)",
-                    fontSize: 12,
-                    color: "var(--t2)",
-                    maxWidth: 240,
-                    cursor: "pointer",
-                  }}
-                >
-                  📄
-                  <span className="ellipsis">
-                    {p.split("/").pop()}
-                  </span>
+      <div
+        className="mc-message-row"
+        style={{
+          position: "relative",
+          maxWidth: "70%",
+          background: "var(--userBg)",
+          border: "1px solid var(--accBd)",
+          borderRadius: "12px 12px 3px 12px",
+          padding: "9px 15px",
+          fontSize: 13.5,
+          lineHeight: 1.6,
+          color: "var(--t1)",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          animation: "mcin .25s ease",
+        }}
+      >
+        {body}
+        {(images.length > 0 || files.length > 0) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: body ? 8 : 2, alignItems: "center" }}>
+            {images.map((p) => (
+              <UploadImg
+                key={p}
+                load={() => uploadUrl!(p)}
+                alt={p}
+                title={p}
+                onClick={() => setZoom(p)}
+                style={{
+                  maxWidth: 150,
+                  maxHeight: 120,
+                  borderRadius: 8,
+                  border: "1px solid var(--accBd)",
+                  cursor: "zoom-in",
+                  display: "block",
+                }}
+              />
+            ))}
+            {files.map((p) => (
+              <span
+                key={p}
+                title={p + "(点击下载)"}
+                onClick={() => downloadUpload(() => uploadUrl!(p), p.split("/").pop() || "附件")}
+                style={{
+                  height: 28,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "0 10px",
+                  borderRadius: 8,
+                  border: "1px solid var(--accBd)",
+                  background: "var(--card)",
+                  fontSize: 12,
+                  color: "var(--t2)",
+                  maxWidth: 240,
+                  cursor: "pointer",
+                }}
+              >
+                📄
+                <span className="ellipsis">
+                  {p.split("/").pop()}
                 </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <MessageTime timestamp={timestamp} align="right" />
+              </span>
+            ))}
+          </div>
+        )}
+        <MessageTime timestamp={timestamp} side="left-bottom" />
       </div>
       {zoom && (
         <div
@@ -722,9 +730,12 @@ function ItemView({
       return <UserBubble text={item.text} timestamp={item.timestamp} uploadUrl={uploadUrl} />;
     case "agent":
       return (
-        <div style={{ maxWidth: "92%", wordBreak: "break-word", animation: "mcin .25s ease" }}>
+        <div
+          className="mc-message-row"
+          style={{ position: "relative", maxWidth: "92%", wordBreak: "break-word", animation: "mcin .25s ease" }}
+        >
           <Markdown text={item.text} />
-          <MessageTime timestamp={item.timestamp} align="left" />
+          <MessageTime timestamp={item.timestamp} side="right-top" />
         </div>
       );
     case "thought":
