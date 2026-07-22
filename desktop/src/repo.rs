@@ -26,7 +26,7 @@ impl RepoCtx {
     /// 本地文件系统视角的工作区根(WSL 模式转 UNC)。
     fn fs_root(&self) -> PathBuf {
         match &self.wsl_distro {
-            Some(d) => PathBuf::from(format!(r"\\wsl$\{}{}", d, self.workdir.replace('/', r"\"))),
+            Some(d) => crate::wsl::unc_path(d, &self.workdir),
             None => PathBuf::from(&self.workdir),
         }
     }
@@ -46,8 +46,10 @@ impl RepoCtx {
         Ok(self.fs_root().join(rel))
     }
 
-    /// 在工作区内执行 git(WSL 模式经 wsl.exe 在 guest 内跑)。
-    fn git(&self, args: &[&str]) -> Result<String, String> {
+    /// 在工作区内执行 git 的唯一通道(WSL 模式经 wsl.exe 在 guest 内跑)。
+    /// allow_fail:非零退出码不视为错误,只取 stdout(diff --no-index 有
+    /// 差异时退出码为 1 这类"正常失败")。
+    fn run_git(&self, args: &[&str], allow_fail: bool) -> Result<String, String> {
         let out = match &self.wsl_distro {
             Some(d) => Command::new(crate::wsl::wsl_exe())
                 .args(["-d", d, "--cd", &self.workdir, "--exec", "git"])
@@ -56,22 +58,19 @@ impl RepoCtx {
             None => Command::new("git").current_dir(&self.workdir).args(args).output(),
         }
         .map_err(|e| format!("git 执行失败: {e}"))?;
-        if !out.status.success() {
+        if !allow_fail && !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    /// diff --no-index 有差异时退出码为 1,非错误;只取 stdout。
+    fn git(&self, args: &[&str]) -> Result<String, String> {
+        self.run_git(args, false)
+    }
+
     fn git_allow_fail(&self, args: &[&str]) -> String {
-        let out = match &self.wsl_distro {
-            Some(d) => Command::new(crate::wsl::wsl_exe())
-                .args(["-d", d, "--cd", &self.workdir, "--exec", "git"])
-                .args(args)
-                .output(),
-            None => Command::new("git").current_dir(&self.workdir).args(args).output(),
-        };
-        out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+        // spawn 失败也吞掉返回空:调用方(未跟踪文件 diff)按无差异降级
+        self.run_git(args, true).unwrap_or_default()
     }
 
     fn is_git_repo(&self) -> bool {

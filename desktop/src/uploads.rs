@@ -48,7 +48,7 @@ fn uploads_root(workdir: &str, wsl_distro: Option<&str>) -> Result<PathBuf, Stri
         return Err("会话缺少工作目录,无法定位附件目录".into());
     }
     Ok(match wsl_distro {
-        Some(d) => PathBuf::from(format!(r"\\wsl$\{}{}", d, workdir.replace('/', r"\"))),
+        Some(d) => crate::wsl::unc_path(d, workdir),
         None => PathBuf::from(workdir),
     })
 }

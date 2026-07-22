@@ -11,7 +11,7 @@ pub mod wechat;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Mutex as StdMutex;
+use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -212,7 +212,7 @@ impl Service {
     /// 返回 data(缺 data 字段时返回整个响应体,对齐移动端语义)。
     pub async fn call(&self, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
         let (data, status) = self.account_do(method, path, body).await?;
-        envelope_unwrap(&data, status, "百智云")
+        unwrap_envelope(&data, status, &ENV_BAIZHI)
     }
 
     /// 请求裸结构端点(验证码 challenge/redeem 不套包壳;2xx 即成功)。
@@ -313,21 +313,67 @@ impl Service {
 
 // ==================== 包壳/错误辅助 ====================
 
-/// 解开 {code,message,success,data} 包壳:code!=0 或 success=false 或非 2xx 即失败。
-fn envelope_unwrap(data: &[u8], status: u16, label: &str) -> BzResult<Value> {
+/// 包壳解包策略。四个后端(百智云账号域/模型网关/MCP 网关/MonkeyCode)的
+/// {code,message,(success),data} 包壳结构相同,差异只在 code 合法值集合、
+/// 3xx/401 处理与 data 缺失兜底——用参数钉住差异,防止各自拷贝后语义漂移。
+pub(crate) struct Envelope {
+    /// http_error 的前缀标签(拉丁词标签自带尾部空格,与中文拼接时留排版间隔)
+    pub label: &'static str,
+    /// code 字段合法值判定(收到的是 `v.get("code")` 原值,含缺失/非数字情形)
+    pub code_ok: fn(Option<&Value>) -> bool,
+    /// 是否额外检查 success 布尔字段(百智云账号域包壳带 success)
+    pub check_success: bool,
+    /// Some(文案):3xx 直接以该文案判失败(MCP 网关未开通时不重定向即 302)
+    pub redirect_msg: Option<&'static str>,
+    /// Some(文案):401 不看响应体,直接返回固定 Unauthorized
+    /// (MonkeyCode 链路的 401 恢复动作是"重新同步云端账号"而非重新登录)
+    pub fixed_401: Option<&'static str>,
+    /// data 缺失/为 null 时:true 返回整个响应体(百智云,对齐移动端),false 返回 Null
+    pub whole_body_fallback: bool,
+}
+
+/// 常规 code 判定:整数 0 合法;缺失或非数字不视为失败(与各链路原语义一致)。
+pub(crate) fn code_is_zero(c: Option<&Value>) -> bool {
+    c.and_then(Value::as_i64).map(|x| x == 0).unwrap_or(true)
+}
+
+/// 百智云账号域:包壳带 success 布尔;缺 data 回整个响应体(对齐移动端)。
+pub(crate) const ENV_BAIZHI: Envelope = Envelope {
+    label: "百智云",
+    code_ok: code_is_zero,
+    check_success: true,
+    redirect_msg: None,
+    fixed_401: None,
+    whole_body_fallback: true,
+};
+
+/// 按策略解开包壳:非 2xx 或 code/success 判失败;失败信息经 clean_message,
+/// 401 转 Unauthorized 哨兵;成功取 data。
+pub(crate) fn unwrap_envelope(data: &[u8], status: u16, p: &Envelope) -> BzResult<Value> {
+    if let Some(msg) = p.fixed_401 {
+        if status == 401 {
+            return Err(BzErr::Unauthorized(msg.into()));
+        }
+    }
+    if let Some(msg) = p.redirect_msg {
+        if (300..400).contains(&status) {
+            return Err(other(msg));
+        }
+    }
     let is2xx = (200..300).contains(&status);
     let Ok(v) = serde_json::from_slice::<Value>(data) else {
         if is2xx {
             return Ok(Value::Null); // 非 JSON 但 2xx,视为成功无数据
         }
-        return Err(http_error(status, data, label));
+        return Err(http_error(status, data, p.label));
     };
-    let code_fail = v.get("code").and_then(|c| c.as_i64()).map(|c| c != 0).unwrap_or(false);
-    let success_fail = v.get("success").and_then(|s| s.as_bool()).map(|s| !s).unwrap_or(false);
+    let code_fail = !(p.code_ok)(v.get("code"));
+    let success_fail = p.check_success
+        && v.get("success").and_then(|s| s.as_bool()).map(|s| !s).unwrap_or(false);
     if !is2xx || code_fail || success_fail {
         let msg = clean_message(v.get("message").and_then(|m| m.as_str()).unwrap_or(""));
         if msg.is_empty() {
-            return Err(http_error(status, &[], label));
+            return Err(http_error(status, &[], p.label));
         }
         if status == 401 {
             return Err(BzErr::Unauthorized(msg));
@@ -336,14 +382,19 @@ fn envelope_unwrap(data: &[u8], status: u16, label: &str) -> BzResult<Value> {
     }
     match v.get("data") {
         Some(d) if !d.is_null() => Ok(d.clone()),
-        _ => Ok(v),
+        _ if p.whole_body_fallback => Ok(v),
+        _ => Ok(Value::Null),
     }
 }
 
+/// trace_id 剥离正则。LazyLock:clean_message 在每条错误路径上被调,
+/// 现编译正则(微秒级但反复发生)纯属浪费,进程内编译一次即可。
+static TRACE_ID_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\s*\[trace_id:[^\]]+\]\s*$").unwrap());
+
 /// 去掉服务端 message 尾部的 trace_id 标注(对齐移动端)。
 pub fn clean_message(msg: &str) -> String {
-    let re = regex::Regex::new(r"(?i)\s*\[trace_id:[^\]]+\]\s*$").unwrap();
-    re.replace(msg, "").trim().to_string()
+    TRACE_ID_RE.replace(msg, "").trim().to_string()
 }
 
 pub fn http_error(status: u16, body: &[u8], label: &str) -> BzErr {

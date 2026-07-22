@@ -8,9 +8,40 @@
 //     405 确认成功(附 wx_code)
 //  4. 拿到 wx_code 后,带 cookie 罐 GET 百智云回调 → 会话 cookie 落盘
 
+use std::sync::LazyLock;
+
 use base64::Engine as _;
+use regex::Regex;
 
 use super::{clean_message, other, BzResult, Service};
+
+// 页面刮取正则。LazyLock:长轮询每 ~25s 打一次 poll,现编译纯属重复劳动,
+// 进程内编译一次即可。
+//
+// 这三条正则刮的是微信第三方页面,页面一改版就会静默断裂,因此都有
+// tests.rs 里按线上结构快照(2026-07)固化的集成测试钉着——CI 挂了先怀疑
+// 微信改版,再看快照 fixture 与正则哪个过期。
+//
+// 授权页 HTML 里的二维码 <img src="/connect/qrcode/<uuid>">;uuid 同时也是
+// 长轮询的会话标识。
+static QRCODE_UUID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/connect/qrcode/([A-Za-z0-9_-]+)").unwrap());
+// 长轮询应答是一段 JS:window.wx_errcode=405;window.wx_code='xxx';
+static WX_ERRCODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"wx_errcode=(\d+)").unwrap());
+static WX_CODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"wx_code='([^']*)'").unwrap());
+
+/// 长轮询基址推导。微信开放平台的长轮询主机 = 授权页域名加 `lp.` 前缀
+/// (open.weixin.qq.com → lp.open.weixin.qq.com),这是网页版微信登录协议
+/// 多年不变的约定(Go 侧 wechat.go 同款硬编码),页面内容里发现不了,只能
+/// 假设。为让集成测试的单主机假服务端也能接住长轮询,留
+/// MC_DESKTOP_WECHAT_LP_BASE 注入点(与 wsl.rs 的 MC_WSL_EXE shim 同套路);
+/// 线上不设该变量,走 `lp.` 前缀推导。
+fn lp_base_for(scheme: &str, host: &str) -> String {
+    match std::env::var("MC_DESKTOP_WECHAT_LP_BASE") {
+        Ok(v) if !v.is_empty() => v.trim_end_matches('/').to_string(),
+        _ => format!("{scheme}://lp.{host}"),
+    }
+}
 
 /// 单次扫码会话(Service 同一时刻只保留最新一次)。
 pub struct WechatLogin {
@@ -56,26 +87,30 @@ pub async fn start_wechat_login(svc: &Service) -> BzResult<String> {
         .await
         .map_err(|e| other(format!("加载微信授权页失败: {}", e.msg())))?;
     let page_text = String::from_utf8_lossy(&page);
-    let re = regex::Regex::new(r"/connect/qrcode/([A-Za-z0-9_-]+)").unwrap();
-    let uuid = re
+    let uuid = QRCODE_UUID_RE
         .captures(&page_text)
         .and_then(|m| m.get(1))
         .map(|m| m.as_str().to_string())
         .ok_or_else(|| other("微信授权页里没找到二维码(页面结构可能已变化)"))?;
 
-    // 3. 二维码图片
-    let host = auth_url.host_str().unwrap_or("");
-    let scheme = auth_url.scheme();
+    // 3. 二维码图片。与授权页同域,用 join 派生而非拼 scheme://host——
+    // host_str 不含端口,拼接会把非标准端口丢掉(线上无端口无感,
+    // 集成测试的假服务端跑在随机端口上即断)。
+    let qr_url = auth_url
+        .join(&format!("/connect/qrcode/{uuid}"))
+        .map_err(|e| other(format!("二维码地址异常: {e}")))?;
     let img = svc
-        .fetch(&format!("{scheme}://{host}/connect/qrcode/{uuid}"))
+        .fetch(qr_url.as_str())
         .await
         .map_err(|e| other(format!("获取微信二维码失败: {}", e.msg())))?;
+    let host = auth_url.host_str().unwrap_or("");
+    let scheme = auth_url.scheme();
 
     let login = WechatLogin {
         uuid,
         state,
         callback_url: callback,
-        lp_base: format!("{scheme}://lp.{host}"),
+        lp_base: lp_base_for(scheme, host),
     };
     *svc.wx.lock().unwrap() = Some(login);
     Ok(format!(
@@ -103,8 +138,7 @@ pub async fn poll_wechat_login(svc: &Service) -> BzResult<&'static str> {
         .await
         .map_err(|e| other(format!("查询扫码状态失败: {}", e.msg())))?;
     let text = String::from_utf8_lossy(&body);
-    let errcode_re = regex::Regex::new(r"wx_errcode=(\d+)").unwrap();
-    let errcode: i32 = errcode_re
+    let errcode: i32 = WX_ERRCODE_RE
         .captures(&text)
         .and_then(|m| m.get(1))
         .and_then(|m| m.as_str().parse().ok())
@@ -115,8 +149,7 @@ pub async fn poll_wechat_login(svc: &Service) -> BzResult<&'static str> {
         403 => Ok("canceled"),
         402 | 500 => Ok("expired"),
         405 => {
-            let code_re = regex::Regex::new(r"wx_code='([^']*)'").unwrap();
-            let code = code_re
+            let code = WX_CODE_RE
                 .captures(&text)
                 .and_then(|m| m.get(1))
                 .map(|m| m.as_str().to_string())

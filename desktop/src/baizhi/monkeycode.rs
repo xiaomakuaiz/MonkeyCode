@@ -15,6 +15,7 @@
 // 上行经 cloud_ws_send;帧原样转发零翻译(云端 TaskStream 与 UI Frame 同构)。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
@@ -25,7 +26,8 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::{clean_message, BzErr, BzResult, other, Service};
+use super::{code_is_zero, other, unwrap_envelope, BzErr, BzResult, Envelope, Service};
+use crate::util::urlencode;
 
 /// 桥接重定向链上限(实测 4~6 跳,留余量防环)。
 const MAX_BRIDGE_HOPS: usize = 12;
@@ -164,21 +166,21 @@ pub fn mc_host(svc: &Service) -> String {
 pub async fn mc_tasks(svc: &Service, page: u32, size: u32, status: &str) -> BzResult<Value> {
     let mut path = format!("/api/v1/users/tasks?page={page}&size={size}");
     if !status.is_empty() {
-        path.push_str(&format!("&status={}", urlenc(status)));
+        path.push_str(&format!("&status={}", urlencode(status)));
     }
     mc_call(svc, reqwest::Method::GET, &path, None).await
 }
 
 pub async fn mc_task_info(svc: &Service, id: &str) -> BzResult<Value> {
-    mc_call(svc, reqwest::Method::GET, &format!("/api/v1/users/tasks/{}", urlenc(id)), None).await
+    mc_call(svc, reqwest::Method::GET, &format!("/api/v1/users/tasks/{}", urlencode(id)), None).await
 }
 
 /// 云端任务历史回放,归一为 UI 帧词汇:chunk 的 event→type,时间戳纳秒→毫秒;
 /// data(base64)原样透传,与本地会话的 Frame 结构同构。
 pub async fn mc_task_rounds(svc: &Service, id: &str, cursor: &str, limit: u32) -> BzResult<Value> {
-    let mut path = format!("/api/v1/users/tasks/rounds?id={}&limit={limit}", urlenc(id));
+    let mut path = format!("/api/v1/users/tasks/rounds?id={}&limit={limit}", urlencode(id));
     if !cursor.is_empty() {
-        path.push_str(&format!("&cursor={}", urlenc(cursor)));
+        path.push_str(&format!("&cursor={}", urlencode(cursor)));
     }
     let out = mc_call(svc, reqwest::Method::GET, &path, None).await?;
     let chunks = out.get("chunks").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -219,8 +221,17 @@ pub async fn mc_task_stop(svc: &Service, id: &str) -> BzResult<()> {
         .map(|_| ())
 }
 
-/// 云端建任务默认值,与 mobile TASK_DEFAULTS / DEFAULT_SKILL_IDS 及 Web 端一致:
-/// 个人云端固定公共宿主机 + opencode CLI + 2 核 8G 3 小时 + 官方四技能。
+// ---- 云端建任务默认档位(云端契约)----
+// 与 mobile TASK_DEFAULTS / DEFAULT_SKILL_IDS 及 Web 端一致:个人云端固定
+// 公共宿主机 + opencode CLI + 2 核 8G 3 小时 + 官方四技能。
+// 这是云端产品策略,options 各端点(models/images/projects/subscription)
+// 目前均未下发这些档位,只能在壳里钉死;待服务端在 options 应答里补
+// task_defaults 字段后,会经 mc_task_options 透传给 UI、由建任务请求带上
+// 对应字段优先生效(见 mc_task_create 的取用逻辑),届时删除这些常量迁移。
+const MC_DEFAULT_HOST_ID: &str = "public_host";
+const MC_DEFAULT_CLI_NAME: &str = "opencode";
+/// (核数, 内存字节, 存活秒)
+const MC_DEFAULT_RESOURCE: (u64, u64, u64) = (2, 8 << 30, 3 * 60 * 60);
 const MC_DEFAULT_SKILL_IDS: [&str; 4] = [
     "MonkeyCodeOfficialPlugins/main/skills/feature-design",
     "MonkeyCodeOfficialPlugins/main/skills/project-wiki",
@@ -229,6 +240,9 @@ const MC_DEFAULT_SKILL_IDS: [&str; 4] = [
 ];
 
 /// 创建云端任务;返回云端 ProjectTask(含 id)。首轮由服务端用 content 自动启动。
+/// 档位字段(host_id/cli_name/resource/skill_ids)优先取 req 里显式下发的值
+/// (UI 从 mc_task_options 透传的 task_defaults 取),缺省用壳内常量——
+/// 云端改档位只需服务端下发,无需壳发版。
 pub async fn mc_task_create(svc: &Service, req: &Value) -> BzResult<Value> {
     let get = |k: &str| req.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let (content, model_id, image_id) = (get("content"), get("model_id"), get("image_id"));
@@ -244,19 +258,34 @@ pub async fn mc_task_create(svc: &Service, req: &Value) -> BzResult<Value> {
             repo["branch"] = json!(branch);
         }
     }
-    let mut extra = json!({ "skill_ids": MC_DEFAULT_SKILL_IDS });
+    let host_id = get("host_id");
+    let host_id = if host_id.is_empty() { MC_DEFAULT_HOST_ID.into() } else { host_id };
+    let cli_name = get("cli_name");
+    let cli_name = if cli_name.is_empty() { MC_DEFAULT_CLI_NAME.into() } else { cli_name };
+    let resource = match req.get("resource") {
+        Some(r) if r.is_object() => r.clone(),
+        _ => {
+            let (core, memory, life) = MC_DEFAULT_RESOURCE;
+            json!({ "core": core, "memory": memory, "life": life })
+        }
+    };
+    let skill_ids = match req.get("skill_ids").and_then(|v| v.as_array()) {
+        Some(a) if !a.is_empty() => json!(a),
+        _ => json!(MC_DEFAULT_SKILL_IDS),
+    };
+    let mut extra = json!({ "skill_ids": skill_ids });
     let project_id = get("project_id");
     if !project_id.is_empty() {
         extra["project_id"] = json!(project_id);
     }
     let payload = json!({
         "content": content,
-        "host_id": "public_host",
+        "host_id": host_id,
         "image_id": image_id,
         "model_id": model_id,
         "repo": repo,
-        "cli_name": "opencode",
-        "resource": { "core": 2, "memory": 8u64 << 30, "life": 3 * 60 * 60 },
+        "cli_name": cli_name,
+        "resource": resource,
         "task_type": "develop",
         "extra": extra,
     });
@@ -280,6 +309,12 @@ pub async fn mc_task_options(svc: &Service) -> BzResult<Value> {
         "projects": [],
         "plan": "",
     });
+    // 服务端若在 models 应答里下发 task_defaults(host_id/cli_name/resource/
+    // skill_ids 档位),原样透传给 UI;UI 建任务时带上,mc_task_create 即优先
+    // 取用,壳内常量退位(云端调档不再依赖壳发版)。当前真实云端无此字段。
+    if let Some(d) = models.get("task_defaults").filter(|d| d.is_object()) {
+        res["task_defaults"] = d.clone();
+    }
     if let Ok(projects) = mc_call(svc, reqwest::Method::GET, "/api/v1/users/projects?limit=50", None).await {
         res["projects"] = arr(&projects, "projects");
     }
@@ -289,39 +324,22 @@ pub async fn mc_task_options(svc: &Service) -> BzResult<Value> {
     Ok(res)
 }
 
-/// 请求 MonkeyCode 云端接口并解开 {code,message,data} 包壳
-/// (401 即会话失效,code!=0 即业务失败)。
+/// MonkeyCode 云端包壳 {code,message,data}。401 不看响应体直接判会话失效:
+/// 恢复动作是"重新同步云端账号"(桥接登录),与百智云的"重新登录"不同。
+pub(crate) const ENV_MC: Envelope = Envelope {
+    label: "MonkeyCode ", // 尾部空格:拉丁词与中文文案之间的排版间隔
+    code_ok: code_is_zero,
+    check_success: false,
+    redirect_msg: None,
+    fixed_401: Some("MonkeyCode 会话已失效,请重新同步云端账号"),
+    whole_body_fallback: false,
+};
+
+/// 请求 MonkeyCode 云端接口并解开包壳。
 async fn mc_call(svc: &Service, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
     let target = format!("{}{}", svc.ep.monkeycode, path);
     let (data, status) = svc.do_store(&svc.mc, method, &target, body).await?;
-    if status == 401 {
-        return Err(BzErr::Unauthorized("MonkeyCode 会话已失效,请重新同步云端账号".into()));
-    }
-    let is2xx = (200..300).contains(&status);
-    let Ok(v) = serde_json::from_slice::<Value>(&data) else {
-        if is2xx {
-            return Ok(Value::Null);
-        }
-        return Err(other(format!("MonkeyCode 请求失败(HTTP {status})")));
-    };
-    let code_fail = v.get("code").and_then(|c| c.as_i64()).map(|c| c != 0).unwrap_or(false);
-    if code_fail || !is2xx {
-        let msg = clean_message(v.get("message").and_then(|m| m.as_str()).unwrap_or(""));
-        if msg.is_empty() {
-            return Err(other(format!("MonkeyCode 请求失败(HTTP {status})")));
-        }
-        return Err(other(msg));
-    }
-    Ok(v.get("data").cloned().unwrap_or(Value::Null))
-}
-
-fn urlenc(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
+    unwrap_envelope(&data, status, &ENV_MC)
 }
 
 // ==================== 云端 WS 桥 ====================
@@ -331,16 +349,48 @@ enum PipeMsg {
     Close,
 }
 
+/// 注册表条目:sender + 代次。代次防"跨代误删"——旧转发任务收尾时
+/// 同名 pipe 可能已被 close+重开占用,无代次比较会摘掉新连接的注册项
+/// (同 src/browser/bridge.rs drop_conn 的 epoch 方案)。
+struct PipeEntry {
+    gen: u64,
+    tx: mpsc::UnboundedSender<PipeMsg>,
+}
+
 /// 云端 WS 管道注册表(壳级单例;与引擎无关)。
 /// pipe id 由 UI 生成并先注册好事件监听再来开管道——若由壳生成,
 /// 监听注册(异步 IPC)会与转发任务的首批 emit 赛跑,attach 回放丢头帧。
 pub struct CloudPipes {
-    pipes: StdMutex<HashMap<String, mpsc::UnboundedSender<PipeMsg>>>,
+    pipes: StdMutex<HashMap<String, PipeEntry>>,
+    /// 代次发号器(进程内单调递增,溢出无虞)
+    next_gen: AtomicU64,
 }
 
 impl CloudPipes {
     pub fn new() -> Self {
-        Self { pipes: StdMutex::new(HashMap::new()) }
+        Self { pipes: StdMutex::new(HashMap::new()), next_gen: AtomicU64::new(0) }
+    }
+
+    /// 检查与占位一步完成(持同一把锁):占用即报错,否则立刻 insert——
+    /// 消除"检查通过→20s 连接→才 insert"窗口里并发 open 同名 pipe 的
+    /// TOCTOU(双流交织、互删注册项)。返回本次的代次。
+    fn claim(&self, pipe: &str, tx: mpsc::UnboundedSender<PipeMsg>) -> Result<u64, String> {
+        let gen = self.next_gen.fetch_add(1, Ordering::Relaxed);
+        let mut map = self.pipes.lock().unwrap();
+        if map.contains_key(pipe) {
+            return Err("该管道已在连接中或已占用".into());
+        }
+        map.insert(pipe.to_string(), PipeEntry { gen, tx });
+        Ok(gen)
+    }
+
+    /// 按代次摘除:仅当注册项仍是自己那一代才删——连接失败/转发任务收尾
+    /// 只清理自己的占位,不碰后来者。
+    fn remove_gen(&self, pipe: &str, gen: u64) {
+        let mut map = self.pipes.lock().unwrap();
+        if map.get(pipe).map(|e| e.gen) == Some(gen) {
+            map.remove(pipe);
+        }
     }
 }
 
@@ -350,15 +400,15 @@ fn pipe_urls(svc: &Service, kind: &str, id: &str, params: &Value) -> Result<(Str
         "stream" => {
             let mode = params.get("mode").and_then(|v| v.as_str()).unwrap_or("attach");
             let mode = if mode == "new" { "new" } else { "attach" };
-            format!("/api/v1/users/tasks/stream?id={}&mode={mode}", urlenc(id))
+            format!("/api/v1/users/tasks/stream?id={}&mode={mode}", urlencode(id))
         }
-        "control" => format!("/api/v1/users/tasks/control?id={}", urlenc(id)),
+        "control" => format!("/api/v1/users/tasks/control?id={}", urlencode(id)),
         "terminal" => {
             let tid = params.get("terminal_id").and_then(|v| v.as_str()).unwrap_or("");
             if tid.is_empty() {
                 return Err("缺少 terminal_id".into());
             }
-            format!("/api/v1/users/hosts/vms/{}/terminals/connect?terminal_id={}", urlenc(id), urlenc(tid))
+            format!("/api/v1/users/hosts/vms/{}/terminals/connect?terminal_id={}", urlencode(id), urlencode(tid))
         }
         _ => return Err(format!("未知 WS 桥类型 {kind}")),
     };
@@ -380,8 +430,8 @@ pub async fn cloud_ws_open(
     if id.is_empty() {
         return Err("缺少资源 ID".into());
     }
-    if pipe.is_empty() || pipe.len() > 64 || pipes.pipes.lock().unwrap().contains_key(&pipe) {
-        return Err("pipe id 非法或已占用".into());
+    if pipe.is_empty() || pipe.len() > 64 {
+        return Err("pipe id 非法".into());
     }
     let svc = &bz.0;
     if svc.mc.is_empty() {
@@ -402,6 +452,12 @@ pub async fn cloud_ws_open(
         }
     }
 
+    // 连接前先占位(检查+insert 同锁):并发的第二次 open 同名 pipe 立即
+    // 报错,而不是各自跨过 20s 连接窗口后互相覆盖/互删(TOCTOU)。
+    // 副作用是连接期间 cloud_ws_send 的帧会入队缓冲,连上后按序发出。
+    let (tx, mut rx) = mpsc::unbounded_channel::<PipeMsg>();
+    let my_gen = pipes.claim(&pipe, tx)?;
+
     // 读上限:云端工具输出帧可以很大(Go 侧代理为此把下行上限提到 32MB,
     // "默认 32KB 必炸");tungstenite 默认 max_frame_size 16MiB 不够,放宽到
     // 64MiB(消息级同步放宽),超限会断流并陷入重连循环
@@ -410,26 +466,29 @@ pub async fn cloud_ws_open(
         max_frame_size: Some(64 << 20),
         ..Default::default()
     };
-    let (ws, _) = tokio::time::timeout(
+    let ws = match tokio::time::timeout(
         Duration::from_secs(20),
         tokio_tungstenite::connect_async_with_config(req, Some(ws_config), false),
     )
     .await
-    .map_err(|_| {
-        // 失败必须落壳日志:UI 只拿到 invoke 错误串,循环重连时无从追查
-        eprintln!("[desktop] 云端 WS({kind}) 连接超时 url={ws_url}");
-        "连接云端任务流超时".to_string()
-    })?
-    .map_err(|e| {
-        let msg = format!("连接云端任务流失败: {e}");
-        eprintln!("[desktop] 云端 WS({kind}) {msg} url={ws_url}");
-        msg
-    })?;
+    {
+        // 失败必须落壳日志:UI 只拿到 invoke 错误串,循环重连时无从追查;
+        // 并且要移除自己的占位(按代次,不误删期间 close+重开的新连接)
+        Err(_) => {
+            pipes.remove_gen(&pipe, my_gen);
+            eprintln!("[desktop] 云端 WS({kind}) 连接超时 url={ws_url}");
+            return Err("连接云端任务流超时".into());
+        }
+        Ok(Err(e)) => {
+            pipes.remove_gen(&pipe, my_gen);
+            let msg = format!("连接云端任务流失败: {e}");
+            eprintln!("[desktop] 云端 WS({kind}) {msg} url={ws_url}");
+            return Err(msg);
+        }
+        Ok(Ok((ws, _))) => ws,
+    };
 
     let pipe_id = pipe;
-    let (tx, mut rx) = mpsc::unbounded_channel::<PipeMsg>();
-    pipes.pipes.lock().unwrap().insert(pipe_id.clone(), tx);
-
     let pid = pipe_id.clone();
     let pipes_map = {
         // 任务内需要清理注册表:经 AppHandle state 再取(CloudPipes 是 'static 管理态)
@@ -443,6 +502,9 @@ pub async fn cloud_ws_open(
         let mut close_info: Option<Value> = None;
         loop {
             tokio::select! {
+                // biased + rx 在前:连接期间 UI 可能已 close(Close 在队列里),
+                // 必须先于下行帧处理,否则会向已注销的 pipe 多 emit 几帧
+                biased;
                 msg = rx.recv() => match msg {
                     Some(PipeMsg::Text(t)) => {
                         if sink.send(Message::Text(t.into())).await.is_err() {
@@ -467,7 +529,8 @@ pub async fn cloud_ws_open(
             }
         }
         use tauri::Manager;
-        pipes_map.state::<CloudPipes>().pipes.lock().unwrap().remove(&pid);
+        // 收尾按代次摘除:pipe 可能已被 close+重开,不能删别人那一代
+        pipes_map.state::<CloudPipes>().remove_gen(&pid, my_gen);
         let _ = pipes_map.emit_to("main", &format!("ws-closed:{pid}"), close_info);
     });
     Ok(pipe_id)
@@ -476,14 +539,14 @@ pub async fn cloud_ws_open(
 #[tauri::command]
 pub async fn cloud_ws_send(pipes: State<'_, CloudPipes>, pipe: String, text: String) -> Result<(), String> {
     let map = pipes.pipes.lock().unwrap();
-    let tx = map.get(&pipe).ok_or_else(|| "连接已关闭".to_string())?;
-    tx.send(PipeMsg::Text(text)).map_err(|_| "连接已关闭".to_string())
+    let entry = map.get(&pipe).ok_or_else(|| "连接已关闭".to_string())?;
+    entry.tx.send(PipeMsg::Text(text)).map_err(|_| "连接已关闭".to_string())
 }
 
 #[tauri::command]
 pub async fn cloud_ws_close(pipes: State<'_, CloudPipes>, pipe: String) -> Result<(), String> {
-    if let Some(tx) = pipes.pipes.lock().unwrap().remove(&pipe) {
-        let _ = tx.send(PipeMsg::Close);
+    if let Some(entry) = pipes.pipes.lock().unwrap().remove(&pipe) {
+        let _ = entry.tx.send(PipeMsg::Close);
     }
     Ok(())
 }

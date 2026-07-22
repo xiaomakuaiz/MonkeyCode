@@ -30,7 +30,7 @@ pub fn serve(sess: BrowserSession, workdir: WorkdirFn) -> Result<(String, String
     let listener =
         TcpListener::bind("127.0.0.1:0").map_err(|e| format!("MCP 监听失败: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
-    let token = new_token();
+    let token = new_token()?;
     let url = format!("http://{addr}/mcp");
 
     let tok = token.clone();
@@ -49,43 +49,26 @@ pub fn serve(sess: BrowserSession, workdir: WorkdirFn) -> Result<(String, String
     Ok((url, token))
 }
 
-fn new_token() -> String {
-    // 随机 32 hex:进程内每次启动新发(mcp.json 随引擎重启重写,不需持久)
+fn new_token() -> Result<String, String> {
+    // 随机 32 hex:进程内每次启动新发(mcp.json 随引擎重启重写,不需持久)。
+    // 熵源用 getrandom crate(与 bridge.rs 配对 token 同源):跨平台走系统
+    // CSPRNG(Windows 无 /dev/urandom,手写读文件必退化)。失败直接报错让
+    // serve 整体失败(能力降级)——不做弱随机兜底,token 可猜等于鉴权白设
     let mut buf = [0u8; 16];
-    getrandom(&mut buf);
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// 平台无关的随机字节(std 无直接接口;用 UUID 思路:时间 + 地址熵会太弱,
-/// 这里读 /dev/urandom,Windows 用 std 的 RandomState 哈希链兜底)。
-fn getrandom(buf: &mut [u8]) {
-    #[cfg(unix)]
-    {
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            if f.read_exact(buf).is_ok() {
-                return;
-            }
-        }
-    }
-    // 兜底:RandomState 内部持系统熵种子,哈希链导出
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let rs = RandomState::new();
-    let mut x: u64 = 0;
-    for chunk in buf.chunks_mut(8) {
-        let mut h = rs.build_hasher();
-        h.write_u64(x);
-        x = h.finish();
-        for (i, b) in chunk.iter_mut().enumerate() {
-            *b = (x >> (8 * i)) as u8;
-        }
-    }
+    getrandom::getrandom(&mut buf).map_err(|e| format!("系统随机源不可用: {e}"))?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tokio::sync::Mutex<()>, workdir: &WorkdirFn) {
     let Some(req) = read_http_request(&mut conn) else { return };
 
-    if req.bearer.as_deref() != Some(token) {
+    // 常时比较(复用 bridge.rs 的 ct_eq):`!=` 明文比对逐字节短路,
+    // 本机恶意进程可按响应时延逐位试出 token
+    let authed = req
+        .bearer
+        .as_deref()
+        .is_some_and(|b| super::bridge::ct_eq(b.as_bytes(), token.as_bytes()));
+    if !authed {
         write_http(&mut conn, 401, "application/json", br#"{"error":"unauthorized"}"#);
         return;
     }
@@ -163,7 +146,12 @@ async fn dispatch(
             // MCP 语义:工具失败走 isError 带回模型(可行动文案),不是协议错误
             Ok(match out {
                 Ok(content) => json!({ "content": content, "isError": false }),
-                Err(msg) => json!({ "content": [{ "type": "text", "text": msg }], "isError": true }),
+                // 最终出口:剥除进程内错误标记(如 [ERR_DETACHED],供 session
+                // 层做错误分类),模型只看人读文案
+                Err(msg) => json!({
+                    "content": [{ "type": "text", "text": super::protocol::strip_err_marks(msg) }],
+                    "isError": true,
+                }),
             })
         }
         _ => Err((-32601, format!("method not found: {method}"))),

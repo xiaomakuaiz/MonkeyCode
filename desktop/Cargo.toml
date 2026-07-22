@@ -34,10 +34,16 @@ base64 = "0.22"
 sha2 = "0.10"
 cookie = "0.18"
 regex = "1"
+# cookie 罐过期时间的 RFC3339 解析。time 本就在依赖树里(cookie 的 Expires
+# 解析),显式声明 + parsing feature,替代手写历算(严格校验月/日范围)
+time = { version = "0.3", features = ["parsing"] }
 
 [dev-dependencies]
 # baizhi 集成测试:假服务端 + async 测试运行时
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Rust→TS 契约类型生成(derive 经 cfg_attr(test) 门控,不进产物二进制):
+# `cargo test export_bindings` 产出 desktop/ui/src/gen/,见 driver/frame.rs
+ts-rs = "12"
 
 # 桌宠窗口在 macOS 须是 NonactivatingPanel:普通 NSWindow 被点击会激活
 # 应用(主窗口被提到最前并抢焦点→桌宠被显隐逻辑藏掉)。锁 rev 保证可复现。

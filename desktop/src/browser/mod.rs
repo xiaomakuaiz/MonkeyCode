@@ -39,7 +39,8 @@ pub struct BrowserHost {
     pub session: session::BrowserSession,
 }
 
-/// MCP server 的接入信息(config.rs 物化 mcp.json 内置条目时读)。
+/// MCP server 的接入信息。config 模块不直接读它:mcp.json 物化路径由调用方
+/// (main.rs)在 init 之后查询一次、经 save_config_files 参数显式传入。
 static MCP_ENDPOINT: OnceLock<(String, String)> = OnceLock::new(); // (url, bearer_token)
 
 pub fn mcp_endpoint() -> Option<(String, String)> {

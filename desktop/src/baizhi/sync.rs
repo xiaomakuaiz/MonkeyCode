@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-use super::{clean_message, http_error, other, BzErr, BzResult, Service};
+use super::{code_is_zero, other, unwrap_envelope, BzResult, Envelope, Service};
 
 /// 同步新建密钥的名字(网关控制台里用户可见)。
 const SYNC_KEY_NAME: &str = "MonkeyCode";
@@ -32,33 +32,21 @@ pub async fn sync(svc: &Service, known_keys: &[String]) -> BzResult<Value> {
     }))
 }
 
+/// 模型网关包壳:标准 code=0 判定,无 success 字段。
+pub(crate) const ENV_CONSOLE: Envelope = Envelope {
+    label: "网关",
+    code_ok: code_is_zero,
+    check_success: false,
+    redirect_msg: None,
+    fixed_401: None,
+    whole_body_fallback: false,
+};
+
 /// 模型网关请求(带 cookie),解包 {code,data,message}。
 async fn console_call(svc: &Service, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
     let target = format!("{}{}", svc.ep.model_gateway, path);
     let (data, status) = svc.do_store(&svc.store, method, &target, body).await?;
-    unwrap_console(&data, status)
-}
-
-fn unwrap_console(data: &[u8], status: u16) -> BzResult<Value> {
-    let is2xx = (200..300).contains(&status);
-    let Ok(v) = serde_json::from_slice::<Value>(data) else {
-        if is2xx {
-            return Ok(Value::Null);
-        }
-        return Err(http_error(status, data, "网关"));
-    };
-    let code_fail = v.get("code").and_then(|c| c.as_i64()).map(|c| c != 0).unwrap_or(false);
-    if !is2xx || code_fail {
-        let msg = clean_message(v.get("message").and_then(|m| m.as_str()).unwrap_or(""));
-        if msg.is_empty() {
-            return Err(http_error(status, &[], "网关"));
-        }
-        if status == 401 {
-            return Err(BzErr::Unauthorized(msg));
-        }
-        return Err(other(msg));
-    }
-    Ok(v.get("data").cloned().unwrap_or(Value::Null))
+    unwrap_envelope(&data, status, &ENV_CONSOLE)
 }
 
 /// 确保拿到一把可用(存在且启用)的明文推理密钥。返回 (key, 密钥名, 是否新建)。
@@ -201,39 +189,32 @@ async fn gateway_models(svc: &Service, key: &str) -> BzResult<(Vec<Value>, Vec<S
 
 // ==================== MCP(agent-toolkit)====================
 
-/// agent-toolkit 管理 API 请求。与 console 的差异:code 可能是字符串 "ok";
-/// 3xx 视为未开通(不跟随重定向,首响应即 302)。
-async fn mcp_call(svc: &Service, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
-    let target = format!("{}{}", svc.ep.mcp_gateway, path);
-    let (data, status) = svc.do_store(&svc.store, method, &target, body).await?;
-    if (300..400).contains(&status) {
-        return Err(other("当前团队未开通 Agent 工具包"));
-    }
-    let is2xx = (200..300).contains(&status);
-    let Ok(v) = serde_json::from_slice::<Value>(&data) else {
-        if is2xx {
-            return Ok(Value::Null);
-        }
-        return Err(http_error(status, &data, "MCP 网关"));
-    };
-    let code_ok = match v.get("code") {
-        None => true,
-        Some(Value::Null) => true,
+/// agent-toolkit 的 code 合法值:缺失/null 合法,字符串只认 "ok",数字认 0/200。
+fn code_ok_toolkit(c: Option<&Value>) -> bool {
+    match c {
+        None | Some(Value::Null) => true,
         Some(Value::String(s)) => s == "ok",
         Some(Value::Number(n)) => n.as_i64() == Some(0) || n.as_i64() == Some(200),
         _ => false,
-    };
-    if !is2xx || !code_ok {
-        let msg = clean_message(v.get("message").and_then(|m| m.as_str()).unwrap_or(""));
-        if msg.is_empty() {
-            return Err(http_error(status, &[], "MCP 网关"));
-        }
-        if status == 401 {
-            return Err(BzErr::Unauthorized(msg));
-        }
-        return Err(other(msg));
     }
-    Ok(v.get("data").cloned().unwrap_or(Value::Null))
+}
+
+/// MCP 网关包壳。与 console 的差异:code 可能是字符串 "ok";
+/// 3xx 视为未开通(不跟随重定向,首响应即 302)。
+pub(crate) const ENV_MCP: Envelope = Envelope {
+    label: "MCP 网关",
+    code_ok: code_ok_toolkit,
+    check_success: false,
+    redirect_msg: Some("当前团队未开通 Agent 工具包"),
+    fixed_401: None,
+    whole_body_fallback: false,
+};
+
+/// agent-toolkit 管理 API 请求。
+async fn mcp_call(svc: &Service, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
+    let target = format!("{}{}", svc.ep.mcp_gateway, path);
+    let (data, status) = svc.do_store(&svc.store, method, &target, body).await?;
+    unwrap_envelope(&data, status, &ENV_MCP)
 }
 
 /// 拉 Agent 工具包服务并确保一把 MCP 密钥,映射为单个 streamable-http 条目。

@@ -18,6 +18,7 @@ mod config;
 mod driver;
 mod repo;
 mod uploads;
+mod util;
 mod wsl;
 
 use std::path::PathBuf;
@@ -113,7 +114,9 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
 /// 写清单并(重)启引擎(阻塞流程:优雅停内核 ~10s + 起新内核 ~15s,
 /// 调用方负责丢 blocking 池)。save_config 与 engine_restart 共用。
 fn apply_config_and_restart(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
-    save_config_files(app, config)?;
+    // 浏览器桥 MCP 接入信息在此显式取一次传入(browser::init 在 setup 已
+    // 完成;config 模块不反向读 browser 全局态,依赖走参数)
+    save_config_files(app, config, browser::mcp_endpoint())?;
     if let Some(engine) = app.state::<DriverHost>().take() {
         engine.stop();
     }
@@ -378,60 +381,13 @@ fn create_main_window(app: &AppHandle, page: &str) {
     {
         builder = builder.decorations(false);
     }
-    // 无头冒烟探针:页面加载后自动走一遍 UI→IPC→壳配置 链路,
-    // 结果经本地回环上报(无头环境唯一可靠的回读通道)
+    // 无头冒烟探针:页面加载后自动走一遍 UI→IPC→壳配置 链路,结果经本地
+    // 回环上报(无头环境唯一可靠的回读通道)。脚本外置 probe.js:JS 内嵌
+    // Rust 字符串需要行续接转义,难读难改;include_str! 编译期内联,行为不变
     if std::env::var("MC_DESKTOP_IPC_PROBE").is_ok() {
-        builder = builder.initialization_script(
-            "const report = (m) => { fetch('http://127.0.0.1:18240/probe/' + encodeURIComponent(m), {mode:'no-cors'}).catch(()=>{}); \
-               try { window.__TAURI__ && window.__TAURI__.core.invoke('probe_log', {msg: m}).catch(()=>{}); } catch {} }; \
-             let hb = 0; setInterval(() => report('hb-' + (++hb)), 2000); \
-             window.addEventListener('error', (e) => report('jserr:' + String(e.message).slice(0, 120))); \
-             window.addEventListener('unhandledrejection', (e) => report('rej:' + String(e.reason).slice(0, 120))); \
-             report('script-injected:' + location.search + ':saved=' + (sessionStorage.getItem('mc-probe-saved') || '0')); \
-             setTimeout(() => { \
-               if (!window.__TAURI__ || !window.__TAURI__.core) { report('no-tauri'); return; } \
-               window.__TAURI__.core.invoke('get_config') \
-                 .then((cfg) => { report('invoke-ok'); \
-                   /* 保存→重启引擎 链路:save_config 返回即成功(UI 自行 reload)。 \
-                      延后到其他探针都完成之后(引擎重启期间 IPC 不可用) */ \
-                   if (!sessionStorage.getItem('mc-probe-saved')) { \
-                     sessionStorage.setItem('mc-probe-saved', '1'); \
-                     setTimeout(() => { \
-                       window.__TAURI__.core.invoke('save_config', {config: cfg}) \
-                         .then(() => report('save-ok')) \
-                         .catch((e) => report('save-err:' + String(e).slice(0, 80))); \
-                     }, 12000); \
-                   } \
-                 }) \
-                 .catch((e) => report('invoke-err:' + String(e).slice(0, 80))); \
-               window.__TAURI__.core.invoke('take_ui_intent') \
-                 .then(() => report('take-intent-ok')) \
-                 .catch((e) => report('take-intent-err:' + String(e).slice(0, 80))); \
-               window.__TAURI__.event.listen('mc-probe-evt', () => {}) \
-                 .then(() => report('listen-ok')) \
-                 .catch((e) => report('listen-err:' + String(e).slice(0, 80))); \
-               window.__TAURI__.core.invoke('plugin:opener|open_url', {url: 'https://nav-guard.invalid/from-opener'}) \
-                 .then(() => report('opener-ok')) \
-                 .catch((e) => report('opener-err:' + String(e).slice(0, 80))); \
-               /* 导航守卫探测放最后:引擎重启(save)耗时数秒,且取消中的 \
-                  在途导航在 WebKitGTK 有副作用,不能与其他探针交叠 */ \
-               setTimeout(() => { location.href = 'https://nav-guard.invalid/x'; }, 20000); \
-               setTimeout(() => report('nav-guard-ok'), 21000); \
-             }, 3000);",
-        );
+        builder = builder.initialization_script(include_str!("probe.js"));
     }
     let _ = builder.build();
-}
-
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 // ==================== 桌宠 ====================
@@ -625,9 +581,10 @@ fn main() {
             // 首启向导由 UI 的设置视图承担(壳无业务页面)。
             let cfg = load_config(app.handle());
             app.state::<PetEnabled>().0.store(cfg.pet_enabled, Ordering::Relaxed);
-            // 浏览器桥 + MCP server 先于引擎:配置物化要写入 MCP URL/token
+            // 浏览器桥 + MCP server 先于引擎:配置物化要写入 MCP URL/token,
+            // init 后查询一次显式传参(时序依赖由数据流表达,不靠注释约束)
             browser::init(app.handle());
-            save_config_files(app.handle(), &cfg)?; // 刷新物化配置
+            save_config_files(app.handle(), &cfg, browser::mcp_endpoint())?; // 刷新物化配置
             match driver::start_engine(app.handle(), &cfg) {
                 Ok(engine) => {
                     app.state::<DriverHost>().set(engine);
@@ -636,7 +593,7 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("[desktop] 引擎启动失败: {e}");
-                    create_main_window(app.handle(), &format!("error.html#{}", urlencode(&e)));
+                    create_main_window(app.handle(), &format!("error.html#{}", util::urlencode(&e)));
                 }
             }
             Ok(())

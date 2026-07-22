@@ -11,7 +11,11 @@
 // 上行统一走 invoke 命令(本文件底部,main.rs 注册)。
 
 pub mod frame;
+mod normalize;
 pub mod ohmy;
+mod session;
+mod subagent;
+mod transport;
 
 use std::sync::Mutex;
 

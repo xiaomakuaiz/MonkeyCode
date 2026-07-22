@@ -15,8 +15,12 @@
 //   - 一条连接 = 一个 ConnHandle(writer 任务独占 sink,串行写;reader 任务
 //     独占 stream)。epoch 单调递增,作连接身份(替代 Go 的指针比较)。
 //   - close_handle 幂等(closed 标志 CAS):先置 closed,再排空 pending(oneshot
-//     sender 落栈即唤醒 call() 等待端),最后发关闭哨兵让 writer 退出;writer
-//     退出使 rx 落栈,tx.closed() 随之唤醒 reader/ping 任务——全链路无悬挂。
+//     sender 落栈即唤醒 call() 等待端),最后 notify 关闭信号让 writer 退出
+//     (信号走 Notify 不占出站队列,队满时也关得掉);writer 退出使 rx 落栈,
+//     tx.closed() 随之唤醒 reader/ping 任务——全链路无悬挂。
+//   - 出站队列有界(OUT_QUEUE_CAP),入队一律 try_send 不阻塞:队满 = writer
+//     长时间写不动(扩展端 TCP 停滞),视为连接不健康即刻 drop_conn——任何
+//     入队点都不会在持锁或事件回调里阻塞,内存也不无界积压。
 //   - call() 先挂 pending 再查 closed:与 close_handle「先置 closed 再排空」
 //     构成完备配对,任一交错下等待者都能被唤醒,不丢事件。
 //   - st(StdMutex)只保护短临界区,绝不跨 await 持锁。
@@ -51,6 +55,10 @@ const PING_INTERVAL: Duration = Duration::from_secs(20);
 const PORT_SCAN_RANGE: u32 = 10;
 /// 读上限:整页截图 base64 可达数十 MB。
 const MAX_FRAME: usize = 64 * 1024 * 1024;
+/// 出站帧队列上限。为何有界:单帧可达数十 MB(截图),扩展端 TCP 停滞而
+/// 内核连环发帧时,无界队列等于内存无上限。正常在途量(工具串行 + ping)
+/// 远小于 64,积压到此必是连接不健康,try_send 满即断(见 call/ping_loop)。
+const OUT_QUEUE_CAP: usize = 64;
 
 /// 扩展桥。进程级单例,Clone 即共享同一 Inner。
 #[derive(Clone)]
@@ -94,8 +102,12 @@ struct BridgeState {
 #[derive(Clone)]
 struct ConnHandle {
     /// 出站帧队列:writer 任务独占消费,天然串行写(对应 Go 的 writeMu)。
-    /// 空串是关闭哨兵(见 close_handle / writer_task)。
-    tx: mpsc::UnboundedSender<String>,
+    /// 有界(OUT_QUEUE_CAP),入队一律 try_send:满即判连接不健康走 drop_conn。
+    tx: mpsc::Sender<String>,
+    /// 关闭信号(close_handle → writer 退出)。不复用 tx 发哨兵帧:队满时
+    /// 哨兵挤不进有界队列,连接会关不掉;Notify 在 writer 尚未 await 时
+    /// notify_one 也会存下 permit,信号不丢。
+    close: Arc<tokio::sync::Notify>,
     /// 在途请求表:id → 应答投递口。
     pending: Arc<StdMutex<HashMap<i64, oneshot::Sender<Message>>>>,
     /// 连接已关闭(幂等标志,对应 Go 的 closeOnce+closed 通道)。
@@ -162,7 +174,17 @@ impl ExtBridge {
             false
         } else {
             match serde_json::to_string(&req) {
-                Ok(data) => c.tx.send(data).is_ok(),
+                // try_send 不阻塞:队满 = writer 长时间写不动(扩展端停滞),
+                // 连接已不健康,复用既有关闭路径断开止损(唤醒全部在途等待者)
+                Ok(data) => match c.tx.try_send(data) {
+                    Ok(()) => true,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        self.drop_conn(Some(&c));
+                        c.pending.lock().unwrap().remove(&id);
+                        return Err("发送浏览器指令失败: 出站队列积压(连接不健康),已断开".to_string());
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => false,
+                },
                 Err(e) => {
                     c.pending.lock().unwrap().remove(&id);
                     return Err(format!("发送浏览器指令失败: {e}"));
@@ -181,15 +203,25 @@ impl ExtBridge {
             // sender 落栈 = 连接被关闭排空(对应 Go 的 <-c.closed 分支)
             Ok(Err(_)) => Err("浏览器扩展连接已断开,请稍后重试".to_string()),
             Ok(Ok(msg)) => match msg.error {
+                // detached 按错误码前置稳定标记:session 层据标记(而非人读
+                // 文案)判定自动重 attach,文案改动不再静默破坏错误分类
+                Some(e) if e.code == ERR_CODE_DETACHED => {
+                    Err(format!("{ERR_MARK_DETACHED}{}", e.to_msg()))
+                }
                 Some(e) => Err(e.to_msg()),
                 None => Ok(msg.result.unwrap_or(serde_json::Value::Null)),
             },
         }
     }
 
-    /// 设置唯一事件处理器(幂等覆盖;对应 Go RegisterSession 的单会话版)。
+    /// 设置唯一事件处理器(对应 Go RegisterSession 的单会话版)。
+    /// 单会话约定守卫(见 mod.rs 头部「会话归属简化」):桥只有一个事件出口,
+    /// 二次注册意味着旧会话被静默顶掉失聪——那是编码错误,debug/测试构建
+    /// 立即暴露;release 下保持覆盖(新会话可用,不因守卫拖垮宿主)。
     pub fn set_event_handler(&self, f: Arc<dyn Fn(Message) + Send + Sync>) {
-        *self.0.handler.lock().unwrap() = Some(f);
+        // 下划线前缀:release 构建 debug_assert 不求值,避免未用变量警告
+        let _prev = self.0.handler.lock().unwrap().replace(f);
+        debug_assert!(_prev.is_none(), "ExtBridge 事件处理器重复注册:违反单会话约定");
     }
 
     /// 声明标签页受控(新建/认领交付时调用;幂等)。
@@ -260,6 +292,11 @@ impl ExtBridge {
             let _ = std::fs::remove_file(&self.0.auth_path);
             st.conn.take()
         };
+        // 受控 tab 与待领 handoff 随旧浏览器一并失效:重置配对多半是换浏览器/
+        // 换扩展,新浏览器的 tabId 会与旧号撞号,不清空会把新事件错误路由
+        // (handle_event 按 tabs 集合放行)、把旧 handoff 交给新会话
+        self.0.tabs.lock().unwrap().clear();
+        self.0.handoffs.lock().unwrap().clear();
         if let Some(c) = old {
             close_handle(&c);
         }
@@ -360,9 +397,10 @@ fn close_handle(c: &ConnHandle) {
     }
     // 排空在途请求:oneshot sender 落栈 → call() 端收到「连接已断开」
     c.pending.lock().unwrap().clear();
-    // 关闭哨兵(空串):writer 发 WS Close 帧后退出;rx 落栈使 tx.closed()
-    // 就绪,reader/ping 的 select 分支随之唤醒——不依赖对端配合
-    let _ = c.tx.send(String::new());
+    // 关闭信号:writer 发 WS Close 帧后退出;rx 落栈使 tx.closed() 就绪,
+    // reader/ping 的 select 分支随之唤醒——不依赖对端配合。走 Notify 而非
+    // 队列哨兵:有界队列满时哨兵会挤不进去,连接关不掉
+    c.close.notify_one();
 }
 
 /// 生成 8 位配对码(剔除易混字符的 base32 字母表,与 Go 完全一致)。
@@ -388,7 +426,8 @@ fn normalize_code(s: &str) -> String {
 
 /// constant-time 字节比较:逐字节 XOR 累积,不提前返回(对齐 Go
 /// subtle.ConstantTimeCompare;长度不等直接 false,与 Go 相同)。
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+/// pub(crate):mcp.rs 的 Bearer 校验复用同一实现,避免各写一份。
+pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -571,21 +610,23 @@ async fn serve_conn(bridge: ExtBridge, stream: TcpStream) {
 
     // 连接代次发号器(进程级单调)
     static CONN_EPOCH: AtomicU64 = AtomicU64::new(1);
-    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    let (tx, rx) = mpsc::channel::<String>(OUT_QUEUE_CAP);
     let c = ConnHandle {
         tx,
+        close: Arc::new(tokio::sync::Notify::new()),
         pending: Arc::new(StdMutex::new(HashMap::new())),
         closed: Arc::new(AtomicBool::new(false)),
         epoch: CONN_EPOCH.fetch_add(1, Ordering::Relaxed),
     };
     spawn_task(writer_task(sink, rx, bridge.clone(), c.clone()));
 
-    // hello.ok 先于任何后续请求写出(writer 串行保证顺序)
+    // hello.ok 先于任何后续请求写出(writer 串行保证顺序;队列刚建必有余量,
+    // try_send 只可能因 closed 失败)
     let ok = match serde_json::to_string(&hello_ok(&issued)) {
         Ok(s) => s,
         Err(_) => return,
     };
-    if c.tx.send(ok).is_err() {
+    if c.tx.try_send(ok).is_err() {
         return;
     }
 
@@ -629,21 +670,28 @@ async fn close_policy(sink: &mut WsSink, reason: &str) {
     let _ = sink.close().await;
 }
 
-/// 写任务:独占 sink 串行写出(对应 Go 的 writeMu)。空串哨兵 = 关闭连接。
+/// 写任务:独占 sink 串行写出(对应 Go 的 writeMu)。close 信号 = 关闭连接。
 /// 写失败即 drop_conn(reader 随之被 tx.closed() 唤醒)。
 async fn writer_task(
     mut sink: WsSink,
-    mut rx: mpsc::UnboundedReceiver<String>,
+    mut rx: mpsc::Receiver<String>,
     bridge: ExtBridge,
     c: ConnHandle,
 ) {
-    while let Some(s) = rx.recv().await {
-        if s.is_empty() {
-            // 关闭哨兵:发 Close 帧后退出;rx 落栈唤醒 reader/ping
-            let _ = sink.send(WsMessage::Close(None)).await;
-            let _ = sink.close().await;
-            return;
-        }
+    loop {
+        let s = tokio::select! {
+            // 关闭信号(不占出站队列):发 Close 帧后退出;rx 落栈唤醒
+            // reader/ping。排队中的帧直接丢弃——连接已判死,写出无意义
+            _ = c.close.notified() => {
+                let _ = sink.send(WsMessage::Close(None)).await;
+                let _ = sink.close().await;
+                return;
+            }
+            item = rx.recv() => match item {
+                Some(s) => s,
+                None => return,
+            },
+        };
         debugf(format_args!("→ {}", truncate_str(&s, 200)));
         if sink.send(WsMessage::Text(s)).await.is_err() {
             bridge.drop_conn(Some(&c));
@@ -719,7 +767,8 @@ async fn ping_loop(bridge: ExtBridge, c: ConnHandle) {
             Ok(s) => s,
             Err(_) => return,
         };
-        if c.tx.send(data).is_err() {
+        // try_send:队满(writer 停滞)与已关闭同判连接不健康,断开止损
+        if c.tx.try_send(data).is_err() {
             bridge.drop_conn(Some(&c));
             return;
         }

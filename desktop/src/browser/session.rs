@@ -26,7 +26,9 @@ use serde_json::{json, Value};
 
 use super::bridge::ExtBridge;
 use super::cdp::Cdp;
-use super::protocol::{Message, TabInfo, EVENT_CDP, EVENT_DETACHED, EVENT_TAB_REMOVED};
+use super::protocol::{
+    Message, TabInfo, ERR_MARK_DETACHED, EVENT_CDP, EVENT_DETACHED, EVENT_TAB_REMOVED,
+};
 use super::refs::{err_ref_stale, RefTable};
 
 /// BrowserSession 浏览器操作现场:当前标签页、ref 表、事件旁白。
@@ -479,10 +481,11 @@ pub(crate) fn is_stale_object_err(msg: &str) -> bool {
     .any(|pat| msg.contains(pat))
 }
 
-/// 错误表征 debugger 已被剥离(protocol.rs 中 detached 错误码的翻译文案;
-/// cmd 自愈据此判定是否重 attach)。
+/// 错误表征 debugger 已被剥离(cmd 自愈据此判定是否重 attach)。
+/// 判 bridge.call 前置的稳定标记而非中文文案:文案是产品措辞随时可改,
+/// 标记是进程内契约,改文案不会静默破坏自动重连(标记在 MCP 最终出口剥除)。
 fn is_detached_err(msg: &str) -> bool {
-    msg.contains("浏览器调试连接已断开")
+    msg.contains(ERR_MARK_DETACHED)
 }
 
 /// 按字符数截断(对齐 Go 的 rune 截断)。

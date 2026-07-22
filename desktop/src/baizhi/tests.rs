@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::{Endpoints, Service};
+use super::{unwrap_envelope, BzErr, Endpoints, Service, ENV_BAIZHI};
 
 /// 假服务端收到的一次请求。
 struct Req {
@@ -319,6 +319,54 @@ async fn monkeycode_bridge_login() {
     assert!(li, "百智登出不应牵连 MonkeyCode 会话");
 }
 
+/// 包壳解包策略:四链路(百智云/网关/MCP 网关/MonkeyCode)的差异点钉死,
+/// 防止合一后语义漂移(code 合法值集合、3xx/401 处理、data 兜底)。
+#[test]
+fn envelope_policies_pinned() {
+    use super::monkeycode::ENV_MC;
+    use super::sync::{ENV_CONSOLE, ENV_MCP};
+    let unauthorized = |r: super::BzResult<Value>| match r {
+        Err(BzErr::Unauthorized(m)) => m,
+        Err(BzErr::Other(m)) => panic!("应为 Unauthorized,实为 Other: {m}"),
+        Ok(v) => panic!("应失败,实为成功: {v}"),
+    };
+    let err_msg = |r: super::BzResult<Value>| match r {
+        Err(BzErr::Other(m)) => m,
+        Err(BzErr::Unauthorized(m)) => panic!("应为 Other,实为 Unauthorized: {m}"),
+        Ok(v) => panic!("应失败,实为成功: {v}"),
+    };
+
+    // 百智云:success=false 即失败;缺 data 回整个响应体(对齐移动端)
+    let body = r#"{"success":false,"message":"坏了 [trace_id:x]"}"#.as_bytes();
+    assert_eq!(err_msg(unwrap_envelope(body, 200, &ENV_BAIZHI)), "坏了");
+    let whole = unwrap_envelope(br#"{"code":0,"foo":1}"#, 200, &ENV_BAIZHI).map_err(|e| e.msg()).unwrap();
+    assert_eq!(whole.get("foo").and_then(|v| v.as_i64()), Some(1));
+    // 401 带 message → Unauthorized 透传业务文案
+    let m = unauthorized(unwrap_envelope(r#"{"code":1,"message":"过期"}"#.as_bytes(), 401, &ENV_BAIZHI));
+    assert_eq!(m, "过期");
+
+    // 网关:无 success 字段检查;缺 data 兜底 Null;401 无 message 走固定文案
+    let v = unwrap_envelope(br#"{"code":0,"success":false}"#, 200, &ENV_CONSOLE).map_err(|e| e.msg()).unwrap();
+    assert!(v.is_null());
+    let m = unauthorized(unwrap_envelope(br#"{}"#, 401, &ENV_CONSOLE));
+    assert!(m.contains("会话已失效"), "{m}");
+
+    // MCP 网关:3xx = 未开通;code 认 "ok"/0/200,其余字符串/类型判失败
+    let m = err_msg(unwrap_envelope(b"", 302, &ENV_MCP));
+    assert!(m.contains("未开通"), "{m}");
+    assert!(unwrap_envelope(br#"{"code":"ok","data":1}"#, 200, &ENV_MCP).is_ok());
+    assert!(unwrap_envelope(br#"{"code":200,"data":1}"#, 200, &ENV_MCP).is_ok());
+    assert!(unwrap_envelope(br#"{"code":"err","message":"x"}"#, 200, &ENV_MCP).is_err());
+    assert!(unwrap_envelope(br#"{"code":true}"#, 200, &ENV_MCP).is_err());
+
+    // MonkeyCode:401 不看响应体,固定"重新同步云端账号"(与百智云语义不同)
+    let m = unauthorized(unwrap_envelope(r#"{"code":1,"message":"别的话"}"#.as_bytes(), 401, &ENV_MC));
+    assert_eq!(m, "MonkeyCode 会话已失效,请重新同步云端账号");
+    // 业务失败走清洗后的 message;缺 data 兜底 Null
+    assert_eq!(err_msg(unwrap_envelope(r#"{"code":7,"message":"忙 [trace_id:y]"}"#.as_bytes(), 200, &ENV_MC)), "忙");
+    assert!(unwrap_envelope(br#"{"code":0}"#, 200, &ENV_MC).map_err(|e| e.msg()).unwrap().is_null());
+}
+
 /// rounds 归一化:event→type、纳秒→毫秒、seq/kind/data 透传(对照 Go TestTaskRounds)。
 #[tokio::test(flavor = "multi_thread")]
 async fn rounds_normalization() {
@@ -362,4 +410,287 @@ async fn rounds_normalization() {
     assert!(frames[1].get("kind").is_none());
     assert_eq!(out.get("next_cursor").and_then(|v| v.as_str()), Some("c2"));
     assert_eq!(out.get("has_more").and_then(|v| v.as_bool()), Some(true));
+}
+
+/// 建任务档位:req 未显式下发时用壳内常量(现有真实云端行为);服务端在
+/// models 应答里补 task_defaults 后经 options 透传,req 带上对应字段即优先
+/// 生效——钉住"云端调档无需壳发版"的取用逻辑。
+#[tokio::test(flavor = "multi_thread")]
+async fn task_create_defaults_and_overrides() {
+    let captured: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap = captured.clone();
+    let (url, _stop) = serve(Arc::new(move |req: Req| {
+        match (req.method.as_str(), req.path.split('?').next().unwrap()) {
+            ("POST", "/api/v1/users/tasks") => {
+                cap.lock().unwrap().push(body_json(&req.body));
+                Resp::json(200, json!({ "code": 0, "data": {"id": "t1"} }))
+            }
+            ("GET", "/api/v1/users/models") => Resp::json(
+                200,
+                json!({ "code": 0, "data": {
+                    "models": [{"id": "m1"}],
+                    // 服务端下发档位样例(现网暂无此字段)
+                    "task_defaults": {
+                        "host_id": "gpu_host",
+                        "cli_name": "claude-code",
+                        "resource": { "core": 4, "memory": 1024, "life": 60 },
+                        "skill_ids": ["Org/main/skills/only-one"]
+                    }
+                } }),
+            ),
+            ("GET", "/api/v1/users/images") => Resp::json(200, json!({ "code": 0, "data": {"images": []} })),
+            _ => Resp::json(404, json!({ "code": 1, "message": "not found" })),
+        }
+    }));
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url,
+    });
+
+    // options 透传服务端 task_defaults
+    let opts = super::monkeycode::mc_task_options(&svc).await.map_err(|e| e.msg()).unwrap();
+    let defaults = opts.get("task_defaults").cloned().unwrap();
+    assert_eq!(defaults.get("host_id").and_then(|v| v.as_str()), Some("gpu_host"));
+
+    // req 未带档位 → 壳内常量(与 mobile/Web 端一致的云端契约)
+    let req = json!({ "content": "做点事", "model_id": "m1", "image_id": "i1" });
+    super::monkeycode::mc_task_create(&svc, &req).await.map_err(|e| e.msg()).unwrap();
+    let p = captured.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(p.get("host_id").and_then(|v| v.as_str()), Some("public_host"));
+    assert_eq!(p.get("cli_name").and_then(|v| v.as_str()), Some("opencode"));
+    assert_eq!(p.pointer("/resource/core").and_then(|v| v.as_u64()), Some(2));
+    assert_eq!(p.pointer("/resource/memory").and_then(|v| v.as_u64()), Some(8 << 30));
+    assert_eq!(p.pointer("/resource/life").and_then(|v| v.as_u64()), Some(3 * 60 * 60));
+    assert_eq!(p.pointer("/extra/skill_ids").and_then(|v| v.as_array()).map(|a| a.len()), Some(4));
+    assert_eq!(p.get("task_type").and_then(|v| v.as_str()), Some("develop"));
+
+    // req 带上 options 下发的档位 → 覆盖常量
+    let mut req2 = json!({ "content": "做点事", "model_id": "m1", "image_id": "i1" });
+    for k in ["host_id", "cli_name", "resource", "skill_ids"] {
+        req2[k] = defaults.get(k).cloned().unwrap();
+    }
+    super::monkeycode::mc_task_create(&svc, &req2).await.map_err(|e| e.msg()).unwrap();
+    let p = captured.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(p.get("host_id").and_then(|v| v.as_str()), Some("gpu_host"));
+    assert_eq!(p.get("cli_name").and_then(|v| v.as_str()), Some("claude-code"));
+    assert_eq!(p.pointer("/resource/core").and_then(|v| v.as_u64()), Some(4));
+    assert_eq!(
+        p.pointer("/extra/skill_ids").and_then(|v| v.as_array()).map(|a| a.len()),
+        Some(1)
+    );
+}
+
+// ==================== 微信扫码登录(wechat.rs 刮取链路) ====================
+
+/// 微信授权页(qrconnect)HTML 最小快照,结构取自
+/// open.weixin.qq.com/connect/qrconnect 线上页面(快照日期 2026-07)。
+/// QRCODE_UUID_RE 刮的就是 <img src="/connect/qrcode/<uuid>"> 这一处;
+/// uuid 故意含 `_`/`-`,把正则的字符集假设一并钉住。微信改版导致 CI 在
+/// 这里断裂时:先对照线上页面更新此快照,再改 wechat.rs 的正则。
+const WX_AUTH_PAGE: &str = r#"<!DOCTYPE html>
+<html>
+<head><title>微信登录</title></head>
+<body>
+<div class="main impowerBox">
+  <div class="wrp_code">
+    <img class="qrcode lightBorder" src="/connect/qrcode/uuid-Ab3_x-9Z"/>
+  </div>
+  <div class="info"><p class="status status_browser js_status normal">
+    <span>使用微信扫一扫登录</span>
+  </p></div>
+</div>
+</body>
+</html>"#;
+
+/// 长轮询应答快照(lp.open.weixin.qq.com/connect/l/qrconnect,2026-07):
+/// 一段 JS,WX_ERRCODE_RE / WX_CODE_RE 从中刮状态码与授权码。
+fn wx_lp_resp(errcode: i32, code: &str) -> Resp {
+    Resp {
+        status: 200,
+        headers: vec![("Content-Type".into(), "text/javascript".into())],
+        body: format!("window.wx_errcode={errcode};window.wx_code='{code}';").into_bytes(),
+    }
+}
+
+/// 最小百分号编码(测试里拼授权页 URL 的 redirect_uri 参数用)。
+fn pct(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// 微信扫码全链路:授权页刮 uuid → 二维码 data URL → 长轮询状态机各分支 →
+/// 405 拿 wx_code 走回调种 cookie → profile 确认已登录 → 会话清理。
+///
+/// 单主机假服务端同时扮演百智云与微信(授权页/二维码/长轮询/回调);
+/// 长轮询主机靠 MC_DESKTOP_WECHAT_LP_BASE 注入指回本服务端(实现默认按
+/// `lp.` 前缀推导,见 wechat.rs lp_base_for)。该环境变量只有本用例设置、
+/// 只有 poll 成功路径读取,与其他并行用例无交叉。
+#[tokio::test(flavor = "multi_thread")]
+async fn wechat_scan_login_flow() {
+    use base64::Engine as _;
+    use std::collections::VecDeque;
+
+    // 长轮询脚本队列:每次 poll 弹一个应答,按序演完状态机全部分支
+    let lp_script: Arc<Mutex<VecDeque<Vec<u8>>>> = Arc::new(Mutex::new(VecDeque::new()));
+    // 回调收到的完整 path(事后断言 code/state 拼接正确)
+    let callback_hit: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let session = Arc::new(Mutex::new(String::new()));
+    let url_holder: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+
+    let qr_img: &[u8] = b"\xff\xd8fake-jpeg-bytes";
+    let (script, hit, sess, uh) = (lp_script.clone(), callback_hit.clone(), session.clone(), url_holder.clone());
+    let (url, _stop) = serve(Arc::new(move |req: Req| {
+        let base = uh.lock().unwrap().clone();
+        match req.path.split('?').next().unwrap() {
+            // 1. 百智云下发授权页 URL(query 携带 state 与回调地址)
+            "/api/v1/user/oauth/login" => {
+                assert!(req.path.contains("platform=wechat"));
+                assert!(req.path.contains("redirect_url="));
+                let cb = pct(&format!("{base}/wx/callback"));
+                Resp::json(200, json!({ "code": 0, "data": { "url": format!(
+                    "{base}/connect/qrconnect?appid=wx-test&scope=snsapi_login&state=st-42&redirect_uri={cb}"
+                ) } }))
+            }
+            // 2. 微信授权页(HTML 快照)
+            "/connect/qrconnect" => Resp {
+                status: 200,
+                headers: vec![("Content-Type".into(), "text/html; charset=utf-8".into())],
+                body: WX_AUTH_PAGE.as_bytes().to_vec(),
+            },
+            // 3. 二维码图片(uuid 必须与快照页一致)
+            "/connect/qrcode/uuid-Ab3_x-9Z" => Resp {
+                status: 200,
+                headers: vec![("Content-Type".into(), "image/jpeg".into())],
+                body: b"\xff\xd8fake-jpeg-bytes".to_vec(),
+            },
+            // 4. 长轮询(uuid 透传;应答按脚本队列出)
+            "/connect/l/qrconnect" => {
+                assert!(req.path.contains("uuid=uuid-Ab3_x-9Z"), "长轮询未带页面刮出的 uuid: {}", req.path);
+                let body = script.lock().unwrap().pop_front().expect("长轮询脚本队列耗尽");
+                Resp { status: 200, headers: vec![("Content-Type".into(), "text/javascript".into())], body }
+            }
+            // 5. 回调:校验后 302 + 种会话 cookie(不跟随重定向,首响应即吸收)
+            "/wx/callback" => {
+                *hit.lock().unwrap() = Some(req.path.clone());
+                assert!(req.path.contains("code=wxcode-007") && req.path.contains("state=st-42"));
+                *sess.lock().unwrap() = "wx-sess-1".into();
+                Resp::redirect("/").with_cookie("baizhi_session=wx-sess-1; Path=/; HttpOnly")
+            }
+            "/api/v1/user/profile" => {
+                let s = sess.lock().unwrap().clone();
+                if s.is_empty() || !req.cookie.contains(&format!("baizhi_session={s}")) {
+                    return Resp { status: 401, headers: vec![], body: b"Unauthorized".to_vec() };
+                }
+                Resp::json(200, json!({ "code": 0, "data": {"name": "微信用户"} }))
+            }
+            _ => Resp::json(404, json!({ "message": "not found" })),
+        }
+    }));
+    *url_holder.lock().unwrap() = url.clone();
+    // 实现默认推导 lp.<host>,测试单主机接不住;注入指回假服务端
+    std::env::set_var("MC_DESKTOP_WECHAT_LP_BASE", &url);
+
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url.clone(),
+    });
+
+    // start:uuid 刮取正确 → 二维码按 data URL 原样下发
+    let qr = super::wechat::start_wechat_login(&svc).await.map_err(|e| e.msg()).unwrap();
+    assert_eq!(qr, format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(qr_img)));
+
+    // 长轮询状态机:非终态不清会话,同一会话按序演完
+    let push = |body: Vec<u8>| lp_script.lock().unwrap().push_back(body);
+    let poll = || super::wechat::poll_wechat_login(&svc);
+    for (resp, want) in [
+        (wx_lp_resp(408, "").body, "waiting"),  // 待扫码
+        (wx_lp_resp(404, "").body, "scanned"),  // 已扫码待确认
+        (wx_lp_resp(403, "").body, "canceled"), // 手机端取消
+        (wx_lp_resp(402, "").body, "expired"),  // 二维码过期
+        (wx_lp_resp(500, "").body, "expired"),  // 500 同过期
+    ] {
+        push(resp);
+        assert_eq!(poll().await.map_err(|e| e.msg()).unwrap(), want);
+    }
+    // 未知状态码 → 报错(而非误判成功)
+    push(wx_lp_resp(666, "").body);
+    assert!(poll().await.err().map(|e| e.msg()).unwrap().contains("未知扫码状态"));
+    // 应答结构面目全非(改版哨兵)→ 明确报"响应异常"
+    push(b"<html>totally different</html>".to_vec());
+    assert!(poll().await.err().map(|e| e.msg()).unwrap().contains("扫码状态响应异常"));
+    // 405 但 wx_code 为空 → 报错且不吞会话(可继续 poll)
+    push(wx_lp_resp(405, "").body);
+    assert!(poll().await.err().map(|e| e.msg()).unwrap().contains("未返回授权码"));
+
+    // 405 + wx_code → 回调拼 code/state → cookie 落罐 → profile 权威确认
+    push(wx_lp_resp(405, "wxcode-007").body);
+    assert_eq!(poll().await.map_err(|e| e.msg()).unwrap(), "ok");
+    assert!(callback_hit.lock().unwrap().is_some(), "回调未被触达");
+    let (li, profile) = svc.status().await.map_err(|e| e.msg()).unwrap();
+    assert!(li, "回调种下的 cookie 应使 profile 探测为已登录");
+    assert_eq!(profile.get("name").and_then(|v| v.as_str()), Some("微信用户"));
+
+    // 成功后会话清理:再 poll 应提示先获取二维码
+    let err = poll().await.err().map(|e| e.msg()).unwrap();
+    assert!(err.contains("没有进行中的扫码会话"), "{err}");
+}
+
+/// start 的防御路径:授权 URL 缺 state/redirect_uri、授权页改版刮不出
+/// uuid(QRCODE_UUID_RE 断裂的第一现场)、无会话时 poll——都应给出指向
+/// 明确的错误而非 panic/误成功。不触发长轮询,不依赖 lp 注入变量。
+#[tokio::test(flavor = "multi_thread")]
+async fn wechat_start_guards() {
+    let mode = Arc::new(Mutex::new(0u8));
+    let (m, url_holder) = (mode.clone(), Arc::new(Mutex::new(String::new())));
+    let uh = url_holder.clone();
+    let (url, _stop) = serve(Arc::new(move |req: Req| {
+        let base = uh.lock().unwrap().clone();
+        match req.path.split('?').next().unwrap() {
+            "/api/v1/user/oauth/login" => {
+                let auth = if *m.lock().unwrap() == 0 {
+                    // 缺 state / redirect_uri
+                    format!("{base}/connect/qrconnect?appid=wx-test")
+                } else {
+                    format!("{base}/connect/qrconnect?appid=wx-test&state=s&redirect_uri={}", pct(&base))
+                };
+                Resp::json(200, json!({ "code": 0, "data": { "url": auth } }))
+            }
+            // 改版后的假想页面:二维码不再走 /connect/qrcode/ 路径
+            "/connect/qrconnect" => Resp {
+                status: 200,
+                headers: vec![("Content-Type".into(), "text/html".into())],
+                body: br#"<html><body><img src="/connect/qr/v2/xyz"/></body></html>"#.to_vec(),
+            },
+            _ => Resp::json(404, json!({})),
+        }
+    }));
+    *url_holder.lock().unwrap() = url.clone();
+
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url,
+    });
+
+    // 授权 URL 缺参数
+    let err = super::wechat::start_wechat_login(&svc).await.err().map(|e| e.msg()).unwrap();
+    assert!(err.contains("缺少 state/redirect_uri"), "{err}");
+
+    // 页面结构变化 → 指明"页面结构可能已变化"
+    *mode.lock().unwrap() = 1;
+    let err = super::wechat::start_wechat_login(&svc).await.err().map(|e| e.msg()).unwrap();
+    assert!(err.contains("没找到二维码"), "{err}");
+
+    // 无进行中会话直接 poll
+    let err = super::wechat::poll_wechat_login(&svc).await.err().map(|e| e.msg()).unwrap();
+    assert!(err.contains("没有进行中的扫码会话"), "{err}");
 }

@@ -4,15 +4,31 @@
 // 对表:本模块产帧、UI 消费(desktop/ui/src/{types.ts,reduce.ts})——
 // 任何新帧类型/字段先改这里与 types.ts,driver 禁止手拼 Frame JSON。
 //
-// 帧结构:{ type, kind?, data?(base64 JSON), timestamp(ms), seq }
+// 帧结构:{ type, kind?, data?(内联 JSON 对象), timestamp(ms), seq }
 // task-running + acp_event 的 data 为 { update: { sessionUpdate, ... } }。
+//
+// 历史:data 曾编码为 base64(JSON) 字符串(对齐旧 Go 内核 []byte 的
+// JSON 序列化)——纯历史包袱,双重编码 +33% 体积已去除。兼容边界:
+// ① 用户磁盘上的存量 journal(events.jsonl)仍是旧格式,回放原样转发,
+//    由 UI 侧 codec.ts::frameData 双格式容错解码;
+// ② 云端任务流的帧来自云端服务(壳只做管道透传,契约不归本仓库),
+//    同样由 frameData 容错。壳侧不再产旧格式。
+//
+// Rust→TS 类型生成:Frame/SessionStatus/PermOutcome 带 ts_rs 导出
+// (derive 经 cfg_attr(test) 门控,不进产物二进制)。再生成命令:
+//   cargo test export_bindings
+// 产出 desktop/ui/src/gen/(生成物入库,勿手改);ui/src/types.ts 从
+// gen/ 复用这些类型,手写与注释对表自此只剩"跑一次生成"。
 
 use base64::Engine as _;
 use serde_json::{json, Value};
 
 /// 会话状态词汇(SessionMeta.status;UI/桌宠按此渲染,勿用裸字符串)。
-/// 对表 desktop/ui/src/types.ts 的 SessionStatus。
+/// ts-rs 导出 → ui/src/gen/SessionStatus.ts(types.ts 复用);
+/// rename_all 小写与 as_str 一致(两处同改才算改)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../ui/src/gen/", rename_all = "lowercase"))]
 pub enum SessionStatus {
     Created,
     Running,
@@ -34,7 +50,10 @@ impl SessionStatus {
 }
 
 /// 审批终态词汇(permission-resolved.outcome)。
+/// ts-rs 导出 → ui/src/gen/PermOutcome.ts(rename_all 小写与 as_str 一致)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../ui/src/gen/", rename_all = "lowercase"))]
 pub enum PermOutcome {
     Approved,
     Denied,
@@ -60,30 +79,45 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// data 字段编码:JSON → base64(与 Go 侧 []byte 的 JSON 序列化一致)。
-pub fn b64_json(v: &Value) -> String {
-    base64::engine::general_purpose::STANDARD.encode(v.to_string())
-}
-
+/// user-input.content 的文本编码(帧内嵌字段,与云端上行格式一致;
+/// 区别于已去除的 data 层 base64——这是上行/回显契约,保留)。
 pub fn b64_text(s: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(s)
 }
 
-#[allow(dead_code)] // 测试与回放工具使用
-pub fn b64_decode_json(s: &str) -> Option<Value> {
-    let raw = base64::engine::general_purpose::STANDARD.decode(s).ok()?;
-    serde_json::from_slice(&raw).ok()
+/// 下行帧 wire 结构:所有产帧经 build() 走这里序列化,类型即契约。
+/// ts-rs 导出 → ui/src/gen/Frame.ts(types.ts 在此之上放宽 data/seq/
+/// timestamp 以容存量 journal 与云端帧,见 ui/src/types.ts::Frame)。
+#[derive(serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, export_to = "../ui/src/gen/"))]
+pub struct Frame {
+    pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub kind: Option<String>,
+    /// 内联 JSON 对象载荷(产帧侧恒为对象;历史 base64 格式见模块头注)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional, type = "Record<string, unknown>"))]
+    pub data: Option<Value>,
+    /// Unix 毫秒
+    #[cfg_attr(test, ts(type = "number"))]
+    pub timestamp: u64,
+    /// 会话内单调帧序号(回放/去重锚点)
+    #[cfg_attr(test, ts(type = "number"))]
+    pub seq: u64,
 }
 
 fn build(ftype: &str, kind: Option<&str>, payload: Option<Value>, seq: u64) -> Value {
-    let mut f = json!({ "type": ftype, "timestamp": now_ms(), "seq": seq });
-    if let Some(k) = kind {
-        f["kind"] = json!(k);
-    }
-    if let Some(p) = payload {
-        f["data"] = json!(b64_json(&p));
-    }
-    f
+    // Frame 的所有字段都是 JSON 安全类型,to_value 不可能失败
+    serde_json::to_value(Frame {
+        r#type: ftype.to_string(),
+        kind: kind.map(str::to_string),
+        data: payload,
+        timestamp: now_ms(),
+        seq,
+    })
+    .unwrap_or_default()
 }
 
 fn acp(update: Value, seq: u64) -> Value {

@@ -1,6 +1,9 @@
 // 极简持久化 cookie 罐(agent/internal/baizhi/cookies.go 的 Rust 移植):
 // RFC 6265 的域后缀 + 路径前缀匹配,JSON 落盘(0600,登录凭证)。
-// 所有流量只对着 baizhi.cloud 一族域名,完整 jar 的公共后缀防护没有必要。
+// 公共后缀防护做最小化:update() 拒收 TLD 级(无点)Domain 属性——
+// Service::fetch() 是 pub 的、对任意 URL 用本罐收发 cookie(微信授权页等
+// 第三方页面),放行 Domain=cloud/com 会让被刮取站点种下匹配 *.cloud 的
+// cookie 污染后续请求;完整 PSL 表仍不引入,流量面窄,TLD 级已覆盖实际风险。
 //
 // 会话 cookie(无过期时间)也持久化——它就是登录凭证本身,桌面场景的
 // 预期是"登录一次长期有效",真实有效期以服务端 401 为准。
@@ -29,34 +32,11 @@ struct StoredCookie {
 }
 
 fn parse_rfc3339(s: &str) -> Option<SystemTime> {
-    // 只需要秒级精度判断过期:提取 unix 秒。格式 2026-07-19T12:34:56(.frac)?(Z|±hh:mm)
-    // 用 httpdate 不行(格式不同);手写最小解析。
-    let b = s.as_bytes();
-    if b.len() < 19 {
-        return None;
-    }
-    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
-    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
-    let (h, mi, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
-    // 时区偏移
-    let mut off = 0i64;
-    if let Some(tzpos) = s.rfind(['+', '-']).filter(|&p| p >= 19) {
-        let sign = if s.as_bytes()[tzpos] == b'+' { 1 } else { -1 };
-        let tz = &s[tzpos + 1..];
-        if tz.len() >= 5 {
-            let th = tz[0..2].parse::<i64>().ok()?;
-            let tm = tz[3..5].parse::<i64>().ok()?;
-            off = sign * (th * 3600 + tm * 60);
-        }
-    }
-    // 民用历 → unix 天数(Howard Hinnant 算法)
-    let (y2, mo2) = if mo <= 2 { (y - 1, mo + 12) } else { (y, mo) };
-    let era = y2.div_euclid(400);
-    let yoe = y2 - era * 400;
-    let doy = (153 * (mo2 - 3) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    let unix = days * 86400 + h * 3600 + mi * 60 + sec - off;
+    // 只需秒级精度判断过期。time 已在依赖树(cookie crate 的 Expires 解析),
+    // 直接用它:严格校验月/日范围,2026-13-45 这类非法日期解析即失败,
+    // 不会像手写历算那样"算出"一个错误时刻。
+    let dt = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
+    let unix = dt.unix_timestamp();
     if unix < 0 {
         return None;
     }
@@ -131,6 +111,14 @@ impl CookieStore {
                 host_only: false,
                 secure: c.secure().unwrap_or(false),
             };
+            // 公共后缀最小防护:Domain=cloud/com/cn 这类 TLD 级(无点)后缀能
+            // 域匹配同 TLD 下任意主机——fetch() 对任意 URL 用本罐收发 cookie,
+            // 放行等于允许被刮取的第三方页面污染 *.cloud 请求,整条拒收
+            // (RFC 6265 §5.3 对公共后缀的处置)。与请求 host 完全相等的单标签
+            // 主机(localhost 联调)不在此列,照常入罐。
+            if !sc.domain.is_empty() && sc.domain != host && !sc.domain.contains('.') {
+                continue;
+            }
             // RFC 6265:无 Domain 属性,或属性与请求 host 不匹配,都按 host-only 处理
             if sc.domain.is_empty()
                 || (host != sc.domain && !host.ends_with(&format!(".{}", sc.domain)))
@@ -169,7 +157,15 @@ impl CookieStore {
             }
         }
         list.retain(|c| !c.expired(now));
-        self.save_locked(&list);
+        // 锁内只序列化出字节,写盘放到锁外:update 的调用点都在 async 请求链上,
+        // 持锁跨同步磁盘 IO 会把并发请求的 cookie 读写一起卡在盘上。
+        // 并发 update 的两次落盘理论上可能乱序(旧快照后写),但罐以内存为准、
+        // 每次 update 全量重写,偶发旧快照会被下一次写覆盖,可接受。
+        let data = serde_json::to_vec_pretty(&*list).ok();
+        drop(list);
+        if let Some(data) = data {
+            self.persist(&data);
+        }
     }
 
     /// 拼请求应携带的 Cookie 头;无匹配返回 None。
@@ -206,9 +202,9 @@ impl CookieStore {
         self.list.lock().unwrap().iter().all(|c| c.expired(now))
     }
 
-    fn save_locked(&self, list: &[StoredCookie]) {
+    /// 把序列化好的罐内容落盘(调用方须已释放 list 锁)。
+    fn persist(&self, data: &[u8]) {
         let Some(p) = &self.path else { return };
-        let Ok(data) = serde_json::to_vec_pretty(list) else { return };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
             #[cfg(unix)]
@@ -299,5 +295,28 @@ mod tests {
         // Go 侧格式(带偏移)也能读
         assert!(parse_rfc3339("2026-07-19T12:00:00+08:00").is_some());
         assert!(parse_rfc3339("2026-07-19T12:00:00.123456789Z").is_some());
+    }
+
+    #[test]
+    fn rfc3339_rejects_invalid_dates() {
+        // 非法月/日必须失败(手写历算曾把 2026-13-45 "算成"一个错误时刻)
+        assert!(parse_rfc3339("2026-13-45T12:00:00Z").is_none());
+        assert!(parse_rfc3339("2026-02-30T00:00:00Z").is_none());
+        assert!(parse_rfc3339("2026-00-01T00:00:00Z").is_none());
+        // 缺时区/纯垃圾也失败
+        assert!(parse_rfc3339("2026-07-19T12:00:00").is_none());
+        assert!(parse_rfc3339("垃圾").is_none());
+    }
+
+    #[test]
+    fn tld_level_domain_rejected() {
+        let store = CookieStore::new(None);
+        // 被刮取的第三方页面尝试种 Domain=cloud 污染 *.cloud 请求 → 整条拒收
+        store.update(&url("https://evil.cloud/x"), &["sid=hack; Domain=cloud; Path=/".into()]);
+        assert!(store.is_empty());
+        assert!(store.header(&url("https://baizhi.cloud/")).is_none());
+        // 单标签主机自身声明同名 Domain(localhost 联调)不受影响
+        store.update(&url("http://localhost/"), &["a=1; Domain=localhost".into()]);
+        assert_eq!(store.header(&url("http://localhost/")).unwrap(), "a=1");
     }
 }

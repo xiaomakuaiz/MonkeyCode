@@ -1,0 +1,414 @@
+// 协议归一化:引擎 stdio 事件 → Frame 词汇(ohmy.rs 拆出)。
+//
+// 职责:handle_notification(permission/question/turn 等通知路由与
+// 审批/提问簿记)、handle_event(event/stream 归一化:model_done 全文
+// 对账、structuredToolResult/is_error、agent_result 权威内容、eventSeq
+// 空洞观测)。事件归一化映射(ohmy → Frame)参考
+// ohmyagent/internal/transport/{stdio,protocol}.go 与 types/events.go。
+
+use std::collections::HashMap;
+
+use serde_json::{json, Value};
+
+use super::frame::{self, PermOutcome, SessionStatus};
+use super::ohmy::Inner;
+
+impl Inner {
+    /// stdio 通知路由(reader 线程调用)。
+    pub(super) fn handle_notification(&self, method: &str, params: Value) {
+        match method {
+            "event/stream" => self.handle_event(params),
+            "permission/request" => {
+                let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
+                let tool = params.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let input = params.get("input").cloned().unwrap_or(Value::Null);
+                if req_id.is_empty() || sid.is_empty() {
+                    return;
+                }
+                // 记忆集命中 → 自动放行,不上抛 UI(respond_rpc 不阻塞,
+                // reader 线程上调用安全)。兼容尾巴:仅旧引擎走此路径——
+                // permissionRemember cap 出现后审批记忆归引擎(命令段粒度
+                // 规则,记住后引擎根本不再发 request),壳侧工具名粒度的
+                // 自动放行(记住一次 Bash 放行所有命令)随之停用
+                if !self.has_cap("permissionRemember") && self.sess.perm_remember.lock().unwrap().contains(&tool) {
+                    self.respond_rpc("permission/respond", json!({ "request_id": req_id, "approved": true }));
+                    return;
+                }
+                let title = perm_title(&tool, &input);
+                self.sess.pending_perms.lock().unwrap().insert(req_id.clone(), sid.clone());
+                self.sess.perm_tools.lock().unwrap().insert(req_id.clone(), tool.clone());
+                self.push_frame(&sid, |seq| frame::permission_req(&req_id, &tool, &title, seq));
+                self.emit_session_ask(&sid, true);
+            }
+            "permission/cancelled" => {
+                let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
+                let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("cancelled");
+                self.sess.perm_tools.lock().unwrap().remove(&req_id);
+                if !sid.is_empty() {
+                    self.resolve_perm(
+                        &sid,
+                        &req_id,
+                        if reason == "timeout" { PermOutcome::Timeout } else { PermOutcome::Cancelled },
+                    );
+                }
+            }
+            "question/request" => {
+                let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
+                let questions = params.get("questions").cloned().unwrap_or(json!([]));
+                if req_id.is_empty() || sid.is_empty() {
+                    return;
+                }
+                self.sess.pending_questions
+                    .lock()
+                    .unwrap()
+                    .insert(req_id.clone(), (sid.clone(), questions.clone()));
+                // kind=acp_ask_user_question 即一等公民提问卡标记,reduce.ts 据此
+                // 直接消费 rawInput.questions,不走 tool_call 的标题启发式
+                self.push_frame(&sid, |seq| frame::ask_user_question(&req_id, &questions, seq));
+                self.emit_session_ask(&sid, true);
+            }
+            "question/cancelled" => {
+                let req_id = params.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let sid = self.sess.pending_questions.lock().unwrap().remove(&req_id).map(|(s, _)| s);
+                if let Some(sid) = sid {
+                    self.emit_session_ask(&sid, false);
+                }
+            }
+            "turn/stopped" => {
+                let sid = self.shell_sid_of(params.get("session_id").and_then(|v| v.as_str()).unwrap_or(""));
+                let stop_reason = params.get("stop_reason").and_then(|v| v.as_str()).unwrap_or("complete");
+                let err = params.get("error").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if sid.is_empty() {
+                    return;
+                }
+                let (was_running, open) = {
+                    let mut sessions = self.sess.sessions.lock().unwrap();
+                    match sessions.get_mut(&sid) {
+                        Some(s) => {
+                            let was = s.running;
+                            s.running = false;
+                            s.model_text.clear(); // 对账累积不跨轮(model_done 缺席的残留)
+                            (was, std::mem::take(&mut s.open_tools))
+                        }
+                        None => (false, HashMap::new()),
+                    }
+                };
+                // 中断轮次可能留下已暂存未被 tool_result 消费的 agent_result
+                if !open.is_empty() {
+                    let mut ar = self.sub.agent_results.lock().unwrap();
+                    for tc in open.keys() {
+                        ar.remove(tc);
+                    }
+                }
+                // 轮次收尾:残留子代理(未随工具闭合)按中断收尾
+                self.close_children_of_session(&sid, SessionStatus::Interrupted);
+                if !was_running {
+                    // 已本地和解(取消超时/引擎重启)后迟到的收尾,忽略防重复帧
+                    return;
+                }
+                // 引擎的工具错误路径不发 tool_result(错误只进模型消息),
+                // 未闭合的 tool_call 在此补 failed 帧,否则 UI 永远转圈
+                let tool_msg =
+                    if stop_reason == "interrupted" { "已中断" } else { "执行失败(引擎未回传详情)" };
+                for (tc, _name) in open {
+                    self.push_frame(&sid, |seq| frame::tool_call_failed(&tc, tool_msg, seq));
+                }
+                // 轮后上下文占用(见 push_usage 注释)
+                if let Some(c) = params.get("context") {
+                    self.push_usage(
+                        &sid,
+                        c.get("used_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                        c.get("window_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+                    );
+                }
+                // 状态词汇对齐 SessionStatus:取消是 interrupted,
+                // 不能混进 finished(桌宠会当作完成来庆祝)
+                let status = match stop_reason {
+                    "error" => SessionStatus::Error,
+                    "interrupted" => SessionStatus::Interrupted,
+                    _ => SessionStatus::Finished,
+                };
+                if stop_reason == "error" && !err.is_empty() {
+                    self.push_frame(&sid, |seq| frame::task_error(&err, seq));
+                }
+                self.push_frame(&sid, frame::task_ended);
+                // sidecar 状态落盘(重启后列表可见;write_sidecar 一并刷 updated_at)
+                self.write_sidecar(&sid, |m| m["status"] = json!(status.as_str()));
+                self.emit_session_event(&sid, status.as_str());
+            }
+            // 背压丢帧上报(modelDoneText):进程级累计计数,不可丢通知。
+            // 仅日志外显——按会话的缺口定位靠 eventSeq 空洞,文本找回靠
+            // model_done 全文对账(handle_event),此处不动帧流
+            "events/dropped" => {
+                let n = params.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                eprintln!("[desktop] 引擎背压丢弃 {n} 条流式事件(全文将经 model_done 对账补齐)");
+            }
+            _ => {}
+        }
+    }
+
+    /// event/stream 事件归一化 → Frame。
+    pub(super) fn handle_event(&self, event: Value) {
+        let etype = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let raw = event.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+        if raw.is_empty() {
+            return;
+        }
+        let sid = self.shell_sid_of(raw);
+        let data = event.get("data").cloned().unwrap_or(Value::Null);
+        // provider 瞬时错误(kind=transient_retry,loop.go 的
+        // isTransientProviderErr 重试路径)引擎自动退避重试后继续跑,
+        // 不产 task_error——否则 UI 先报"任务出错"随后任务又正常完成;
+        // 仅记日志。终止性 error(无 kind)走下方常规分支不变。早于子代理
+        // 认领判断返回:不为一条重试日志物化子会话
+        if etype == "error" && data.get("kind").and_then(|v| v.as_str()) == Some("transient_retry") {
+            let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("");
+            eprintln!("[desktop] 引擎瞬时错误,自动重试中: {msg}");
+            return;
+        }
+        // 未知 session_id = 上游转发的子代理事件(子循环随机 id):
+        // 认领并物化为壳侧子会话,后续事件走正常帧路径;认领不到(迟到)丢弃
+        if !self.sess.sessions.lock().unwrap().contains_key(&sid) && !self.claim_subagent(&sid, &event) {
+            return;
+        }
+        // eventSeq:事件带会话内单调 seq(被背压丢弃的 delta 仍占号),
+        // 空洞即丢帧信号,记日志外显(文本缺口由 model_done 对账补齐,
+        // 此处只负责"发生过丢弃"的可观测性);seq 回落视为引擎侧会话
+        // 重建(destroy+create 换绑)后重新起算,水位跟随重置。
+        // 旧引擎不带 seq 字段,自然跳过——无需 caps 门控
+        if let Some(eseq) = event.get("seq").and_then(|v| v.as_u64()).filter(|s| *s > 0) {
+            if let Some(s) = self.sess.sessions.lock().unwrap().get_mut(&sid) {
+                if s.last_event_seq > 0 && eseq > s.last_event_seq + 1 {
+                    eprintln!(
+                        "[desktop] 会话 {sid} 事件 seq 空洞 {}→{eseq}(背压丢弃 {} 条)",
+                        s.last_event_seq,
+                        eseq - s.last_event_seq - 1
+                    );
+                }
+                s.last_event_seq = eseq;
+            }
+        }
+        // 子代理事件在父卡进度窗同步一份内联预览(非子代理为 no-op)
+        self.subagent_feed(&sid, etype, &event, &data);
+        match etype {
+            // user_message:引擎回显忽略——session_send 已本地先行落 user-input
+            // 帧(ack 与事件无时序保证,双写会重复气泡)
+            "user_message" => {}
+            "model_delta" => {
+                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                // modelDoneText 对账:累积本段实收流式文本(旧引擎不宣告
+                // 则不累积,免白耗内存;对账逻辑见 model_done 分支)
+                if !text.is_empty() && self.has_cap("modelDoneText") {
+                    if let Some(s) = self.sess.sessions.lock().unwrap().get_mut(&sid) {
+                        s.model_text.push_str(text);
+                    }
+                }
+                self.push_frame(&sid, |seq| frame::agent_text(text, seq));
+            }
+            // 新一段模型输出:重置对账累积(上一段 model_done 缺席/中断的
+            // 残留不得跨段污染前缀比对)
+            "model_start" => {
+                if let Some(s) = self.sess.sessions.lock().unwrap().get_mut(&sid) {
+                    s.model_text.clear();
+                }
+            }
+            // model_done 全文对账(modelDoneText;轮次边界仍以 turn/stopped
+            // 为准):text 是本段**权威全文**,壳侧累积为其前缀且更短说明
+            // delta 被背压丢弃——把缺口补成一条增量帧(走 frame.rs 正规
+            // 产帧路径,journal 与 UI 因此同步补齐);完全不一致仅记日志,
+            // 不覆写已渲染的流(覆写需要 UI 侧替换语义,帧词汇没有)
+            "model_done" => {
+                let full = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let acc = {
+                    let mut sessions = self.sess.sessions.lock().unwrap();
+                    sessions.get_mut(&sid).map(|s| std::mem::take(&mut s.model_text)).unwrap_or_default()
+                };
+                if full.is_empty() || !self.has_cap("modelDoneText") {
+                    // 兼容尾巴:旧引擎 model_done 无 text,无从对账
+                } else if let Some(missing) =
+                    full.strip_prefix(acc.as_str()).filter(|m| !m.is_empty())
+                {
+                    eprintln!(
+                        "[desktop] 会话 {sid} 流式文本缺 {} 字节(背压丢弃),按 model_done 全文补齐",
+                        missing.len()
+                    );
+                    self.push_frame(&sid, |seq| frame::agent_text(missing, seq));
+                } else if full != acc {
+                    eprintln!(
+                        "[desktop] 会话 {sid} 流式累积与 model_done 全文不一致(壳 {} 字节 / 权威 {} 字节),不自动改写",
+                        acc.len(),
+                        full.len()
+                    );
+                }
+            }
+            "thinking_delta" => {
+                let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                self.push_frame(&sid, |seq| frame::agent_thought(text, seq));
+            }
+            "tool_call" => {
+                let tc_id = event
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| data.get("id").and_then(|v| v.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("工具调用").to_string();
+                let input = data.get("input").cloned().unwrap_or(Value::Null);
+                let title = perm_title(&name, &input);
+                if !tc_id.is_empty() {
+                    if let Some(s) = self.sess.sessions.lock().unwrap().get_mut(&sid) {
+                        s.open_tools.insert(tc_id.clone(), name.clone());
+                    }
+                    if name == "Agent" {
+                        // 暂存入参:子会话物化时作标题(description)与首条输入(prompt)
+                        let desc = input
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("子代理")
+                            .to_string();
+                        let prompt =
+                            input.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        self.sub.agent_inputs.lock().unwrap().insert(tc_id.clone(), (desc, prompt));
+                    }
+                }
+                self.push_frame(&sid, |seq| frame::tool_call(&tc_id, &title, &input, seq));
+            }
+            // 同步子代理的全量结构化结果(structuredToolResult):引擎先发
+            // 此事件(content 不截断)再回 tool_result(截断 500 字符,可能
+            // 把结果 JSON 截成半截,subagent.go deliverSyncResult 的顺序
+            // 保证)——暂存到 tc_id,随后 tool_result 闭合工具卡时消费。
+            // 后台子代理不发此事件(其结果走 task_notification)
+            "agent_result" => {
+                let tc = event.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+                if !tc.is_empty() {
+                    let status =
+                        data.get("status").and_then(|v| v.as_str()).unwrap_or("completed").to_string();
+                    let content =
+                        data.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    self.sub.agent_results.lock().unwrap().insert(tc.to_string(), (status, content));
+                }
+            }
+            "tool_result" => {
+                let tc_id = event.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let content = data.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let name = self
+                    .sess.sessions
+                    .lock()
+                    .unwrap()
+                    .get_mut(&sid)
+                    .and_then(|s| s.open_tools.remove(&tc_id));
+                // 失败判定:结构化错误位优先(structuredToolResult 的
+                // is_error);兼容尾巴:旧引擎无错误位,只能按 b02fc77 约定
+                // 嗅探 "Error: " 前缀(误伤正常输出恰以此开头的工具)
+                let mut is_error = if self.has_cap("structuredToolResult") {
+                    data.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false)
+                } else {
+                    content.starts_with("Error: ")
+                };
+                // Agent 工具结果:agent_result 暂存(全量,不截断)为权威;
+                // 无暂存时(旧引擎/后台代理的 async_launched 应答)退回解析
+                // 截断 500 字符的 {status,…,content} JSON——可能破损,
+                // 解析失败原样退回(兼容尾巴)
+                let stashed =
+                    if tc_id.is_empty() { None } else { self.sub.agent_results.lock().unwrap().remove(&tc_id) };
+                let content: String = if name.as_deref() == Some("Agent") {
+                    match stashed {
+                        Some((status, full)) => {
+                            if status == "error" {
+                                // 同步子代理失败:引擎把 "Sub-agent error: …"
+                                // 当正常结果回给模型(is_error=false),壳侧
+                                // 失败位以 agent_result.status 为准
+                                is_error = true;
+                            }
+                            full
+                        }
+                        None if !is_error => serde_json::from_str::<Value>(content)
+                            .ok()
+                            .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(str::to_string))
+                            .unwrap_or_else(|| content.to_string()),
+                        None => content.to_string(),
+                    }
+                } else {
+                    content.to_string()
+                };
+                let content = content.as_str();
+                // Agent 工具闭合:清对应子代理路由(残留行缓冲先冲洗成尾行)
+                self.close_subagents_of(&sid, &tc_id);
+                if is_error {
+                    // 失败工具 → failed 帧,否则 UI 渲染成绿勾
+                    self.push_frame(&sid, |seq| frame::tool_call_failed(&tc_id, content, seq));
+                } else {
+                    // 结果文本里的工作区上传路径(浏览器截图等)→ 工具卡内联图
+                    let images = extract_upload_paths(content);
+                    self.push_frame(&sid, |seq| {
+                        frame::tool_call_completed(&tc_id, content, &images, seq)
+                    });
+                }
+            }
+            "send_user_message" | "task_notification" => {
+                let msg = data
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| data.as_str().unwrap_or("").to_string());
+                if msg.is_empty() {
+                    return;
+                }
+                let text = if etype == "task_notification" { format!("\n📌 {msg}\n") } else { msg };
+                self.push_frame(&sid, |seq| frame::agent_text(&text, seq));
+            }
+            // TodoWrite 全量清单:引擎专发 todo_update 事件供 host 渲染实时
+            // 勾选卡(tool_result 只有截断 500 字符的纯文本,不能用来渲染)
+            "todo_update" => {
+                let todos = data.get("todos").cloned().unwrap_or_else(|| serde_json::json!([]));
+                self.push_frame(&sid, |seq| frame::plan(&todos, seq));
+            }
+            "compaction" => {
+                self.push_frame(&sid, |seq| frame::compact_status("started", seq));
+                self.push_frame(&sid, |seq| frame::compact_status("ended", seq));
+            }
+            "error" => {
+                let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("未知错误");
+                self.push_frame(&sid, |seq| frame::task_error(msg, seq));
+            }
+            // turn_done:轮次边界以 turn/stopped 为准
+            _ => {}
+        }
+    }
+}
+
+/// 工具标题:「名称 主参数」(「动词 目标」的可读形态)。
+/// 从工具结果文本提取工作区上传路径(.monkeycode/uploads/…):
+/// 浏览器截图等壳内生成物经文本路径外显,驱动转成工具卡 images。
+fn extract_upload_paths(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = content;
+    while let Some(i) = rest.find(".monkeycode/uploads/") {
+        let tail = &rest[i..];
+        let end = tail.find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == ',').unwrap_or(tail.len());
+        let p = &tail[..end];
+        if p.len() > ".monkeycode/uploads/".len() && !out.iter().any(|x| x == p) {
+            out.push(p.to_string());
+        }
+        rest = &rest[i + end.max(1)..];
+    }
+    out
+}
+
+pub(super) fn perm_title(tool: &str, input: &Value) -> String {
+    // description 兜底:Agent/任务类工具的 3-5 词任务描述作卡片标签
+    // (与引擎 TUI 的子代理活动面板同源,6a61cfd)
+    let arg = ["file_path", "path", "command", "pattern", "url", "cwd", "description"]
+        .iter()
+        .find_map(|k| input.get(k).and_then(|v| v.as_str()))
+        .unwrap_or("");
+    if arg.is_empty() {
+        tool.to_string()
+    } else {
+        let short: String = arg.chars().take(80).collect();
+        format!("{tool} {short}")
+    }
+}

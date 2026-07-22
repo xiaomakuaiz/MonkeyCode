@@ -137,9 +137,16 @@ pub fn save_config_json(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), Stri
 
 /// 写应用配置(权威 config.json)+ 物化引擎配置(engine_config_dir,0600 含密钥)。
 /// 引擎(重)启路径专用;桌宠偏好等壳自有字段用 save_config_json。
-pub fn save_config_files(app: &AppHandle, cfg: &DesktopConfig) -> Result<(), String> {
+/// browser_mcp:浏览器桥 MCP 的 (url, bearer_token),由调用方在 browser::init
+/// 之后查询一次显式传入——本模块不反向读 browser 的进程级全局态,
+/// "browser 先于配置物化"的时序依赖由参数表达而非注释约束。
+pub fn save_config_files(
+    app: &AppHandle,
+    cfg: &DesktopConfig,
+    browser_mcp: Option<(String, String)>,
+) -> Result<(), String> {
     save_config_json(app, cfg)?;
-    write_ohmyagent_config(&engine_config_dir(app)?, cfg)
+    write_ohmyagent_config(&engine_config_dir(app)?, cfg, browser_mcp.as_ref())
 }
 
 /// 引擎配置目录:app_config_dir/ohmyagent(经 OHMYAGENT_CONFIG_DIR 注入引擎)。
@@ -157,7 +164,11 @@ pub fn engine_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
 ///
 /// 已知限制(引擎协议决定):每个 provider 路由只有一组 endpoint/key,
 /// 同协议多网关时默认模型所在网关生效,其余条目跳过(stderr 告警)。
-fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), String> {
+fn write_ohmyagent_config(
+    dir: &PathBuf,
+    cfg: &DesktopConfig,
+    browser_mcp: Option<&(String, String)>,
+) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("创建引擎配置目录失败: {e}"))?;
 
     // 协议 → 引擎 wire 类型(e792858 起扁平 per-model schema:每条模型
@@ -242,9 +253,10 @@ fn write_ohmyagent_config(dir: &PathBuf, cfg: &DesktopConfig) -> Result<(), Stri
             }
         }
     }
-    // 内置条目:壳的浏览器桥 MCP(browser_* 工具)。Bearer token 进程级
-    // 每次启动新发;mcp.json 随引擎(重)启重写,恒为当前值,无需持久。
-    if let Some((url, token)) = crate::browser::mcp_endpoint() {
+    // 内置条目:壳的浏览器桥 MCP(browser_* 工具),接入信息经参数传入。
+    // Bearer token 进程级每次启动新发;mcp.json 随引擎(重)启重写,
+    // 恒为当前值,无需持久。
+    if let Some((url, token)) = browser_mcp {
         servers.push(serde_json::json!({
             "name": "mc-browser", "transport": "streamable-http", "url": url,
             "headers": { "Authorization": format!("Bearer {token}") },
@@ -275,7 +287,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        write_ohmyagent_config(&dir, &cfg).unwrap();
+        write_ohmyagent_config(&dir, &cfg, None).unwrap();
         let mcp: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("mcp.json")).unwrap()).unwrap();
         let names: Vec<&str> = mcp["servers"]
@@ -288,5 +300,53 @@ mod tests {
         assert!(!names.contains(&"off-stdio"), "禁用的 stdio server 应被过滤: {names:?}");
         assert!(!names.contains(&"off-http"), "禁用的 http server 应被过滤: {names:?}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 浏览器桥 MCP 接入信息经参数传入后应物化为 mc-browser 内置条目
+    /// (endpoint 显式化前依赖进程级 OnceLock,该路径不可测)。
+    #[test]
+    fn browser_mcp_param_materialized() {
+        let dir = std::env::temp_dir().join(format!("mc-mcp-browser-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ep = ("http://127.0.0.1:7777/mcp".to_string(), "tok-1".to_string());
+        write_ohmyagent_config(&dir, &DesktopConfig::default(), Some(&ep)).unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("mcp.json")).unwrap()).unwrap();
+        let servers = mcp["servers"].as_array().unwrap();
+        let b = servers.iter().find(|s| s["name"] == "mc-browser").expect("应有 mc-browser 条目");
+        assert_eq!(b["url"], "http://127.0.0.1:7777/mcp");
+        assert_eq!(b["headers"]["Authorization"], "Bearer tok-1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- ms_to_rfc3339(手写 Hinnant 历算,靠已知值对表锚定正确性) ----
+
+    #[test]
+    fn ms_to_rfc3339_epoch_and_truncation() {
+        assert_eq!(ms_to_rfc3339(0), "1970-01-01T00:00:00Z");
+        // 毫秒向下截断到秒
+        assert_eq!(ms_to_rfc3339(1999), "1970-01-01T00:00:01Z");
+    }
+
+    #[test]
+    fn ms_to_rfc3339_leap_day() {
+        // 2024:普通闰年;2000:世纪年被 400 整除的闰年(历算最易错分支)
+        assert_eq!(ms_to_rfc3339(1_709_164_800_000), "2024-02-29T00:00:00Z");
+        assert_eq!(ms_to_rfc3339(951_825_600_000), "2000-02-29T12:00:00Z");
+        // 闰日翻页到 3 月 1 日
+        assert_eq!(ms_to_rfc3339(1_709_251_200_000), "2024-03-01T00:00:00Z");
+    }
+
+    #[test]
+    fn ms_to_rfc3339_year_boundary() {
+        assert_eq!(ms_to_rfc3339(1_704_067_199_000), "2023-12-31T23:59:59Z");
+        assert_eq!(ms_to_rfc3339(1_704_067_200_000), "2024-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn ms_to_rfc3339_known_values() {
+        // 外部工具(date -u -d @…)对表的锚点值
+        assert_eq!(ms_to_rfc3339(1_700_000_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(ms_to_rfc3339(1_721_001_600_000), "2024-07-15T00:00:00Z");
     }
 }

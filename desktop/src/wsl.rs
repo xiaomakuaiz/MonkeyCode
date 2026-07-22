@@ -5,13 +5,20 @@
 // 本模块全平台编译:Linux 开发机可经 MC_WSL_EXE 指向假 wsl 脚本冒烟整条
 // 代码路径;仅 CREATE_NO_WINDOW 之类 Windows 细节 cfg 局部化。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// wsl 可执行名(MC_WSL_EXE 覆盖,开发机 shim 冒烟用)。
 pub fn wsl_exe() -> String {
     std::env::var("MC_WSL_EXE").unwrap_or_else(|_| "wsl.exe".into())
+}
+
+/// guest 内 Linux 绝对路径 → Windows 侧可见的 UNC 路径(\\wsl$\<发行版>\…)。
+/// 壳跨 host/guest 的文件系统访问统一走这里(repo 浏览、附件上传共用);
+/// M3(ohmy WSL 模式)若改用 \\wsl.localhost\ 等新形式,此函数是唯一改动点。
+pub fn unc_path(distro: &str, guest_path: &str) -> PathBuf {
+    PathBuf::from(format!(r"\\wsl$\{}{}", distro, guest_path.replace('/', r"\")))
 }
 
 /// kernel_env 配置值解析:"wsl:<distro>" → Some(distro),其余(本机)→ None。
@@ -165,6 +172,14 @@ mod tests {
     #[test]
     fn decode_utf8_passthrough() {
         assert_eq!(decode_wsl_output("Ubuntu-22.04\n发行版\n".as_bytes()), "Ubuntu-22.04\n发行版\n");
+    }
+
+    #[test]
+    fn unc_path_mapping() {
+        assert_eq!(
+            unc_path("Ubuntu-22.04", "/home/u/proj"),
+            PathBuf::from(r"\\wsl$\Ubuntu-22.04\home\u\proj")
+        );
     }
 
     #[test]
