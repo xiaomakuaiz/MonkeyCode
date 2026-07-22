@@ -250,6 +250,26 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
           const raw = typeof u.rawOutput === "string" ? u.rawOutput : "";
           const out = raw.split("\n")[0].slice(0, 160);
           const images = Array.isArray(u.images) ? (u.images as string[]) : it.images;
+          const backgroundLaunch = raw.includes("子代理已转入后台继续执行");
+          if (backgroundLaunch) {
+            // Agent 工具调用虽已返回 completed,子代理仍在后台执行:卡片视觉
+            // 上保持运行态,最终正文到达时再作为独立对话项展示。
+            items[i] = { ...it, status: "run", out: "后台运行中", result: undefined, images, lastLine: undefined, background: true };
+            break;
+          }
+          if (it.background) {
+            const error = u.status !== "completed";
+            items[i] = {
+              ...it,
+              status: error ? "fail" : "ok",
+              out: error ? "后台执行失败" : "后台执行完成",
+              result: raw,
+              images,
+              lastLine: undefined,
+              backgroundNoticePending: true,
+            };
+            return { ...s, items, streamKind: "" };
+          }
           // 完整结果一并保留:子代理卡把最终产出按 markdown 展示,
           // 普通工具卡仍只显示首行摘要
           items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, result: raw, images, lastLine: undefined };
@@ -265,10 +285,19 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       return { ...s, plan: u.entries ?? [] };
     case "llm_call_retry":
       return push(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
-    case "task_notification":
+    case "task_notification": {
       // 后台子代理完成通知(📌):独立系统行。不能走 agent_text——
-      // appendStream 会把它并进正在流式的模型正文气泡
+      // appendStream 会把它并进正在流式的模型正文气泡。已回填后台卡时
+      // 通知信息重复,消费卡上的 pending 标记但不再往对话流追加任何项。
+      const items = s.items.slice();
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.kind !== "tool" || !it.backgroundNoticePending) continue;
+        items[i] = { ...it, backgroundNoticePending: false };
+        return { ...s, items, streamKind: "" };
+      }
       return u.text ? push(s, { kind: "sys", text: u.text }) : s;
+    }
     case "usage_update":
       return { ...s, usage: { used: u.used ?? 0, size: u.size ?? 0 } };
     case "compact_status":

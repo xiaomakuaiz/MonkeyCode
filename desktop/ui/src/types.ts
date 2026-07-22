@@ -174,6 +174,10 @@ export type LogItem =
       lastLine?: string;
       /** 子代理子会话 ID(可打开完整回放) */
       childSessionId?: string;
+      /** Agent 工具已转后台,但子代理本身仍在运行 */
+      background?: boolean;
+      /** 后台终态已回填,等待吞掉紧随其后的重复 task_notification */
+      backgroundNoticePending?: boolean;
     }
   | { kind: "sys"; text: string; error?: boolean }
   | {

@@ -331,13 +331,17 @@ export function ToolCard({
   onPermAnswer?: PermAnswerFn;
 }) {
   const [zoom, setZoom] = useState<string | null>(null);
+  const [showBackgroundResult, setShowBackgroundResult] = useState(false);
   const images = uploadUrl ? (item.images ?? []) : [];
   const feed = item.feed ?? [];
-  const visible = feed.slice(-FEED_WINDOW);
-  // 子代理卡(有进度窗/子会话):完成后把最终产出全文按 markdown 展示,
-  // 不再只给首行 160 字符的 ellipsis;普通工具卡维持首行摘要
-  const isAgentCard = !!(item.childSessionId || feed.length);
-  const summary = isAgentCard && item.status !== "run" ? (item.result ?? "").trim() : "";
+  // 后台任务完成后卡片收成单行状态,过程仍可从“查看子会话”进入;
+  // 最终正文已作为独立对话项展示,这里不再残留进度窗抢视觉。
+  const visible = item.background && item.status !== "run" ? [] : feed.slice(-FEED_WINDOW);
+  // 同步子代理完成后直接展示完整产出;后台代理默认只收成单行状态,
+  // 结果从子会话查看。没有子会话入口时才给按需展开的兜底。
+  const isAgentCard = !!(item.childSessionId || feed.length || item.background);
+  const backgroundResult = item.background && item.status !== "run" ? (item.result ?? "").trim() : "";
+  const summary = isAgentCard && item.status !== "run" && (!item.background || showBackgroundResult) ? (item.result ?? "").trim() : "";
   // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
   const title = stripWorkdir(item.title, workdir);
   const sp = title.indexOf(" ");
@@ -384,6 +388,16 @@ export function ToolCard({
           >
             查看子会话
           </a>
+        )}
+        {backgroundResult && !(item.childSessionId && onOpenChild) && (
+          <button
+            type="button"
+            className="hv-t1"
+            onClick={() => setShowBackgroundResult((v) => !v)}
+            style={{ padding: 0, border: 0, background: "transparent", color: "var(--t5)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", flex: "none" }}
+          >
+            {showBackgroundResult ? "收起结果" : "查看结果"}
+          </button>
         )}
       </div>
       {visible.length > 0 && (

@@ -177,27 +177,48 @@ describe("后台子代理(Agent 超时转后台)", () => {
     expect(reduceFrame(s, acp({ sessionUpdate: "task_notification" })).items).toHaveLength(3);
   });
 
-  it("已闭合的 Agent 卡继续接受后台代理的进度直播", () => {
+  it("转后台后卡片保持运行态并继续接受进度直播", () => {
     const s = run([
       open,
       launched,
       acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", progress: { kind: "subagent_text", line: "后台仍在跑" } }),
       acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", progress: { kind: "child_session", childSessionId: "c1" } }),
     ]);
-    expect(toolItem(s, "t1")).toMatchObject({ status: "ok", childSessionId: "c1" });
+    expect(toolItem(s, "t1")).toMatchObject({ status: "run", out: "后台运行中", background: true, childSessionId: "c1" });
+    expect(toolItem(s, "t1").result).toBeUndefined();
     expect(toolItem(s, "t1").feed).toEqual([{ kind: "text", text: "后台仍在跑" }]);
   });
 
-  it("终态帧可重复回写:task_notification 迟到的真实结果覆写转后台文案", () => {
+  it("后台终态只收起卡片并隐藏紧随其后的重复通知", () => {
     const s = run([
       open,
       launched,
       acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: "最终结论正文" }),
+      acp({ sessionUpdate: "task_notification", text: "📌 后台代理 bd 已完成,结果已回填其任务卡" }),
     ]);
-    expect(toolItem(s, "t1")).toMatchObject({ status: "ok", result: "最终结论正文" });
-    // 失败终态同样覆写(后台代理 error 收尾)
-    const f = reduceFrame(s, acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed", rawOutput: "炸了" }));
-    expect(toolItem(f, "t1")).toMatchObject({ status: "fail", result: "炸了" });
+    expect(toolItem(s, "t1")).toMatchObject({
+      status: "ok",
+      out: "后台执行完成",
+      result: "最终结论正文",
+      backgroundNoticePending: false,
+    });
+    expect(s.items.map((it) => it.kind)).toEqual(["tool"]);
+  });
+
+  it("后台失败正文同样只保留在卡片数据里,重复终态不追加渲染项", () => {
+    const s = run([
+      open,
+      launched,
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed", rawOutput: "第一次错误" }),
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed", rawOutput: "最终错误" }),
+    ]);
+    expect(toolItem(s, "t1")).toMatchObject({
+      status: "fail",
+      out: "后台执行失败",
+      result: "最终错误",
+      backgroundNoticePending: true,
+    });
+    expect(s.items.map((it) => it.kind)).toEqual(["tool"]);
   });
 });
 
