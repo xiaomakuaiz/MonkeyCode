@@ -64,6 +64,12 @@ describe("工具调用生命周期", () => {
     expect(toolItem(s, "t1")).toMatchObject({ title: "read", status: "run", out: "" });
   });
 
+  it("tool_call 保留完整 rawInput 供展示层使用", () => {
+    const rawInput = { file_path: "/repo/.ohmyagent/worktrees/wt/internal/agent/loop.go" };
+    const s = run([acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read /repo/.ohmyagent", rawInput })]);
+    expect(toolItem(s, "t1").rawInput).toEqual(rawInput);
+  });
+
   it("completed 置 ok,rawOutput 取首行且截断 160 字符", () => {
     const long = "x".repeat(200) + "\n第二行";
     const s = run([
@@ -111,12 +117,15 @@ describe("执行期进度(in_progress progress)", () => {
     acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", progress });
 
   it("subagent_tool 按 id 追加与原地更新,标题缺省保留旧值", () => {
+    const rawInput = { file_path: "/repo/internal/agent/loop.go" };
     const s = run([
       open,
-      prog({ kind: "subagent_tool", id: "s1", title: "读取 a.txt", status: "run" }),
+      prog({ kind: "subagent_tool", id: "s1", title: "读取 a.txt", rawInput, status: "run" }),
       prog({ kind: "subagent_tool", id: "s1", status: "ok" }),
     ]);
-    expect(toolItem(s, "t1").feed).toEqual([{ kind: "tool", id: "s1", title: "读取 a.txt", status: "ok" }]);
+    expect(toolItem(s, "t1").feed).toEqual([
+      { kind: "tool", id: "s1", title: "读取 a.txt", rawInput, status: "ok" },
+    ]);
   });
 
   it("subagent_text 追加文本行,空行忽略", () => {

@@ -90,6 +90,7 @@ const COMMON_WORDS: Record<string, string> = {
 };
 
 const SERVICE_LABELS: Record<string, string> = {
+  "mc-browser": "浏览器",
   github: "GitHub",
   gitlab: "GitLab",
   slack: "Slack",
@@ -98,6 +99,19 @@ const SERVICE_LABELS: Record<string, string> = {
   filesystem: "文件系统",
   browser: "浏览器",
   playwright: "浏览器",
+};
+
+/** 首方浏览器工具直接表达用户动作，不暴露 MCP 服务内部名。 */
+const BROWSER_ACTIONS: Record<string, string> = {
+  browser_navigate: "打开网页",
+  browser_snapshot: "查看页面",
+  browser_take_screenshot: "截取页面",
+  browser_click: "点击页面元素",
+  browser_type: "输入内容",
+  browser_select_option: "选择页面选项",
+  browser_press_key: "按下按键",
+  browser_scroll: "滚动页面",
+  browser_tabs: "管理标签页",
 };
 
 function identifierWords(value: string): string[] {
@@ -128,6 +142,108 @@ export interface ToolTitleParts {
   rawTool: string;
 }
 
+export type ToolTargetKind = "path" | "code" | "text";
+
+export interface ToolPresentation extends ToolTitleParts {
+  /** 视图用它选择路径中间省略、等宽命令或普通文本 */
+  targetKind: ToolTargetKind;
+}
+
+function inputRecord(input: unknown): Record<string, unknown> | null {
+  return input !== null && typeof input === "object" && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : null;
+}
+
+function inputValue(input: Record<string, unknown>, key: string): string {
+  const value = input[key];
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.filter((v) => typeof v === "string" || typeof v === "number").join(", ");
+  return "";
+}
+
+function joinedInput(input: Record<string, unknown>, keys: string[]): string {
+  return keys.map((key) => inputValue(input, key)).filter(Boolean).join(" · ");
+}
+
+/** 完整 rawInput → 卡片的主目标；不展示 Write.content/Edit.new_string 等大段正文。 */
+function structuredTarget(rawTool: string, rawInput: unknown): { target: string; kind: ToolTargetKind } | null {
+  const input = inputRecord(rawInput);
+  if (!input) return null;
+
+  const mcp = mcpParts(rawTool);
+  if (mcp && ["mc-browser", "browser", "playwright"].includes(mcp.service.toLowerCase())) {
+    switch (mcp.operation) {
+      case "browser_navigate":
+        return { target: inputValue(input, "url"), kind: "text" };
+      case "browser_snapshot":
+        return { target: "", kind: "text" };
+      case "browser_take_screenshot":
+        return { target: inputValue(input, "full_page") === "true" ? "整页" : "", kind: "text" };
+      case "browser_click":
+        return { target: inputValue(input, "ref"), kind: "code" };
+      case "browser_type":
+        return { target: joinedInput(input, ["ref", "text"]), kind: "code" };
+      case "browser_select_option":
+        return { target: joinedInput(input, ["ref", "values"]), kind: "code" };
+      case "browser_press_key":
+        return { target: inputValue(input, "key"), kind: "code" };
+      case "browser_scroll":
+        return { target: joinedInput(input, ["direction", "ref"]), kind: "code" };
+      case "browser_tabs":
+        return { target: joinedInput(input, ["action", "tab_id", "url"]), kind: "code" };
+    }
+  }
+
+  switch (rawTool) {
+    case "Read":
+    case "Write":
+    case "Edit":
+      return { target: joinedInput(input, ["file_path", "path"]), kind: "path" };
+    case "NotebookEdit":
+      return { target: joinedInput(input, ["notebook_path", "file_path"]), kind: "path" };
+    case "LSP":
+      return { target: joinedInput(input, ["file_path", "operation"]), kind: "path" };
+    case "Bash":
+    case "Cmd":
+    case "PowerShell":
+      return { target: inputValue(input, "command"), kind: "code" };
+    case "Grep":
+    case "Glob":
+      return { target: joinedInput(input, ["pattern", "path"]), kind: "code" };
+    case "WebFetch":
+      return { target: inputValue(input, "url"), kind: "text" };
+    case "WebSearch":
+      return { target: joinedInput(input, ["query", "search_query"]), kind: "text" };
+    case "Agent":
+    case "Task":
+      return { target: inputValue(input, "description"), kind: "text" };
+    case "TaskCreate":
+      return { target: inputValue(input, "subject"), kind: "text" };
+    case "TaskGet":
+    case "TaskOutput":
+    case "TaskStop":
+      return { target: joinedInput(input, ["task_id", "id"]), kind: "code" };
+    case "TaskUpdate":
+      return { target: joinedInput(input, ["task_id", "id", "status"]), kind: "code" };
+    case "EnterWorktree":
+      return { target: inputValue(input, "name"), kind: "text" };
+    case "ExitWorktree":
+      return { target: inputValue(input, "worktree_path"), kind: "path" };
+    case "Skill":
+      return { target: joinedInput(input, ["skill", "name"]), kind: "text" };
+    case "SendMessage":
+      return { target: joinedInput(input, ["to", "target"]), kind: "text" };
+  }
+
+  for (const key of ["file_path", "path", "command", "pattern", "query", "url", "description", "name", "id"]) {
+    const target = inputValue(input, key);
+    if (target) return { target, kind: key === "file_path" || key === "path" ? "path" : key === "command" ? "code" : "text" };
+  }
+  return null;
+}
+
 export function localizeToolTitle(title: string, locale: ToolLocale = DEFAULT_TOOL_LOCALE): ToolTitleParts {
   const trimmed = title.trim();
   if (!trimmed) return { action: locale === "zh-CN" ? "调用工具" : "Tool", target: "", rawTool: "" };
@@ -146,6 +262,10 @@ export function localizeToolTitle(title: string, locale: ToolLocale = DEFAULT_TO
 
   const mcp = mcpParts(rawTool);
   if (mcp) {
+    const browserAction = ["mc-browser", "browser", "playwright"].includes(mcp.service.toLowerCase())
+      ? BROWSER_ACTIONS[mcp.operation]
+      : undefined;
+    if (browserAction) return { action: browserAction, target: argument, rawTool };
     const service = SERVICE_LABELS[mcp.service.toLowerCase()] ?? readableIdentifier(mcp.service);
     const operation = readableIdentifier(mcp.operation);
     return {
@@ -159,6 +279,21 @@ export function localizeToolTitle(title: string, locale: ToolLocale = DEFAULT_TO
     action: "调用工具",
     target: [readableIdentifier(rawTool), argument].filter(Boolean).join(" "),
     rawTool,
+  };
+}
+
+/** 标题决定动作，结构化入参决定完整目标；旧 journal 无 rawInput 时自动回退标题。 */
+export function presentToolCall(
+  title: string,
+  rawInput?: unknown,
+  locale: ToolLocale = DEFAULT_TOOL_LOCALE,
+): ToolPresentation {
+  const base = localizeToolTitle(title, locale);
+  const structured = structuredTarget(base.rawTool, rawInput);
+  return {
+    ...base,
+    target: structured?.target ?? base.target,
+    targetKind: structured?.kind ?? (base.rawTool === "Read" || base.rawTool === "Write" || base.rawTool === "Edit" ? "path" : "text"),
   };
 }
 

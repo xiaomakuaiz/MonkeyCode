@@ -173,11 +173,16 @@ function applyProgress(s: ChatState, tcId: string, p: ToolProgress): ChatState {
           kind: "tool",
           id: p.id ?? String(feed.length),
           title: p.title ?? "",
+          ...(p.rawInput !== undefined ? { rawInput: p.rawInput } : {}),
           status: (p.status as "run" | "ok" | "fail") ?? "run",
         };
         if (idx >= 0) {
           const prev = feed[idx] as Extract<SubEntry, { kind: "tool" }>;
-          feed[idx] = { ...entry, title: entry.title || prev.title };
+          feed[idx] = {
+            ...entry,
+            title: entry.title || prev.title,
+            ...(entry.rawInput !== undefined || prev.rawInput === undefined ? {} : { rawInput: prev.rawInput }),
+          };
         } else {
           feed.push(entry);
           if (feed.length > MAX_FEED) feed = feed.slice(-MAX_FEED);
@@ -219,6 +224,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
         kind: "tool",
         tcId: u.toolCallId ?? "",
         title: u.title || u.kind || "工具调用",
+        ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
         status: "run",
         out: "",
       });

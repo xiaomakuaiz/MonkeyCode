@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localizedToolTitleText, localizeToolTitle, toolDisplayName } from "./toolLabels";
+import { localizedToolTitleText, localizeToolTitle, presentToolCall, toolDisplayName } from "./toolLabels";
 
 describe("工具标题本地化", () => {
   it("覆盖当前所有内置活动工具与别名", () => {
@@ -35,6 +35,38 @@ describe("工具标题本地化", () => {
       action: "调用 GitHub",
       target: "创建 事项 MonkeyCode",
       rawTool: "mcp__github__create_issue",
+    });
+  });
+
+  it("优先用结构化入参展示完整文件路径，不隐藏 worktree", () => {
+    const path = "/repo/.ohmyagent/worktrees/ohmyagent/internal/agent/loop.go";
+    expect(presentToolCall("Edit /repo/.ohmyagent/worktrees/ohmyagent", { file_path: path })).toEqual({
+      action: "编辑文件",
+      target: path,
+      targetKind: "path",
+      rawTool: "Edit",
+    });
+  });
+
+  it("命令使用完整 rawInput，而不是标题里的截断值", () => {
+    const command = "go test -race ./internal/agent";
+    expect(presentToolCall("Bash go test", { command })).toMatchObject({
+      action: "执行命令",
+      target: command,
+      targetKind: "code",
+    });
+  });
+
+  it("浏览器 MCP 按具体操作展示，不显示内部服务名", () => {
+    expect(presentToolCall("mcp__mc-browser__browser_navigate", { url: "https://example.com" })).toEqual({
+      action: "打开网页",
+      target: "https://example.com",
+      targetKind: "text",
+      rawTool: "mcp__mc-browser__browser_navigate",
+    });
+    expect(presentToolCall("mcp__mc-browser__browser_take_screenshot", { full_page: true })).toMatchObject({
+      action: "截取页面",
+      target: "整页",
     });
   });
 

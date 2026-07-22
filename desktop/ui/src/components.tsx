@@ -42,7 +42,7 @@ import {
   IconTrash,
 } from "./icons";
 import { permAnchors } from "./reduce";
-import { localizedToolTitleText, localizeToolTitle, toolDisplayName } from "./toolLabels";
+import { localizedToolTitleText, presentToolCall, toolDisplayName, type ToolTargetKind } from "./toolLabels";
 import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -285,8 +285,42 @@ const FEED_WINDOW = 5;
 /** 标题里的工作区绝对路径收敛为相对路径(历史会话标题已落盘,只能渲染时处理) */
 function stripWorkdir(text: string, workdir?: string): string {
   if (!workdir) return text;
-  const prefix = workdir.endsWith("/") ? workdir : workdir + "/";
-  return text.split(prefix).join("");
+  const slashDir = workdir.replace(/\\/g, "/").replace(/\/$/, "");
+  const backslashDir = workdir.replace(/\//g, "\\").replace(/\\$/, "");
+  return text.split(slashDir + "/").join("").split(backslashDir + "\\").join("");
+}
+
+/** 路径保证末尾文件名可见；完整值始终放在 title，不在数据层截断。 */
+function ToolTargetText({
+  target,
+  fullTarget,
+  kind,
+  compact = false,
+}: {
+  target: string;
+  fullTarget?: string;
+  kind: ToolTargetKind;
+  compact?: boolean;
+}) {
+  const common: CSSProperties = {
+    color: "var(--t3)",
+    font: `${compact ? 11 : 11.5}px/1.55 ${MONO}`,
+    minWidth: 0,
+  };
+  if (kind !== "path") {
+    return <span title={fullTarget || target} className="ellipsis" style={{ ...common, display: "block" }}>{target}</span>;
+  }
+
+  const split = Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\"));
+  const hasFilename = split >= 0 && split < target.length - 1;
+  const directory = hasFilename ? target.slice(0, split + 1) : "";
+  const filename = hasFilename ? target.slice(split + 1) : target;
+  return (
+    <span title={fullTarget || target} style={{ ...common, display: "flex", whiteSpace: "nowrap", overflow: "hidden" }}>
+      {directory && <span className="ellipsis" style={{ minWidth: 12, color: "var(--t5)" }}>{directory}</span>}
+      <span className="ellipsis" style={{ flex: "none", maxWidth: "70%", color: "var(--t3)" }}>{filename}</span>
+    </span>
+  );
 }
 
 /** 上传/落盘图片:src 经壳异步回读(data URL),就绪前占位不渲染。 */
@@ -364,75 +398,84 @@ export function ToolCard({
   // 但不再默认把整段结果灌进卡片。
   const summary = agentResult && !canOpenChild && showAgentResult ? agentResult : "";
   const images = uploadUrl && !(agentFinished && canOpenChild) ? (item.images ?? []) : [];
-  // 标题按「本地化动作 + 原始参数」展示:参数/路径/命令保持等宽且不翻译。
-  const title = stripWorkdir(item.title, workdir);
-  const { action, target } = localizeToolTitle(title);
+  // 动作取标题，目标优先取完整 rawInput；旧 journal 自动回退标题。
+  const presentation = presentToolCall(item.title, item.rawInput);
+  const fullTarget = presentation.target;
+  const target = presentation.targetKind === "path" ? stripWorkdir(fullTarget, workdir) : fullTarget;
+  const { action, targetKind } = presentation;
   const stepRow: CSSProperties = {
     display: "flex",
     gap: 7,
     alignItems: "center",
     paddingLeft: 15,
-    font: "11px/1.7 " + MONO,
+    fontSize: 11.5,
+    lineHeight: 1.7,
     color: "var(--t3)",
     whiteSpace: "nowrap",
     minWidth: 0,
   };
   return (
     <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
-      <div title={item.title} style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", columnGap: 9, alignItems: target ? "start" : "center", minWidth: 0 }}>
         {/* 待审批:⏸ 顶掉运行状态图标,
             解答后回到 run/ok/fail 常规流转 */}
-        {perm ? (
-          <span style={{ color: "var(--warn)", fontSize: 11, flex: "none" }}>⏸</span>
-        ) : (
-          <StatusDot status={item.status} />
-        )}
-        <span style={{ fontWeight: 600, flex: "none", color: "var(--t1)" }}>{action}</span>
-        {target && (
-          <span className="ellipsis" style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0 }}>
-            {target}
-          </span>
-        )}
-        <span style={{ flex: 1 }} />
-        {item.out && !summary && !agentFinished && (
-          <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%" }}>
-            {item.out}
-          </span>
-        )}
-        {item.childSessionId && onOpenChild && (
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              onOpenChild(item.childSessionId!);
-            }}
-            style={{ fontSize: 11.5, fontWeight: 600, flex: "none" }}
-          >
-            查看子会话
-          </a>
-        )}
-        {agentResult && !canOpenChild && (
-          <button
-            type="button"
-            className="hv-t1"
-            onClick={() => setShowAgentResult((v) => !v)}
-            style={{ padding: 0, border: 0, background: "transparent", color: "var(--t5)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", flex: "none" }}
-          >
-            {showAgentResult ? "收起结果" : "查看结果"}
-          </button>
-        )}
+        <span style={{ display: "flex", alignItems: "center", paddingTop: target ? 4 : 0 }}>
+          {perm ? <span style={{ color: "var(--warn)", fontSize: 11 }}>⏸</span> : <StatusDot status={item.status} />}
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, lineHeight: "18px" }}>
+            <span title={presentation.rawTool ? `原始工具：${presentation.rawTool}` : undefined} style={{ fontWeight: 650, flex: "none", color: "var(--t1)" }}>{action}</span>
+            {item.out && !summary && !agentFinished && (
+              <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, minWidth: 0 }}>{item.out}</span>
+            )}
+          </div>
+          {target && (
+            <div style={{ marginTop: 2, minWidth: 0 }}>
+              <ToolTargetText target={target} fullTarget={fullTarget} kind={targetKind} />
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 18, paddingTop: target ? 1 : 0 }}>
+          {item.childSessionId && onOpenChild && (
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                onOpenChild(item.childSessionId!);
+              }}
+              style={{ fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap" }}
+            >
+              查看子会话
+            </a>
+          )}
+          {agentResult && !canOpenChild && (
+            <button
+              type="button"
+              className="hv-t1"
+              onClick={() => setShowAgentResult((v) => !v)}
+              style={{ padding: 0, border: 0, background: "transparent", color: "var(--t5)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              {showAgentResult ? "收起结果" : "查看结果"}
+            </button>
+          )}
+        </div>
       </div>
       {visible.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {visible.map((s, i) => {
-            const subTitle = s.kind === "tool" ? stripWorkdir(s.title, workdir) : "";
+            const subPresentation = s.kind === "tool" ? presentToolCall(s.title, s.rawInput) : null;
+            const subFullTarget = subPresentation?.target ?? "";
+            const subTarget = subPresentation?.targetKind === "path" ? stripWorkdir(subFullTarget, workdir) : subFullTarget;
             return (
               <div key={feed.length - visible.length + i} style={stepRow}>
                 {s.kind === "tool" ? (
                   <>
                     {stepMark(s.status)}
-                    <span title={s.title} className="ellipsis" style={{ flex: 1, minWidth: 0 }}>
-                      {localizedToolTitleText(subTitle)}
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0, overflow: "hidden" }}>
+                      <span style={{ flex: "none", color: "var(--t3)" }}>{subPresentation?.action}</span>
+                      {subTarget && subPresentation && (
+                        <ToolTargetText target={subTarget} fullTarget={subFullTarget} kind={subPresentation.targetKind} compact />
+                      )}
                     </span>
                   </>
                 ) : (

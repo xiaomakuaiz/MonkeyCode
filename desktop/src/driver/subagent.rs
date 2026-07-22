@@ -193,7 +193,8 @@ impl Inner {
                 self.push_frame(&psid, |seq| {
                     frame::tool_call_progress(
                         &ptc,
-                        json!({ "kind": "subagent_tool", "id": tc_id, "title": title, "status": "run" }),
+                        json!({ "kind": "subagent_tool", "id": tc_id, "title": title,
+                            "rawInput": input, "status": "run" }),
                         seq,
                     )
                 });

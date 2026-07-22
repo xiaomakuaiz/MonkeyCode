@@ -116,6 +116,8 @@ export interface ToolProgress {
   kind: string; // subagent_tool | subagent_text | output | child_session
   id?: string;
   title?: string;
+  /** subagent_tool 的完整结构化入参，避免从截断标题反推目标 */
+  rawInput?: unknown;
   status?: string; // run | ok | fail
   line?: string;
   childSessionId?: string;
@@ -123,7 +125,7 @@ export interface ToolProgress {
 
 /** 子代理进度窗口的一条:工具步骤或回复文本行(按时间混排,挂在 task 工具行下) */
 export type SubEntry =
-  | { kind: "tool"; id: string; title: string; status: "run" | "ok" | "fail" }
+  | { kind: "tool"; id: string; title: string; rawInput?: unknown; status: "run" | "ok" | "fail" }
   | { kind: "text"; text: string };
 
 export interface PlanEntry {
@@ -162,6 +164,8 @@ export type LogItem =
       kind: "tool";
       tcId: string;
       title: string;
+      /** 工具的完整结构化入参；卡片优先用它展示路径/命令/查询 */
+      rawInput?: unknown;
       status: "run" | "ok" | "fail";
       out: string;
       /** 完整结果文本(子代理卡按 markdown 展示最终产出;普通卡不消费) */
