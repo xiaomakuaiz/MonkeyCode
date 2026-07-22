@@ -1086,7 +1086,13 @@ impl Inner {
 
 /// 壳模式词汇 → ohmyagent permission_mode
 fn ohmy_mode_of(mode: &str) -> &'static str {
-    if mode == "yolo" { "bypassPermissions" } else { "normal" }
+    match mode {
+        "yolo" => "bypassPermissions",
+        // 兼容历史 sidecar 中可能存在的显式 normal；UI 的默认模式从现在起
+        // 使用 auto，由 agent 分类器决定放行、拒绝或询问。
+        "normal" => "normal",
+        _ => "auto",
+    }
 }
 
 #[cfg(test)]
@@ -1095,7 +1101,7 @@ mod permission_mode_tests {
 
     #[test]
     fn shell_modes_map_to_agent_permission_modes() {
-        assert_eq!(ohmy_mode_of("default"), "normal");
+        assert_eq!(ohmy_mode_of("default"), "auto");
         assert_eq!(ohmy_mode_of("normal"), "normal");
         assert_eq!(ohmy_mode_of("yolo"), "bypassPermissions");
     }
