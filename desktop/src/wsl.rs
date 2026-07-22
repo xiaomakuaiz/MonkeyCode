@@ -142,7 +142,10 @@ pub fn prepare(distro: &str, win_paths: &[&Path]) -> Result<Vec<String>, String>
     Ok(lines)
 }
 
-fn no_console(cmd: &mut Command) {
+/// Windows 上 GUI 进程 spawn 控制台子系统 exe 会弹黑窗,统一在此加
+/// CREATE_NO_WINDOW(非 Windows 空操作)。壳内所有 std Command 的
+/// spawn 点(引擎/git/wsl)共用这一处。
+pub(crate) fn no_console(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

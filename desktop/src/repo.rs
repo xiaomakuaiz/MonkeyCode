@@ -50,14 +50,20 @@ impl RepoCtx {
     /// allow_fail:非零退出码不视为错误,只取 stdout(diff --no-index 有
     /// 差异时退出码为 1 这类"正常失败")。
     fn run_git(&self, args: &[&str], allow_fail: bool) -> Result<String, String> {
-        let out = match &self.wsl_distro {
-            Some(d) => Command::new(crate::wsl::wsl_exe())
-                .args(["-d", d, "--cd", &self.workdir, "--exec", "git"])
-                .args(args)
-                .output(),
-            None => Command::new("git").current_dir(&self.workdir).args(args).output(),
-        }
-        .map_err(|e| format!("git 执行失败: {e}"))?;
+        let mut cmd = match &self.wsl_distro {
+            Some(d) => {
+                let mut c = Command::new(crate::wsl::wsl_exe());
+                c.args(["-d", d, "--cd", &self.workdir, "--exec", "git"]).args(args);
+                c
+            }
+            None => {
+                let mut c = Command::new("git");
+                c.current_dir(&self.workdir).args(args);
+                c
+            }
+        };
+        crate::wsl::no_console(&mut cmd); // Windows 下每次文件树/diff 查询不闪黑窗
+        let out = cmd.output().map_err(|e| format!("git 执行失败: {e}"))?;
         if !allow_fail && !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
         }

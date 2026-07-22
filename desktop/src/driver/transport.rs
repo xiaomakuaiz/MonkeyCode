@@ -164,8 +164,8 @@ impl OhmyDriver {
         // 会漏给引擎的 os.Getwd 兜底与其 spawn 的 MCP stdio 子进程;
         // 会话工作目录不受影响(session/create 逐会话显式传 cwd)
         let proc_cwd = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let mut child = Command::new(&bin)
-            .current_dir(&proc_cwd)
+        let mut cmd = Command::new(&bin);
+        cmd.current_dir(&proc_cwd)
             // GUI 启动时环境贫瘠,按登录 shell 补齐(只补缺,见 login_shell_env);
             // OHMYAGENT_CONFIG_DIR 在其后设置,恒不被补齐项影响
             .envs(engine_env_additions())
@@ -173,7 +173,10 @@ impl OhmyDriver {
             .arg("--stdio")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(log_file.map(Stdio::from).unwrap_or_else(Stdio::null))
+            .stderr(log_file.map(Stdio::from).unwrap_or_else(Stdio::null));
+        // 引擎是控制台子系统 exe,Windows 上 GUI 壳直接 spawn 会弹黑窗
+        crate::wsl::no_console(&mut cmd);
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("启动 ohmyagent 失败({}): {e}", bin.display()))?;
 
