@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 桌宠页:透明置顶小窗,主窗口不在前台时外显任务聚合状态。
+<!-- 桌宠页:透明置顶常驻小窗,与主窗口是否在前台无关,外显任务聚合状态。
      形象:官方吉祥物 8 帧"点头打盹"精灵图(pet-sprite.webp,88px@2x),
      CSS steps(8) 逐帧播放——待机慢速打盹、运行中快速点头、等审批定格
      摇晃、离线定格在低头睡着帧并灰化。
@@ -74,8 +74,8 @@
   const invoke = window.__TAURI__.core.invoke;
   const bubble = document.getElementById('bubble');
 
-  // 事件音效:桌宠窗口隐藏时 webview 仍在运行,所以无论猴子是否可见、
-  // 主窗口是否在前台都会响。同一音效 2s 内只响一次,避免并发叠音。
+  // 事件音效:桌宠被用户隐藏时 webview 仍在运行,所以音效仍会响。
+  // 同一音效 2s 内只响一次,避免并发叠音。
   const sounds = {
     start: new Audio('sound-app-start.mp3'),      // 应用启动(首次连上内核)
     end: new Audio('sound-task-end.mp3'),         // 轮次完成

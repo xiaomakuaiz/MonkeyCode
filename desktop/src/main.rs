@@ -36,11 +36,9 @@ use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
 use config::{load_config, save_config_files, DesktopConfig};
 use driver::DriverHost;
 
-// macOS 桌宠面板类:普通 NSWindow 被点击会激活应用——主窗口被系统提到
-// 最前并拿到焦点,触发"main 聚焦→藏桌宠",表现为"一点猴子主窗口就弹出、
-// 猴子消失"。NonactivatingPanel 点击不激活应用,彻底断根。
-// hides_on_deactivate 必须关:NSPanel 默认应用失活即隐藏,而桌宠恰恰在
-// 应用失活时出场,不关的话面板刚 show 就被系统藏掉。
+// macOS 桌宠面板类:普通 NSWindow 被点击会激活应用、把主窗口带到最前;
+// NonactivatingPanel 让桌宠保持为不抢焦点的独立面板。hides_on_deactivate 必须关,
+// 否则 NSPanel 会在应用失活时自行隐藏,违反桌宠常驻语义。
 #[cfg(target_os = "macos")]
 tauri_panel! {
     panel!(PetPanel {
@@ -63,7 +61,7 @@ struct TrayReady(AtomicBool);
 /// take_ui_intent 取走补处理,两路兜底。
 struct UiIntent(Mutex<Option<String>>);
 
-/// 桌宠开关的运行时缓存(焦点切换高频读,不每次读盘;真值落 config.json)。
+/// 桌宠开关的运行时缓存(真值落 config.json)。
 struct PetEnabled(AtomicBool);
 
 /// 桌宠位置暂存:Moved 事件在拖动中高频触发,不能逐次写盘;
@@ -396,7 +394,8 @@ fn create_main_window(app: &AppHandle, page: &str) {
 const PET_W: f64 = 116.0;
 const PET_H: f64 = 120.0;
 
-/// 创建桌宠窗口(初始隐藏,主窗口失焦/隐藏时显示)。
+/// 创建桌宠窗口。先隐藏创建以避免定位前在屏幕角落闪现,
+/// 定位完成后按用户开关显示,不受主窗口焦点影响。
 /// focusable(false):桌宠是状态外显不是交互主体,永不抢焦点;
 /// 鼠标点击与拖动不依赖键盘焦点,不受影响。
 fn ensure_pet_window(app: &AppHandle) {
@@ -431,6 +430,7 @@ fn ensure_pet_window(app: &AppHandle) {
                 }
                 Err(e) => eprintln!("[desktop] 桌宠转 NSPanel 失败(点击会激活应用): {e}"),
             }
+            set_pet_visible(app, true);
         }
         Err(e) => eprintln!("[desktop] 桌宠窗口创建失败: {e}"),
     }
@@ -464,8 +464,8 @@ fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPo
     tauri::PhysicalPosition::new(mx + mw - w - margin, my + mh - h - margin - taskbar)
 }
 
-/// 按条件显示/隐藏桌宠:显示要求 开关开 && 引擎在跑(引擎没起时
-/// 桌宠只会展示"离线",徒增噪音);隐藏无条件执行。
+/// 按用户开关显示/隐藏桌宠。引擎不可用时桌宠自己展示离线状态;
+/// 主窗口是否在前台不参与可见性决策。
 fn set_pet_visible(app: &AppHandle, show: bool) {
     let Some(pet) = app.get_webview_window("pet") else {
         return;
@@ -475,8 +475,7 @@ fn set_pet_visible(app: &AppHandle, show: bool) {
         return;
     }
     let enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
-    let engine_running = app.state::<DriverHost>().running();
-    if enabled && engine_running {
+    if enabled {
         let _ = pet.show();
     }
 }
@@ -589,23 +588,18 @@ fn main() {
                 Ok(engine) => {
                     app.state::<DriverHost>().set(engine);
                     create_main_window(app.handle(), "index.html");
-                    ensure_pet_window(app.handle());
                 }
                 Err(e) => {
                     eprintln!("[desktop] 引擎启动失败: {e}");
                     create_main_window(app.handle(), &format!("error.html#{}", util::urlencode(&e)));
                 }
             }
+            // 桌宠是独立常驻面板:主窗口的焦点/可见性和引擎在线状态
+            // 都不影响它出现;只有用户在托盘菜单关掉"显示桌宠"才隐藏。
+            ensure_pet_window(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 主窗口前台与否 = 桌宠退场/接棒:在前台看得见状态,桌宠隐藏;
-            // 失焦(切去别的应用)则桌宠出场外显任务状态
-            if let WindowEvent::Focused(focused) = event {
-                if window.label() == "main" {
-                    set_pet_visible(window.app_handle(), !*focused);
-                }
-            }
             // 桌宠拖动:位置暂存,退出/开关切换时落盘(Moved 高频,不逐次写)
             if let WindowEvent::Moved(pos) = event {
                 if window.label() == "pet" {
@@ -629,8 +623,6 @@ fn main() {
                 if engine_running && tray_ready {
                     let _ = window.hide();
                     api.prevent_close();
-                    // hide 不保证在所有平台补发 Focused(false),显式接棒
-                    set_pet_visible(app, true);
                 }
             }
         })
@@ -676,17 +668,13 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 app.state::<UiIntent>().0.lock().unwrap().replace("open-settings".into());
                 let _ = app.emit_to("main", "open-settings", ());
             }
-            // 桌宠开关:CheckMenuItem 点击自翻勾选态,这里同步运行时缓存并落盘;
-            // 开启时仅在主窗口不在前台才立即出场(在前台本就该藏)
+            // 桌宠开关:CheckMenuItem 点击自翻勾选态,这里同步运行时缓存、
+            // 立即更新可见性并落盘。
             "toggle-pet" => {
                 let enabled = !app.state::<PetEnabled>().0.load(Ordering::Relaxed);
                 app.state::<PetEnabled>().0.store(enabled, Ordering::Relaxed);
                 persist_pet_prefs(app);
-                let main_focused = app
-                    .get_webview_window("main")
-                    .and_then(|w| w.is_focused().ok())
-                    .unwrap_or(false);
-                set_pet_visible(app, enabled && !main_focused);
+                set_pet_visible(app, enabled);
             }
             "check-update" => {
                 let app = app.clone();
