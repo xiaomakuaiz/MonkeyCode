@@ -226,7 +226,7 @@ fn write_ohmyagent_config(
 
     let settings = serde_json::json!({
         "default_model": default_model,
-        "permission_mode": "default",
+        "permission_mode": "normal",
         "models": models_out,
     });
     let write0600 = |path: &PathBuf, data: Vec<u8>| -> Result<(), String> {
@@ -287,6 +287,19 @@ fn write_ohmyagent_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// desktop 的普通模式允许只读工具直接执行、写操作再询问；生成给
+    /// agent 的进程级兜底配置必须是 normal，不能退回每次操作都询问的 default。
+    #[test]
+    fn ohmyagent_config_defaults_to_normal_permissions() {
+        let dir = std::env::temp_dir().join(format!("mc-permission-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        write_ohmyagent_config(&dir, &DesktopConfig::default(), None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["permission_mode"], "normal");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// 设置页停用的 MCP 不得物化进引擎 mcp.json(mcp.json 是引擎 MCP
     /// 的唯一来源,漏过滤 = 禁用不生效)。

@@ -957,7 +957,7 @@ export function LogList({
         i++;
       }
       out.push(
-        <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: "92%" }}>
           {group.map((t, j) => (
             <ToolCard
               key={t.tcId || j}

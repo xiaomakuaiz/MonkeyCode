@@ -183,7 +183,11 @@ impl OhmyDriver {
             }
         }
         let result = self
-            .rpc("session/create", json!({ "cwd": workdir, "model": model_id, "interactive": true }))
+            .rpc(
+                "session/create",
+                json!({ "cwd": workdir, "model": model_id,
+                    "permission_mode": ohmy_mode_of("default"), "interactive": true }),
+            )
             .await?;
         let sid = result
             .get("session_id")
@@ -1082,5 +1086,17 @@ impl Inner {
 
 /// 壳模式词汇 → ohmyagent permission_mode
 fn ohmy_mode_of(mode: &str) -> &'static str {
-    if mode == "yolo" { "bypassPermissions" } else { "default" }
+    if mode == "yolo" { "bypassPermissions" } else { "normal" }
+}
+
+#[cfg(test)]
+mod permission_mode_tests {
+    use super::ohmy_mode_of;
+
+    #[test]
+    fn shell_modes_map_to_agent_permission_modes() {
+        assert_eq!(ohmy_mode_of("default"), "normal");
+        assert_eq!(ohmy_mode_of("normal"), "normal");
+        assert_eq!(ohmy_mode_of("yolo"), "bypassPermissions");
+    }
 }
