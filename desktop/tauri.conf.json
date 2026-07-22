@@ -12,6 +12,9 @@
     "macOSPrivateApi": true,
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
       "capabilities": [
         {
           "identifier": "main-app",
