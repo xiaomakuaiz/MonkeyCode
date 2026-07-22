@@ -1,10 +1,16 @@
 // 新建任务视图:居中卡片(文件夹选择 + 任务输入 + 本地/云端 + 模型 + 开始)。
 // 布局与数值取自设计稿 New Task 屏。云端模式:选仓库(可不选=快速开始)+ 云端模型,
 // 经内核代理真实创建 monkeycode 云端任务,成功后进桌面内详情视图跟看。
+// 表单状态(目录/文本/模型/错误/busy + 附件/云端选项)整体收口在本组件:
+// 状态随视图挂载与卸载,App 只注入数据(models/recentDirs/lastDir)与编排回调
+// (onCreated/onCloudCreated)及外部预填(prefill)。
 import { useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
 import { basename, isImeEnter, markImeEnd, ModelPicker } from "./chat";
 import { MONO } from "./components";
-import { inDesktopShell, mcTaskCreate, mcTaskOptions, pickDirectory, workdirPickBase, type CloudTask } from "./client";
+import { mcTaskCreate, mcTaskOptions } from "./cloudapi";
+import { inDesktopShell, pickDirectory, workdirPickBase } from "./host";
+import { createSession } from "./session";
+import type { CloudTask } from "./types";
 import {
   cloudModelLabel,
   pickDefaultCloudImage,
@@ -25,39 +31,33 @@ import {
   IconX,
 } from "./icons";
 import logoUrl from "./logo.png";
-import type { ModelInfo } from "./types";
+import type { ModelInfo, SessionMeta } from "./types";
+
+/** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
+export const DEFAULT_DIR = "~/MonkeyCode";
 
 export function NewTaskView({
-  dir,
-  recentDirs,
-  text,
   models,
-  model,
-  busy,
-  err,
-  offerCreate,
+  lastDir,
+  recentDirs,
+  prefill,
   cloudReady,
-  onDirChange,
-  onTextChange,
-  onModelChange,
-  onCreate,
+  onCreated,
   onCloudCreated,
 }: {
-  dir: string;
-  recentDirs: string[];
-  text: string;
   models: ModelInfo[];
-  model: string;
-  busy: boolean;
-  err: string;
-  offerCreate: boolean;
+  /** 最近会话的工作目录(空 = 还没有会话);用户没改过目录时跟随它 */
+  lastDir: string;
+  /** 侧栏同款项目分组目录(App 从 sessions 派生;当前目录不在其中时头部补入) */
+  recentDirs: string[];
+  /** 外部触发的预填(侧栏"新建任务"/项目行 +):每次触发都是新对象,
+   * 同目录重复点击也能生效;带 dir 则预填目录并停止跟随最近会话 */
+  prefill: { dir?: string | null } | null;
   /** monkeycode 云端账号已同步(云端派发的前提) */
   cloudReady: boolean;
-  onDirChange: (dir: string) => void;
-  onTextChange: (v: string) => void;
-  onModelChange: (name: string) => void;
-  /** files:随首条消息上传的附件(会话创建后由 useSession 上传并拼接) */
-  onCreate: (createDir?: boolean, files?: File[]) => void;
+  /** 本地会话创建成功:App 刷新列表并进入会话;first/files 随首条消息发出
+   * (附件由 useSession 在会话连上后上传并拼接) */
+  onCreated: (meta: SessionMeta, first?: string, files?: File[]) => Promise<void> | void;
   /** 云端任务创建成功:App 打开桌面内详情视图跟看 */
   onCloudCreated: (t: CloudTask) => void;
 }) {
@@ -65,9 +65,37 @@ export function NewTaskView({
   const [mode, setMode] = useState<"local" | "cloud">("local");
   const [manualDir, setManualDir] = useState("");
 
+  // ===== 本地表单主状态(此前拆在 App 里经 15 个 props 注入,现随视图生命周期)=====
+  const dirTouchedRef = useRef(!!prefill?.dir); // 用户改过工作目录后不再跟随最近会话
+  const [dir, setDir] = useState(() => prefill?.dir || lastDir || DEFAULT_DIR);
+  const [text, setText] = useState("");
+  // 模型:未主动选择时跟随默认模型(models 异步到达也自动就位,无需同步 effect)
+  const [pickedModel, setPickedModel] = useState("");
+  const model = pickedModel || models.find((m) => m.default)?.name || "";
+  const [err, setErr] = useState("");
+  const [offerCreate, setOfferCreate] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // 目录跟随最近会话:没有会话则用默认目录(用户改过/预填过则不再跟随)
+  useEffect(() => {
+    if (dirTouchedRef.current) return;
+    setDir(lastDir || DEFAULT_DIR);
+  }, [lastDir]);
+
+  // 外部预填:清掉上一次的错误态;带目录则预填并停止跟随
+  useEffect(() => {
+    if (!prefill) return;
+    setErr("");
+    setOfferCreate(false);
+    if (prefill.dir) {
+      dirTouchedRef.current = true;
+      setDir(prefill.dir);
+    }
+  }, [prefill]);
+
   // ===== 附件暂存(仅本地模式;云端任务不支持附件)=====
-  // 此刻会话还没创建,File 只能留在内存;提交后经 onCreate 传给 App,
-  // 会话建好、WS 连上时由 useSession 上传落盘并随首条消息发出
+  // 此刻会话还没创建,File 只能留在内存;createTask 成功后随 onCreated 交给
+  // App,会话建好、WS 连上时由 useSession 上传落盘并随首条消息发出
   const [atts, setAtts] = useState<{ file: File; preview?: string }[]>([]);
   const [attErr, setAttErr] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -183,7 +211,7 @@ export function NewTaskView({
         project_id: cloudProject?.id || undefined,
       });
       if (!task?.id) throw new Error("云端未返回任务 ID");
-      onTextChange("");
+      setText("");
       onCloudCreated({ id: task.id, content, status: task.status ?? "pending", title: task.title, summary: task.summary });
     } catch (e) {
       setCloudErr("云端任务创建失败: " + (e instanceof Error ? e.message : String(e)));
@@ -192,13 +220,39 @@ export function NewTaskView({
     }
   };
 
+  // 本地会话创建:成功后交给 App 编排(刷新列表 + 进入会话);目录不存在
+  // 时给"创建该目录并继续"入口
+  const createTask = async (createDir = false, files?: File[]) => {
+    const d = dir.trim();
+    if (!d || busy) return;
+    setBusy(true);
+    setErr("");
+    setOfferCreate(false);
+    try {
+      // 自有默认目录静默创建;用户自填的目录不存在仍走确认流程
+      const meta = await createSession(d, model, createDir || d === DEFAULT_DIR);
+      const first = text.trim();
+      setText("");
+      await onCreated(meta, first || undefined, files);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr("创建失败: " + msg);
+      if (msg.includes("目录不存在")) setOfferCreate(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submit = () => {
     if (mode === "cloud") void createCloud();
-    else onCreate(undefined, atts.map((a) => a.file));
+    else void createTask(undefined, atts.map((a) => a.file));
   };
 
   const pick = (p: string) => {
-    onDirChange(p);
+    dirTouchedRef.current = true;
+    setDir(p);
+    setErr("");
+    setOfferCreate(false);
     setFolderOpen(false);
   };
 
@@ -214,6 +268,9 @@ export function NewTaskView({
       submit();
     }
   };
+
+  // 当前目录不在最近列表时补到头部,最多展示 6 条
+  const shownDirs = (recentDirs.includes(dir) ? recentDirs : [dir, ...recentDirs]).slice(0, 6);
 
   const segItem = (active: boolean, fg: string): CSSProperties => ({
     display: "flex",
@@ -369,7 +426,7 @@ export function NewTaskView({
                       <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, color: "var(--t6)", padding: "5px 9px 3px" }}>
                         最近用过的文件夹
                       </span>
-                      {recentDirs.map((p) => (
+                      {shownDirs.map((p) => (
                         <button key={p} className="hv menu-item" onClick={() => pick(p)} style={{ gap: 9 }}>
                           <IconFolder color="var(--t5)" />
                           <span style={{ flex: 1, display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
@@ -485,7 +542,7 @@ export function NewTaskView({
             value={text}
             autoFocus
             rows={4}
-            onChange={(e) => onTextChange(e.target.value)}
+            onChange={(e) => setText(e.target.value)}
             onCompositionEnd={markImeEnd}
             onKeyDown={onKey}
             onPaste={onPaste}
@@ -543,7 +600,7 @@ export function NewTaskView({
                 )}
               </span>
             ) : (
-              <ModelPicker models={models} current={model} onPick={onModelChange} />
+              <ModelPicker models={models} current={model} onPick={setPickedModel} />
             )}
             <span style={{ flex: 1 }} />
             <button
@@ -594,7 +651,7 @@ export function NewTaskView({
             {offerCreate && (
               <span
                 className="hv-t1"
-                onClick={() => onCreate(true, atts.map((a) => a.file))}
+                onClick={() => void createTask(true, atts.map((a) => a.file))}
                 style={{ cursor: "pointer", color: "var(--warn)", marginLeft: 8 }}
               >
                 创建该目录并继续 →

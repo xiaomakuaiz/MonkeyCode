@@ -1,6 +1,7 @@
 // reduce.ts 归约器单测:帧 → 对话流渲染项的全部状态转移。
-// 纯函数无 DOM,直接在 node 环境跑(vitest 默认);帧构造经 codec 编码,
-// 与内核下行格式(data = base64(JSON))一致。
+// 纯函数无 DOM,直接在 node 环境跑(vitest 默认);帧构造与壳下行新格式
+// 一致(data = 内联 JSON 对象);旧格式(base64(JSON) 字符串)的容错
+// 回归用例见文末「旧格式帧兼容」。
 import { describe, expect, it } from "vitest";
 import { b64encode } from "./codec";
 import { answerAsk, answerPerm, initialChat, permStateLabel, reduceBatch, reduceFrame } from "./reduce";
@@ -9,7 +10,7 @@ import type { AcpUpdate, Frame, LogItem, ToolProgress } from "./types";
 const frame = (type: string, data?: unknown, kind?: string): Frame => ({
   type,
   ...(kind ? { kind } : {}),
-  ...(data !== undefined ? { data: b64encode(JSON.stringify(data)) } : {}),
+  ...(data !== undefined ? { data } : {}),
 });
 
 const acp = (update: Partial<AcpUpdate>): Frame =>
@@ -347,5 +348,42 @@ describe("AI 提问卡(ask_user_question)", () => {
   it("普通 tool_call(有 title 非提问词汇)不受影响,仍是工具卡", () => {
     const s = run([acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "bash", rawInput: { questions } })]);
     expect(s.items[0].kind).toBe("tool");
+  });
+});
+
+describe("旧格式帧兼容(data = base64(JSON) 字符串)", () => {
+  // 钉住 codec.frameData 的双格式容错,不可删:①存量 journal(events.jsonl)
+  // 是旧格式,壳回放原样转发;②云端任务流的帧契约不归本仓库管,
+  // 实测既有 base64 字符串也有裸对象/裸 JSON 字符串形态。
+  const legacy = (type: string, data: unknown, kind?: string): Frame => ({
+    type,
+    ...(kind ? { kind } : {}),
+    data: b64encode(JSON.stringify(data)),
+  });
+
+  it("旧格式 acp_event 帧照常归约(存量 journal 回放)", () => {
+    const s = run([
+      legacy("task-running", { update: { sessionUpdate: "agent_message_chunk", content: { text: "旧帧" } } }, "acp_event"),
+      legacy("task-running", { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "读取 a.txt" } }, "acp_event"),
+      legacy("task-running", { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: "ok" } }, "acp_event"),
+    ]);
+    expect(s.items[0]).toEqual({ kind: "agent", text: "旧帧" });
+    expect(toolItem(s, "t1")).toMatchObject({ status: "ok", out: "ok" });
+  });
+
+  it("旧格式顶层帧照常归约(user-input 内层 content 仍是 base64 文本)", () => {
+    const s = run([
+      legacy("user-input", { content: b64encode("旧格式输入") }),
+      legacy("permission-req", { id: "p1", title: "rm x", tool: "bash" }),
+      legacy("task-error", { error: "旧格式错误" }),
+    ]);
+    expect(s.items[0]).toEqual({ kind: "user", text: "旧格式输入" });
+    expect(s.items[1]).toMatchObject({ kind: "perm", id: "p1", state: "expired" }); // task-error 过期开放卡
+    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "✗ 旧格式错误", error: true });
+  });
+
+  it("裸 JSON 字符串形态的 data(云端观测形态)也可解", () => {
+    const s = run([{ type: "task-error", data: JSON.stringify({ error: "裸串" }) } as Frame]);
+    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "✗ 裸串", error: true });
   });
 });

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { connectCloudTerminal } from "./client";
+import { connectCloudTerminal } from "./cloudapi";
 import { MONO } from "./components";
 
 export function CloudTerminal({ vmId }: { vmId: string }) {

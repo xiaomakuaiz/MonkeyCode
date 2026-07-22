@@ -6,32 +6,37 @@
 // 整个页面导航到新内核 URL(本组件随之卸载)。
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { BaizhiCard } from "./baizhi";
+import { baizhiStatus } from "./baizhiapi";
 import {
-  baizhiStatus,
   getBrowserExtStatus,
   getHostConfig,
   inDesktopShell,
   isWindowsShell,
   listWslDistros,
-  engineCaps,
-  type EngineCaps,
   openExtensionDir,
   repairBrowserExt,
   saveHostConfig,
   updateCheck,
   updateInstall,
-  type BaizhiStatus,
-  type BaizhiSyncResult,
-  type BrowserExtStatus,
-  type UpdateStatus,
-} from "./client";
+} from "./host";
+import { engineCaps } from "./session";
 import { MONO } from "./components";
 import { IconBack, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
 import { MacDragSpacer } from "./titlebar";
-import { SOURCE_BAIZHI, modelSourceLabel, type HostConfig, type HostModel } from "./types";
+import {
+  SOURCE_BAIZHI,
+  modelSourceLabel,
+  type BaizhiStatus,
+  type BaizhiSyncResult,
+  type BrowserExtStatus,
+  type EngineCaps,
+  type HostConfig,
+  type HostModel,
+  type UpdateStatus,
+} from "./types";
 
 // ---- MCP 编辑模型与序列化(与内核 mcp.json 的 mcpServers 同构,壳不解释) ----
 

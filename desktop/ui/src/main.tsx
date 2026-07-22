@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { inDesktopShell } from "./client";
+import { inDesktopShell } from "./host";
 import "./styles.css";
 
 // 桌面壳内屏蔽 WebView 默认右键菜单(重新加载/检查元素等浏览器项);

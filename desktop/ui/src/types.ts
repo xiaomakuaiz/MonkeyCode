@@ -1,7 +1,20 @@
-// 与内核帧协议(internal/frame)对齐的类型定义。
+// 与壳帧协议(driver/frame.rs)对齐的类型定义,以及壳 IPC 载荷的纯数据
+// 类型(网络层与视图层共用,视图不必 import 网络层文件拿类型)。
+//
+// 壳↔UI 高频对表类型(Frame/SessionStatus/PermOutcome)不再手写:由
+// driver/frame.rs 经 ts-rs 生成到 ./gen/(再生成:桌面壳目录下
+// `cargo test export_bindings`;生成物勿手改),本文件从 gen/ 复用。
+// ts-rs 覆盖不了的(字符串常量、UI 侧放宽形状)仍手写并注明缘由。
+
+import type { Frame as WireFrame } from "./gen/Frame";
+import type { PermOutcome } from "./gen/PermOutcome";
+import type { SessionStatus } from "./gen/SessionStatus";
+
+export type { PermOutcome, SessionStatus, WireFrame };
 
 /** 百智云同步条目的 source 值。单一事实来源:内核侧赋值在
- * agent/internal/baizhi/sync.go(sourceBaizhi 常量),两侧改动需同步。 */
+ * agent/internal/baizhi/sync.go(sourceBaizhi 常量),两侧改动需同步;
+ * 字符串常量 ts-rs 覆盖不了,保留手写。 */
 export const SOURCE_BAIZHI = "baizhi";
 
 /** source → 分组展示名(未知来源兜底显示原值)。 */
@@ -45,9 +58,8 @@ export interface HostConfig {
   kernel_env?: string;
 }
 
-/** 会话状态词汇(与壳 driver/frame.rs 的 SessionStatus 对表;
- * 桌宠/侧栏/横幅按此渲染,勿散落裸字符串比较之外的新词) */
-export type SessionStatus = "created" | "running" | "finished" | "interrupted" | "error";
+// SessionStatus:见文件头——gen/SessionStatus.ts(ts-rs 生成)复用,
+// 桌宠/侧栏/横幅按此渲染,勿散落裸字符串比较之外的新词。
 
 /** GET /api/sessions 返回的会话元信息 */
 export interface SessionMeta {
@@ -66,14 +78,12 @@ export interface SessionMeta {
   archived?: boolean;
 }
 
-/** WS 下行帧(data 为 base64(JSON)) */
-export interface Frame {
-  type: string;
-  kind?: string;
-  data?: string;
-  seq?: number;
-  timestamp?: number;
-}
+/** WS 下行帧(UI 视角)。壳产帧的权威形状 = gen/Frame.ts(ts-rs 生成,
+ * data 为内联 JSON 对象、seq/timestamp 必有);UI 在其上放宽:
+ * ① 云端流/存量 journal 的帧可缺 seq/timestamp;
+ * ② data 还有 base64(JSON) 字符串等旧/云端形态——一律经
+ *    codec.ts::frameData 收口解码,禁止直接摸 data。 */
+export type Frame = { type: string; data?: unknown } & Partial<Omit<WireFrame, "type" | "data">>;
 
 /** task-running 帧内的 ACP 风格 sessionUpdate */
 export interface AcpUpdate {
@@ -125,7 +135,7 @@ export interface PlanEntry {
   blocked?: boolean;
 }
 
-export type PermOutcome = "approved" | "denied" | "timeout" | "cancelled";
+// PermOutcome:见文件头——gen/PermOutcome.ts(ts-rs 生成)复用。
 export type PermState = "open" | "allowed" | "rejected" | PermOutcome | "expired";
 
 /** AI 提问(ask_user_question)的一道题(结构对齐 mobile messages/handler.ts) */
@@ -194,4 +204,147 @@ export interface Attachment {
 export interface Usage {
   used: number;
   size: number;
+}
+
+// ==================== 壳 IPC 载荷(各域纯数据类型) ====================
+
+/** 全局事件流(session-event)载荷:session-status(状态变更)/
+ * session-ask(审批等待)。后台会话结束靠它感知(不轮询)。 */
+export interface SessionEvent {
+  type: string;
+  id: string;
+  title: string;
+  /** session-status:新状态 */
+  status?: string;
+  /** session-ask:true 进入等待,false 解除 */
+  open?: boolean;
+}
+
+/** 引擎能力(UI 按此降级;引擎未运行时 reject)。 */
+export interface EngineCaps {
+  browser_ext: boolean;
+  usage_update: boolean;
+  perm_remember: boolean;
+  attachments: boolean;
+}
+
+/** 引擎崩溃信息(壳的进程监视发现非正常退出时推送)。 */
+export interface EngineCrash {
+  engine: string;
+  detail: string;
+  /** 引擎日志尾部(诊断展示) */
+  log_tail?: string;
+}
+
+/** browser_status 应答:扩展桥监听/配对/连接状态(设置页展示)。 */
+export interface BrowserExtStatus {
+  enabled: boolean;
+  addr?: string;
+  error?: string;
+  paired: boolean;
+  connected: boolean;
+  browser_name?: string;
+  browser_version?: string;
+  /** 未配对时的一次性配对码(用户填进扩展 options 完成配对) */
+  pairing_code?: string;
+}
+
+export interface BaizhiStatus {
+  logged_in: boolean;
+  host: string;
+  profile?: Record<string, unknown>;
+}
+
+export interface BaizhiSyncedModel {
+  name: string;
+  provider: string;
+  base_url: string;
+  api_key: string;
+  model: string;
+  context_window?: number;
+  vision?: boolean;
+  source: string; // "baizhi"
+}
+
+export interface BaizhiSyncResult {
+  models: BaizhiSyncedModel[];
+  mcp_servers: Record<string, Record<string, unknown>>;
+  key_created: boolean; // 本次是否在网关新建了密钥(false=复用已有)
+  key_name?: string; // 使用的密钥在网关里的名字(撞名时是 MonkeyCode-N)
+  notes?: string[];
+}
+
+export interface McUser {
+  id?: string;
+  name?: string;
+  username?: string;
+  email?: string;
+  avatar_url?: string;
+}
+
+export interface McStatus {
+  logged_in: boolean;
+  /** 云端主机名(拼任务详情外链用,如 monkeycode-ai.com) */
+  host: string;
+  user?: McUser;
+}
+
+/** 云端任务(backend ProjectTask 的侧栏子集,字段与云端 JSON 一致)。
+ * 实测线上 title 常为空、任务文案落在 summary,展示优先 title → summary → content。 */
+export interface CloudTask {
+  id: string;
+  title?: string;
+  summary?: string;
+  content?: string;
+  status?: "pending" | "processing" | "error" | "finished";
+  created_at?: number;
+}
+
+export interface CloudTasksResp {
+  tasks?: CloudTask[];
+  page_info?: { total?: number; total_count?: number };
+}
+
+/** 云端任务详情(ProjectTask 子集;VM 准备进度在 virtualmachine.conditions)。 */
+export interface CloudTaskDetail extends CloudTask {
+  model?: { id?: string; model?: string; remark?: string };
+  branch?: string;
+  repo_url?: string;
+  full_name?: string;
+  stats?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; llm_requests?: number };
+  virtualmachine?: {
+    id?: string;
+    status?: string;
+    conditions?: { type?: string; status?: number; message?: string; progress?: number }[];
+  };
+}
+
+/** ws-closed 事件载荷:服务端 Close 帧的 code/reason(壳透传);
+ * 异常断开(无 Close 帧)或壳侧主动断为 null。 */
+export interface WsCloseInfo {
+  code?: number;
+  reason?: string;
+}
+
+/** repo_file_list 条目;entry_mode 4=目录 5=子模块(对齐 web task-shared.ts) */
+export interface CloudRepoFile {
+  name: string;
+  path: string;
+  entry_mode: number;
+  size?: number;
+  modified_at?: number;
+}
+
+export interface CloudFileChange {
+  path: string;
+  status: string; // M/A/D/R/RM/??
+  additions?: number;
+  deletions?: number;
+  old_path?: string;
+}
+
+export interface UpdateStatus {
+  available: boolean;
+  current?: string;
+  latest?: string;
 }

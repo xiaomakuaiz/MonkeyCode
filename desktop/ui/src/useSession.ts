@@ -2,7 +2,8 @@
 // 模型与权限模式切换、改动查询,统一收口为一个句柄。App 只留布局切换与
 // App 级浮层,ChatView 整体消费句柄而非逐项 props。协议层(client/reduce)不变。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { connect, uploadFile, uploadFileURL, type Conn } from "./client";
+import { connect, type Conn } from "./session";
+import { uploadFile, uploadFileURL } from "./uploads";
 import { b64encode } from "./codec";
 import { answerAsk as applyAskAnswer, answerPerm as applyPermAnswer, initialChat, reduceBatch, type ChatState } from "./reduce";
 import type { Attachment, FileChange, FileEntry, Frame } from "./types";
@@ -99,8 +100,6 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     noticeTimer.current = window.setTimeout(() => setNotice(null), 8000);
   };
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
-  const [model, setModel] = useState("");
-  const [yolo, setYolo] = useState(false);
   const [input, setInput] = useState("");
   const [queued, setQueued] = useState<string | null>(null);
   const [atts, setAtts] = useState<Attachment[]>([]);
@@ -140,13 +139,14 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   const open = useCallback((sid: string, o: { model?: string; mode?: string; firstMessage?: string; firstFiles?: File[] } = {}) => {
     connRef.current?.close();
     setId(sid);
-    setChat(initialChat);
+    // model/permMode 以 ChatState 为唯一真值:meta 值作为初值注入,后续
+    // model_update / permission_mode_update 帧经 reduce 覆盖(回放/多客户端
+    // 同步)。此前 hook 里另存镜像 state 靠 effect 缝合,存在不一致窗口。
+    setChat({ ...initialChat, model: o.model ?? "", permMode: o.mode ?? "" });
     setQueued(null);
     setAtts([]);
     setChanges(null);
     setChangesErr("");
-    setModel(o.model ?? "");
-    setYolo(o.mode === "yolo");
     pendingMsgRef.current = o.firstMessage ?? null;
     pendingFilesRef.current = o.firstFiles?.length ? { sid, files: o.firstFiles } : null;
     localStorage.setItem(LAST_SESSION_KEY, sid);
@@ -169,22 +169,12 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     setChat(initialChat);
     setStatus("未连接");
     setConnected(false);
-    setModel("");
-    setYolo(false);
     setQueued(null);
     setAtts([]);
     setChanges(null);
     setChangesErr("");
     if (forget) localStorage.removeItem(LAST_SESSION_KEY);
   }, []);
-
-  // model_update / permission_mode_update 帧回写(回放/多客户端同步)
-  useEffect(() => {
-    if (chat.model) setModel(chat.model);
-  }, [chat.model]);
-  useEffect(() => {
-    if (chat.permMode) setYolo(chat.permMode === "yolo");
-  }, [chat.permMode]);
 
   // 连接就绪:拉改动计数;若新建会话时带了首个任务/附件,此刻发出。
   // 附件先上传拿到工作区路径,附件行按 send() 同款约定并入正文;上传结果
@@ -296,7 +286,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   };
 
   const switchModel = async (name: string) => {
-    if (!connRef.current || !name || name === model) return;
+    if (!connRef.current || !name || name === chat.model) return;
     try {
       const r = await connRef.current.call<{ result?: { model: string }; error?: string }>(
         "session_set_model",
@@ -306,7 +296,9 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
         pushNotice("⚠ 切换模型失败: " + r.error);
         return;
       }
-      setModel(name); // model_update 帧也会到达并渲染系统行
+      // 成功即回写 chat(唯一真值),不等 model_update 帧——帧到达时幂等
+      // 覆盖并渲染系统行;不做失败前的乐观更新是因为切换可即时校验
+      setChat((s) => ({ ...s, model: name }));
       onSessionsChangedRef.current?.();
     } catch (e) {
       pushNotice("⚠ 切换模型失败: " + (e instanceof Error ? e.message : e));
@@ -315,20 +307,22 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
 
   const toggleYolo = async () => {
     if (!connRef.current) return;
-    const prev = yolo;
-    const next = prev ? "default" : "yolo";
-    setYolo(!prev); // 乐观回写,失败回滚
+    const prevMode = chat.permMode;
+    const next = prevMode === "yolo" ? "default" : "yolo";
+    // 乐观回写 chat(唯一真值),失败按原值回滚;permission_mode_update
+    // 帧到达后幂等覆盖并渲染系统行
+    setChat((s) => ({ ...s, permMode: next }));
     try {
       const r = await connRef.current.call<{ result?: { mode: string }; error?: string }>(
         "session_set_mode",
         { mode: next },
       );
       if (r.error) {
-        setYolo(prev);
+        setChat((s) => ({ ...s, permMode: prevMode }));
         pushNotice("⚠ 切换权限模式失败: " + r.error);
       }
     } catch (e) {
-      setYolo(prev);
+      setChat((s) => ({ ...s, permMode: prevMode }));
       pushNotice("⚠ 切换权限模式失败: " + (e instanceof Error ? e.message : e));
     }
   };
@@ -364,8 +358,9 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     notice,
     dismissNotice: () => setNotice(null),
     connected,
-    model,
-    yolo,
+    // 由 chat 派生对外(SessionHandle 形状不变):ChatState 是唯一真值
+    model: chat.model,
+    yolo: chat.permMode === "yolo",
     input,
     queued,
     atts,

@@ -9,7 +9,7 @@ import {
   windowIsMaximized,
   windowMinimize,
   windowToggleMaximize,
-} from "./client";
+} from "./host";
 
 /** macOS 壳最左栏顶部的红绿灯落区:50px 拖拽区(Tauri 的拖拽区机制是
  * data-tauri-drag-region 属性,不是 CSS app-region);非 mac 壳 12px 普通留白。

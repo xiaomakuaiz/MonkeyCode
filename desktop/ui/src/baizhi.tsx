@@ -9,9 +9,8 @@ import {
   baizhiSync,
   baizhiWechatPoll,
   baizhiWechatStart,
-  type BaizhiStatus,
-  type BaizhiSyncResult,
-} from "./client";
+} from "./baizhiapi";
+import type { BaizhiStatus, BaizhiSyncResult } from "./types";
 import { MONO } from "./components";
 import { Field, input, whiteBtn } from "./settings-ui";
 import baizhiLogoUrl from "./baizhi-logo.png";

@@ -2,6 +2,7 @@
 // 布局与数值取自设计稿 Sidebar 区块;macOS 壳内顶部为红绿灯预留拖拽区。
 import { useState, type CSSProperties } from "react";
 import { isImeEnter, markImeEnd } from "./chat";
+import { ConfirmPane, DeleteMenuItem, type MenuState } from "./components";
 import { MacDragSpacer } from "./titlebar";
 import {
   IconArchive,
@@ -13,11 +14,9 @@ import {
   IconPencil,
   IconPlus,
   IconRefresh,
-  IconTrash,
 } from "./icons";
 import logoUrl from "./logo.png";
-import type { CloudTask } from "./client";
-import type { SessionMeta } from "./types";
+import type { CloudTask, SessionMeta } from "./types";
 
 export interface ProjectGroup {
   dir: string;
@@ -105,7 +104,7 @@ function SessionRow({
   onRename: (title: string) => void;
 }) {
   const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
-  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  const [menu, setMenu] = useState<MenuState>("closed");
   // 行内重命名:Enter 确认 / Esc 取消 / 失焦确认;空值或未变则放弃
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -254,39 +253,18 @@ function SessionRow({
                   <IconArchive />
                   {meta.archived ? "取消归档" : "归档"}
                 </button>
-                {running ? (
-                  <button className="menu-item" style={{ cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
-                    <IconTrash color="var(--t5)" />
-                    删除
-                  </button>
-                ) : (
-                  <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
-                    <IconTrash />
-                    删除
-                  </button>
-                )}
+                <DeleteMenuItem running={running} onDelete={() => setMenu("confirm")} />
               </>
             ) : (
-              <>
-                <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
-                  删除后不可恢复。
-                </div>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button
-                    className="hv-errbg menu-item"
-                    style={{ color: "var(--err)", fontWeight: 600 }}
-                    onClick={() => {
-                      closeMenu();
-                      onDelete();
-                    }}
-                  >
-                    确认删除
-                  </button>
-                  <button className="hv menu-item" onClick={closeMenu}>
-                    取消
-                  </button>
-                </div>
-              </>
+              <ConfirmPane
+                message="删除后不可恢复。"
+                confirmLabel="确认删除"
+                onConfirm={() => {
+                  closeMenu();
+                  onDelete();
+                }}
+                onCancel={closeMenu}
+              />
             )}
           </div>
         </>

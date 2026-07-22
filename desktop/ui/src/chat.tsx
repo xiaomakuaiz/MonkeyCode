@@ -8,26 +8,28 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
-  type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { LogList, MONO, TaskPanel } from "./components";
 import {
-  IconArchive,
-  IconChevronDown,
-  IconClock,
-  IconDots,
-  IconFolder,
-  IconSend,
-  IconShield,
-  IconStop,
-  IconTrash,
-  IconX,
-} from "./icons";
+  DeleteMenuItem,
+  HeaderFilesButton,
+  HeaderMenu,
+  LogList,
+  MONO,
+  TaskPanel,
+  ViewHeader,
+  type MenuState,
+} from "./components";
+import { Composer, QueuedChip, RunningBar } from "./composer";
+import { IconArchive, IconChevronDown, IconFolder, IconShield, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import type { SessionHandle } from "./useSession";
 import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type Usage } from "./types";
+
+// IME 守卫随 composer 收敛到 composer.tsx;从这转口保持既有引用面
+// (sidebar/newtask 均 import 自 ./chat)
+export { isImeEnter, markImeEnd } from "./composer";
 
 // 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
 // 记「视口顶部的条目序号 + 条目内偏移」而非 scrollTop 像素:历史分批回放、
@@ -44,17 +46,6 @@ const fmtK = (n: number) =>
 export const COL_MAX = "clamp(680px, 55vw, 860px)";
 
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
-
-// 输入法(IME)组合态的 Enter 只是确认候选词,不能当作提交。Chromium 上该 keydown
-// 的 isComposing 为 true 即可拦截;但 WebKit(macOS 壳的 WKWebView)顺序相反:
-// compositionend 先于 keydown 触发且 isComposing 已复位。故再记录组合结束时刻,
-// 紧随其后的 Enter(同一次按键,时间差远小于人手连按)一律视为选字确认。
-let imeEndedAt = -Infinity;
-export const markImeEnd = (e: { timeStamp: number }) => {
-  imeEndedAt = e.timeStamp;
-};
-export const isImeEnter = (e: { timeStamp: number; nativeEvent: { isComposing: boolean } }) =>
-  e.nativeEvent.isComposing || e.timeStamp - imeEndedAt < 100;
 
 /** 上下文用量圆环(设计稿 composer 的 ctx ring):悬停展示精确数字气泡
  * (自定义气泡而非 title:WKWebView 的原生提示不可靠且出现慢) */
@@ -295,11 +286,10 @@ export function ChatView({
   const { chat, input, queued, atts, yolo } = session;
   const changesCount = session.changes?.length ?? 0;
   const logRef = useRef<HTMLDivElement>(null);
-  const taRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
   // 待恢复的锚点;回放期间每批都重新对齐(上方内容变高也不漂),用户主动滚动后交还控制权
   const restoreRef = useRef<{ anchor: number; offset: number } | null>(null);
-  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed");
+  const [menu, setMenu] = useState<MenuState>("closed");
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0); // dragenter/leave 在子元素间反复触发,计数配对
 
@@ -350,14 +340,6 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasLog]);
 
-  // 输入框随内容自适应高度
-  useEffect(() => {
-    const el = taRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 160) + "px";
-  }, [input]);
-
   const saveAnchor = () => {
     const el = logRef.current;
     // 恢复进行中的程序滚动不写记忆,避免中途切走时锚点被半成品覆盖
@@ -405,14 +387,6 @@ export function ChatView({
     // 按在右缘滚动条带上 = 准备拖动定位,解除跟随(拖回底部会经 scroll 事件重新贴上)
     const el = logRef.current;
     if (el && e.clientX > el.getBoundingClientRect().right - 20) pinnedRef.current = false;
-  };
-
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // 输入法组合态(选字/确认候选)的 Enter 不发送
-    if (e.key === "Enter" && !e.shiftKey && !isImeEnter(e)) {
-      e.preventDefault();
-      session.send();
-    }
   };
 
   // 粘贴附件:剪贴板里的 file item(截图/复制的文件)上传为附件,文本粘贴不受影响
@@ -491,132 +465,67 @@ export function ChatView({
           松开以添加文件
         </div>
       )}
-      {/* ==== 标题栏(空白区可拖拽窗口,macOS 常规行为)==== */}
-      <div data-tauri-drag-region="" style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-          <span className="ellipsis" style={{ fontWeight: 700, fontSize: 13.5 }}>
-            {meta?.title || "新任务"}
-          </span>
+      {/* ==== 标题栏(共享 ViewHeader:56px 双行,空白区可拖拽窗口)==== */}
+      <ViewHeader
+        title={meta?.title || "新任务"}
+        subtitle={
           <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
             <IconFolder size={11} color="var(--t6)" />
             <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>{basename(workdir)}</span>
             <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
             <span className="ellipsis" style={{ fontFamily: MONO }}>{workdir}</span>
           </span>
-        </div>
-        <span data-tauri-drag-region="" style={{ flex: 1, alignSelf: "stretch" }} />
-        <button
-          className="hv"
+        }
+      >
+        <HeaderFilesButton
           title="浏览工作区文件(标注本轮改动)"
           onClick={() => onOpenDrawer()}
-          style={{
-            height: 28,
-            border: "1px solid var(--line)",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "0 12px",
-            borderRadius: 8,
-            background: "var(--card)",
-            fontSize: 12,
-            color: "var(--t2)",
-            cursor: "pointer",
-            fontWeight: 600,
-            boxShadow: "var(--cardSh)",
-            flex: "none",
-          }}
+          badge={
+            changesCount > 0 && (
+              <span
+                title="查看本轮改动"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenDrawer("changes");
+                }}
+                style={{
+                  minWidth: 16,
+                  height: 16,
+                  borderRadius: 8,
+                  background: "var(--accBg)",
+                  color: "var(--acc)",
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "0 4px",
+                }}
+              >
+                {changesCount}
+              </span>
+            )
+          }
+        />
+        <HeaderMenu
+          menu={menu}
+          setMenu={setMenu}
+          minWidth={118}
+          confirm={{ message: "删除后不可恢复。", confirmLabel: "确认删除", onConfirm: onDelete }}
         >
-          <IconFolder size={12} />
-          文件
-          {changesCount > 0 && (
-            <span
-              title="查看本轮改动"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenDrawer("changes");
-              }}
-              style={{
-                minWidth: 16,
-                height: 16,
-                borderRadius: 8,
-                background: "var(--accBg)",
-                color: "var(--acc)",
-                fontSize: 10.5,
-                fontWeight: 700,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: "0 4px",
-              }}
-            >
-              {changesCount}
-            </span>
-          )}
-        </button>
-        <div style={{ position: "relative", flex: "none" }}>
           <button
-            className="hv icon-btn"
-            title="更多"
-            onClick={() => setMenu(menu === "closed" ? "open" : "closed")}
-            style={{ width: 28, height: 28, borderRadius: 8, background: menu !== "closed" ? "var(--hov)" : "transparent" }}
+            className="hv menu-item"
+            onClick={() => {
+              setMenu("closed");
+              onArchive();
+            }}
           >
-            <IconDots size={14} color="var(--t5)" />
+            <IconArchive />
+            {meta?.archived ? "取消归档" : "归档"}
           </button>
-          {menu !== "closed" && (
-            <>
-              <div className="backdrop" onClick={() => setMenu("closed")} />
-              <div className="pop" style={{ position: "absolute", top: 32, right: 0, minWidth: 118 }}>
-                {menu === "open" ? (
-                  <>
-                    <button
-                      className="hv menu-item"
-                      onClick={() => {
-                        setMenu("closed");
-                        onArchive();
-                      }}
-                    >
-                      <IconArchive />
-                      {meta?.archived ? "取消归档" : "归档"}
-                    </button>
-                    {chat.running ? (
-                      <button className="menu-item" style={{ cursor: "default", color: "var(--t5)" }} title="运行中,请先停止">
-                        <IconTrash color="var(--t5)" />
-                        删除
-                      </button>
-                    ) : (
-                      <button className="hv-errbg menu-item" style={{ color: "var(--err)" }} onClick={() => setMenu("confirm")}>
-                        <IconTrash />
-                        删除
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div style={{ padding: "6px 9px 4px", fontSize: 11.5, color: "var(--t4)", lineHeight: 1.6, maxWidth: 200, whiteSpace: "normal" }}>
-                      删除后不可恢复。
-                    </div>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <button
-                        className="hv-errbg menu-item"
-                        style={{ color: "var(--err)", fontWeight: 600 }}
-                        onClick={() => {
-                          setMenu("closed");
-                          onDelete();
-                        }}
-                      >
-                        确认删除
-                      </button>
-                      <button className="hv menu-item" onClick={() => setMenu("closed")}>
-                        取消
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+          <DeleteMenuItem running={chat.running} onDelete={() => setMenu("confirm")} />
+        </HeaderMenu>
+      </ViewHeader>
 
       {/* ==== 对话流 / 空态 ==== */}
       {empty ? (
@@ -680,166 +589,87 @@ export function ChatView({
           </div>
         )}
         {chat.running && (
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <span className="spinner" />
-            <span style={{ fontWeight: 600, fontSize: 12.5 }}>{runningLabel}</span>
-            <span style={{ fontSize: 12, color: "var(--t5)" }}>
-              第 {roundNo} 轮{usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}
-            </span>
-            <span style={{ flex: 1 }} />
-            <button
-              className="hv-errbg"
-              onClick={session.stop}
-              style={{
-                height: 26,
-                border: "1px solid var(--errBd)",
-                background: "transparent",
-                color: "var(--err)",
-                borderRadius: 13,
-                padding: "0 12px",
-                fontSize: 11.5,
-                fontWeight: 600,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-              }}
-            >
-              <IconStop />
-              停止
-            </button>
-          </div>
+          <RunningBar
+            label={runningLabel}
+            detail={`第 ${roundNo} 轮${usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}`}
+            onStop={session.stop}
+          />
         )}
 
-        {queued && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "var(--panel2)",
-              border: "1px solid var(--cardBd)",
-              borderRadius: 10,
-              padding: "7px 12px",
-              fontSize: 12,
-              margin: "0 -12px",
-            }}
-          >
-            <IconClock />
-            <span style={{ color: "var(--t3)", flex: "none" }}>已排队</span>
-            <span className="ellipsis" style={{ fontWeight: 600, flex: 1 }}>{queued}</span>
-            <span style={{ color: "var(--t6)", flex: "none", fontSize: 11.5 }}>运行结束后自动发送</span>
-            <button className="hv2 icon-btn" title="取消排队" onClick={session.clearQueued} style={{ width: 20, height: 20, borderRadius: 5 }}>
-              <IconX />
-            </button>
-          </div>
-        )}
+        {queued && <QueuedChip text={queued} hint="运行结束后自动发送" onClear={session.clearQueued} />}
 
-        <div
-          style={{
-            background: "var(--panel)",
-            border: "1px solid var(--inputBd)",
-            borderRadius: 12,
-            boxShadow: "var(--panelSh)",
-            display: "flex",
-            flexDirection: "column",
-            // 光学对齐:硬边卡片向两侧出血 12px,卡内文字(textarea 左内距 15px)
-            // 与对话文字左缘几乎重合,消除"输入框显窄"的错觉
-            margin: "0 -12px",
-          }}
-        >
-          {atts.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
-              {atts.map((a, i) => (
-                <span key={a.path} style={{ position: "relative", display: "flex" }}>
-                  {a.isImage ? (
-                    <img
-                      src={a.preview}
-                      alt={a.path}
-                      title={a.path}
-                      style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: "1px solid var(--cardBd)" }}
-                    />
-                  ) : (
-                    <span
-                      title={a.path}
+        <Composer
+          value={input}
+          placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片/文件可作为附件"}
+          sendActive={!!input.trim() || atts.length > 0}
+          onChange={session.setInput}
+          onSend={session.send}
+          onPaste={onPaste}
+          above={
+            atts.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
+                {atts.map((a, i) => (
+                  <span key={a.path} style={{ position: "relative", display: "flex" }}>
+                    {a.isImage ? (
+                      <img
+                        src={a.preview}
+                        alt={a.path}
+                        title={a.path}
+                        style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: "1px solid var(--cardBd)" }}
+                      />
+                    ) : (
+                      <span
+                        title={a.path}
+                        style={{
+                          height: 30,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "0 10px",
+                          borderRadius: 8,
+                          border: "1px solid var(--cardBd)",
+                          background: "var(--codeBg)",
+                          fontSize: 12,
+                          color: "var(--t2)",
+                          maxWidth: 220,
+                        }}
+                      >
+                        <IconFolder size={12} color="var(--t4)" />
+                        <span className="ellipsis">{a.name}</span>
+                      </span>
+                    )}
+                    <button
+                      className="icon-btn"
+                      title="移除"
+                      onClick={() => session.removeAtt(i)}
                       style={{
-                        height: 30,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "0 10px",
-                        borderRadius: 8,
-                        border: "1px solid var(--cardBd)",
-                        background: "var(--codeBg)",
-                        fontSize: 12,
-                        color: "var(--t2)",
-                        maxWidth: 220,
+                        position: "absolute",
+                        top: -5,
+                        right: -5,
+                        width: 17,
+                        height: 17,
+                        border: "1px solid var(--line)",
+                        borderRadius: "50%",
+                        background: "var(--card)",
+                        boxShadow: "var(--cardSh)",
                       }}
                     >
-                      <IconFolder size={12} color="var(--t4)" />
-                      <span className="ellipsis">{a.name}</span>
-                    </span>
-                  )}
-                  <button
-                    className="icon-btn"
-                    title="移除"
-                    onClick={() => session.removeAtt(i)}
-                    style={{
-                      position: "absolute",
-                      top: -5,
-                      right: -5,
-                      width: 17,
-                      height: 17,
-                      border: "1px solid var(--line)",
-                      borderRadius: "50%",
-                      background: "var(--card)",
-                      boxShadow: "var(--cardSh)",
-                    }}
-                  >
-                    <IconX size={8} color="var(--t3)" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <textarea
-            ref={taRef}
-            rows={2}
-            value={input}
-            placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片/文件可作为附件"}
-            onChange={(e) => session.setInput(e.target.value)}
-            onCompositionEnd={markImeEnd}
-            onKeyDown={onKey}
-            onPaste={onPaste}
-            style={{
-              border: "none",
-              outline: "none",
-              resize: "none",
-              background: "transparent",
-              color: "var(--t1)",
-              padding: "12px 15px 2px",
-              fontSize: 13,
-              lineHeight: 1.5,
-              maxHeight: 160,
-              display: "block",
-              width: "100%",
-            }}
-          />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 10px" }}>
-            <PermPill yolo={yolo} onToggle={() => void session.toggleYolo()} />
-            <span style={{ flex: 1 }} />
-            <ModelPicker models={models} current={currentModel} disabled={chat.running} onPick={(name) => void session.switchModel(name)} />
-            <ContextRing usage={usage} />
-            <button
-              className="hv-acc icon-btn"
-              title="发送 ↩ · 换行 ⇧↩"
-              onClick={session.send}
-              style={{ width: 27, height: 27, borderRadius: 8, background: "var(--acc)", opacity: input.trim() || atts.length > 0 ? 1 : 0.45 }}
-            >
-              <IconSend />
-            </button>
-          </div>
-        </div>
+                      <IconX size={8} color="var(--t3)" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )
+          }
+          controls={
+            <>
+              <PermPill yolo={yolo} onToggle={() => void session.toggleYolo()} />
+              <span style={{ flex: 1 }} />
+              <ModelPicker models={models} current={currentModel} disabled={chat.running} onPick={(name) => void session.switchModel(name)} />
+              <ContextRing usage={usage} />
+            </>
+          }
+        />
       </div>
     </div>
   );
