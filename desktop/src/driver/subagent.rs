@@ -20,6 +20,9 @@ pub(super) struct SubagentRoute {
     pub(super) parent_tc: String,
     /// model_delta 行缓冲:凑整行再出 subagent_text(防每 token 一帧)
     pub(super) line_buf: String,
+    /// 后台代理(Agent 工具回了 async_launched):子循环跨轮存活,
+    /// turn/stopped 不得收尾,等 task_notification 才闭合
+    pub(super) background: bool,
 }
 
 /// 子代理态锁组:子会话路由与 Agent 工具入参/结果暂存。
@@ -41,6 +44,10 @@ pub(super) struct SubagentState {
     /// 父会话 Agent 工具入参暂存(tc_id → (description, prompt)),
     /// 子会话物化时作标题与首条输入
     pub(super) agent_inputs: StdMutex<HashMap<String, (String, String)>>,
+    /// 后台代理登记(agent_id → (父 sid, 父 Agent tc_id)):Agent 工具回
+    /// async_launched(超时转后台/显式后台)时登记,task_notification 按
+    /// agent_id 反查父卡回填最终结果并收尾;引擎不再服务时随会话和解清除
+    pub(super) background_agents: StdMutex<HashMap<String, (String, String)>>,
 }
 
 impl Inner {
@@ -133,9 +140,17 @@ impl Inner {
             m["title"] = json!(title);
             m["status"] = json!(SessionStatus::Running.as_str());
         });
+        // 认领晚于 async_launched 的情形(子代理首个转发事件在超时之后才到):
+        // 登记表已有该父工具的后台标记,路由生来即后台,跨轮存活
+        let background = self
+            .sub.background_agents
+            .lock()
+            .unwrap()
+            .values()
+            .any(|(s, tc)| s == &psid && tc == &ptc);
         self.sub.subagents.lock().unwrap().insert(
             child_sid.to_string(),
-            SubagentRoute { parent_sid: psid.clone(), parent_tc: ptc.clone(), line_buf: String::new() },
+            SubagentRoute { parent_sid: psid.clone(), parent_tc: ptc.clone(), line_buf: String::new(), background },
         );
         // 子会话回放形状与主会话一致:user-input(任务)→ task-started → …
         if !prompt.is_empty() {
@@ -249,8 +264,9 @@ impl Inner {
         self.write_sidecar(child_sid, |m| m["status"] = json!(status.as_str()));
     }
 
-    /// 父会话某工具闭合:冲洗子代理残留行缓冲、关闭对应子会话、删路由。
-    pub(super) fn close_subagents_of(&self, sid: &str, tc_id: &str) {
+    /// 父会话某工具闭合:冲洗子代理残留行缓冲、按 status 关闭对应子会话、
+    /// 删路由(同步完成 Finished;后台代理经 task_notification 按其终态)。
+    pub(super) fn close_subagents_of(&self, sid: &str, tc_id: &str, status: SessionStatus) {
         let closing: Vec<(String, String)> = {
             let mut subs = self.sub.subagents.lock().unwrap();
             let closing = subs
@@ -267,25 +283,129 @@ impl Inner {
                     frame::tool_call_progress(tc_id, json!({ "kind": "subagent_text", "line": tail }), seq)
                 });
             }
-            self.close_child(&child, SessionStatus::Finished);
+            self.close_child(&child, status);
         }
         self.sub.agent_inputs.lock().unwrap().remove(tc_id);
     }
 
-    /// 会话轮次结束/和解:其子代理路由全部失效,残留子会话按 status 收尾。
-    pub(super) fn close_children_of_session(&self, sid: &str, status: SessionStatus) {
+    /// 会话轮次结束/和解:子代理路由失效,残留子会话按 status 收尾。
+    /// include_background=false(turn/stopped)放过后台代理——它们的子循环
+    /// 跨轮存活,收尾归 task_notification;true(引擎不再服务的和解)全关,
+    /// 后台登记一并清除(通知永远不会来了)。
+    pub(super) fn close_children_of_session(&self, sid: &str, status: SessionStatus, include_background: bool) {
         let children: Vec<String> = {
             let mut subs = self.sub.subagents.lock().unwrap();
             let children = subs
                 .iter()
-                .filter(|(_, r)| r.parent_sid == sid)
+                .filter(|(_, r)| r.parent_sid == sid && (include_background || !r.background))
                 .map(|(child, _)| child.clone())
                 .collect();
-            subs.retain(|_, r| r.parent_sid != sid);
+            subs.retain(|_, r| !(r.parent_sid == sid && (include_background || !r.background)));
             children
         };
         for child in children {
             self.close_child(&child, status);
         }
+        if include_background {
+            self.sub.background_agents.lock().unwrap().retain(|_, (s, _)| s != sid);
+        }
     }
+
+    /// Agent 工具应答 async_launched(同步超时转后台/显式 run_in_background):
+    /// 子代理还活着——不关路由,登记 agent_id → 父卡供 task_notification
+    /// 反查,已认领路由补后台标记(超时前已流式认领的情形;认领在后的
+    /// 情形由 claim_subagent 查登记表)。工具卡以友好文案按 completed
+    /// 收尾:调用本身成功返回,子代理成败等 task_notification 终态回填。
+    pub(super) fn background_agent_launched(&self, sid: &str, tc_id: &str, resp: &Value) {
+        let get = |k: &str| resp.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let agent_id = get("agentId");
+        if !agent_id.is_empty() {
+            self.sub.background_agents
+                .lock()
+                .unwrap()
+                .insert(agent_id.to_string(), (sid.to_string(), tc_id.to_string()));
+        }
+        if let Some(r) = self
+            .sub.subagents
+            .lock()
+            .unwrap()
+            .values_mut()
+            .find(|r| r.parent_sid == sid && r.parent_tc == tc_id)
+        {
+            r.background = true;
+        }
+        let label = agent_label(get("name"), get("description"), agent_id);
+        let text =
+            format!("⏳ 子代理已转入后台继续执行({label}),完成后结果将回填此卡,并在对话流以 📌 通知");
+        self.push_frame(sid, |seq| frame::tool_call_completed(tc_id, &text, &[], seq));
+    }
+
+    /// task_notification 收尾后台代理:按 agent_id 反查父卡,Result 正文
+    /// 回填工具卡终态(error → failed 帧),子会话按终态关闭,对话流落
+    /// 一条 📌 系统行(task_note 帧,独立渲染项不混模型气泡)。反查不到
+    /// (壳重启丢登记/SendMessage 续跑的二次完成/旧引擎)返回 false,
+    /// 调用方整段外显兜底。
+    pub(super) fn background_agent_finished(&self, data: &Value, msg: &str) -> bool {
+        let get = |k: &str| data.get(k).and_then(|v| v.as_str()).unwrap_or("");
+        let agent_id = get("agent_id");
+        if agent_id.is_empty() {
+            return false;
+        }
+        // 帧一律落在登记的父会话(通知本就发在父会话,psid 即 sid;
+        // 万一不符也以卡所在会话为准,不把结果写岔)
+        let Some((psid, ptc)) = self.sub.background_agents.lock().unwrap().remove(agent_id) else {
+            return false;
+        };
+        let status = get("status");
+        let result = notification_result(msg).unwrap_or_else(|| msg.to_string());
+        let child_status = match status {
+            "error" => SessionStatus::Error,
+            "stopped" => SessionStatus::Interrupted,
+            _ => SessionStatus::Finished,
+        };
+        // 先冲洗行缓冲/关子会话(残留尾行在终态帧之前落卡),再回填终态
+        self.close_subagents_of(&psid, &ptc, child_status);
+        if status == "error" {
+            self.push_frame(&psid, |seq| frame::tool_call_failed(&ptc, &result, seq));
+        } else {
+            let images = super::normalize::extract_upload_paths(&result);
+            self.push_frame(&psid, |seq| frame::tool_call_completed(&ptc, &result, &images, seq));
+        }
+        let label = agent_label(get("name"), get("description"), agent_id);
+        let note = match status {
+            "error" => format!("📌 后台代理 {label} 执行失败,详情见其任务卡"),
+            "stopped" => format!("📌 后台代理 {label} 已停止"),
+            _ => format!("📌 后台代理 {label} 已完成,结果已回填其任务卡"),
+        };
+        self.push_frame(&psid, |seq| frame::task_note(&note, seq));
+        true
+    }
+}
+
+/// 后台代理的人话标签:「name(description)」按有啥用啥,全空退 agent_id。
+fn agent_label(name: &str, desc: &str, agent_id: &str) -> String {
+    match (name.is_empty(), desc.is_empty()) {
+        (false, false) => format!("{name}({desc})"),
+        (false, true) => name.to_string(),
+        (true, false) => desc.to_string(),
+        (true, true) => agent_id.to_string(),
+    }
+}
+
+/// 从 task_notification 渲染消息里取 Result 正文。形状对表引擎
+/// notification.go::Render(固定:<task-notification>\n…\nResult:\n{正文}
+/// \n</task-notification>);解析不出返回 None,调用方退回全文。
+fn notification_result(msg: &str) -> Option<String> {
+    let body = strip_notification_tags(msg);
+    let idx = body.find("\nResult:\n")?;
+    Some(body[idx + "\nResult:\n".len()..].trim().to_string())
+}
+
+/// 剥掉 <task-notification> 包装标签(markdown 会把标签行当 HTML 块,
+/// DOMPurify 再剥标签,块内文本与后续正文的分界随之错乱——外显前去壳)。
+pub(super) fn strip_notification_tags(msg: &str) -> String {
+    let body = msg.trim();
+    let body = body.strip_prefix("<task-notification>").unwrap_or(body);
+    let body = body.strip_suffix("</task-notification>").unwrap_or(body);
+    body.trim().to_string()
 }

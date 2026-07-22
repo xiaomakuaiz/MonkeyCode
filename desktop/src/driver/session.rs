@@ -1017,7 +1017,8 @@ impl Inner {
                 ar.remove(tc);
             }
         }
-        self.close_children_of_session(sid, SessionStatus::Interrupted);
+        // 引擎不再服务:后台代理连同子循环一起没了,一并收尾(含后台登记)
+        self.close_children_of_session(sid, SessionStatus::Interrupted, true);
         for (tc, _name) in open {
             self.push_frame(sid, |seq| frame::tool_call_failed(&tc, "已中断", seq));
         }

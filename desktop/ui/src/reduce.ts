@@ -237,8 +237,12 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
         };
       }
       if (u.status === "in_progress") {
+        // 注:已闭合卡也接受 progress——超时转后台的 Agent 卡先以
+        // "已转入后台"文案 completed,后台代理继续流式,进度窗照常直播
         return u.progress ? applyProgress(s, u.toolCallId ?? "", u.progress) : s;
       }
+      // 终态可重复回写:后台 Agent 卡的真实结果随 task_notification 迟到,
+      // 驱动补发终态帧回填——后到者权威,直接覆写
       const items = s.items.slice();
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
@@ -261,6 +265,10 @@ function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
       return { ...s, plan: u.entries ?? [] };
     case "llm_call_retry":
       return push(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
+    case "task_notification":
+      // 后台子代理完成通知(📌):独立系统行。不能走 agent_text——
+      // appendStream 会把它并进正在流式的模型正文气泡
+      return u.text ? push(s, { kind: "sys", text: u.text }) : s;
     case "usage_update":
       return { ...s, usage: { used: u.used ?? 0, size: u.size ?? 0 } };
     case "compact_status":

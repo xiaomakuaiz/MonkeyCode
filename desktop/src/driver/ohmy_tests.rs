@@ -137,6 +137,16 @@ fn e2e_setup(tag: &str, llm_delay_ms: u64) -> (OhmyDriver, PathBuf) {
 }
 
 fn e2e_setup_steps(tag: &str, llm_delay_ms: u64, steps: Vec<String>) -> (OhmyDriver, PathBuf) {
+    e2e_setup_cfg(tag, llm_delay_ms, steps, json!({}))
+}
+
+/// extra_settings:并进引擎 settings.json 的顶层键(如 subagent_timeout)。
+fn e2e_setup_cfg(
+    tag: &str,
+    llm_delay_ms: u64,
+    steps: Vec<String>,
+    extra_settings: Value,
+) -> (OhmyDriver, PathBuf) {
     let home = std::env::temp_dir().join(format!("ohmy-e2e-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     // 引擎配置写进壳私有目录(driver 会以 OHMYAGENT_CONFIG_DIR 注入)
@@ -145,13 +155,18 @@ fn e2e_setup_steps(tag: &str, llm_delay_ms: u64, steps: Vec<String>) -> (OhmyDri
     std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
 
     let llm = fake_anthropic_steps(llm_delay_ms, steps);
-    let settings = json!({
+    let mut settings = json!({
         "default_model": "测试模型",
         "permission_mode": "default",
         "models": { "测试模型": { "type": "anthropic", "model": "test-model",
             "api_key": "sk-fake", "base_url": format!("{llm}/api/anthropic"),
             "context_window": 200000 } },
     });
+    if let Some(extra) = extra_settings.as_object() {
+        for (k, v) in extra {
+            settings[k] = v.clone();
+        }
+    }
     std::fs::write(
         home.join("shellcfg/ohmyagent/settings.json"),
         serde_json::to_vec_pretty(&settings).unwrap(),
@@ -405,6 +420,7 @@ fn bare_inner(tag: &str) -> Arc<Inner> {
             subagents: StdMutex::new(HashMap::new()),
             agent_results: StdMutex::new(HashMap::new()),
             agent_inputs: StdMutex::new(HashMap::new()),
+            background_agents: StdMutex::new(HashMap::new()),
         },
         models: vec![],
         data_dir,
@@ -760,4 +776,312 @@ fn unstamped_subagent_event_not_claimed() {
         inner.sub.subagents.lock().unwrap().get("child9").map(|r| r.parent_tc.clone()),
         Some("tc1".into())
     );
+}
+
+// ==================== 超时转后台的子代理(async_launched) ====================
+//
+// 事件序列 ground truth(真实引擎 35ba211 实测,subagent_timeout=1s +
+// 假 LLM 每请求延迟 2s;超时前已流式的情形子代理事件在 tool_result 之前):
+//   tool_call(Agent tu_1)
+//   tool_result(tu_1){content=async_launched JSON:{agentId,agentType,
+//     description,name,note,reason,status:"async_launched"}——**无 content
+//     字段**,is_error=false;后台路径不发 agent_result}
+//   (父轮继续;子代理事件带 parent_session_id/parent_tool_call_id/
+//    parent_description 戳记,model_delta/model_done 全量转发)
+//   task_notification{data:{agent_id,agent_type,name,description,status,
+//     message:"<task-notification>\n…\nResult:\n{全量结果}\n</task-notification>"}}
+//   (父轮收尾 turn/stopped;子代理无终止事件转发,收尾信号只有通知)
+
+/// async_launched 应答的 JSON(形状对表引擎 subagent.go asyncLaunchedResult)。
+fn async_launched_json(agent_id: &str, name: &str, desc: &str) -> String {
+    serde_json::to_string_pretty(&json!({
+        "agentId": agent_id,
+        "agentType": "plan",
+        "description": desc,
+        "name": name,
+        "note": "The agent will notify you with a <task-notification> when it finishes.",
+        "reason": "still running after 2m0s; moved to the background",
+        "status": "async_launched",
+    }))
+    .unwrap()
+}
+
+fn notification_message(agent_id: &str, name: &str, desc: &str, status: &str, result: &str) -> String {
+    format!(
+        "<task-notification>\nBackground agent {agent_id} (name: {name}) [plan] finished with status: {status}\nTask: {desc}\nResult:\n{result}\n</task-notification>"
+    )
+}
+
+fn journal_frames(inner: &Inner, sid: &str) -> Vec<Value> {
+    inner.journal_barrier();
+    std::fs::read_to_string(inner.data_dir.join(sid).join("events.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect()
+}
+
+/// 用户实测回归(超时前子代理已流式认领):async_launched 不把原始 JSON
+/// 灌卡、不关活着的子代理路由;turn/stopped 放过后台子会话(跨轮存活);
+/// task_notification 以 Result 正文回填父卡终态 + 📌 系统行 + 子会话收尾;
+/// 通知全文不再以 agent_text 混进模型正文气泡。
+#[test]
+fn backgrounded_subagent_survives_and_backfills() {
+    let inner = bare_inner("bg");
+    inner.transport.engine_caps.lock().unwrap().insert("structuredToolResult".into());
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), bare_session("s1"));
+    let ev = |t: &str, tc: &str, data: Value| {
+        json!({ "type": t, "session_id": "s1", "tool_call_id": tc, "data": data })
+    };
+    inner.handle_event(ev(
+        "tool_call",
+        "tc1",
+        json!({ "name": "Agent", "input": { "description": "设计解耦接口方案", "prompt": "去设计", "name": "bd" } }),
+    ));
+    // 超时前子代理已流式(带戳记)→ 认领并投喂父卡
+    inner.handle_event(json!({ "type": "model_delta", "session_id": "child1",
+        "parent_session_id": "s1", "parent_tool_call_id": "tc1",
+        "parent_description": "设计解耦接口方案", "data": { "text": "调查中…\n" } }));
+    assert!(inner.sess.sessions.lock().unwrap().contains_key("child1"), "子代理未认领");
+    // 超时转后台:tool_result 回 async_launched JSON(无 content 字段)
+    inner.handle_event(ev(
+        "tool_result",
+        "tc1",
+        json!({ "tool": "Agent", "content": async_launched_json("a1", "bd", "设计解耦接口方案"), "is_error": false }),
+    ));
+    {
+        let subs = inner.sub.subagents.lock().unwrap();
+        let r = subs.get("child1").expect("async_launched 不得清掉活着的子代理路由");
+        assert!(r.background, "路由未标记后台");
+    }
+    assert!(
+        inner.sub.background_agents.lock().unwrap().contains_key("a1"),
+        "后台代理未登记"
+    );
+    // 父轮收尾:后台子会话跨轮存活,不得按中断收尾
+    inner.handle_notification("turn/stopped", json!({ "session_id": "s1", "stop_reason": "complete" }));
+    assert!(
+        inner.sub.subagents.lock().unwrap().contains_key("child1"),
+        "turn/stopped 不得收掉后台子代理路由"
+    );
+    assert!(
+        inner.sess.sessions.lock().unwrap().get("child1").map(|s| s.running).unwrap_or(false),
+        "后台子会话应保持 running"
+    );
+    // 后台期间子代理继续流式 → 仍投喂父卡进度窗
+    inner.handle_event(json!({ "type": "model_delta", "session_id": "child1",
+        "parent_session_id": "s1", "parent_tool_call_id": "tc1",
+        "parent_description": "设计解耦接口方案", "data": { "text": "结论已成\n" } }));
+    // 完成通知:结果回填 + 收尾
+    inner.handle_event(json!({ "type": "task_notification", "session_id": "s1", "data": {
+        "agent_id": "a1", "agent_type": "plan", "name": "bd", "description": "设计解耦接口方案",
+        "status": "completed",
+        "message": notification_message("a1", "bd", "设计解耦接口方案", "completed", "最终结论正文"),
+    }}));
+    assert!(inner.sub.background_agents.lock().unwrap().is_empty(), "登记未消费");
+    assert!(inner.sub.subagents.lock().unwrap().is_empty(), "通知后路由未清");
+
+    let frames = journal_frames(&inner, "s1");
+    let tc1_finals: Vec<Value> = frames
+        .iter()
+        .filter_map(acp_update)
+        .filter(|u| {
+            u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("tool_call_update")
+                && u.get("toolCallId").and_then(|v| v.as_str()) == Some("tc1")
+                && u.get("status").and_then(|v| v.as_str()) != Some("in_progress")
+        })
+        .collect();
+    assert_eq!(tc1_finals.len(), 2, "应有两次终态帧(转后台文案 + 结果回填): {tc1_finals:?}");
+    let first = tc1_finals[0].get("rawOutput").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(first.contains("已转入后台"), "async_launched 卡应是友好文案: {first}");
+    assert!(!first.contains("async_launched"), "原始 JSON 不得灌卡: {first}");
+    assert_eq!(tc1_finals[1].get("status").and_then(|v| v.as_str()), Some("completed"));
+    assert_eq!(
+        tc1_finals[1].get("rawOutput").and_then(|v| v.as_str()),
+        Some("最终结论正文"),
+        "Result 正文未回填父卡"
+    );
+    // 📌 系统行(task_notification 帧,独立渲染项)
+    let note = frames
+        .iter()
+        .filter_map(acp_update)
+        .find(|u| u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("task_notification"))
+        .expect("缺 📌 系统行帧");
+    let note_text = note.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(note_text.contains("bd") && note_text.contains("已完成"), "📌 文案不符: {note_text}");
+    // 通知全文不得以 agent_text 混进模型正文气泡
+    let leaked = frames.iter().filter_map(acp_update).any(|u| {
+        u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk")
+            && u["content"]["text"].as_str().map(|t| t.contains("Background agent")).unwrap_or(false)
+    });
+    assert!(!leaked, "通知全文混进了正文气泡");
+    // 后台期间的流式行仍进父卡进度窗
+    let fed = frames.iter().filter_map(acp_update).any(|u| {
+        u.get("toolCallId").and_then(|v| v.as_str()) == Some("tc1")
+            && u["progress"]["line"].as_str().map(|l| l.contains("结论已成")).unwrap_or(false)
+    });
+    assert!(fed, "后台期间的子代理进度未进父卡");
+    // 子会话按 Finished 收尾
+    let ctypes: Vec<String> = journal_frames(&inner, "child1")
+        .iter()
+        .filter_map(|f| f.get("type").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    assert!(ctypes.iter().any(|t| t == "task-ended"), "子会话未收尾: {ctypes:?}");
+    assert_eq!(
+        inner.read_sidecar("child1").get("status").and_then(|v| v.as_str()),
+        Some("finished"),
+        "子会话 sidecar 未落 finished"
+    );
+}
+
+/// 后台代理失败(status=error)→ 父卡 failed 帧回填错误详情,📌 行报失败,
+/// 子会话按 error 收尾。
+#[test]
+fn backgrounded_subagent_error_marks_card_failed() {
+    let inner = bare_inner("bgerr");
+    inner.transport.engine_caps.lock().unwrap().insert("structuredToolResult".into());
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), bare_session("s1"));
+    let ev = |t: &str, tc: &str, data: Value| {
+        json!({ "type": t, "session_id": "s1", "tool_call_id": tc, "data": data })
+    };
+    inner.handle_event(ev("tool_call", "tc1", json!({ "name": "Agent", "input": { "description": "d", "prompt": "p" } })));
+    inner.handle_event(ev(
+        "tool_result",
+        "tc1",
+        json!({ "tool": "Agent", "content": async_launched_json("a2", "", "d"), "is_error": false }),
+    ));
+    inner.handle_event(json!({ "type": "task_notification", "session_id": "s1", "data": {
+        "agent_id": "a2", "name": "", "description": "d", "status": "error",
+        "message": notification_message("a2", "", "d", "error", "provider 炸了"),
+    }}));
+    let frames = journal_frames(&inner, "s1");
+    let failed = frames
+        .iter()
+        .filter_map(acp_update)
+        .find(|u| {
+            u.get("toolCallId").and_then(|v| v.as_str()) == Some("tc1")
+                && u.get("status").and_then(|v| v.as_str()) == Some("failed")
+        })
+        .expect("缺 failed 回填帧");
+    assert_eq!(failed.get("rawOutput").and_then(|v| v.as_str()), Some("provider 炸了"));
+    let note = frames
+        .iter()
+        .filter_map(acp_update)
+        .find(|u| u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("task_notification"))
+        .expect("缺 📌 系统行帧");
+    assert!(note.get("text").and_then(|v| v.as_str()).unwrap_or("").contains("执行失败"));
+}
+
+/// 反查不到登记(壳重启丢内存/SendMessage 续跑二次完成)的 task_notification:
+/// 退回整段外显,但剥 <task-notification> 包装标签——markdown 会把标签行
+/// 当 HTML 块吞掉后半段(用户实测症状:Result: 后面正文丢失)。
+#[test]
+fn task_notification_without_registry_falls_back_stripped() {
+    let inner = bare_inner("bgfb");
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), bare_session("s1"));
+    inner.handle_event(json!({ "type": "task_notification", "session_id": "s1", "data": {
+        "agent_id": "unknown", "status": "completed",
+        "message": notification_message("unknown", "x", "d", "completed", "正文内容"),
+    }}));
+    let frames = journal_frames(&inner, "s1");
+    let text = frames
+        .iter()
+        .filter_map(acp_update)
+        .filter(|u| u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk"))
+        .filter_map(|u| u["content"]["text"].as_str().map(String::from))
+        .next()
+        .expect("缺兜底外显帧");
+    assert!(text.contains("📌") && text.contains("正文内容"), "兜底外显不完整: {text}");
+    assert!(!text.contains("<task-notification>"), "包装标签未剥: {text}");
+}
+
+/// E2E:真实引擎 subagent_timeout=1s + 假 LLM 每请求 2s——Agent 同步调用
+/// 超时转后台,整条链路(async_launched 卡文案 → 后台完成通知回填 →
+/// 📌 系统行 → 子会话收尾)对着真实事件序列验证。
+#[tokio::test(flavor = "multi_thread")]
+async fn e2e_subagent_timeout_backgrounded() {
+    if find_ohmyagent().is_none() {
+        eprintln!("skip: 未找到 ohmyagent 二进制");
+        return;
+    }
+    let _g = E2E_LOCK.lock().unwrap();
+    let steps = vec![
+        // req0 父轮:派 Agent;req1 子代理应答(延迟 2s > 超时 1s → 转后台);
+        // req2 父轮继续(Bash 给循环一次迭代机会,好在轮内排空通知);
+        // req3 父轮收尾(模型已看到 <task-notification>)
+        sse_tool_use("tu_1", "Agent", &json!({ "prompt": "深入调查并汇报", "description": "后台调查任务", "name": "bg-worker" })),
+        sse_text("子代理最终结论:一切正常\n"),
+        sse_tool_use("tu_2", "Bash", &json!({ "command": "echo ok" })),
+        sse_text("父任务收尾完成"),
+    ];
+    let (driver, home) = e2e_setup_cfg("bg", 2000, steps, json!({ "subagent_timeout": 1000 }));
+    let workdir = home.to_string_lossy().into_owned();
+    let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
+    let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_call(&sid, "session_set_mode", json!({ "mode": "yolo" })).await.expect("yolo");
+    driver
+        .session_send(&sid, "user-input", json!({ "content": frame::b64_text("派个子代理") }))
+        .await
+        .expect("发送");
+
+    let journal = wait_journal(&driver, &sid, |j| {
+        j.iter().any(|f| f.get("type").and_then(|v| v.as_str()) == Some("task-ended"))
+    })
+    .await;
+    let tu1_finals: Vec<Value> = journal
+        .iter()
+        .filter_map(acp_update)
+        .filter(|u| {
+            u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("tool_call_update")
+                && u.get("toolCallId").and_then(|v| v.as_str()) == Some("tu_1")
+                && u.get("status").and_then(|v| v.as_str()) != Some("in_progress")
+        })
+        .collect();
+    assert_eq!(tu1_finals.len(), 2, "应有转后台 + 回填两次终态帧: {journal:?}");
+    let first = tu1_finals[0].get("rawOutput").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        first.contains("已转入后台") && first.contains("bg-worker") && !first.contains("async_launched"),
+        "async_launched 卡文案不符: {first}"
+    );
+    assert_eq!(tu1_finals[1].get("status").and_then(|v| v.as_str()), Some("completed"));
+    assert!(
+        tu1_finals[1].get("rawOutput").and_then(|v| v.as_str()).unwrap_or("").contains("子代理最终结论"),
+        "后台完成结果未回填父卡: {tu1_finals:?}"
+    );
+    // 📌 系统行帧
+    let note = journal
+        .iter()
+        .filter_map(acp_update)
+        .find(|u| u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("task_notification"))
+        .expect("缺 📌 系统行帧");
+    assert!(note.get("text").and_then(|v| v.as_str()).unwrap_or("").contains("bg-worker"));
+    // 通知全文不得混进正文气泡
+    let leaked = journal.iter().filter_map(acp_update).any(|u| {
+        u.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk")
+            && u["content"]["text"].as_str().map(|t| t.contains("Background agent")).unwrap_or(false)
+    });
+    assert!(!leaked, "通知全文混进正文气泡");
+    // 子会话物化 + 收尾(认领晚于 async_launched 的顺序也要能闭合)
+    let child_id = journal
+        .iter()
+        .filter_map(acp_update)
+        .find_map(|u| {
+            if u.get("toolCallId").and_then(|v| v.as_str()) != Some("tu_1") {
+                return None;
+            }
+            let p = u.get("progress")?;
+            if p.get("kind").and_then(|v| v.as_str()) != Some("child_session") {
+                return None;
+            }
+            p.get("childSessionId").and_then(|v| v.as_str()).map(String::from)
+        })
+        .expect("缺 child_session 链接");
+    let ctypes: Vec<String> = driver
+        .read_journal(&child_id)
+        .iter()
+        .filter_map(|f| f.get("type").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    assert!(ctypes.iter().any(|t| t == "task-ended"), "后台子会话未收尾: {ctypes:?}");
+    driver.stop();
 }

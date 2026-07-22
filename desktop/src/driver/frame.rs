@@ -244,6 +244,12 @@ pub fn compact_status(status: &str, seq: u64) -> Value {
     acp(json!({ "sessionUpdate": "compact_status", "status": status }), seq)
 }
 
+/// 后台子代理完成通知(📌):独立系统行。不复用 agent_text——它会被
+/// reduce.ts 并进正在流式的模型正文气泡,通知与模型的话混作一团。
+pub fn task_note(text: &str, seq: u64) -> Value {
+    acp(json!({ "sessionUpdate": "task_notification", "text": text }), seq)
+}
+
 pub fn model_update(model: &str, seq: u64) -> Value {
     acp(json!({ "sessionUpdate": "model_update", "model": model }), seq)
 }

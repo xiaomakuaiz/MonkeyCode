@@ -103,8 +103,9 @@ impl Inner {
                         ar.remove(tc);
                     }
                 }
-                // 轮次收尾:残留子代理(未随工具闭合)按中断收尾
-                self.close_children_of_session(&sid, SessionStatus::Interrupted);
+                // 轮次收尾:残留子代理(未随工具闭合)按中断收尾;后台代理
+                // 除外——其子循环跨轮存活,收尾归 task_notification
+                self.close_children_of_session(&sid, SessionStatus::Interrupted, false);
                 if !was_running {
                     // 已本地和解(取消超时/引擎重启)后迟到的收尾,忽略防重复帧
                     return;
@@ -309,12 +310,25 @@ impl Inner {
                     content.starts_with("Error: ")
                 };
                 // Agent 工具结果:agent_result 暂存(全量,不截断)为权威;
-                // 无暂存时(旧引擎/后台代理的 async_launched 应答)退回解析
-                // 截断 500 字符的 {status,…,content} JSON——可能破损,
-                // 解析失败原样退回(兼容尾巴)
+                // 无暂存时先分流 async_launched(超时转后台/显式后台的应答,
+                // 引擎 subagent.go asyncLaunchedResult——**没有 content 字段**,
+                // 走下面的退回解析会 unwrap_or 把整段原始 JSON 灌进卡),
+                // 其余退回解析截断 500 字符的 {status,…,content} JSON——
+                // 可能破损,解析失败原样退回(兼容尾巴)
                 let stashed =
                     if tc_id.is_empty() { None } else { self.sub.agent_results.lock().unwrap().remove(&tc_id) };
-                let content: String = if name.as_deref() == Some("Agent") {
+                let is_agent = name.as_deref() == Some("Agent");
+                if is_agent && stashed.is_none() && !is_error {
+                    if let Some(resp) = serde_json::from_str::<Value>(content)
+                        .ok()
+                        .filter(|v| v.get("status").and_then(|s| s.as_str()) == Some("async_launched"))
+                    {
+                        // 子代理还活着:不关路由,登记后台,友好文案闭卡
+                        self.background_agent_launched(&sid, &tc_id, &resp);
+                        return;
+                    }
+                }
+                let content: String = if is_agent {
                     match stashed {
                         Some((status, full)) => {
                             if status == "error" {
@@ -336,7 +350,7 @@ impl Inner {
                 };
                 let content = content.as_str();
                 // Agent 工具闭合:清对应子代理路由(残留行缓冲先冲洗成尾行)
-                self.close_subagents_of(&sid, &tc_id);
+                self.close_subagents_of(&sid, &tc_id, SessionStatus::Finished);
                 if is_error {
                     // 失败工具 → failed 帧,否则 UI 渲染成绿勾
                     self.push_frame(&sid, |seq| frame::tool_call_failed(&tc_id, content, seq));
@@ -357,8 +371,21 @@ impl Inner {
                 if msg.is_empty() {
                     return;
                 }
-                let text = if etype == "task_notification" { format!("\n📌 {msg}\n") } else { msg };
-                self.push_frame(&sid, |seq| frame::agent_text(&text, seq));
+                if etype == "task_notification" {
+                    // 后台代理完成:登记在案 → Result 正文回填父 Agent 卡 +
+                    // 📌 系统行(独立渲染项)。旧行为把整段渲染消息当
+                    // agent_text 混进模型正文气泡——<task-notification>
+                    // 标签行被 markdown 当 HTML 块吞掉,Result 正文散落
+                    // 主流,看着像主/子代理消息交织
+                    if !self.background_agent_finished(&data, &msg) {
+                        // 反查不到(壳重启丢登记/SendMessage 续跑的二次完成/
+                        // 旧引擎):整段外显兜底,剥包装标签防 markdown 吞块
+                        let inner = super::subagent::strip_notification_tags(&msg);
+                        self.push_frame(&sid, |seq| frame::agent_text(&format!("\n\n📌 {inner}\n\n"), seq));
+                    }
+                    return;
+                }
+                self.push_frame(&sid, |seq| frame::agent_text(&msg, seq));
             }
             // TodoWrite 全量清单:引擎专发 todo_update 事件供 host 渲染实时
             // 勾选卡(tool_result 只有截断 500 字符的纯文本,不能用来渲染)
@@ -383,7 +410,7 @@ impl Inner {
 /// 工具标题:「名称 主参数」(「动词 目标」的可读形态)。
 /// 从工具结果文本提取工作区上传路径(.monkeycode/uploads/…):
 /// 浏览器截图等壳内生成物经文本路径外显,驱动转成工具卡 images。
-fn extract_upload_paths(content: &str) -> Vec<String> {
+pub(super) fn extract_upload_paths(content: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = content;
     while let Some(i) = rest.find(".monkeycode/uploads/") {

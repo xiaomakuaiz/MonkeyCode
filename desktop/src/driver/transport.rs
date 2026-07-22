@@ -216,6 +216,7 @@ impl OhmyDriver {
                 subagents: StdMutex::new(HashMap::new()),
                 agent_results: StdMutex::new(HashMap::new()),
                 agent_inputs: StdMutex::new(HashMap::new()),
+                background_agents: StdMutex::new(HashMap::new()),
             },
             models,
             data_dir,

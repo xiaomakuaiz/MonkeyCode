@@ -100,6 +100,8 @@ export interface AcpUpdate {
   entries?: PlanEntry[];
   attempt?: number;
   message?: string;
+  /** task_notification(后台子代理完成 📌 系统行)的通知文本 */
+  text?: string;
   used?: number;
   size?: number;
   progress?: ToolProgress;

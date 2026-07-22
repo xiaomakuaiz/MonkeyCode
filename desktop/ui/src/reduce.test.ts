@@ -147,6 +147,52 @@ describe("执行期进度(in_progress progress)", () => {
   });
 });
 
+describe("后台子代理(Agent 超时转后台)", () => {
+  const open = acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Agent 后台调查" });
+  // 驱动侧 async_launched 的友好文案闭卡
+  const launched = acp({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    status: "completed",
+    rawOutput: "⏳ 子代理已转入后台继续执行(bd),完成后结果将回填此卡",
+  });
+
+  it("task_notification 渲染独立系统行,不并入流式中的正文气泡", () => {
+    const s = run([
+      acp({ sessionUpdate: "agent_message_chunk", content: { text: "我先做别的" } }),
+      acp({ sessionUpdate: "task_notification", text: "📌 后台代理 bd 已完成,结果已回填其任务卡" }),
+      acp({ sessionUpdate: "agent_message_chunk", content: { text: ",继续" } }),
+    ]);
+    expect(s.items.map((it) => it.kind)).toEqual(["agent", "sys", "agent"]);
+    expect((s.items[1] as Extract<LogItem, { kind: "sys" }>).text).toContain("bd");
+    // 缺 text 忽略
+    expect(reduceFrame(s, acp({ sessionUpdate: "task_notification" })).items).toHaveLength(3);
+  });
+
+  it("已闭合的 Agent 卡继续接受后台代理的进度直播", () => {
+    const s = run([
+      open,
+      launched,
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", progress: { kind: "subagent_text", line: "后台仍在跑" } }),
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", progress: { kind: "child_session", childSessionId: "c1" } }),
+    ]);
+    expect(toolItem(s, "t1")).toMatchObject({ status: "ok", childSessionId: "c1" });
+    expect(toolItem(s, "t1").feed).toEqual([{ kind: "text", text: "后台仍在跑" }]);
+  });
+
+  it("终态帧可重复回写:task_notification 迟到的真实结果覆写转后台文案", () => {
+    const s = run([
+      open,
+      launched,
+      acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: "最终结论正文" }),
+    ]);
+    expect(toolItem(s, "t1")).toMatchObject({ status: "ok", result: "最终结论正文" });
+    // 失败终态同样覆写(后台代理 error 收尾)
+    const f = reduceFrame(s, acp({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed", rawOutput: "炸了" }));
+    expect(toolItem(f, "t1")).toMatchObject({ status: "fail", result: "炸了" });
+  });
+});
+
 describe("计划卡片", () => {
   it("plan 不进对话流,面板状态整卡更新", () => {
     const s = reduceBatch(initialChat, [
