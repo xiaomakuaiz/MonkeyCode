@@ -118,8 +118,12 @@ jobs:
           git submodule update --init agent
           mkdir -p "$GITHUB_WORKSPACE/desktop/binaries"
           cd agent
-          go build -trimpath -ldflags "-s -w" \
+          # Desktop 专用 sidecar 链成 GUI 子系统:stdio 仍走壳提供的管道,
+          # 但 Windows 不再给 ohmyagent.exe 分配常驻控制台黑框。
+          go build -trimpath -ldflags "-s -w -H=windowsgui" \
             -o "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
+          python "$GITHUB_WORKSPACE/desktop/scripts/check-pe-subsystem.py" \
+            "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" gui
 
       - name: Download WebView2 fixed runtime 109
         working-directory: desktop

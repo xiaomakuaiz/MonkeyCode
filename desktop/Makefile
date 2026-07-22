@@ -22,6 +22,7 @@ SIDECAR_UNI := $(BIN_DIR)/ohmyagent-universal-apple-darwin
 SIDECAR_WIN := $(BIN_DIR)/ohmyagent-x86_64-pc-windows-msvc.exe
 TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
+GOFLAGS_WIN := -trimpath -ldflags "-s -w -H=windowsgui"
 
 .PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows check-ohmy-src engine-universal engine-windows browser-extension icons clean
 
@@ -101,7 +102,8 @@ check-windows:
 # WSL 模式的 ohmyagent-linux 随 M3 落地。
 engine-windows: check-ohmy-src
 	mkdir -p $(BIN_DIR)
-	cd $(OHMYAGENT_SRC) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS) -o $(abspath $(SIDECAR_WIN)) ./cmd/ohmyagent
+	cd $(OHMYAGENT_SRC) && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GOFLAGS_WIN) -o $(abspath $(SIDECAR_WIN)) ./cmd/ohmyagent
+	python3 scripts/check-pe-subsystem.py $(SIDECAR_WIN) gui
 
 # 浏览器扩展:随包分发(tauri bundle.resources 引用 ../browser-extension/dist,
 # 缺失会打包失败)。
