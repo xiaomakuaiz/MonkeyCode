@@ -1082,11 +1082,11 @@ export function SettingsView({
                 userSelect: "none",
                 fontSize: 12.5,
                 background: activeNow ? "var(--accSel)" : "transparent",
-                color: activeNow ? "var(--onAcc)" : "var(--t2)",
-                fontWeight: activeNow ? 500 : 400,
+                color: activeNow ? "var(--accSelT)" : "var(--t2)",
+                fontWeight: activeNow ? 600 : 400,
               }}
             >
-              <Icon size={13} color={activeNow ? "var(--onAcc)" : "var(--t4)"} />
+              <Icon size={13} color={activeNow ? "var(--accSelT)" : "var(--t4)"} />
               {n.label}
             </div>
           );

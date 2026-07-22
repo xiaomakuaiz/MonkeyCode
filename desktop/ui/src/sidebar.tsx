@@ -120,7 +120,7 @@ function SessionRow({
   const showActions = hover || menu !== "closed";
   const st = rowStatus(meta);
   const bg = active ? (archived ? "var(--hov3)" : "var(--accSel)") : "transparent";
-  const fg = active && !archived ? "var(--onAcc)" : "var(--t2)";
+  const fg = active && !archived ? "var(--accSelT)" : "var(--t2)";
   const closeMenu = () => setMenu("closed");
 
   return (
@@ -212,7 +212,7 @@ function SessionRow({
             className="hv3 icon-btn"
             style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent" }}
           >
-            <IconDots color={active && !archived ? "var(--onAccDim)" : "var(--t3)"} />
+            <IconDots color={active && !archived ? "var(--accSelDim)" : "var(--t3)"} />
           </button>
         )}
       </div>
@@ -512,7 +512,7 @@ export function Sidebar({
                   cursor: "pointer",
                   fontSize: 12.5,
                   background: active ? "var(--accSel)" : "transparent",
-                  color: active ? "var(--onAcc)" : "var(--t2)",
+                  color: active ? "var(--accSelT)" : "var(--t2)",
                   fontWeight: active ? 500 : 400,
                   whiteSpace: "nowrap",
                   minWidth: 0,
@@ -524,7 +524,9 @@ export function Sidebar({
                     flex: "none",
                     fontSize: 11,
                     opacity: 0.7,
-                    color: active ? "var(--onAccDim)" : st.color === "inherit" ? undefined : st.color,
+                    // 运行/排队/错误等语义色不因行选中而变化;只有普通
+                    // “已完成”状态在浅绿选中底上使用次级灰绿色。
+                    color: st.color === "inherit" ? (active ? "var(--accSelDim)" : undefined) : st.color,
                   }}
                 >
                   {st.text}

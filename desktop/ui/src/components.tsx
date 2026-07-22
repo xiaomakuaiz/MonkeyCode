@@ -31,6 +31,7 @@ import {
 import { openExternal } from "./host";
 import { IconCheck, IconChevronRight, IconDots, IconFolder, IconSpark, IconTrash } from "./icons";
 import { permAnchors } from "./reduce";
+import { localizedToolTitleText, localizeToolTitle, toolDisplayName } from "./toolLabels";
 import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -344,11 +345,9 @@ export function ToolCard({
   // 但不再默认把整段结果灌进卡片。
   const summary = agentResult && !canOpenChild && showAgentResult ? agentResult : "";
   const images = uploadUrl && !(agentFinished && canOpenChild) ? (item.images ?? []) : [];
-  // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
+  // 标题按「本地化动作 + 原始参数」展示:参数/路径/命令保持等宽且不翻译。
   const title = stripWorkdir(item.title, workdir);
-  const sp = title.indexOf(" ");
-  const verb = (sp > 0 ? title.slice(0, sp) : "").replace(/[::]$/, "");
-  const target = sp > 0 ? title.slice(sp + 1) : title;
+  const { action, target } = localizeToolTitle(title);
   const stepRow: CSSProperties = {
     display: "flex",
     gap: 7,
@@ -361,7 +360,7 @@ export function ToolCard({
   };
   return (
     <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
+      <div title={item.title} style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
         {/* 待审批:⏸ 顶掉运行点(与 ✗/◐/⊘ 同属符号词汇,非 emoji),
             解答后回到 run/ok/fail 常规流转 */}
         {perm ? (
@@ -369,10 +368,12 @@ export function ToolCard({
         ) : (
           <StatusDot status={item.status} />
         )}
-        {verb && <span style={{ fontWeight: 600, flex: "none", color: "var(--t1)" }}>{verb}</span>}
-        <span className="ellipsis" style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0 }}>
-          {target}
-        </span>
+        <span style={{ fontWeight: 600, flex: "none", color: "var(--t1)" }}>{action}</span>
+        {target && (
+          <span className="ellipsis" style={{ color: "var(--t3)", font: "12px " + MONO, minWidth: 0 }}>
+            {target}
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         {item.out && !summary && !agentFinished && (
           <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%" }}>
@@ -404,18 +405,23 @@ export function ToolCard({
       </div>
       {visible.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {visible.map((s, i) => (
-            <div key={feed.length - visible.length + i} style={stepRow}>
-              {s.kind === "tool" ? (
-                <>
-                  {stepMark(s.status)}
-                  <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{stripWorkdir(s.title, workdir)}</span>
-                </>
-              ) : (
-                <MarkdownInline text={s.text} style={{ color: "var(--t5)", flex: 1, minWidth: 0 }} />
-              )}
-            </div>
-          ))}
+          {visible.map((s, i) => {
+            const subTitle = s.kind === "tool" ? stripWorkdir(s.title, workdir) : "";
+            return (
+              <div key={feed.length - visible.length + i} style={stepRow}>
+                {s.kind === "tool" ? (
+                  <>
+                    {stepMark(s.status)}
+                    <span title={s.title} className="ellipsis" style={{ flex: 1, minWidth: 0 }}>
+                      {localizedToolTitleText(subTitle)}
+                    </span>
+                  </>
+                ) : (
+                  <MarkdownInline text={s.text} style={{ color: "var(--t5)", flex: 1, minWidth: 0 }} />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       {summary && (
@@ -432,7 +438,9 @@ export function ToolCard({
           警示色标题保住"这是要你拍板"的视觉信号,不给整卡换底色 */}
       {perm && onPermAnswer && (
         <div style={{ borderTop: "1px dashed var(--warnBd)", paddingTop: 9, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--warn)" }}>需要确认 · {perm.tool || "执行操作"}</div>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--warn)" }}>
+            需要确认 · {perm.tool ? toolDisplayName(perm.tool) : "执行操作"}
+          </div>
           <PermActions id={perm.id} onAnswer={onPermAnswer} />
         </div>
       )}
@@ -545,6 +553,7 @@ function PermCard({
   if (item.state !== "open") {
     return null;
   }
+  const title = localizedToolTitleText(item.title);
   return (
     <div
       style={{
@@ -557,7 +566,7 @@ function PermCard({
       }}
     >
       <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--warn)", whiteSpace: "nowrap" }}>
-        需要确认 · {item.tool || "执行操作"}
+        需要确认 · {item.tool ? toolDisplayName(item.tool) : "执行操作"}
       </div>
       <div
         style={{
@@ -571,7 +580,7 @@ function PermCard({
           wordBreak: "break-all",
         }}
       >
-        {item.title}
+        <span title={item.title}>{title}</span>
       </div>
       <PermActions id={item.id} onAnswer={onAnswer} />
     </div>
