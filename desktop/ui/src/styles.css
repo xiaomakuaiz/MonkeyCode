@@ -238,6 +238,14 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   transition-delay: 0s;
 }
 
+/* ask_user_question 选项:中性卡面上只做轻背景/描边反馈。 */
+.mc-ask-option:hover {
+  border-color: var(--accBd2) !important;
+  background: var(--accBgSoft) !important;
+}
+.mc-ask-option:focus-visible { box-shadow: 0 0 0 2px var(--accBg2); }
+.mc-ask-input:focus { border-color: var(--acc) !important; }
+
 /* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */
 .hl .hljs-comment, .hl .hljs-quote { color: var(--t5); font-style: italic; }
 .hl .hljs-keyword, .hl .hljs-selector-tag, .hl .hljs-meta, .hl .hljs-doctag { color: var(--hlKw); }

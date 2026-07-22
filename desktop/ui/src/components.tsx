@@ -331,17 +331,19 @@ export function ToolCard({
   onPermAnswer?: PermAnswerFn;
 }) {
   const [zoom, setZoom] = useState<string | null>(null);
-  const [showBackgroundResult, setShowBackgroundResult] = useState(false);
-  const images = uploadUrl ? (item.images ?? []) : [];
+  const [showAgentResult, setShowAgentResult] = useState(false);
   const feed = item.feed ?? [];
-  // 后台任务完成后卡片收成单行状态,过程仍可从“查看子会话”进入;
-  // 最终正文已作为独立对话项展示,这里不再残留进度窗抢视觉。
-  const visible = item.background && item.status !== "run" ? [] : feed.slice(-FEED_WINDOW);
-  // 同步子代理完成后直接展示完整产出;后台代理默认只收成单行状态,
-  // 结果从子会话查看。没有子会话入口时才给按需展开的兜底。
+  // 子代理运行时卡内直播少量进度;完成后无论同步/后台都收成单行,
+  // 完整过程与最终产出统一从子会话查看。
   const isAgentCard = !!(item.childSessionId || feed.length || item.background);
-  const backgroundResult = item.background && item.status !== "run" ? (item.result ?? "").trim() : "";
-  const summary = isAgentCard && item.status !== "run" && (!item.background || showBackgroundResult) ? (item.result ?? "").trim() : "";
+  const agentFinished = isAgentCard && item.status !== "run";
+  const canOpenChild = !!(item.childSessionId && onOpenChild);
+  const agentResult = agentFinished ? (item.result ?? "").trim() : "";
+  const visible = agentFinished ? [] : feed.slice(-FEED_WINDOW);
+  // 极端情况下子会话入口缺失(云端只读流/旧 journal),保留按需展开兜底,
+  // 但不再默认把整段结果灌进卡片。
+  const summary = agentResult && !canOpenChild && showAgentResult ? agentResult : "";
+  const images = uploadUrl && !(agentFinished && canOpenChild) ? (item.images ?? []) : [];
   // 标题按「动词 目标」拆开:动词常规、目标等宽(设计稿 verb/target)
   const title = stripWorkdir(item.title, workdir);
   const sp = title.indexOf(" ");
@@ -372,7 +374,7 @@ export function ToolCard({
           {target}
         </span>
         <span style={{ flex: 1 }} />
-        {item.out && !summary && (
+        {item.out && !summary && !agentFinished && (
           <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, flex: "none", maxWidth: "40%" }}>
             {item.out}
           </span>
@@ -389,14 +391,14 @@ export function ToolCard({
             查看子会话
           </a>
         )}
-        {backgroundResult && !(item.childSessionId && onOpenChild) && (
+        {agentResult && !canOpenChild && (
           <button
             type="button"
             className="hv-t1"
-            onClick={() => setShowBackgroundResult((v) => !v)}
+            onClick={() => setShowAgentResult((v) => !v)}
             style={{ padding: 0, border: 0, background: "transparent", color: "var(--t5)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", flex: "none" }}
           >
-            {showBackgroundResult ? "收起结果" : "查看结果"}
+            {showAgentResult ? "收起结果" : "查看结果"}
           </button>
         )}
       </div>
@@ -767,6 +769,27 @@ function ItemView({
 /** 自定义答案在选中集合里的占位键(对齐 mobile askAnswers.ts) */
 const CUSTOM_ANSWER_KEY = "__monkeycode_custom_answer__";
 
+/** 单选圆点/多选勾:问答选项统一使用明确的选择控件,不再只靠整行变色。 */
+function AskChoiceMark({ active, multi }: { active: boolean; multi: boolean }) {
+  return (
+    <span
+      style={{
+        width: 17,
+        height: 17,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: `1.5px solid ${active ? "var(--acc)" : "var(--inputBd)"}`,
+        borderRadius: multi ? 5 : "50%",
+        background: active ? "var(--acc)" : "var(--card)",
+        flex: "none",
+      }}
+    >
+      {active && (multi ? <IconCheck size={10} color="var(--onAcc)" /> : <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--onAcc)" }} />)}
+    </span>
+  );
+}
+
 /** AI 提问卡:每题单选/多选 + 可选自定义输入;全部作答后可提交。
  * 已答/过期态只读展示答案。onAnswer 缺省(只读回放场景)则不可交互。 */
 function AskCard({
@@ -779,26 +802,51 @@ function AskCard({
   const [selected, setSelected] = useState<Record<number, Set<string>>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
 
-  // 已答/过期收成紧凑问答行(用户拍板,与审批卡"已决即轻"同一取向):
-  // 选项列表与边框大卡只属于待答态;但问与答是对话上下文(模型下一轮
-  // 会引用答案),不能像审批卡那样整个消失——一行小字保住来龙去脉。
+  // 提问过期只留一条弱状态;已回答则按“用户消息”收成右侧气泡。
+  // 问与答完整换行保留,不做原先易读性很差的单行截断。
   if (item.state !== "open") {
+    if (item.state === "expired") {
+      return (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, color: "var(--t6)", fontSize: 11.5 }}>
+          <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--t7)" }} />
+          提问已过期 · 未回答
+        </div>
+      );
+    }
+    const hasAnswers = item.questions.some((q) => q.answer !== undefined);
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 3, maxWidth: 560 }}>
-        {item.questions.map((q, qi) => {
-          const ans = Array.isArray(q.answer) ? q.answer.join("、") : q.answer;
-          return (
-            <div key={qi} style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 12, color: "var(--t5)", minWidth: 0 }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{q.question}</span>
-              <span style={{ whiteSpace: "nowrap" }}>→</span>
-              {ans ? (
-                <span style={{ color: "var(--t2)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ans}</span>
-              ) : (
-                <span style={{ whiteSpace: "nowrap" }}>未回答{item.state === "expired" ? "(已过期)" : ""}</span>
-              )}
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div
+          style={{
+            width: "fit-content",
+            minWidth: 240,
+            maxWidth: "70%",
+            padding: "10px 14px",
+            border: "1px solid var(--accBd)",
+            borderRadius: "12px 12px 3px 12px",
+            background: "var(--userBg)",
+            animation: "mcin .2s ease",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 8, color: hasAnswers ? "var(--acc)" : "var(--t5)", fontSize: 10.5, fontWeight: 700 }}>
+            {hasAnswers && <IconCheck size={11} color="var(--acc)" />}
+            {hasAnswers ? "已回答" : "未回答"}
+          </div>
+          {item.questions.map((q, qi) => {
+            const ans = Array.isArray(q.answer) ? q.answer.join("、") : q.answer;
+            return (
+              <div key={qi} style={{ paddingTop: qi ? 9 : 0, marginTop: qi ? 9 : 0, borderTop: qi ? "1px solid var(--line2)" : "none" }}>
+                <div style={{ marginBottom: 3, color: "var(--t5)", fontSize: 11.5, lineHeight: 1.45 }}>
+                  {q.header && <span style={{ marginRight: 5, color: "var(--t4)", fontWeight: 600 }}>{q.header} ·</span>}
+                  {q.question}
+                </div>
+                <div style={{ color: ans ? "var(--t1)" : "var(--t5)", fontSize: 13, fontWeight: ans ? 600 : 400, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {ans || "未回答"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -841,104 +889,154 @@ function AskCard({
   const ready = open && buildAnswers() !== null;
 
   const optBtn = (active: boolean): CSSProperties => ({
+    width: "100%",
     display: "flex",
-    flexDirection: "column",
-    gap: 2,
-    padding: "7px 12px",
-    borderRadius: 8,
-    border: `1px solid ${active ? "var(--acc)" : "var(--line)"}`,
-    background: active ? "var(--accBg)" : "var(--card)",
+    alignItems: "center",
+    gap: 10,
+    padding: "9px 11px",
+    borderRadius: 9,
+    border: `1px solid ${active ? "var(--accBd2)" : "var(--line)"}`,
+    background: active ? "var(--accBgSoft)" : "var(--card)",
     cursor: open ? "pointer" : "default",
     userSelect: "none",
     textAlign: "left",
+    outline: "none",
   });
 
   return (
     <div
       style={{
-        border: "1px solid var(--warnBd)",
+        width: "100%",
+        border: "1px solid var(--cardBd)",
         borderRadius: 12,
-        background: "var(--warnBg)",
-        padding: "13px 15px",
+        background: "var(--card)",
+        boxShadow: "var(--cardSh)",
+        padding: "14px 15px",
         maxWidth: 560,
         animation: "mcin .25s ease",
       }}
     >
-      <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--warn)", whiteSpace: "nowrap" }}>
-        {item.state === "open" ? "AI 想确认几个问题" : item.state === "done" ? "已回答的问题" : "提问已过期"}
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <span
+          style={{
+            width: 24,
+            height: 24,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 8,
+            background: "var(--accBg)",
+            color: "var(--acc)",
+            fontSize: 13,
+            fontWeight: 800,
+            flex: "none",
+          }}
+        >
+          ?
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: "var(--t1)", fontSize: 12.5, fontWeight: 700 }}>需要你的回答</div>
+          <div style={{ marginTop: 1, color: "var(--t5)", fontSize: 10.5 }}>
+            {item.questions.length > 1
+              ? `共 ${item.questions.length} 个问题`
+              : item.questions[0]?.multiSelect
+                ? "可以选择多个答案"
+                : item.questions[0]?.custom
+                  ? "请选择或填写答案"
+                  : "请选择一个选项"}
+          </div>
+        </div>
       </div>
       {item.questions.map((q, qi) => {
-        const done = item.state !== "open";
-        const answered = q.answer !== undefined ? (Array.isArray(q.answer) ? q.answer : [q.answer]) : [];
         return (
-          <div key={qi} style={{ marginTop: 10 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 7 }}>
+          <div key={qi} style={{ marginTop: 13, paddingTop: qi ? 13 : 0, borderTop: qi ? "1px solid var(--line2)" : "none" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
               {q.header && (
-                <span style={{ flex: "none", fontSize: 10.5, fontWeight: 700, color: "var(--acc)", background: "var(--accBg)", borderRadius: 5, padding: "1px 6px" }}>
+                <span style={{ flex: "none", fontSize: 10.5, fontWeight: 700, color: "var(--acc)", background: "var(--accBg)", borderRadius: 6, padding: "2px 6px" }}>
                   {q.header}
                 </span>
               )}
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)", lineHeight: 1.5 }}>{q.question}</span>
+              <span style={{ fontSize: 13, fontWeight: 650, color: "var(--t1)", lineHeight: 1.5 }}>{q.question}</span>
+              {q.multiSelect && <span style={{ marginLeft: "auto", color: "var(--t6)", fontSize: 10.5, whiteSpace: "nowrap" }}>可多选</span>}
             </div>
-            {done ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {answered.length > 0 ? (
-                  answered.map((a, i) => (
-                    <span key={i} style={{ fontSize: 12, color: "var(--acc)", background: "var(--accBg)", borderRadius: 7, padding: "3px 10px", fontWeight: 600 }}>
-                      {a}
-                    </span>
-                  ))
-                ) : (
-                  <span style={{ fontSize: 12, color: "var(--t5)" }}>(未回答)</span>
-                )}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {q.options.map((o) => {
-                  const active = selected[qi]?.has(o.label) ?? false;
-                  return (
-                    <div key={o.label} className={open ? "hv" : undefined} onClick={() => open && toggle(qi, o.label, q.multiSelect)} style={optBtn(active)}>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: active ? "var(--acc)" : "var(--t1)" }}>{o.label}</span>
-                      {o.description && <span style={{ fontSize: 11.5, color: "var(--t5)", lineHeight: 1.5 }}>{o.description}</span>}
-                    </div>
-                  );
-                })}
-                {q.custom && (
-                  <div
-                    className={open ? "hv" : undefined}
-                    onClick={() => open && !selected[qi]?.has(CUSTOM_ANSWER_KEY) && toggle(qi, CUSTOM_ANSWER_KEY, q.multiSelect)}
-                    style={optBtn(selected[qi]?.has(CUSTOM_ANSWER_KEY) ?? false)}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {q.options.map((o) => {
+                const active = selected[qi]?.has(o.label) ?? false;
+                return (
+                  <button
+                    key={o.label}
+                    type="button"
+                    disabled={!open}
+                    className={open ? "mc-ask-option" : undefined}
+                    onClick={() => toggle(qi, o.label, q.multiSelect)}
+                    style={optBtn(active)}
                   >
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t3)" }}>自定义答案…</span>
-                    {selected[qi]?.has(CUSTOM_ANSWER_KEY) && (
-                      <input
-                        autoFocus
-                        value={custom[qi] ?? ""}
-                        onChange={(e) => setCustom((p) => ({ ...p, [qi]: e.target.value }))}
-                        onClick={(e) => e.stopPropagation()}
-                        placeholder="输入你的回答"
-                        style={{
-                          marginTop: 4,
-                          border: "1px solid var(--line)",
-                          borderRadius: 6,
-                          padding: "5px 8px",
-                          fontSize: 12.5,
-                          background: "var(--card)",
-                          color: "var(--t1)",
-                          outline: "none",
-                        }}
-                      />
-                    )}
+                    <AskChoiceMark active={active} multi={q.multiSelect} />
+                    <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>{o.label}</span>
+                      {o.description && <span style={{ fontSize: 11.5, color: "var(--t5)", lineHeight: 1.45 }}>{o.description}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+              {q.custom && (() => {
+                const active = selected[qi]?.has(CUSTOM_ANSWER_KEY) ?? false;
+                return (
+                  <div
+                    role="button"
+                    aria-pressed={active}
+                    tabIndex={open ? 0 : -1}
+                    className={open ? "mc-ask-option" : undefined}
+                    onClick={() => open && !active && toggle(qi, CUSTOM_ANSWER_KEY, q.multiSelect)}
+                    onKeyDown={(e) => {
+                      if (open && !active && (e.key === "Enter" || e.key === " ")) {
+                        e.preventDefault();
+                        toggle(qi, CUSTOM_ANSWER_KEY, q.multiSelect);
+                      }
+                    }}
+                    style={{ ...optBtn(active), alignItems: active ? "flex-start" : "center" }}
+                  >
+                    <AskChoiceMark active={active} multi={q.multiSelect} />
+                    <span style={{ display: "flex", flex: 1, flexDirection: "column", gap: 2, minWidth: 0 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>其他</span>
+                      {!active && <span style={{ color: "var(--t5)", fontSize: 11.5 }}>输入自己的答案</span>}
+                      {active && (
+                        <input
+                          autoFocus
+                          className="mc-ask-input"
+                          value={custom[qi] ?? ""}
+                          onChange={(e) => setCustom((p) => ({ ...p, [qi]: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          placeholder="输入你的回答"
+                          style={{
+                            width: "100%",
+                            marginTop: 5,
+                            border: "1px solid var(--inputBd)",
+                            borderRadius: 7,
+                            padding: "7px 9px",
+                            fontSize: 12.5,
+                            background: "var(--inputBg)",
+                            color: "var(--t1)",
+                            outline: "none",
+                          }}
+                        />
+                      )}
+                    </span>
                   </div>
-                )}
-              </div>
-            )}
+                );
+              })()}
+            </div>
           </div>
         );
       })}
       {open && (
-        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
-          <div
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line2)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span style={{ color: ready ? "var(--acc)" : "var(--t5)", fontSize: 11.5 }}>
+            {ready ? "已完成选择" : "请回答全部问题"}
+          </span>
+          <button
+            type="button"
+            disabled={!ready}
             className={ready ? "hv-acc" : undefined}
             onClick={() => {
               const answers = buildAnswers();
@@ -948,7 +1046,7 @@ function AskCard({
               height: 28,
               display: "flex",
               alignItems: "center",
-              padding: "0 16px",
+              padding: "0 17px",
               background: ready ? "var(--acc)" : "var(--hov)",
               border: "none",
               color: ready ? "var(--onAcc)" : "var(--t5)",
@@ -960,7 +1058,7 @@ function AskCard({
             }}
           >
             提交回答
-          </div>
+          </button>
         </div>
       )}
     </div>
