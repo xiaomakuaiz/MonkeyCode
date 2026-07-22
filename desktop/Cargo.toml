@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 # 需配套 tauri.conf.json 的 app.macOSPrivateApi=true。不上 App Store,可用。
 # devtools:release 包也可右键"检查元素"打开 WebView 控制台(内部分发,
 # 非 App Store,无私有 API 顾虑;线上排障全靠它)
-tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api", "devtools"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api", "devtools", "unstable"] }
 getrandom = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -51,6 +51,17 @@ ts-rs = "12"
 # 应用(主窗口被提到最前并抢焦点→桌宠被显隐逻辑藏掉)。锁 rev 保证可复现。
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "a3122e894383aa068ec5365a42994e3ac94ba1b6" }
+
+# Windows 桌宠不再交给 WebView2 绘制:Win7 不支持透明 WebView
+# 背景,改用 UpdateLayeredWindow 直接提交预乘 alpha 位图。
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 strip = true

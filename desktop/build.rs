@@ -9,6 +9,7 @@ fn main() {
                 "take_ui_intent",
                 "host_info",
                 "show_main",
+                "pet_native_render",
                 "update_check",
                 "update_install",
                 "open_extension_dir",

@@ -16,6 +16,8 @@ mod baizhi;
 mod browser;
 mod config;
 mod driver;
+#[cfg(target_os = "windows")]
+mod native_pet;
 mod repo;
 mod uploads;
 mod util;
@@ -30,6 +32,8 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+#[cfg(target_os = "windows")]
+use tauri::WindowBuilder;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
 
@@ -175,6 +179,17 @@ fn probe_log(msg: String) {
 #[tauri::command]
 fn show_main(app: AppHandle) {
     show_any_window(&app);
+}
+
+/// Windows 隐藏状态页→原生 layered window 的视觉快照。
+/// 非 Windows 继续由 pet.html 自己渲染,命令保留为跨平台空操作,
+/// 使同一份内置页不需分叉打包。
+#[tauri::command]
+fn pet_native_render(app: AppHandle, state: String, tone: String, text: String) {
+    #[cfg(target_os = "windows")]
+    native_pet::update(&app, &state, &tone, &text);
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, state, tone, text);
 }
 
 /// 枚举 WSL 发行版(设置视图"运行环境"下拉用)。
@@ -394,10 +409,11 @@ fn create_main_window(app: &AppHandle, page: &str) {
 const PET_W: f64 = 116.0;
 const PET_H: f64 = 120.0;
 
-/// 创建桌宠窗口。先隐藏创建以避免定位前在屏幕角落闪现,
+/// 创建非 Windows 桌宠窗口。先隐藏创建以避免定位前在屏幕角落闪现,
 /// 定位完成后按用户开关显示,不受主窗口焦点影响。
 /// focusable(false):桌宠是状态外显不是交互主体,永不抢焦点;
 /// 鼠标点击与拖动不依赖键盘焦点,不受影响。
+#[cfg(not(target_os = "windows"))]
 fn ensure_pet_window(app: &AppHandle) {
     if app.get_webview_window("pet").is_some() {
         return;
@@ -436,6 +452,62 @@ fn ensure_pet_window(app: &AppHandle) {
     }
 }
 
+/// Windows 可见桌宠不创建 WebView:原生 Tauri Window 交给
+/// native_pet 用 UpdateLayeredWindow 绘制,避开 Win7 WebView2 不支持透明背景的白边。
+/// pet-service 始终隐藏,只复用成熟的会话聚合与 MP3 音效逻辑。
+#[cfg(target_os = "windows")]
+fn ensure_pet_window(app: &AppHandle) {
+    if app.get_window("pet").is_some() {
+        return;
+    }
+    let saved = load_config(app).pet_pos;
+    let window = WindowBuilder::new(app, "pet")
+        .title("MonkeyCode 桌宠")
+        .inner_size(PET_W, PET_H)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .focusable(false)
+        .focused(false)
+        .visible(false)
+        .build();
+    let window = match window {
+        Ok(window) => window,
+        Err(e) => {
+            eprintln!("[desktop] Windows 原生桌宠窗口创建失败: {e}");
+            return;
+        }
+    };
+    let _ = window.set_position(pet_position(app, saved));
+    if let Err(e) = native_pet::attach(app, &window) {
+        eprintln!("[desktop] Windows 原生桌宠初始化失败: {e}");
+        let _ = window.close();
+        return;
+    }
+
+    // 不透明、永不 show:它只是桌宠状态机与音频宿主,
+    // 对 Win7 的 WebView2 透明限制零依赖。
+    if let Err(e) = WebviewWindowBuilder::new(app, "pet-service", WebviewUrl::App("pet.html".into()))
+        .title("MonkeyCode 桌宠状态服务")
+        .inner_size(1.0, 1.0)
+        .decorations(false)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .focusable(false)
+        .focused(false)
+        .visible(false)
+        .build()
+    {
+        eprintln!("[desktop] 桌宠状态服务创建失败: {e}");
+    }
+    set_pet_visible(app, true);
+}
+
 /// 桌宠位置:记忆位置仍落在任一显示器内则沿用(显示器可能被拔掉),
 /// 否则回主显示器右下角留边(避开任务栏)。
 fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPosition<i32> {
@@ -467,7 +539,11 @@ fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPo
 /// 按用户开关显示/隐藏桌宠。引擎不可用时桌宠自己展示离线状态;
 /// 主窗口是否在前台不参与可见性决策。
 fn set_pet_visible(app: &AppHandle, show: bool) {
-    let Some(pet) = app.get_webview_window("pet") else {
+    #[cfg(target_os = "windows")]
+    let pet = app.get_window("pet");
+    #[cfg(not(target_os = "windows"))]
+    let pet = app.get_webview_window("pet");
+    let Some(pet) = pet else {
         return;
     };
     if !show {
@@ -502,6 +578,8 @@ fn main() {
     // 桌宠 NSPanel 转换(ensure_pet_window)依赖此插件注册的面板管理状态
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    #[cfg(target_os = "windows")]
+    let builder = builder.manage(native_pet::NativePetHost::new());
     builder
         .manage(DriverHost::new())
         .manage(TrayReady(AtomicBool::new(true)))
@@ -515,6 +593,7 @@ fn main() {
             take_ui_intent,
             host_info,
             show_main,
+            pet_native_render,
             update_check,
             update_install,
             open_extension_dir,
@@ -612,6 +691,12 @@ fn main() {
                         .replace((pos.x, pos.y));
                 }
             }
+            #[cfg(target_os = "windows")]
+            if let WindowEvent::ScaleFactorChanged { .. } = event {
+                if window.label() == "pet" {
+                    native_pet::rerender(window.app_handle());
+                }
+            }
             // 主窗口:引擎在跑且托盘可用时关窗只隐藏;错误页正常关闭
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
@@ -638,6 +723,8 @@ fn main() {
             }
             RunEvent::Exit => {
                 persist_pet_prefs(app); // 拖动位置只在退出/开关切换时落盘
+                #[cfg(target_os = "windows")]
+                native_pet::shutdown(app);
                 if let Some(engine) = app.state::<DriverHost>().take() {
                     engine.stop();
                 }

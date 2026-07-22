@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<!-- 桌宠页:透明置顶常驻小窗,与主窗口是否在前台无关,外显任务聚合状态。
+<!-- 桌宠状态页:macOS/Linux 直接作为透明置顶小窗;
+     Windows(含 Win7)上隐藏运行,只承担状态聚合与音效,画面推送给壳的原生 layered window。
      形象:官方吉祥物 8 帧"点头打盹"精灵图(pet-sprite.webp,88px@2x),
      CSS steps(8) 逐帧播放——待机慢速打盹、运行中快速点头、等审批定格
      摇晃、离线定格在低头睡着帧并灰化。
@@ -73,6 +74,13 @@
 <script>
   const invoke = window.__TAURI__.core.invoke;
   const bubble = document.getElementById('bubble');
+  const sprite = document.getElementById('sprite');
+  const nativeWindowsPet = /Windows/i.test(navigator.userAgent || '');
+
+  function syncNative(state, tone, text) {
+    if (!nativeWindowsPet) return;
+    invoke('pet_native_render', { state, tone: tone || '', text: text || '' }).catch(() => {});
+  }
 
   // 事件音效:桌宠被用户隐藏时 webview 仍在运行,所以音效仍会响。
   // 同一音效 2s 内只响一次,避免并发叠音。
@@ -126,6 +134,7 @@
       armIdle(false);
       document.body.className = 'st-offline';
       setBubble('', '内核休息中 Zzz');
+      syncNative('offline', '', '内核休息中 Zzz');
       return;
     }
     let running = 0, waiting = 0;
@@ -134,13 +143,16 @@
       else if (s.status === 'running') running++;
     }
     armIdle(running === 0 && waiting === 0);
-    document.body.className = flash && flash.cheer
-      ? 'st-celebrate'
-      : waiting ? 'st-waiting' : running ? 'st-running' : 'st-idle';
-    if (flash) setBubble(flash.tone, flash.text);
-    else if (waiting) setBubble('warn', '等你审批!');
-    else if (running) setBubble('ok', running + ' 个任务运行中');
-    else setBubble('', '');
+    const state = flash && flash.cheer
+      ? 'celebrate'
+      : waiting ? 'waiting' : running ? 'running' : 'idle';
+    const tone = flash ? flash.tone : waiting ? 'warn' : running ? 'ok' : '';
+    const text = flash ? flash.text
+      : waiting ? '等你审批!'
+      : running ? running + ' 个任务运行中' : '';
+    document.body.className = 'st-' + state;
+    setBubble(tone, text);
+    syncNative(state, tone, text);
   }
 
   /** cheer=true 时闪现期间播庆祝动作(仅任务完成用) */
@@ -216,14 +228,134 @@
   const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
   const petWin = () => window.__TAURI__.window.getCurrentWindow();
   let down = null, dragged = false, winPos = null;
+
+  // macOS 的透明 NSPanel 默认仍按完整矩形吃鼠标。按精灵图当前帧的 alpha
+  // 和气泡实际形状做命中检测；光标落在透明像素时临时开启穿透。
+  // 穿透后页面收不到 mousemove，所以用全局光标位置低频探测重新进入热区。
+  const MAC_HIT_POLL_MS = 50;
+  const SPRITE_CSS_SIZE = 88;
+  const SPRITE_SOURCE_SIZE = 176;
+  const SPRITE_FRAMES = 31;
+  const SPRITE_ALPHA_HIT = 20;
+  let macSpriteMasks = null;
+  let macWindowOrigin = null;
+  let macCursorScale = window.devicePixelRatio || 1;
+  let macOriginUpdatedAt = 0;
+  let macIgnoring = null;
+  let macHitPollBusy = false;
+
+  function buildMacSpriteMasks() {
+    if (!isMac) return;
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = SPRITE_CSS_SIZE;
+      canvas.height = SPRITE_CSS_SIZE;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const masks = [];
+      for (let frame = 0; frame < SPRITE_FRAMES; frame++) {
+        ctx.clearRect(0, 0, SPRITE_CSS_SIZE, SPRITE_CSS_SIZE);
+        ctx.drawImage(image,
+          frame * SPRITE_SOURCE_SIZE, 0, SPRITE_SOURCE_SIZE, SPRITE_SOURCE_SIZE,
+          0, 0, SPRITE_CSS_SIZE, SPRITE_CSS_SIZE);
+        const rgba = ctx.getImageData(0, 0, SPRITE_CSS_SIZE, SPRITE_CSS_SIZE).data;
+        const alpha = new Uint8Array(SPRITE_CSS_SIZE * SPRITE_CSS_SIZE);
+        for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
+        masks.push(alpha);
+      }
+      macSpriteMasks = masks;
+    };
+    image.src = 'pet-sprite.webp';
+  }
+
+  function inRoundedRect(x, y, rect, radius) {
+    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) return false;
+    const cx = Math.max(rect.left + radius, Math.min(x, rect.right - radius));
+    const cy = Math.max(rect.top + radius, Math.min(y, rect.bottom - radius));
+    const dx = x - cx, dy = y - cy;
+    return dx * dx + dy * dy <= radius * radius;
+  }
+
+  function inBubble(x, y) {
+    if (!bubble.textContent) return false;
+    const rect = bubble.getBoundingClientRect();
+    if (inRoundedRect(x, y, rect, 9)) return true;
+    // ::after 的 8×4 三角尾巴不在 getBoundingClientRect 内。
+    const tailY = y - rect.bottom;
+    return tailY >= 0 && tailY < 4 && Math.abs(x - (rect.left + rect.right) / 2) <= 4 - tailY;
+  }
+
+  function inSpritePixel(x, y) {
+    const rect = sprite.getBoundingClientRect();
+    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) return false;
+    // 图片尚未解码时先以 88×88 兜底，避免启动瞬间宠物完全点不到。
+    if (!macSpriteMasks) return true;
+    const backgroundX = Number.parseFloat(getComputedStyle(sprite).backgroundPositionX) || 0;
+    const frame = Math.max(0, Math.min(SPRITE_FRAMES - 1,
+      Math.round(-backgroundX / SPRITE_CSS_SIZE)));
+    const px = Math.max(0, Math.min(SPRITE_CSS_SIZE - 1, Math.floor(x - rect.left)));
+    const py = Math.max(0, Math.min(SPRITE_CSS_SIZE - 1, Math.floor(y - rect.top)));
+    return macSpriteMasks[frame][py * SPRITE_CSS_SIZE + px] >= SPRITE_ALPHA_HIT;
+  }
+
+  function inMacPetHotRegion(x, y) {
+    return inBubble(x, y) || inSpritePixel(x, y);
+  }
+
+  async function setMacMouseIgnoring(ignore) {
+    if (!isMac || down || macIgnoring === ignore) return;
+    macIgnoring = ignore;
+    try {
+      await petWin().setIgnoreCursorEvents(ignore);
+    } catch {
+      macIgnoring = null;
+    }
+  }
+
+  async function pollMacHotRegion() {
+    if (!isMac || down || macHitPollBusy) return;
+    macHitPollBusy = true;
+    try {
+      const now = Date.now();
+      if (!macWindowOrigin || now - macOriginUpdatedAt > 1000) {
+        const [origin, primary] = await Promise.all([
+          petWin().outerPosition(),
+          window.__TAURI__.window.primaryMonitor(),
+        ]);
+        macWindowOrigin = origin;
+        macCursorScale = primary && primary.scaleFactor || 1;
+        macOriginUpdatedAt = now;
+      }
+      const cursor = await window.__TAURI__.window.cursorPosition();
+      // Tao 的全局光标按主屏 scaleFactor 返回，窗口位置按当前屏幕返回；
+      // 分别还原为逻辑坐标，兼容 Retina + 普通屏混用。
+      const windowScale = window.devicePixelRatio || 1;
+      const x = cursor.x / macCursorScale - macWindowOrigin.x / windowScale;
+      const y = cursor.y / macCursorScale - macWindowOrigin.y / windowScale;
+      await setMacMouseIgnoring(!inMacPetHotRegion(x, y));
+    } catch {
+      // 旧系统偶发取不到全局光标时保持上次状态，下一轮重试。
+    } finally {
+      macHitPollBusy = false;
+    }
+  }
+
   document.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     down = { x: e.screenX, y: e.screenY };
     dragged = false;
     winPos = null;
-    if (isMac) petWin().outerPosition().then((p) => { winPos = p; }).catch(() => {});
+    if (isMac) petWin().outerPosition().then((p) => {
+      winPos = p;
+      macWindowOrigin = p;
+      macOriginUpdatedAt = Date.now();
+    }).catch(() => {});
   });
   document.addEventListener('mousemove', (e) => {
+    if (isMac && !down) setMacMouseIgnoring(!inMacPetHotRegion(e.clientX, e.clientY));
     if (!down) return;
     const dx = e.screenX - down.x, dy = e.screenY - down.y;
     if (!dragged && Math.abs(dx) + Math.abs(dy) <= 4) return;
@@ -231,8 +363,10 @@
     if (isMac) {
       if (!winPos) return; // outerPosition 未返回前先不动
       const s = window.devicePixelRatio || 1; // screenX 是逻辑坐标,窗口位置是物理像素
-      petWin().setPosition(new window.__TAURI__.dpi.PhysicalPosition(
-        Math.round(winPos.x + dx * s), Math.round(winPos.y + dy * s)));
+      const x = Math.round(winPos.x + dx * s), y = Math.round(winPos.y + dy * s);
+      macWindowOrigin = { x, y };
+      macOriginUpdatedAt = Date.now();
+      petWin().setPosition(new window.__TAURI__.dpi.PhysicalPosition(x, y));
     } else {
       down = null; // OS 接管拖动后 mouseup 不可靠,直接终结本次手势
       petWin().startDragging();
@@ -243,6 +377,11 @@
     down = null;
   });
   document.addEventListener('contextmenu', (e) => e.preventDefault());
+  if (isMac) {
+    buildMacSpriteMasks();
+    pollMacHotRegion();
+    setInterval(pollMacHotRegion, MAC_HIT_POLL_MS);
+  }
 </script>
 </body>
 </html>

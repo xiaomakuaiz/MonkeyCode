@@ -82,15 +82,19 @@
           "identifier": "pet-page",
           "description": "桌宠窗口(壳内静态页):会话状态快照与事件、拖动窗口、唤回主窗口",
           "windows": [
-            "pet"
+            "pet",
+            "pet-service"
           ],
           "permissions": [
             "core:default",
             "core:window:allow-start-dragging",
+            "core:window:allow-cursor-position",
+            "core:window:allow-set-ignore-cursor-events",
             "core:window:allow-set-position",
             "core:window:allow-outer-position",
             "allow-sessions-list",
-            "allow-show-main"
+            "allow-show-main",
+            "allow-pet-native-render"
           ]
         }
       ]
