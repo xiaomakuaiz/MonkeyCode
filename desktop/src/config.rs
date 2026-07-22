@@ -6,6 +6,7 @@
 // 经 UI 引导修复。pet_* 是壳自有偏好:设置视图不感知,save_config 时从磁盘
 // 合并保留(否则每次保存设置都会被 serde 默认值冲掉)。
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
@@ -67,12 +68,26 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("无法定位配置目录: {e}"))
 }
 
-/// 用户主目录:HOME(unix)→ USERPROFILE(Windows,HOME 通常未设)。
-/// Go 侧 os.UserHomeDir 的等价物;所有 ~ 展开与 ~/.xxx 定位统一走这里。
+/// 用户主目录。语义严格对齐引擎(Go)的 os.UserHomeDir——壳在这里算出的
+/// ~ 展开结果会作为 cwd 交给引擎,两侧对"家在哪"的认定必须一致:
+/// - Windows:USERPROFILE 优先(Go 在 Windows 上只认 USERPROFILE,忽略 HOME)。
+///   HOME 常被 Git-Bash/MSYS/WSL interop 注入且指向类 Unix 目录;若让它胜出,
+///   默认工作区 ~/MonkeyCode 会落到 MSYS 家目录而非 C:\Users\<用户>,且与引擎
+///   对 ~ 的解析错位——本机模式下正是"agent 写文件的目录不对"的一种成因。
+/// - Unix:HOME 优先(USERPROFILE 在 Unix 上不存在,回退项仅作防御)。
+/// 所有 ~ 展开与 ~/.xxx 定位统一走这里。
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+    pick_home(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"), cfg!(windows)).map(PathBuf::from)
+}
+
+/// home_dir 的纯选择逻辑,与平台解耦以便跨平台单测锁定 Windows 语义
+/// (std::env/PathBuf 在 Linux CI 上无法复现 Windows 的 USERPROFILE 优先级)。
+fn pick_home(home: Option<OsString>, userprofile: Option<OsString>, windows: bool) -> Option<OsString> {
+    if windows {
+        userprofile.or(home)
+    } else {
+        home.or(userprofile)
+    }
 }
 
 /// unix 毫秒 → RFC3339(UTC)。会话 updated_at 等对 UI 的时间字段统一此
@@ -317,6 +332,32 @@ mod tests {
         assert_eq!(b["url"], "http://127.0.0.1:7777/mcp");
         assert_eq!(b["headers"]["Authorization"], "Bearer tok-1");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- home_dir 选择语义(跨平台锁 Windows USERPROFILE 优先) ----
+
+    /// Windows:USERPROFILE 必须压过 HOME——HOME 常被 Git-Bash/MSYS/WSL
+    /// interop 注入并指向类 Unix 家目录,让它胜出会把 ~/MonkeyCode 写到
+    /// MSYS 家而非 C:\Users\<用户>,与引擎(Go os.UserHomeDir)错位。
+    #[test]
+    fn pick_home_windows_prefers_userprofile() {
+        let home = Some(OsString::from(r"C:\msys64\home\dev"));
+        let up = Some(OsString::from(r"C:\Users\dev"));
+        assert_eq!(pick_home(home.clone(), up.clone(), true), up);
+        // USERPROFILE 缺失时回退 HOME,仍能定位(不至于无家可归)
+        assert_eq!(pick_home(home.clone(), None, true), home);
+        // 两者皆无 → None
+        assert_eq!(pick_home(None, None, true), None);
+    }
+
+    /// Unix:HOME 优先(USERPROFILE 在 Unix 上不存在,回退项仅防御)。
+    #[test]
+    fn pick_home_unix_prefers_home() {
+        let home = Some(OsString::from("/home/dev"));
+        let up = Some(OsString::from(r"C:\Users\dev"));
+        assert_eq!(pick_home(home.clone(), up.clone(), false), home);
+        assert_eq!(pick_home(None, up.clone(), false), up);
+        assert_eq!(pick_home(None, None, false), None);
     }
 
     // ---- ms_to_rfc3339(手写 Hinnant 历算,靠已知值对表锚定正确性) ----
