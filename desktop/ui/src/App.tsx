@@ -232,6 +232,13 @@ export default function App() {
       void takeUiIntent(); // 事件已送达:消费壳的待取副本,防下次整页加载重放
       openSettings();
     });
+    const offBrowserMcp = onHostEvent("browser-mcp-reloaded", () => {
+      if (settingsDirty.current) {
+        session.notify("浏览器工具已更新；请先保存当前设置，页面随后会重新连接 Agent");
+        return;
+      }
+      location.reload();
+    });
     Promise.all([listModels().catch(() => [] as ModelInfo[]), refreshSessions()])
       .then(([ms, metas]) => {
         setModels(ms);
@@ -259,6 +266,7 @@ export default function App() {
     }
     return () => {
       offSettings();
+      offBrowserMcp();
       clearInterval(updateTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

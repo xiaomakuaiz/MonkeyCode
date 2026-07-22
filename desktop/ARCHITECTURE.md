@@ -87,8 +87,8 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 `DesktopConfig`(config.json)是唯一权威;引擎配置是它的**纯函数物化**,
 在引擎(重)启时重写:`app_config_dir/ohmyagent/{settings,mcp}.json`
 (经 OHMYAGENT_CONFIG_DIR 注入引擎,桌面版私有目录,不碰用户全局
-~/.ohmyagent;mcp.json 含壳注入的 mc-browser 内置条目,URL/Bearer
-进程级新发)。
+~/.ohmyagent;扩展完成配对后 mcp.json 才注入 mc-browser 内置条目,
+URL/Bearer 进程级新发;首次配对/重置配对会自动重启 Agent 刷新工具集)。
 壳自有偏好(桌宠)走 save_config_json,只写权威、不触发物化。
 
 数据归属:

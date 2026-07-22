@@ -78,6 +78,9 @@ struct Inner {
     handoffs: StdMutex<Vec<TabInfo>>,
     /// 唯一事件处理器(对应 Go 的 sessions 表,单会话只留一个)。
     handler: StdMutex<Option<Arc<dyn Fn(Message) + Send + Sync>>>,
+    /// 配对状态变化回调。桌面壳据此重写 mcp.json 并重启 Agent；
+    /// 只在 false→true / true→false 时触发，普通断线重连不触发。
+    pairing_handler: StdMutex<Option<Arc<dyn Fn(bool) + Send + Sync>>>,
 }
 
 /// 受 st 锁保护的可变状态(对应 Go ExtBridge 里 mu 保护的字段)。
@@ -148,7 +151,26 @@ impl ExtBridge {
             tabs: StdMutex::new(HashSet::new()),
             handoffs: StdMutex::new(Vec::new()),
             handler: StdMutex::new(None),
+            pairing_handler: StdMutex::new(None),
         }))
+    }
+
+    /// 是否已持有扩展的长期配对凭据。浏览器是否正在运行是瞬时连接状态，
+    /// 不能作为 MCP 工具是否安装到 Agent 的条件。
+    pub fn is_paired(&self) -> bool {
+        !self.0.st.lock().unwrap().token.is_empty()
+    }
+
+    /// 注册配对状态变化回调。仅桌面壳生命周期层消费；桥本身不负责重启 Agent。
+    pub fn set_pairing_change_handler(&self, f: Arc<dyn Fn(bool) + Send + Sync>) {
+        *self.0.pairing_handler.lock().unwrap() = Some(f);
+    }
+
+    fn notify_pairing_changed(&self, paired: bool) {
+        let handler = self.0.pairing_handler.lock().unwrap().clone();
+        if let Some(handler) = handler {
+            handler(paired);
+        }
     }
 
     /// 启动监听(后台任务)。端口全占时只记录 listen_err(状态页外显),
@@ -284,13 +306,14 @@ impl ExtBridge {
 
     /// 重置配对:删除长期 token 与落盘凭据,断开现有连接,生成新配对码。
     pub fn repair(&self) -> serde_json::Value {
-        let old = {
+        let (old, was_paired) = {
             let mut st = self.0.st.lock().unwrap();
+            let was_paired = !st.token.is_empty();
             st.token.clear();
             st.ext_id.clear();
             st.pairing_code = new_pairing_code();
             let _ = std::fs::remove_file(&self.0.auth_path);
-            st.conn.take()
+            (st.conn.take(), was_paired)
         };
         // 受控 tab 与待领 handoff 随旧浏览器一并失效:重置配对多半是换浏览器/
         // 换扩展,新浏览器的 tabId 会与旧号撞号,不清空会把新事件错误路由
@@ -299,6 +322,9 @@ impl ExtBridge {
         self.0.handoffs.lock().unwrap().clear();
         if let Some(c) = old {
             close_handle(&c);
+        }
+        if was_paired {
+            self.notify_pairing_changed(false);
         }
         self.status()
     }
@@ -339,8 +365,13 @@ impl ExtBridge {
             if write_file_0600(&self.0.auth_path, &data).is_err() {
                 return Err("persist failed".to_string());
             }
+            let became_paired = st.token.is_empty();
             st.token = token.clone();
             st.ext_id = ext_id;
+            drop(st);
+            if became_paired {
+                self.notify_pairing_changed(true);
+            }
             return Ok(token);
         }
         Err("unauthorized".to_string())

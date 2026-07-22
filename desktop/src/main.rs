@@ -24,7 +24,7 @@ mod util;
 mod wsl;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -70,6 +70,14 @@ struct PetEnabled(AtomicBool);
 /// 退出与托盘开关切换时经 persist_pet_prefs 落盘。
 struct PetPos(Mutex<Option<(i32, i32)>>);
 
+/// 配置物化/Agent 重启串行锁。设置保存、手动恢复与浏览器配对变化都可能
+/// 触发同一事务，必须避免两个 Agent 进程交错启停。
+struct EngineApply(Mutex<()>);
+
+/// 浏览器配对变化代次。快速“配对→重置”时只让最后一次状态负责通知 UI；
+/// 每次物化仍读取当下配对真值，最终配置不会停在过期状态。
+struct BrowserMcpRefresh(AtomicU64);
+
 /// 托盘图标:彩色透明图形(不走 macOS 模板渲染——模板会抹掉颜色只按
 /// alpha 涂黑/白,深色菜单栏下整只猴子被反色成白剪影;彩色图自带绿描边,
 /// 明暗菜单栏下轮廓均可辨,无需随主题换图)。
@@ -114,15 +122,52 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
 /// 写清单并(重)启引擎(阻塞流程:优雅停内核 ~10s + 起新内核 ~15s,
 /// 调用方负责丢 blocking 池)。save_config 与 engine_restart 共用。
 fn apply_config_and_restart(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
+    let apply = app.state::<EngineApply>();
+    let _apply = apply.0.lock().unwrap();
+    apply_config_and_restart_locked(app, config)
+}
+
+fn apply_config_and_restart_locked(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
     // 浏览器桥 MCP 接入信息在此显式取一次传入(browser::init 在 setup 已
     // 完成;config 模块不反向读 browser 全局态,依赖走参数)
-    save_config_files(app, config, browser::mcp_endpoint())?;
+    save_config_files(app, config, browser::mcp_endpoint(app))?;
     if let Some(engine) = app.state::<DriverHost>().take() {
         engine.stop();
     }
     let engine = driver::start_engine(app, config)?;
     app.state::<DriverHost>().set(engine);
     Ok(())
+}
+
+/// 扩展首次配对或重置配对后异步刷新 Agent 的 MCP 工具集合。
+/// 回调来自桥的 async 任务，不能在其上阻塞数秒等待 Agent 启停。
+fn schedule_browser_mcp_refresh(app: &AppHandle) {
+    let generation = app
+        .state::<BrowserMcpRefresh>()
+        .0
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let apply = app.state::<EngineApply>();
+        let _apply = apply.0.lock().unwrap();
+        if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        // 必须在取得配置事务锁后再读盘：否则并发的设置保存可能先写入新值，
+        // 本线程却拿旧快照随后覆盖回去。
+        let config = load_config(&app);
+        if let Err(e) = apply_config_and_restart_locked(&app, &config) {
+            eprintln!("[desktop] 浏览器 MCP 工具刷新失败: {e}");
+            return;
+        }
+        if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) == generation {
+            let _ = app.emit("browser-mcp-reloaded", ());
+        }
+    });
 }
 
 /// 保存配置并重启引擎。内容不做业务校验(壳零字段知识):表单校验在设置
@@ -591,6 +636,8 @@ fn main() {
         .manage(UiIntent(Mutex::new(None)))
         .manage(PetEnabled(AtomicBool::new(true)))
         .manage(PetPos(Mutex::new(None)))
+        .manage(EngineApply(Mutex::new(())))
+        .manage(BrowserMcpRefresh(AtomicU64::new(0)))
         .manage(baizhi::monkeycode::CloudPipes::new())
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -667,7 +714,7 @@ fn main() {
             // 浏览器桥 + MCP server 先于引擎:配置物化要写入 MCP URL/token,
             // init 后查询一次显式传参(时序依赖由数据流表达,不靠注释约束)
             browser::init(app.handle());
-            save_config_files(app.handle(), &cfg, browser::mcp_endpoint())?; // 刷新物化配置
+            save_config_files(app.handle(), &cfg, browser::mcp_endpoint(app.handle()))?; // 刷新物化配置
             match driver::start_engine(app.handle(), &cfg) {
                 Ok(engine) => {
                     app.state::<DriverHost>().set(engine);

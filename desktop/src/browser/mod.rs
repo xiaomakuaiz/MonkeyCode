@@ -9,7 +9,7 @@
 //   session.rs   浏览器会话现场(tab/refs/notes/对话框/OOPIF)
 //   ops.rs       9 个 browser_* 工具语义 + MCP 工具元数据
 //   keys.rs/refs.rs/snapshot.rs  键表/元素引用表/页面采集 JS
-//   mcp.rs       MCP streamable-http server:把工具暴露给 ohmyagent
+//   mcp.rs       MCP streamable-http server:配对后把工具暴露给 ohmyagent
 //                (Bearer 鉴权,URL+token 经 mcp.json 内置条目物化下发)
 //
 // 会话归属简化:MCP 工具调用不带会话身份,桥为
@@ -40,11 +40,22 @@ pub struct BrowserHost {
 }
 
 /// MCP server 的接入信息。config 模块不直接读它:mcp.json 物化路径由调用方
-/// (main.rs)在 init 之后查询一次、经 save_config_files 参数显式传入。
+/// (main.rs)在 init 之后查询一次、经 save_config_files 参数显式传入；
+/// mcp_endpoint 还会检查长期配对凭据，未配对时返回 None。
 static MCP_ENDPOINT: OnceLock<(String, String)> = OnceLock::new(); // (url, bearer_token)
 
-pub fn mcp_endpoint() -> Option<(String, String)> {
-    MCP_ENDPOINT.get().cloned()
+fn endpoint_for_pairing(
+    paired: bool,
+    endpoint: Option<(String, String)>,
+) -> Option<(String, String)> {
+    if paired { endpoint } else { None }
+}
+
+pub fn mcp_endpoint(app: &AppHandle) -> Option<(String, String)> {
+    let paired = app
+        .try_state::<BrowserHost>()
+        .is_some_and(|host| host.bridge.is_paired());
+    endpoint_for_pairing(paired, MCP_ENDPOINT.get().cloned())
 }
 
 /// 初始化浏览器桥 + MCP server(setup 阶段调用,先于引擎启动——
@@ -58,7 +69,6 @@ pub fn init(app: &AppHandle) {
         }
     };
     let b = bridge::ExtBridge::new(7440, &data_dir);
-    b.spawn();
     let sess = session::BrowserSession::new(b.clone());
     // 截图落盘定位:惰性查当前运行会话的工作区(引擎晚于桥启动,调用时才读)
     let app2 = app.clone();
@@ -74,6 +84,13 @@ pub fn init(app: &AppHandle) {
         Err(e) => eprintln!("[desktop] 浏览器 MCP server 启动失败: {e}"),
     }
     app.manage(BrowserHost { bridge: b, session: sess });
+    let app2 = app.clone();
+    app.state::<BrowserHost>()
+        .bridge
+        .set_pairing_change_handler(std::sync::Arc::new(move |_| {
+            crate::schedule_browser_mcp_refresh(&app2);
+        }));
+    app.state::<BrowserHost>().bridge.spawn();
 }
 
 // ==================== Tauri 命令(设置页) ====================

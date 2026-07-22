@@ -19,6 +19,13 @@ fn tmp_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
+#[test]
+fn browser_mcp_endpoint_requires_pairing() {
+    let endpoint = Some(("http://127.0.0.1:7777/mcp".to_string(), "token".to_string()));
+    assert_eq!(super::endpoint_for_pairing(false, endpoint.clone()), None);
+    assert_eq!(super::endpoint_for_pairing(true, endpoint.clone()), endpoint);
+}
+
 /// 轮询桥就绪并取实际地址。
 async fn wait_addr(b: &ExtBridge) -> String {
     for _ in 0..50 {
@@ -37,6 +44,12 @@ async fn wait_addr(b: &ExtBridge) -> String {
 async fn bridge_pair_and_call_roundtrip() {
     let dir = tmp_dir("bridge");
     let b = ExtBridge::new(27440, &dir);
+    let pairing_changes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pairing_changes2 = pairing_changes.clone();
+    b.set_pairing_change_handler(std::sync::Arc::new(move |paired| {
+        pairing_changes2.lock().unwrap().push(paired);
+    }));
+    assert!(!b.is_paired(), "新配置目录不应被视为已配对");
     b.spawn();
     let addr = wait_addr(&b).await;
 
@@ -64,6 +77,8 @@ async fn bridge_pair_and_call_roundtrip() {
     // 已配对状态外显 + 浏览器信息
     let st = b.status();
     assert_eq!(st.get("paired").and_then(|v| v.as_bool()), Some(true));
+    assert!(b.is_paired());
+    assert_eq!(*pairing_changes.lock().unwrap(), vec![true]);
     assert_eq!(st.get("connected").and_then(|v| v.as_bool()), Some(true));
     assert_eq!(st.get("browser_name").and_then(|v| v.as_str()), Some("TestChrome"));
 
@@ -167,6 +182,8 @@ async fn bridge_pair_and_call_roundtrip() {
     .unwrap();
     barrier.await.unwrap().expect("屏障 call 应成功");
     b.repair();
+    assert!(!b.is_paired());
+    assert_eq!(*pairing_changes.lock().unwrap(), vec![true, false]);
     assert!(b.take_pending_handoff().is_none(), "repair 应清空 handoff 队列");
     assert!(!b.owns_tab(9), "repair 应清空受控集合");
 }
