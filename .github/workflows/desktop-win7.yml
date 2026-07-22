@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
   push:
     branches: [feat-local-version]
-    paths: ["desktop/**", ".github/workflows/desktop-win7.yml"]
+    paths: ["desktop/**", "agent", ".gitmodules", ".github/workflows/desktop-win7.yml"]
 
 env:
   GO_WIN7_VERSION: patched-1.26.5 # 与 ohmyagent go.mod 的 go 版本对应
@@ -97,24 +97,22 @@ jobs:
           echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
           echo "$HOME/go-win7-legacy/bin" >> "$GITHUB_PATH"
 
-      # 引擎 sidecar(win7 兼容工具链编译;钉 OHMYAGENT_REF,凭据缺失直接失败)
-      - name: Build ohmyagent sidecar (win7-compatible, pinned)
+      # 引擎 sidecar(win7 兼容工具链编译;源码来自 agent/ submodule,
+      # 私库经 OHMYAGENT_REPO_TOKEN + insteadOf 拉取,凭据缺失直接失败)
+      - name: Build ohmyagent sidecar (win7-compatible, agent/ submodule)
         env:
           CGO_ENABLED: "0"
           OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
-          OHMYAGENT_REF: 35ba211581dc44cef8131631c18b4b9684c972f4
         run: |
           go version
           # 断言用的是 go-win7 而非 runner 预装的官方 Go(官方产物 Win7 上直接崩,
           # 且 go version 输出无法区分,必须查 GOROOT)
           [ "$(go env GOROOT)" = "$GOROOT" ]
           [ -n "$OHMYAGENT_REPO_TOKEN" ] || { echo "::error::OHMYAGENT_REPO_TOKEN 未配置,引擎无法进包"; exit 1; }
-          git init -q /tmp/ohmyagent
-          cd /tmp/ohmyagent
-          git remote add origin "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git"
-          git fetch -q --depth 1 origin "$OHMYAGENT_REF"
-          git checkout -q FETCH_HEAD
+          git config --global url."https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git submodule update --init agent
           mkdir -p "$GITHUB_WORKSPACE/desktop/binaries"
+          cd agent
           go build -trimpath -ldflags "-s -w" \
             -o "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
 

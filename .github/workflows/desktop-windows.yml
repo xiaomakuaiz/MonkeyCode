@@ -4,11 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [feat-local-version]
-    paths: ["desktop/**", ".github/workflows/desktop-windows.yml"]
+    paths: ["desktop/**", "agent", ".gitmodules", ".github/workflows/desktop-windows.yml"]
 
-env:
-  # 引擎版本钉死:升级引擎 = 改这里(配合壳的 system/ready 能力握手)
-  OHMYAGENT_REF: 35ba211581dc44cef8131631c18b4b9684c972f4
+# 引擎版本 = agent/ submodule 的 gitlink(仓库内单一来源);
+# 升级引擎 = bump submodule(配合壳的 system/ready 能力握手)
 
 jobs:
   build:
@@ -40,18 +39,18 @@ jobs:
           npm ci
           npm run build
 
-      # 引擎 sidecar:独立仓库,钉 OHMYAGENT_REF;单引擎化后引擎必须进包,
-      # 凭据缺失直接失败而非静默出无引擎包
-      - name: Build ohmyagent sidecar (pinned)
+      # 引擎 sidecar:源码来自 agent/ submodule(私库,checkout 默认
+      # GITHUB_TOKEN 无跨库权限 → 用 OHMYAGENT_REPO_TOKEN;.gitmodules
+      # 是 ssh URL,经 insteadOf 重写为带 token 的 https)。单引擎化后
+      # 引擎必须进包,凭据缺失直接失败而非静默出无引擎包
+      - name: Build ohmyagent sidecar (agent/ submodule)
         env:
           OHMYAGENT_REPO_TOKEN: ${{ secrets.OHMYAGENT_REPO_TOKEN }}
         run: |
           [ -n "$OHMYAGENT_REPO_TOKEN" ] || { echo "::error::OHMYAGENT_REPO_TOKEN 未配置,引擎无法进包"; exit 1; }
-          git init -q /tmp/ohmyagent
-          cd /tmp/ohmyagent
-          git remote add origin "https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/chaitin/ohmyagent.git"
-          git fetch -q --depth 1 origin "$OHMYAGENT_REF"
-          git checkout -q FETCH_HEAD
+          git config --global url."https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git submodule update --init agent
+          cd agent
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
             -o "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
 

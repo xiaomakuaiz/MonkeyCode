@@ -3,7 +3,7 @@
 单引擎架构:壳(Rust)承载 UI(`ui/` React SPA,构建产物随壳分发)与
 全部平台服务(百智云/云端任务/文件浏览/上传/浏览器扩展桥),引擎
 **ohmyagent** 是壳拉起的 stdio JSON-RPC 子进程(独立上游仓库,不 fork,
-CI 按 OHMYAGENT_REF 钉版本)。
+版本经仓库根 agent/ submodule 钉死)。
 
 分层、契约(帧词汇/能力/IPC/配置所有权/会话状态机)、浏览器桥与
 上游缺口清单见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**(权威文档)。

@@ -1,6 +1,7 @@
 # desktop 构建与打包。
 #
-# 引擎 sidecar 来自独立的 ohmyagent 仓库(不入本仓),打包前须指定源码位置:
+# 引擎 sidecar 源码缺省取仓库根的 agent/ submodule(git submodule update --init agent);
+# 要用别处的 ohmyagent 检出时可覆盖:
 #   export OHMYAGENT_SRC=/path/to/ohmyagent
 #
 # macOS 打包(在 Mac 上执行):
@@ -12,7 +13,8 @@
 # CI: .github/workflows/desktop-windows.yml):
 #   make windows        # NSIS 安装包,引擎 sidecar 打进包
 
-OHMYAGENT_SRC ?=
+# 缺省 = agent/ submodule;未初始化时下方守卫会给出可执行的报错
+OHMYAGENT_SRC ?= $(abspath $(CURDIR)/../agent)
 BIN_DIR     := binaries
 SIDECAR_ARM := $(BIN_DIR)/ohmyagent-aarch64-apple-darwin
 SIDECAR_X64 := $(BIN_DIR)/ohmyagent-x86_64-apple-darwin
@@ -62,8 +64,9 @@ check-macos:
 
 check-ohmy-src:
 	@[ -n "$(OHMYAGENT_SRC)" ] && [ -d "$(OHMYAGENT_SRC)/cmd/ohmyagent" ] || \
-		{ echo "错误: 需要 OHMYAGENT_SRC 指向 ohmyagent 源码仓库,如:"; \
-		  echo "  export OHMYAGENT_SRC=~/dev/chaitin/ai/monkeycode/ohmyagent"; exit 1; }
+		{ echo "错误: 引擎源码不存在($(OHMYAGENT_SRC))。初始化 submodule:"; \
+		  echo "  git submodule update --init agent"; \
+		  echo "或指向别处检出: export OHMYAGENT_SRC=/path/to/ohmyagent"; exit 1; }
 
 # 双架构编译引擎 sidecar。universal 打包会按架构各编译一遍,每遍的
 # tauri_build 都要求存在 <name>-<本架构 triple> 文件,最终 bundle 阶段

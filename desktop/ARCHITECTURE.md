@@ -36,8 +36,8 @@
 - **driver 只做协议翻译**,不做策略;产帧必须经 frame.rs 构造器。
 - **壳原生服务(repo/uploads/baizhi/browser)与引擎解耦**;引擎经 MCP
   消费浏览器工具,不感知桥的存在。
-- **引擎是可替换子进程**:ohmyagent 是不 fork 的上游,版本经 CI 的
-  OHMYAGENT_REF 钉死;壳按 system/ready 的 capabilities 做版本握手,
+- **引擎是可替换子进程**:ohmyagent 是不 fork 的上游,版本经仓库根
+  agent/ submodule 的 gitlink 钉死;壳按 system/ready 的 capabilities 做版本握手,
   能力缺口自动回退(如 switch RPC → destroy+resume)。
 
 ## 契约 1:帧词汇(Frame)
@@ -163,8 +163,8 @@ permission remember(现壳记忆集自动应答)、stdio 会话索引
 ## 开发与构建产物
 
 uidist/ 是纯生成物不入库;壳静态页与 webfonts 在 ui/public/。
-引擎 sidecar 来自独立 ohmyagent 仓库:本地打包 `export OHMYAGENT_SRC=...`,
-CI 按 OHMYAGENT_REF 钉死;externalBin 在基础 tauri 配置——缺二进制打包
+引擎 sidecar 来自独立 ohmyagent 仓库:本地打包缺省用仓库根
+agent/ submodule(`export OHMYAGENT_SRC=...` 可覆盖),CI 同源;externalBin 在基础 tauri 配置——缺二进制打包
 直接失败,不存在"包里没引擎"的静默。
 
 ```bash
