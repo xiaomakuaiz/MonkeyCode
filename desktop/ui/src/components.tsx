@@ -591,8 +591,8 @@ function TurnDivider() {
 /** 用户消息里的附件行:`[图片]/[文件] <工作区相对路径>`(composer 发送时拼接的约定格式) */
 const ATT_LINE = /^\[(图片|文件)\] (\S+)$/;
 
-/** 消息时间:贴在消息外侧留白区,不占正文高度;悬停可查看完整日期。 */
-function MessageTime({ timestamp, side }: { timestamp?: number; side: "left-bottom" | "right-top" }) {
+/** 消息时间:默认隐藏,悬停消息时在其上沿浮出,不参与正文布局。 */
+function MessageTime({ timestamp, align }: { timestamp?: number; align: "start" | "end" }) {
   if (timestamp === undefined || !Number.isFinite(timestamp)) return null;
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return null;
@@ -602,11 +602,7 @@ function MessageTime({ timestamp, side }: { timestamp?: number; side: "left-bott
       className="mc-message-time"
       dateTime={date.toISOString()}
       title={date.toLocaleString()}
-      style={
-        side === "left-bottom"
-          ? { position: "absolute", right: "calc(100% + 8px)", bottom: 4 }
-          : { position: "absolute", left: "calc(100% + 8px)", top: 7 }
-      }
+      style={{ position: "absolute", top: -20, ...(align === "end" ? { right: 0 } : { left: 0 }) }}
     >
       {time}
     </time>
@@ -701,7 +697,7 @@ function UserBubble({
             ))}
           </div>
         )}
-        <MessageTime timestamp={timestamp} side="left-bottom" />
+        <MessageTime timestamp={timestamp} align="end" />
       </div>
       {zoom && (
         <div
@@ -749,7 +745,7 @@ function ItemView({
           style={{ position: "relative", maxWidth: "92%", wordBreak: "break-word", animation: "mcin .25s ease" }}
         >
           <Markdown text={item.text} />
-          <MessageTime timestamp={item.timestamp} side="right-top" />
+          <MessageTime timestamp={item.timestamp} align="start" />
         </div>
       );
     case "thought":
