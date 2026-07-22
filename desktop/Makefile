@@ -24,7 +24,7 @@ TAURI       := npx --yes @tauri-apps/cli@^2
 GOFLAGS     := -trimpath -ldflags "-s -w"
 GOFLAGS_WIN := -trimpath -ldflags "-s -w -H=windowsgui"
 
-.PHONY: dev run macos macos-release windows windows-release check-signing check-macos check-windows check-ohmy-src engine-universal engine-windows browser-extension icons clean
+.PHONY: dev run macos macos-release set-release-version windows windows-release check-signing check-macos check-windows check-ohmy-src engine-universal engine-windows browser-extension icons clean
 
 # ---------- 开发 ----------
 
@@ -49,8 +49,20 @@ macos: check-macos engine-universal browser-extension icons/icon.icns
 # 签名),并汇集 updater 产物(带版本文件名的 .app.tar.gz + latest.json)到
 # bundle/updater/,供人工上传 OSS。
 macos-release: EXTRA_TAURI_CONFIG += --config tauri.release.conf.json
-macos-release: check-signing macos
+
+macos-release:
+	$(MAKE) check-signing
+	$(MAKE) set-release-version
+	$(MAKE) macos EXTRA_TAURI_CONFIG="$(EXTRA_TAURI_CONFIG)"
 	python3 scripts/gen-latest-json.py
+
+# 发布版本只接受当前提交上的 vYYMMDDNN tag；由统一脚本同步 Tauri、Cargo
+# manifest 及主/Win7 lockfile。普通 macos 构建不修改版本文件。
+set-release-version:
+	@tag="$$(git describe --tags --exact-match \
+		--match 'v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]' HEAD 2>/dev/null)"; \
+		[ -n "$$tag" ] || { echo "错误: 发布构建要求当前提交带 vYYMMDDNN tag"; exit 1; }; \
+		python3 scripts/set_release_version.py "$$tag"
 
 check-signing:
 	@[ -n "$$TAURI_SIGNING_PRIVATE_KEY" ] || \
