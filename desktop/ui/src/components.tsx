@@ -30,7 +30,6 @@ import {
 } from "react";
 import { openExternal } from "./host";
 import { IconCheck, IconChevronRight, IconDots, IconFolder, IconSpark, IconTrash } from "./icons";
-import { permStateLabel } from "./reduce";
 import type { LogItem, PlanEntry } from "./types";
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -446,22 +445,6 @@ export function ToolCard({
   );
 }
 
-/** 审批卡终态文案 */
-function permResolved(state: string): { text: string; color: string } {
-  switch (state) {
-    case "allowed":
-    case "approved":
-      return { text: "✓ 已允许", color: "var(--ok)" };
-    case "rejected":
-    case "denied":
-      return { text: "✕ 已拒绝", color: "var(--err)" };
-    case "timeout":
-      return { text: "✕ " + permStateLabel(state), color: "var(--err)" };
-    default:
-      return { text: permStateLabel(state), color: "var(--t5)" };
-  }
-}
-
 function PermCard({
   item,
   onAnswer,
@@ -469,6 +452,13 @@ function PermCard({
   item: Extract<LogItem, { kind: "perm" }>;
   onAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
 }) {
+  // 已允许/已拒绝的审批卡直接消失(用户拍板):决策后紧跟的工具卡(或
+  // 拒绝后的轮次收尾)本身就说明了结果,残留任何形态都嫌多。例外:
+  // 拒绝/过期之外的异常终态不多见,同样静默——状态机仍在 reduce 里
+  // 完整落盘,journal 回放只是不渲染,不丢审计数据。
+  if (item.state !== "open") {
+    return null;
+  }
   const btn: CSSProperties = {
     height: 28,
     display: "flex",
@@ -512,33 +502,29 @@ function PermCard({
       >
         {item.title}
       </div>
-      {item.state === "open" ? (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div
-            className="hv-acc"
-            onClick={() => onAnswer(item.id, "allow")}
-            style={{ ...btn, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)" }}
-          >
-            允许
-          </div>
-          <div className="hv" onClick={() => onAnswer(item.id, "always")} style={btn}>
-            本会话始终
-          </div>
-          <div className="hv" onClick={() => onAnswer(item.id, "persist")} style={btn}>
-            此项目永久
-          </div>
-          <div
-            className="hv-errbg"
-            onClick={() => onAnswer(item.id, "deny")}
-            style={{ ...btn, background: "transparent", border: "1px solid var(--errBd)", color: "var(--err)" }}
-          >
-            拒绝
-          </div>
-          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>⏎ 允许 · esc 拒绝</span>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div
+          className="hv-acc"
+          onClick={() => onAnswer(item.id, "allow")}
+          style={{ ...btn, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)" }}
+        >
+          允许
         </div>
-      ) : (
-        <div style={{ fontSize: 12, color: permResolved(item.state).color }}>{permResolved(item.state).text}</div>
-      )}
+        <div className="hv" onClick={() => onAnswer(item.id, "always")} style={btn}>
+          本会话始终
+        </div>
+        <div className="hv" onClick={() => onAnswer(item.id, "persist")} style={btn}>
+          此项目永久
+        </div>
+        <div
+          className="hv-errbg"
+          onClick={() => onAnswer(item.id, "deny")}
+          style={{ ...btn, background: "transparent", border: "1px solid var(--errBd)", color: "var(--err)" }}
+        >
+          拒绝
+        </div>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)" }}>⏎ 允许 · esc 拒绝</span>
+      </div>
     </div>
   );
 }
@@ -712,6 +698,30 @@ function AskCard({
 }) {
   const [selected, setSelected] = useState<Record<number, Set<string>>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
+
+  // 已答/过期收成紧凑问答行(用户拍板,与审批卡"已决即轻"同一取向):
+  // 选项列表与边框大卡只属于待答态;但问与答是对话上下文(模型下一轮
+  // 会引用答案),不能像审批卡那样整个消失——一行小字保住来龙去脉。
+  if (item.state !== "open") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, maxWidth: 560 }}>
+        {item.questions.map((q, qi) => {
+          const ans = Array.isArray(q.answer) ? q.answer.join("、") : q.answer;
+          return (
+            <div key={qi} style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 12, color: "var(--t5)", minWidth: 0 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{q.question}</span>
+              <span style={{ whiteSpace: "nowrap" }}>→</span>
+              {ans ? (
+                <span style={{ color: "var(--t2)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ans}</span>
+              ) : (
+                <span style={{ whiteSpace: "nowrap" }}>未回答{item.state === "expired" ? "(已过期)" : ""}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   const toggle = (qi: number, choice: string, multi: boolean) => {
     setSelected((prev) => {
