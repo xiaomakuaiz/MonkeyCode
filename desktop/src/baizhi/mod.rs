@@ -11,7 +11,7 @@ pub mod wechat;
 #[cfg(test)]
 mod tests;
 
-use std::sync::{LazyLock, Mutex as StdMutex};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -387,14 +387,17 @@ pub(crate) fn unwrap_envelope(data: &[u8], status: u16, p: &Envelope) -> BzResul
     }
 }
 
-/// trace_id 剥离正则。LazyLock:clean_message 在每条错误路径上被调,
+/// trace_id 剥离正则。OnceLock:clean_message 在每条错误路径上被调,
 /// 现编译正则(微秒级但反复发生)纯属浪费,进程内编译一次即可。
-static TRACE_ID_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\s*\[trace_id:[^\]]+\]\s*$").unwrap());
+static TRACE_ID_RE: OnceLock<regex::Regex> = OnceLock::new();
 
 /// 去掉服务端 message 尾部的 trace_id 标注(对齐移动端)。
 pub fn clean_message(msg: &str) -> String {
-    TRACE_ID_RE.replace(msg, "").trim().to_string()
+    TRACE_ID_RE
+        .get_or_init(|| regex::Regex::new(r"(?i)\s*\[trace_id:[^\]]+\]\s*$").unwrap())
+        .replace(msg, "")
+        .trim()
+        .to_string()
 }
 
 pub fn http_error(status: u16, body: &[u8], label: &str) -> BzErr {

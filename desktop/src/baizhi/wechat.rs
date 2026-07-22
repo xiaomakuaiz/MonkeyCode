@@ -8,14 +8,14 @@
 //     405 确认成功(附 wx_code)
 //  4. 拿到 wx_code 后,带 cookie 罐 GET 百智云回调 → 会话 cookie 落盘
 
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 use base64::Engine as _;
 use regex::Regex;
 
 use super::{clean_message, other, BzResult, Service};
 
-// 页面刮取正则。LazyLock:长轮询每 ~25s 打一次 poll,现编译纯属重复劳动,
+// 页面刮取正则。OnceLock:长轮询每 ~25s 打一次 poll,现编译纯属重复劳动,
 // 进程内编译一次即可。
 //
 // 这三条正则刮的是微信第三方页面,页面一改版就会静默断裂,因此都有
@@ -24,11 +24,10 @@ use super::{clean_message, other, BzResult, Service};
 //
 // 授权页 HTML 里的二维码 <img src="/connect/qrcode/<uuid>">;uuid 同时也是
 // 长轮询的会话标识。
-static QRCODE_UUID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/connect/qrcode/([A-Za-z0-9_-]+)").unwrap());
+static QRCODE_UUID_RE: OnceLock<Regex> = OnceLock::new();
 // 长轮询应答是一段 JS:window.wx_errcode=405;window.wx_code='xxx';
-static WX_ERRCODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"wx_errcode=(\d+)").unwrap());
-static WX_CODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"wx_code='([^']*)'").unwrap());
+static WX_ERRCODE_RE: OnceLock<Regex> = OnceLock::new();
+static WX_CODE_RE: OnceLock<Regex> = OnceLock::new();
 
 /// 长轮询基址推导。微信开放平台的长轮询主机 = 授权页域名加 `lp.` 前缀
 /// (open.weixin.qq.com → lp.open.weixin.qq.com),这是网页版微信登录协议
@@ -88,6 +87,7 @@ pub async fn start_wechat_login(svc: &Service) -> BzResult<String> {
         .map_err(|e| other(format!("加载微信授权页失败: {}", e.msg())))?;
     let page_text = String::from_utf8_lossy(&page);
     let uuid = QRCODE_UUID_RE
+        .get_or_init(|| Regex::new(r"/connect/qrcode/([A-Za-z0-9_-]+)").unwrap())
         .captures(&page_text)
         .and_then(|m| m.get(1))
         .map(|m| m.as_str().to_string())
@@ -139,6 +139,7 @@ pub async fn poll_wechat_login(svc: &Service) -> BzResult<&'static str> {
         .map_err(|e| other(format!("查询扫码状态失败: {}", e.msg())))?;
     let text = String::from_utf8_lossy(&body);
     let errcode: i32 = WX_ERRCODE_RE
+        .get_or_init(|| Regex::new(r"wx_errcode=(\d+)").unwrap())
         .captures(&text)
         .and_then(|m| m.get(1))
         .and_then(|m| m.as_str().parse().ok())
@@ -150,6 +151,7 @@ pub async fn poll_wechat_login(svc: &Service) -> BzResult<&'static str> {
         402 | 500 => Ok("expired"),
         405 => {
             let code = WX_CODE_RE
+                .get_or_init(|| Regex::new(r"wx_code='([^']*)'").unwrap())
                 .captures(&text)
                 .and_then(|m| m.get(1))
                 .map(|m| m.as_str().to_string())
