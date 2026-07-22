@@ -810,6 +810,7 @@ function AskCard({
 }) {
   const [selected, setSelected] = useState<Record<number, Set<string>>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
+  const [customOpen, setCustomOpen] = useState<Record<number, boolean>>({});
 
   // 提问过期只留一条弱状态;已回答则按“用户消息”收成右侧气泡。
   // 问与答完整换行保留,不做原先易读性很差的单行截断。
@@ -867,6 +868,30 @@ function AskCard({
       else {
         if (!multi) cur.clear();
         cur.add(choice);
+      }
+      return { ...prev, [qi]: cur };
+    });
+  };
+
+  const chooseOption = (qi: number, choice: string, multi: boolean) => {
+    // 单选切回预设项时,自定义文本也必须清掉;否则会出现“有输入但没
+    // 勾选其他”的矛盾状态。多选的各项彼此独立,不动自定义内容。
+    if (!multi) {
+      setCustom((prev) => ({ ...prev, [qi]: "" }));
+      setCustomOpen((prev) => ({ ...prev, [qi]: false }));
+    }
+    toggle(qi, choice, multi);
+  };
+
+  const updateCustomAnswer = (qi: number, value: string, multi: boolean) => {
+    setCustom((prev) => ({ ...prev, [qi]: value }));
+    setSelected((prev) => {
+      const cur = new Set(prev[qi] ?? []);
+      if (value.trim()) {
+        if (!multi) cur.clear();
+        cur.add(CUSTOM_ANSWER_KEY);
+      } else {
+        cur.delete(CUSTOM_ANSWER_KEY);
       }
       return { ...prev, [qi]: cur };
     });
@@ -977,7 +1002,7 @@ function AskCard({
                     type="button"
                     disabled={!open}
                     className={open ? "mc-ask-option" : undefined}
-                    onClick={() => toggle(qi, o.label, q.multiSelect)}
+                    onClick={() => chooseOption(qi, o.label, q.multiSelect)}
                     style={optBtn(active)}
                   >
                     <AskChoiceMark active={active} multi={q.multiSelect} />
@@ -990,32 +1015,54 @@ function AskCard({
               })}
               {q.custom && (() => {
                 const active = selected[qi]?.has(CUSTOM_ANSWER_KEY) ?? false;
+                const expanded = customOpen[qi] || active;
                 return (
                   <div
                     role="button"
                     aria-pressed={active}
                     tabIndex={open ? 0 : -1}
                     className={open ? "mc-ask-option" : undefined}
-                    onClick={() => open && !active && toggle(qi, CUSTOM_ANSWER_KEY, q.multiSelect)}
+                    onClick={() => open && setCustomOpen((prev) => ({ ...prev, [qi]: true }))}
                     onKeyDown={(e) => {
-                      if (open && !active && (e.key === "Enter" || e.key === " ")) {
+                      if (open && (e.key === "Enter" || e.key === " ")) {
                         e.preventDefault();
-                        toggle(qi, CUSTOM_ANSWER_KEY, q.multiSelect);
+                        setCustomOpen((prev) => ({ ...prev, [qi]: true }));
                       }
                     }}
-                    style={{ ...optBtn(active), alignItems: active ? "flex-start" : "center" }}
+                    style={{ ...optBtn(active), alignItems: expanded ? "flex-start" : "center" }}
                   >
                     <AskChoiceMark active={active} multi={q.multiSelect} />
                     <span style={{ display: "flex", flex: 1, flexDirection: "column", gap: 2, minWidth: 0 }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>其他</span>
-                      {!active && <span style={{ color: "var(--t5)", fontSize: 11.5 }}>输入自己的答案</span>}
-                      {active && (
+                      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--t1)" }}>其他</span>
+                        {active && (
+                          <span
+                            className="hv-t1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateCustomAnswer(qi, "", q.multiSelect);
+                              setCustomOpen((prev) => ({ ...prev, [qi]: false }));
+                            }}
+                            style={{ color: "var(--t5)", fontSize: 11, fontWeight: 400 }}
+                          >
+                            清空
+                          </span>
+                        )}
+                      </span>
+                      {!expanded && <span style={{ color: "var(--t5)", fontSize: 11.5 }}>输入自己的答案</span>}
+                      {expanded && (
                         <input
                           autoFocus
                           className="mc-ask-input"
                           value={custom[qi] ?? ""}
-                          onChange={(e) => setCustom((p) => ({ ...p, [qi]: e.target.value }))}
+                          onChange={(e) => updateCustomAnswer(qi, e.target.value, q.multiSelect)}
                           onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === "Escape" && !(custom[qi] ?? "").trim()) {
+                              setCustomOpen((prev) => ({ ...prev, [qi]: false }));
+                            }
+                          }}
                           placeholder="输入你的回答"
                           style={{
                             width: "100%",
