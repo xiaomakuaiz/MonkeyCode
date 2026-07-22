@@ -155,8 +155,8 @@ export interface AskQuestion {
 
 /** 对话流里的一条渲染项 */
 export type LogItem =
-  | { kind: "user"; text: string }
-  | { kind: "agent"; text: string }
+  | { kind: "user"; text: string; /** 消息帧产生时间(Unix ms;旧记录可缺省) */ timestamp?: number }
+  | { kind: "agent"; text: string; /** 首个流式分片时间(Unix ms;旧记录可缺省) */ timestamp?: number }
   | { kind: "thought"; text: string }
   | {
       kind: "tool";

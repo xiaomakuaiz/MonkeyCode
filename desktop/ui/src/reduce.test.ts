@@ -30,6 +30,14 @@ describe("流式文本聚合", () => {
     expect(s.items).toEqual([{ kind: "agent", text: "你好,世界" }]);
   });
 
+  it("流式 agent 消息保留首个分片的时间", () => {
+    const s = run([
+      { ...acp({ sessionUpdate: "agent_message_chunk", content: { text: "你好" } }), timestamp: 1_000 },
+      { ...acp({ sessionUpdate: "agent_message_chunk", content: { text: ",世界" } }), timestamp: 2_000 },
+    ]);
+    expect(s.items).toEqual([{ kind: "agent", text: "你好,世界", timestamp: 1_000 }]);
+  });
+
   it("thought 与 agent 互不合并", () => {
     const s = run([
       acp({ sessionUpdate: "agent_thought_chunk", content: { text: "想" } }),
@@ -331,6 +339,11 @@ describe("轮次与系统帧", () => {
     expect(s.items[0]).toEqual({ kind: "user", text: "修复 Bug🐛" });
     const bad = run([frame("user-input", { content: "!!!不是base64" })]);
     expect(bad.items[0]).toEqual({ kind: "user", text: "!!!不是base64" });
+  });
+
+  it("user-input 保留消息时间", () => {
+    const s = run([{ ...frame("user-input", { content: b64encode("带时间") }), timestamp: 1_234 }]);
+    expect(s.items[0]).toEqual({ kind: "user", text: "带时间", timestamp: 1_234 });
   });
 
   it("usage/model/permMode 回写状态并留系统行", () => {

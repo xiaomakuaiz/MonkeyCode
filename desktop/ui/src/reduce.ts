@@ -51,13 +51,13 @@ export function permStateLabel(state: string): string {
 }
 
 /** 追加流式文本:与上一项同 kind 则合并,否则新开一项 */
-function appendStream(s: ChatState, kind: "agent" | "thought", text: string): ChatState {
+function appendStream(s: ChatState, kind: "agent" | "thought", text: string, timestamp?: number): ChatState {
   const items = s.items.slice();
   const last = items[items.length - 1];
   if (s.streamKind === kind && last && last.kind === kind) {
     items[items.length - 1] = { ...last, text: last.text + text };
   } else {
-    items.push({ kind, text });
+    items.push({ kind, text, ...(kind === "agent" && timestamp !== undefined ? { timestamp } : {}) });
   }
   return { ...s, items, streamKind: kind };
 }
@@ -205,10 +205,10 @@ function applyProgress(s: ChatState, tcId: string, p: ToolProgress): ChatState {
   return s;
 }
 
-function reduceAcp(s: ChatState, u: AcpUpdate): ChatState {
+function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
   switch (u.sessionUpdate) {
     case "agent_message_chunk":
-      return appendStream(s, "agent", u.content?.text ?? "");
+      return appendStream(s, "agent", u.content?.text ?? "", timestamp);
     case "agent_thought_chunk":
       return appendStream(s, "thought", u.content?.text ?? "");
     case "tool_call": {
@@ -320,7 +320,7 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
       } catch {
         text = data?.content ?? "";
       }
-      return push(s, { kind: "user", text });
+      return push(s, { kind: "user", text, ...(f.timestamp !== undefined ? { timestamp: f.timestamp } : {}) });
     }
     case "permission-req": {
       const data = frameData<{ id?: string; title?: string; tool?: string; tool_call_id?: string }>(f);
@@ -351,7 +351,7 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
     case "task-running":
       if (f.kind === "acp_event") {
         const data = frameData<{ update?: AcpUpdate }>(f);
-        if (data?.update) return reduceAcp(s, data.update);
+        if (data?.update) return reduceAcp(s, data.update, f.timestamp);
         return s;
       }
       if (f.kind === "acp_ask_user_question") {
