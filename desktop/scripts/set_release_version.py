@@ -12,6 +12,14 @@ from datetime import datetime
 TAG_RE = re.compile(r"v([0-9]{8})")
 
 
+def configure_utf8_output() -> None:
+    """避免 Windows runner 的 cp1252 控制台无法输出中文诊断信息。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def release_version(tag: str) -> str:
     """校验 vYYMMDDNN tag，并转换为 Tauri/Cargo 所需的 SemVer。"""
     match = TAG_RE.fullmatch(tag)
@@ -70,6 +78,7 @@ def apply_version(root: pathlib.Path, tag: str) -> str:
 
 
 def main() -> int:
+    configure_utf8_output()
     if len(sys.argv) != 2:
         print(f"用法: {pathlib.Path(sys.argv[0]).name} vYYMMDDNN", file=sys.stderr)
         return 2
