@@ -2,15 +2,17 @@
 //!
 //! WebView2 在 Windows 7 上明确不支持透明 DefaultBackgroundColor,
 //! HTML 的 transparent 最终会与白底合成。本模块只在 Windows 编译:
-//! 可见窗口是无 WebView 的 Tauri Window,帧画面以预乘 BGRA 经
+//! 可见窗口是自行注册窗口类创建的 Win32 popup,帧画面以预乘 BGRA 经
 //! UpdateLayeredWindow 提交,因而 Win7/10/11 共用同一套逐像素 alpha。
+//! 不能复用 Tao/Tauri Window:其窗口类带 CS_OWNDC,与 WS_EX_LAYERED
+//! 不兼容,UpdateLayeredWindow 会失败并留下黑底。
 
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Manager, Window};
+use tauri::{AppHandle, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -20,15 +22,18 @@ use windows::Win32::Graphics::Gdi::{
     DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_CENTER, DT_END_ELLIPSIS, DT_NOPREFIX,
     DT_SINGLELINE, DT_VCENTER, FW_NORMAL, HGDIOBJ, OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::Shell::{
     DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass, SUBCLASSPROC,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowLongPtrW, GetWindowRect, KillTimer, PostMessageW, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, UpdateLayeredWindow, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_NOZORDER, ULW_ALPHA, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
-    WM_TIMER, WS_EX_LAYERED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowRect, KillTimer,
+    LoadCursorW, PostMessageW, RegisterClassExW, SetTimer, SetWindowPos, ShowWindow,
+    UpdateLayeredWindow, HWND_TOPMOST, IDC_ARROW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_APP, WM_DPICHANGED,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const LOGICAL_H: f64 = 120.0;
@@ -39,6 +44,8 @@ const SUBCLASS_ID: usize = 0x4D43_5045_54; // "MCPET"
 const TIMER_ID: usize = 0x5045_54;
 const TIMER_MS: u32 = 100;
 const WM_RENDER: u32 = WM_APP + 0x51;
+const WINDOW_CLASS_NAME: windows::core::PCWSTR = w!("MonkeyCodeNativePetLayeredWindow");
+static WINDOW_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// App 级句柄:命令线程只更新快照并 PostMessage,所有 GDI/窗口操作
 /// 仍在创建窗口的 UI 线程上完成。
@@ -120,8 +127,49 @@ struct NativePet {
     mouse: Mutex<MouseState>,
 }
 
-/// 把 Tauri 原生窗口转成逐像素 alpha 的 layered window,并安装动画/拖动子类过程。
-pub fn attach(app: &AppHandle, window: &Window) -> Result<(), String> {
+unsafe extern "system" fn base_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+fn register_window_class() -> Result<(), String> {
+    WINDOW_CLASS
+        .get_or_init(|| unsafe {
+            let module =
+                GetModuleHandleW(None).map_err(|e| format!("获取桌宠模块句柄失败: {e}"))?;
+            let class = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                // 必须保持 0:CS_OWNDC / CS_CLASSDC 与 WS_EX_LAYERED 不兼容。
+                style: Default::default(),
+                lpfnWndProc: Some(base_window_proc),
+                hInstance: module.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                lpszClassName: WINDOW_CLASS_NAME,
+                ..Default::default()
+            };
+            if RegisterClassExW(&class) == 0 {
+                return Err(format!(
+                    "注册桌宠窗口类失败: {}",
+                    windows::core::Error::from_win32()
+                ));
+            }
+            Ok(())
+        })
+        .clone()
+}
+
+pub fn exists(app: &AppHandle) -> bool {
+    app.state::<NativePetHost>().get().is_some()
+}
+
+/// 创建独立 Win32 popup。窗口类不带 Tao 的 CS_OWNDC,因此 Win7/10 都能
+/// 正常使用 UpdateLayeredWindow 的逐像素 alpha；WS_POPUP 从源头消除标题栏/X。
+pub fn create(app: &AppHandle, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+    register_window_class()?;
     let sprite = tauri::image::Image::from_bytes(include_bytes!("assets/pet-sprite.png"))
         .map_err(|e| format!("桌宠 PNG 解码失败: {e}"))?
         .to_owned();
@@ -135,9 +183,25 @@ pub fn attach(app: &AppHandle, window: &Window) -> Result<(), String> {
         ));
     }
 
-    let hwnd = window
-        .hwnd()
-        .map_err(|e| format!("获取桌宠 HWND 失败: {e}"))?;
+    let module =
+        unsafe { GetModuleHandleW(None) }.map_err(|e| format!("获取桌宠模块句柄失败: {e}"))?;
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            WINDOW_CLASS_NAME,
+            w!("MonkeyCode 桌宠"),
+            WS_POPUP,
+            x,
+            y,
+            width.max(1),
+            height.max(1),
+            None,
+            None,
+            Some(module.into()),
+            None,
+        )
+    }
+    .map_err(|e| format!("创建桌宠 Win32 窗口失败: {e}"))?;
     let pet = Arc::new(NativePet {
         hwnd: hwnd.0 as isize,
         app: app.clone(),
@@ -146,10 +210,16 @@ pub fn attach(app: &AppHandle, window: &Window) -> Result<(), String> {
         mouse: Mutex::new(MouseState::default()),
     });
 
-    unsafe {
-        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
+    // 第一次逐像素提交必须成功才允许 show。失败时直接销毁，绝不把未合成的
+    // 黑色窗口暴露给用户。
+    if let Err(e) = pet.render(true) {
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        return Err(e);
+    }
 
+    unsafe {
         // 子类回调持有独立 Arc,到 WM_NCDESTROY 时归还;
         // Host 另持一份,用于 IPC 线程更新状态。
         let callback_ref = Arc::into_raw(pet.clone()) as usize;
@@ -162,18 +232,49 @@ pub fn attach(app: &AppHandle, window: &Window) -> Result<(), String> {
         .as_bool()
         {
             drop(Arc::from_raw(callback_ref as *const NativePet));
+            let _ = DestroyWindow(hwnd);
             return Err("安装桌宠窗口过程失败".into());
         }
         if SetTimer(Some(hwnd), TIMER_ID, TIMER_MS, None) == 0 {
             let _ = RemoveWindowSubclass(hwnd, SUBCLASSPROC::Some(window_proc), SUBCLASS_ID);
             drop(Arc::from_raw(callback_ref as *const NativePet));
+            let _ = DestroyWindow(hwnd);
             return Err("创建桌宠动画定时器失败".into());
         }
     }
 
     app.state::<NativePetHost>().set(pet.clone());
-    pet.render(true);
     Ok(())
+}
+
+pub fn set_visible(app: &AppHandle, visible: bool) {
+    let Some(pet) = app.state::<NativePetHost>().get() else {
+        return;
+    };
+    unsafe {
+        if visible {
+            // TOPMOST 需经 SetWindowPos 确认；SW_SHOWNOACTIVATE 保证不抢主窗口焦点。
+            let _ = SetWindowPos(
+                pet.hwnd(),
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            let _ = ShowWindow(pet.hwnd(), SW_SHOWNOACTIVATE);
+        } else {
+            let _ = ShowWindow(pet.hwnd(), SW_HIDE);
+        }
+    }
+}
+
+pub fn position(app: &AppHandle) -> Option<(i32, i32)> {
+    let pet = app.state::<NativePetHost>().get()?;
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(pet.hwnd(), &mut rect) }.ok()?;
+    Some((rect.left, rect.top))
 }
 
 /// 由隐藏 pet-service WebView 推送已聚合的视觉状态。
@@ -205,21 +306,12 @@ pub fn update(app: &AppHandle, mode: &str, tone: &str, text: &str) {
     }
 }
 
-pub fn rerender(app: &AppHandle) {
-    let pet = app.state::<NativePetHost>().get();
-    if let Some(pet) = pet {
-        pet.visual.lock().unwrap().last_key = None;
-        unsafe {
-            let _ = PostMessageW(Some(pet.hwnd()), WM_RENDER, WPARAM(0), LPARAM(0));
-        }
-    }
-}
-
 pub fn shutdown(app: &AppHandle) {
     let pet = app.state::<NativePetHost>().take();
     if let Some(pet) = pet {
         unsafe {
             let _ = KillTimer(Some(pet.hwnd()), TIMER_ID);
+            let _ = DestroyWindow(pet.hwnd());
         }
     }
 }
@@ -240,11 +332,10 @@ impl NativePet {
         }
     }
 
-    fn render(&self, force: bool) {
+    fn render(&self, force: bool) -> Result<(), String> {
         let mut client = RECT::default();
-        if unsafe { GetClientRect(self.hwnd(), &mut client) }.is_err() {
-            return;
-        }
+        unsafe { GetClientRect(self.hwnd(), &mut client) }
+            .map_err(|e| format!("GetClientRect 失败: {e}"))?;
         let width = (client.right - client.left).max(1) as u32;
         let height = (client.bottom - client.top).max(1) as u32;
 
@@ -253,15 +344,13 @@ impl NativePet {
             let frame = Self::frame_at(visual.mode, visual.since.elapsed());
             let key = (frame, visual.generation, width, height);
             if !force && visual.last_key == Some(key) {
-                return;
+                return Ok(());
             }
             visual.last_key = Some(key);
             (frame, visual.tone, visual.text.clone(), visual.mode)
         };
 
-        if let Err(e) = self.render_frame(width, height, frame, mode, tone, &text) {
-            eprintln!("[desktop] 桌宠原生绘制失败: {e}");
-        }
+        self.render_frame(width, height, frame, mode, tone, &text)
     }
 
     fn render_frame(
@@ -584,11 +673,36 @@ unsafe extern "system" fn window_proc(
     let pet = &*(ref_data as *const NativePet);
     match msg {
         WM_RENDER => {
-            pet.render(true);
+            if let Err(e) = pet.render(true) {
+                eprintln!("[desktop] 桌宠原生绘制失败: {e}");
+            }
             return LRESULT(0);
         }
         WM_TIMER if wparam.0 == TIMER_ID => {
-            pet.render(false);
+            if let Err(e) = pet.render(false) {
+                eprintln!("[desktop] 桌宠原生绘制失败: {e}");
+            }
+            return LRESULT(0);
+        }
+        WM_SIZE => {
+            pet.visual.lock().unwrap().last_key = None;
+            if let Err(e) = pet.render(true) {
+                eprintln!("[desktop] 桌宠尺寸变化后重绘失败: {e}");
+            }
+            return LRESULT(0);
+        }
+        WM_DPICHANGED => {
+            // Win8.1+ 的建议矩形已按新屏 DPI 换算；Win7 不发送此消息。
+            let rect = &*(lparam.0 as *const RECT);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             return LRESULT(0);
         }
         WM_LBUTTONDOWN => {

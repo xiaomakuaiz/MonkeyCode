@@ -32,8 +32,6 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-#[cfg(target_os = "windows")]
-use tauri::WindowBuilder;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
 
@@ -452,40 +450,39 @@ fn ensure_pet_window(app: &AppHandle) {
     }
 }
 
-/// Windows 可见桌宠不创建 WebView:原生 Tauri Window 交给
-/// native_pet 用 UpdateLayeredWindow 绘制,避开 Win7 WebView2 不支持透明背景的白边。
+/// Windows 可见桌宠不创建 WebView/Tao Window:后者窗口类带 CS_OWNDC,
+/// 与 WS_EX_LAYERED 不兼容。native_pet 自建 Win32 popup 并用
+/// UpdateLayeredWindow 绘制,避开黑底、Win7 标题栏和 WebView2 白边。
 /// pet-service 始终隐藏,只复用成熟的会话聚合与 MP3 音效逻辑。
 #[cfg(target_os = "windows")]
 fn ensure_pet_window(app: &AppHandle) {
-    if app.get_window("pet").is_some() {
+    if native_pet::exists(app) {
         return;
     }
     let saved = load_config(app).pet_pos;
-    let window = WindowBuilder::new(app, "pet")
-        .title("MonkeyCode 桌宠")
-        .inner_size(PET_W, PET_H)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .resizable(false)
-        .maximizable(false)
-        .minimizable(false)
-        .focusable(false)
-        .focused(false)
-        .visible(false)
-        .build();
-    let window = match window {
-        Ok(window) => window,
-        Err(e) => {
-            eprintln!("[desktop] Windows 原生桌宠窗口创建失败: {e}");
-            return;
-        }
-    };
-    let _ = window.set_position(pet_position(app, saved));
-    if let Err(e) = native_pet::attach(app, &window) {
+    let position = pet_position(app, saved);
+    let scale = app
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|m| {
+            let p = m.position();
+            let s = m.size();
+            position.x >= p.x
+                && position.x < p.x + s.width as i32
+                && position.y >= p.y
+                && position.y < p.y + s.height as i32
+        })
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    if let Err(e) = native_pet::create(
+        app,
+        position.x,
+        position.y,
+        (PET_W * scale).round() as i32,
+        (PET_H * scale).round() as i32,
+    ) {
         eprintln!("[desktop] Windows 原生桌宠初始化失败: {e}");
-        let _ = window.close();
         return;
     }
 
@@ -538,10 +535,14 @@ fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPo
 
 /// 按用户开关显示/隐藏桌宠。引擎不可用时桌宠自己展示离线状态;
 /// 主窗口是否在前台不参与可见性决策。
+#[cfg(target_os = "windows")]
 fn set_pet_visible(app: &AppHandle, show: bool) {
-    #[cfg(target_os = "windows")]
-    let pet = app.get_window("pet");
-    #[cfg(not(target_os = "windows"))]
+    let enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
+    native_pet::set_visible(app, show && enabled);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_pet_visible(app: &AppHandle, show: bool) {
     let pet = app.get_webview_window("pet");
     let Some(pet) = pet else {
         return;
@@ -561,7 +562,11 @@ fn set_pet_visible(app: &AppHandle, show: bool) {
 fn persist_pet_prefs(app: &AppHandle) {
     let mut cfg = load_config(app);
     cfg.pet_enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
-    if let Some(pos) = *app.state::<PetPos>().0.lock().unwrap() {
+    #[cfg(target_os = "windows")]
+    let pos = native_pet::position(app);
+    #[cfg(not(target_os = "windows"))]
+    let pos = *app.state::<PetPos>().0.lock().unwrap();
+    if let Some(pos) = pos {
         cfg.pet_pos = Some(pos);
     }
     if let Err(e) = config::save_config_json(app, &cfg) {
@@ -689,12 +694,6 @@ fn main() {
                         .lock()
                         .unwrap()
                         .replace((pos.x, pos.y));
-                }
-            }
-            #[cfg(target_os = "windows")]
-            if let WindowEvent::ScaleFactorChanged { .. } = event {
-                if window.label() == "pet" {
-                    native_pet::rerender(window.app_handle());
                 }
             }
             // 主窗口:引擎在跑且托盘可用时关窗只隐藏;错误页正常关闭
