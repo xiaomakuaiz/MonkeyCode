@@ -239,6 +239,46 @@ export function IconCheck({ size = 10, color = "var(--ok)", strokeWidth = 1.5, s
   );
 }
 
+/** 任务待处理(空心圆角方框) */
+export function IconTaskPending({ size = 12, color = "var(--t5)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <rect x="2" y="2" width="10" height="10" rx="2.2" stroke={color} strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+/** 任务执行中(进度环) */
+export function IconTaskRunning({ size = 12, color = "var(--acc)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <circle cx="7" cy="7" r="5" stroke={color} strokeWidth="1.3" opacity=".25" />
+      <path d="M7 2a5 5 0 0 1 5 5" stroke={color} strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="7" cy="2" r="1" fill={color} />
+    </svg>
+  );
+}
+
+/** 任务已完成(圆角方框勾选) */
+export function IconTaskDone({ size = 12, color = "var(--ok)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <rect x="2" y="2" width="10" height="10" rx="2.2" stroke={color} strokeWidth="1.3" />
+      <path d="m4.3 7.1 1.8 1.8 3.7-4" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 任务被依赖阻塞(圆圈斜杠) */
+export function IconTaskBlocked({ size = 12, color = "var(--t4)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ ...base, ...style }}>
+      <circle cx="7" cy="7" r="5" stroke={color} strokeWidth="1.3" />
+      <path d="m3.5 10.5 7-7" stroke={color} strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** 思考火花 */
 export function IconSpark({ size = 12, color = "var(--acc)", style }: IconProps) {
   return (

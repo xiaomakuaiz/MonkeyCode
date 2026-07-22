@@ -29,7 +29,18 @@ import {
   type ReactNode,
 } from "react";
 import { openExternal } from "./host";
-import { IconCheck, IconChevronRight, IconDots, IconFolder, IconSpark, IconTrash } from "./icons";
+import {
+  IconCheck,
+  IconChevronRight,
+  IconDots,
+  IconFolder,
+  IconSpark,
+  IconTaskBlocked,
+  IconTaskDone,
+  IconTaskPending,
+  IconTaskRunning,
+  IconTrash,
+} from "./icons";
 import { permAnchors } from "./reduce";
 import { localizedToolTitleText, localizeToolTitle, toolDisplayName } from "./toolLabels";
 import type { LogItem, PlanEntry } from "./types";
@@ -179,8 +190,12 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
     const names = deps.map((d) => byId.get(d)).filter(Boolean).map((x) => `#${x!.idx}`);
     return names.length ? `等 ${names.join(" ")}` : null;
   };
-  const mark = (s: string, blocked: boolean) =>
-    blocked ? "⊘" : s === "completed" ? "☑" : s === "in_progress" ? "◐" : "☐";
+  const statusIcon = (status: string, blocked: boolean, size = 12) => {
+    if (blocked) return <IconTaskBlocked size={size} />;
+    if (status === "completed") return <IconTaskDone size={size} />;
+    if (status === "in_progress") return <IconTaskRunning size={size} />;
+    return <IconTaskPending size={size} />;
+  };
   // 有任何依赖关系时全员编号,"等 #N" 才有落点
   const numbered = entries.some((e) => e.depends_on?.length);
   return (
@@ -194,9 +209,7 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
           cursor: "pointer", font: "inherit", fontSize: 12, textAlign: "left",
         }}
       >
-        <span style={{ color: done === entries.length && entries.length > 0 ? "var(--t5)" : "var(--acc)", fontWeight: 700 }}>
-          {done === entries.length && entries.length > 0 ? "☑" : "◐"}
-        </span>
+        {statusIcon(done === entries.length && entries.length > 0 ? "completed" : "in_progress", false, 13)}
         <span style={{ fontWeight: 600 }}>
           任务 {done}/{entries.length}
         </span>
@@ -205,7 +218,11 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
             · {current.status === "in_progress" ? "正在" : "接下来"}:{current.content}
           </span>
         )}
-        <span style={{ marginLeft: "auto", color: "var(--t5)", fontSize: 10 }}>{open ? "▾" : "▸"}</span>
+        <IconChevronRight
+          size={9}
+          color="var(--t5)"
+          style={{ marginLeft: "auto", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
+        />
       </button>
       {open && (
         <div style={{ maxHeight: 176, overflowY: "auto", padding: "0 12px 9px", display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5 }}>
@@ -221,7 +238,9 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
                 }}
                 title={hint ? `依赖未完成: ${hint}` : undefined}
               >
-                <span style={{ display: "inline-block", width: 18 }}>{mark(e.status, blocked)}</span>
+                <span style={{ display: "inline-flex", width: 18, verticalAlign: -2 }}>
+                  {statusIcon(e.status, blocked)}
+                </span>
                 {numbered && <span style={{ color: "var(--t5)", marginRight: 5, fontSize: 11 }}>#{i + 1}</span>}
                 {e.content}
                 {hint && <span style={{ color: "var(--t5)", fontSize: 11, marginLeft: 6 }}>· {hint}</span>}
@@ -361,7 +380,7 @@ export function ToolCard({
   return (
     <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
       <div title={item.title} style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0, whiteSpace: "nowrap" }}>
-        {/* 待审批:⏸ 顶掉运行点(与 ✗/◐/⊘ 同属符号词汇,非 emoji),
+        {/* 待审批:⏸ 顶掉运行状态图标,
             解答后回到 run/ok/fail 常规流转 */}
         {perm ? (
           <span style={{ color: "var(--warn)", fontSize: 11, flex: "none" }}>⏸</span>
