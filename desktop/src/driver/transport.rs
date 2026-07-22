@@ -166,6 +166,9 @@ impl OhmyDriver {
         let proc_cwd = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let mut child = Command::new(&bin)
             .current_dir(&proc_cwd)
+            // GUI 启动时环境贫瘠,按登录 shell 补齐(只补缺,见 login_shell_env);
+            // OHMYAGENT_CONFIG_DIR 在其后设置,恒不被补齐项影响
+            .envs(engine_env_additions())
             .env("OHMYAGENT_CONFIG_DIR", &engine_dir)
             .arg("--stdio")
             .stdin(Stdio::piped())
@@ -500,6 +503,166 @@ fn migrate_legacy_sessions(engine_dir: &std::path::Path) {
     }
     copy_dir(&old_sessions, &new_sessions);
     eprintln!("[desktop] 已迁移 ~/.ohmyagent/sessions → {}", new_sessions.display());
+}
+
+/// 登录 shell 环境补齐(unix):从 Finder/Dock/桌面启动器点开时,GUI 会话
+/// 给壳的环境是贫瘠子集(macOS 下 PATH 仅系统四目录),shell profile 里
+/// export 的 PATH/代理/密钥全部缺席——引擎的 bash 工具与其 spawn 的
+/// MCP stdio 子进程(npx 等)会齐刷刷"命令找不到"。这里跑一次用户登录
+/// shell 取完整 env(VS Code 同款手法),进程级缓存(save_config 重启
+/// 引擎不反复起 shell)。Windows 的 GUI 进程本就继承完整用户环境,不需要。
+///
+/// 合并策略见 engine_env_additions:**只补壳进程缺失的键**——GUI 会话
+/// 独有的值(如 launchd 的 SSH_AUTH_SOCK)不被登录 shell 的覆盖;
+/// PATH 例外,取"登录 shell 在前 + 壳独有段追加"的并集。终端启动开发时
+/// 登录 env 基本是当前 env 的子集,合并自然无感。
+#[cfg(unix)]
+fn login_shell_env() -> &'static HashMap<String, String> {
+    static CACHE: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+        // env -0 防值内换行;老 env 无 -0 时回退普通形态(值内换行的键会解坏,
+        // 解析层跳过坏行即可)。command 前缀绕开同名 alias/函数。
+        let mut child = match Command::new(&shell)
+            .args(["-lc", "command env -0 2>/dev/null || command env"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[desktop] 登录 shell({shell})启动失败,引擎环境不补齐: {e}");
+                return HashMap::new();
+            }
+        };
+        // stdout 必须并发读:env 输出超过管道缓冲时,先 wait 后读会互相卡死
+        let mut out = child.stdout.take().expect("piped");
+        let reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            use std::io::Read;
+            let _ = out.read_to_end(&mut buf);
+            buf
+        });
+        // 5s 超时:用户 profile 挂死(等输入/网络)不能拖住壳启动
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    eprintln!("[desktop] 登录 shell 5s 未返回(profile 挂死?),引擎环境不补齐");
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(30)),
+                Err(_) => break,
+            }
+        }
+        let buf = reader.join().unwrap_or_default();
+        let env = parse_env_output(&buf);
+        if !env.is_empty() {
+            eprintln!("[desktop] 登录 shell 环境已解析({} 项)", env.len());
+        }
+        env
+    })
+}
+
+/// env(-0) 输出 → 键值表:优先按 NUL 分隔,无 NUL(回退形态)按行分隔;
+/// 无 '=' 的坏行(回退形态下值内换行的碎片)跳过。
+fn parse_env_output(buf: &[u8]) -> HashMap<String, String> {
+    let text = String::from_utf8_lossy(buf);
+    let sep = if text.contains('\0') { '\0' } else { '\n' };
+    text.split(sep)
+        .filter_map(|kv| kv.split_once('='))
+        .filter(|(k, _)| !k.is_empty())
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// 引擎子进程的补齐项(在继承壳环境的基础上叠加)。纯函数,current 由
+/// 调用方传入以便测试。会话性噪音键(PWD/SHLVL 等)不搬。
+fn merge_login_env(
+    login: &HashMap<String, String>,
+    current: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    const SKIP: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
+    let mut out = Vec::new();
+    for (k, v) in login {
+        if SKIP.contains(&k.as_str()) {
+            continue;
+        }
+        if k == "PATH" {
+            // 登录 shell 的 PATH 在前(用户配置的优先级),壳环境独有段追加
+            let mut parts: Vec<&str> = v.split(':').filter(|s| !s.is_empty()).collect();
+            for p in current.get("PATH").map(String::as_str).unwrap_or("").split(':') {
+                if !p.is_empty() && !parts.contains(&p) {
+                    parts.push(p);
+                }
+            }
+            out.push((k.clone(), parts.join(":")));
+        } else if !current.contains_key(k) {
+            out.push((k.clone(), v.clone()));
+        }
+    }
+    out
+}
+
+#[cfg(unix)]
+fn engine_env_additions() -> Vec<(String, String)> {
+    let current: HashMap<String, String> = std::env::vars().collect();
+    merge_login_env(login_shell_env(), &current)
+}
+
+#[cfg(not(unix))]
+fn engine_env_additions() -> Vec<(String, String)> {
+    Vec::new()
+}
+
+#[cfg(test)]
+mod login_env_tests {
+    use super::*;
+
+    #[test]
+    fn parse_nul_and_line_forms() {
+        let nul = b"A=1\0PATH=/a:/b\0EMPTY=\0BAD\0";
+        let m = parse_env_output(nul);
+        assert_eq!(m.get("A").map(String::as_str), Some("1"));
+        assert_eq!(m.get("PATH").map(String::as_str), Some("/a:/b"));
+        assert_eq!(m.get("EMPTY").map(String::as_str), Some(""));
+        assert!(!m.contains_key("BAD"));
+        // 回退形态:按行;值内换行的碎片行(无 =)被跳过
+        let lines = b"A=1\nWRAPPED=first\nsecond half\nB=2";
+        let m = parse_env_output(lines);
+        assert_eq!(m.get("B").map(String::as_str), Some("2"));
+        assert!(!m.contains_key("second half"));
+    }
+
+    #[test]
+    fn merge_only_fills_missing_and_unions_path() {
+        let login: HashMap<String, String> = [
+            ("PATH", "/opt/homebrew/bin:/usr/bin"),
+            ("HTTP_PROXY", "http://127.0.0.1:7890"),
+            ("SSH_AUTH_SOCK", "/login/sock"),
+            ("PWD", "/home/u"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        let current: HashMap<String, String> =
+            [("PATH", "/usr/bin:/bin"), ("SSH_AUTH_SOCK", "/gui/launchd.sock")]
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect();
+        let out: HashMap<String, String> = merge_login_env(&login, &current).into_iter().collect();
+        // PATH 并集:登录在前,壳独有段(/bin)追加,去重(/usr/bin)
+        assert_eq!(out.get("PATH").map(String::as_str), Some("/opt/homebrew/bin:/usr/bin:/bin"));
+        // 缺失键补上
+        assert_eq!(out.get("HTTP_PROXY").map(String::as_str), Some("http://127.0.0.1:7890"));
+        // 壳已有的键不覆盖(GUI 会话的 SSH_AUTH_SOCK 保留)、噪音键不搬
+        assert!(!out.contains_key("SSH_AUTH_SOCK"));
+        assert!(!out.contains_key("PWD"));
+    }
 }
 
 pub(super) fn find_ohmyagent() -> Option<PathBuf> {
