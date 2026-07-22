@@ -1779,3 +1779,84 @@ Windows 侧 7440 被占扩展桥静默失效;WSL 内核访问不到 Windows loca
       (桌面是有人的 UI,引擎给持久 Task 工具族而非 TodoWrite)
 - [x] E2E 换新 schema(别名"测试模型"全链路);OHMYAGENT_REF 钉 06f945e;
       cargo 31/31、零告警
+
+## 架构评审全量修复(2026-07-21,四路评审 → 分波实施)
+
+> 评审范围:壳 Rust 核心 / baizhi+browser / React UI / 壳↔引擎契约。
+> 结论:骨架不动,修四条主线——真实缺陷、引擎 API 缺口逼出的壳侧补偿、
+> 云端未纳入既有抽象、三段手写契约漂移。
+
+### Wave 1:P0 真实缺陷(按文件分区并行)✅
+- [x] ohmy.rs 五连修:respond 改带 id 的 fire-and-log RPC(防 reader 自等死锁,
+      EOF 统一清 pending)、sessions_list 锁内快照放锁再读盘、write_sidecar
+      temp+rename、error 帧 transient_retry 不产 task_error、protocolVersion
+      校验(不匹配拒启,防双报 engine-crashed)
+- [x] monkeycode.rs cloud_ws_open TOCTOU:PipeEntry 代次占位,连接前 claim、
+      失败/收尾只删自己那代;select biased 先消费 Close
+- [x] mcp.rs token:getrandom + bridge::ct_eq(弱随机退化路径删除)
+- [x] tauri.conf.json CSP:script-src 'self' 禁远程脚本,远程图片一并封
+      (注入外泄通道);探针 fetch 被拦有 invoke 兜底,无头冒烟验证通过
+- [x] client.ts 云端控制流:指数退避+5 次放弃+短命断开闸、放弃后懒重连、
+      断开即 reject 在途 pending、CloudConn.send 真实 Promise<boolean>
+      (调用方改"成功才回写")、call 超时按调用覆盖(switch_model 90s+唤醒文案)
+
+### Wave 2:P1 结构收编 ✅
+- [x] journal 专职写线程+句柄缓存(上限 16 LRU):热路径零磁盘 I/O;帧序与
+      seq 编号同锁;session_open 回放缺口经锁内屏障+字节位点补读确定性消除
+      (并发推帧单测锁定);sidecar/回放/删除 spawn_blocking;崩溃日志轮转 .prev
+- [x] 引擎协议补齐(ohmyagent):permission/respond.remember(命令段粒度规则
+      +项目设置持久化)、session/exists+list、model_done 带全文、events/dropped
+      不可丢通知、AgentEvent.seq(被丢 delta 占号=空洞可测)——新增 caps 5 个
+      +shutdownGraceMs;go test -race 23 包全绿
+- [x] 引擎契约加固:wire 防腐层(TestWireShapes 钉序列化)、tool_result.is_error、
+      agent_result 全量结构化事件、退出预算宣告、integration-guide/架构文档修正
+- [x] 壳侧收编(全部 caps 门控,旧路径注释"兼容尾巴"):审批记忆移引擎(壳
+      perm_remember 新引擎下停用,E2E 断言二次同命令不弹卡)、session/exists
+      取代 messages.jsonl 磁盘探测、model_done 前缀对账补帧+seq 空洞告警、
+      is_error/agent_result 取代 "Error: " 嗅探与截断 JSON 解析、停止预算
+      grace+3s
+- [x] 抽 useCloudTask:createCloudTaskCore 零 React 依赖(11 ref 收敛为核心
+      字段,trySendRef hack 消失),cloudtask.tsx 1014→543;新增状态机测试 9 例
+
+### Wave 3:P2 收敛与测试 ✅
+- [x] UI 共享件:filesdrawer.tsx(FsAdapter 适配双端,删两份 ~630 行实现)、
+      composer.tsx(Composer/QueuedChip/RunningBar+IME helpers)、components
+      ViewHeader/HeaderMenu/ConfirmPane;六视图共删 996 行重复
+- [x] ohmy.rs 3039→96 门面 + transport/session/normalize/subagent/ohmy_tests
+      五文件;Inner 拆 3 锁组且锁序成文;逆变换逐行比对零逻辑漂移。
+      client.ts 1014 行拆 ipc/session/uploads/baizhiapi/cloudapi/host 六域,
+      74 导出符号无遗漏,IPC 载荷类型归位 types.ts
+- [x] 测试补白:wechat 全链路 fixture(22/22,顺手抓到二维码 URL 丢端口真 bug)、
+      browser 可编程假扩展 5 条集成(snapshot→click/ref 失效/detached 自愈/
+      新连顶旧连/tab 清理+对话框,12/12)、connectCloudControl 状态机(随 W1-C)
+- [x] 杂项:urlencode/UNC/git 合并、time crate 换手写历算(非法日期拒绝)、
+      TLD 级 Domain 防护、detached 走 [ERR_DETACHED] 标记、bridge 出站有界
+      64+Notify 关闭、repair 清 tabs/handoffs、单会话 debug_assert 守卫、
+      LazyLock、ms_to_rfc3339 补测(date -u 对表)、config↔browser 显式传参、
+      探针 include_str! 外置、云端默认值常量块+task_defaults 迁移通道、
+      model/permMode 单一真值(镜像 state 清零)、NewTaskView props 15→7、
+      envelope 四合一(策略参数化,语义差异测试钉死)、go-sdk 发包形态测试
+
+### Wave 4:P3 长期债 ✅
+- [x] ts-rs 12(仅 dev-dep,cfg(test) 门控):Frame wire 结构典型化且 build()
+      经它序列化(生成物=真实产帧路径),SessionStatus/PermOutcome 导出
+      ui/src/gen/,types.ts 复用;幂等三连验证。HostConfig 留手写(config.rs
+      范围外),SOURCE_BAIZHI 常量留手写
+- [x] 帧 base64 层去除:壳只产内联 JSON;codec.frameData 三态容错唯一收口
+      (存量 journal/云端裸对象两条兼容边界注释钉死),旧格式回归 3 例
+- [x] 子代理认领启发式删除:无 parent_session_id 记日志丢弃,精确路径保留
+
+### Review(2026-07-21)
+
+终验:引擎 go vet + go test 23 包全绿;桌面 `MC_OHMYAGENT_BIN` 新引擎
+cargo test **60/60 零警告**(4 个真实引擎 E2E + perm remember/对账/结构化/
+不认领新 E2E);UI tsc 干净 + vitest **66/66** + vite build + uidist 重建;
+无头冒烟(xvfb+dbus+探针)CSP 生效下 IPC 全链路 OK,新引擎 caps=14。
+
+**未尽事项(留待用户决策)**:
+1. 两仓库改动均未 commit(含引擎侧);引擎提交后需 bump 三个 workflow 的
+   OHMYAGENT_REF 并同步 desktop/README·ARCHITECTURE 的钉版说明
+2. 兼容尾巴按设计保留:codec 旧格式读路径(存量 journal/云端契约)、壳侧
+   旧引擎 caps 回退路径(同包分发,可在下个版本清理)
+3. 评审建议未采纳项:引擎崩溃自动重试(现状"外显+一键恢复"是可辩护的
+   显式设计,未改);CloudPipes 并入 BaizhiState(收益小改动面大,未动)
