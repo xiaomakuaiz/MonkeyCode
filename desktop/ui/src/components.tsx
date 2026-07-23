@@ -510,7 +510,7 @@ export function ToolCard({
     minWidth: 0,
   };
   return (
-    <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
+    <div className="card tool-card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
       <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", columnGap: 9, alignItems: "center", minWidth: 0 }}>
         {/* 待审批:⏸ 顶掉运行状态图标,
             解答后回到 run/ok/fail 常规流转 */}
@@ -522,7 +522,7 @@ export function ToolCard({
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={targetKind} />}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 18 }}>
-          {duration && <span title={`耗时 ${duration}`} style={{ color: "var(--t5)", fontSize: 10.5, whiteSpace: "nowrap" }}>{duration}</span>}
+          {duration && <span className="tool-duration" title={`耗时 ${duration}`} style={{ color: "var(--t5)", fontSize: 10.5, whiteSpace: "nowrap" }}>{duration}</span>}
           {item.childSessionId && onOpenChild && (
             <a
               href="#"

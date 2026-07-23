@@ -16,12 +16,13 @@ const tool = (overrides: Partial<Extract<LogItem, { kind: "tool" }>> = {}): Extr
 });
 
 describe("ToolCard", () => {
-  it("单行展示工具名称、调用目标和可靠耗时，不展示成功结果摘要", () => {
+  it("单行展示工具名称、调用目标和悬浮耗时，不展示成功结果摘要", () => {
     const html = renderToStaticMarkup(<ToolCard item={tool()} workdir="/repo" />);
 
     expect(html).toContain("读取文件");
     expect(html).toContain("src/main.ts");
     expect(html).toContain("1.2s");
+    expect(html).toContain('class="tool-duration"');
     expect(html).toContain("font-weight:500");
     expect(html).not.toContain("不应展示的原始结果");
   });
