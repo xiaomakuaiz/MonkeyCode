@@ -53,6 +53,31 @@ interface McpEntry {
   extra?: Record<string, unknown>;
 }
 
+const MCP_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+/** MCP server 名会进入 mcp__<server>__<tool>，因此必须满足模型工具名约束。 */
+export function mcpNameValidationError(name: string): string | null {
+  const normalized = name.trim();
+  if (!normalized) return "请输入 MCP 名称";
+  if (!MCP_NAME_PATTERN.test(normalized)) return "仅支持英文字母、数字、_ 和 -";
+  return null;
+}
+
+/** 返回与 entries 同下标的错误；trim 后重名的两项都会被标记。 */
+export function validateMcpNames(entries: ReadonlyArray<{ name: string }>): Array<string | null> {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    const name = entry.name.trim();
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return entries.map((entry) => {
+    const name = entry.name.trim();
+    const formatError = mcpNameValidationError(entry.name);
+    if (formatError) return formatError;
+    return (counts.get(name) ?? 0) > 1 ? `MCP 名称重复: ${name}` : null;
+  });
+}
+
 /** serversToMcps 拆进表单字段的键;其余键进 extra 原样往返 */
 const MCP_FORM_KEYS = new Set(["url", "command", "args", "env", "headers", "source"]);
 
@@ -561,6 +586,8 @@ export function SettingsView({
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const mcpNameErrors = useMemo(() => validateMcpNames(mcps), [mcps]);
+  const hasMcpNameErrors = mcpNameErrors.some(Boolean);
 
   // 登录态由 Shell 持有:账号页 BaizhiCard 与模型/MCP 页的引导条共用
   const [bzStatus, setBzStatus] = useState<BaizhiStatus | null>(null);
@@ -704,6 +731,13 @@ export function SettingsView({
         return;
       }
       names.add(m.name.trim());
+    }
+    const invalidMcp = mcpNameErrors.findIndex(Boolean);
+    if (invalidMcp >= 0) {
+      setErr(mcpNameErrors[invalidMcp] ?? "MCP 名称无效");
+      setActive("mcp");
+      setMcpExpanded(invalidMcp);
+      return;
     }
     setErr("");
     setSaving(true);
@@ -949,6 +983,7 @@ export function SettingsView({
   const mcpRow = (m: McpEntry, i: number) => {
     const isOpen = mcpExpanded === i;
     const disabled = !!m.extra?.disabled;
+    const nameError = mcpNameErrors[i];
     return (
       <>
         <div
@@ -957,7 +992,7 @@ export function SettingsView({
           style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: "pointer", userSelect: "none", opacity: disabled ? 0.5 : 1 }}
         >
           {m.source === SOURCE_BAIZHI && <BaizhiLogo size={14} />}
-          <span className="ellipsis" style={{ fontSize: 12.5, fontFamily: MONO, color: m.name.trim() ? "var(--t1)" : "var(--t5)", flex: "none", maxWidth: 180 }}>
+          <span className="ellipsis" style={{ fontSize: 12.5, fontFamily: MONO, color: nameError ? "var(--err)" : m.name.trim() ? "var(--t1)" : "var(--t5)", flex: "none", maxWidth: 180 }}>
             {m.name.trim() || "未命名"}
           </span>
           <span style={pill}>{m.type}</span>
@@ -1000,7 +1035,17 @@ export function SettingsView({
           <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "4px 14px 14px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: 12 }}>
               <Field label="名称">
-                <input style={input} value={m.name} placeholder="如: context7" onChange={(e) => patchMcp(i, { name: e.target.value })} className="hv-bd" />
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <input
+                    style={{ ...input, borderColor: nameError ? "var(--err)" : undefined }}
+                    value={m.name}
+                    placeholder="如: context7"
+                    onChange={(e) => patchMcp(i, { name: e.target.value })}
+                    className="hv-bd"
+                    aria-invalid={!!nameError}
+                  />
+                  {nameError && <span style={{ color: "var(--err)", fontSize: 11 }}>{nameError}</span>}
+                </div>
               </Field>
               <Field label="类型">
                 <select style={select} value={m.type} onChange={(e) => patchMcp(i, { type: e.target.value as McpEntry["type"] })}>
@@ -1250,7 +1295,9 @@ export function SettingsView({
             </button>
             <button
               className="hv-acc"
-              onClick={() => !saving && void save()}
+              onClick={() => !saving && !hasMcpNameErrors && void save()}
+              disabled={saving || hasMcpNameErrors}
+              title={hasMcpNameErrors ? "请先修正 MCP 名称" : undefined}
               style={{
                 height: 28,
                 border: "none",
@@ -1260,8 +1307,8 @@ export function SettingsView({
                 fontWeight: 700,
                 fontSize: 12.5,
                 padding: "0 18px",
-                cursor: saving ? "default" : "pointer",
-                opacity: saving ? 0.6 : 1,
+                cursor: saving || hasMcpNameErrors ? "not-allowed" : "pointer",
+                opacity: saving || hasMcpNameErrors ? 0.6 : 1,
                 boxShadow: "var(--accSh)",
                 display: "flex",
                 alignItems: "center",

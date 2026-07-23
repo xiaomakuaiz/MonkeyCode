@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 static TEMP_FILE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -442,9 +443,14 @@ fn write_ohmyagent_config(
             if v.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false) {
                 continue;
             }
+            // 新版 UI 会前置校验名称；旧配置/外部写入仍可能含中文。引擎会把
+            // name 拼进 mcp__<server>__<tool>,而 OpenAI Responses 仅接受
+            // [A-Za-z0-9_-]。只规范化派生 mcp.json,不回写权威 config.json。
+            let engine_name = engine_mcp_server_name(name);
             if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
-                let mut entry =
-                    serde_json::json!({ "name": name, "transport": "stdio", "command": cmd });
+                let mut entry = serde_json::json!({
+                    "name": engine_name, "transport": "stdio", "command": cmd
+                });
                 if let Some(args) = v.get("args") {
                     entry["args"] = args.clone();
                 }
@@ -453,8 +459,9 @@ fn write_ohmyagent_config(
                 }
                 servers.push(entry);
             } else if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
-                let mut entry =
-                    serde_json::json!({ "name": name, "transport": "streamable-http", "url": url });
+                let mut entry = serde_json::json!({
+                    "name": engine_name, "transport": "streamable-http", "url": url
+                });
                 if let Some(h) = v
                     .get("headers")
                     .and_then(|h| h.as_object())
@@ -481,6 +488,41 @@ fn write_ohmyagent_config(
             .map_err(|e| e.to_string())?,
     )?;
     Ok(())
+}
+
+/// 兼容旧版/外部写入的中文 MCP 名称：引擎侧名称会进入模型工具标识，必须
+/// 满足 OpenAI 的 ASCII 约束。合法名称保持不变；发生转换时追加原名哈希。
+fn engine_mcp_server_name(display_name: &str) -> String {
+    let compatible = !display_name.is_empty()
+        && display_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if compatible {
+        return display_name.to_string();
+    }
+
+    let mut slug = String::new();
+    let mut separator_pending = false;
+    for ch in display_name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            if separator_pending
+                && !slug.is_empty()
+                && !slug.ends_with('_')
+                && !slug.ends_with('-')
+            {
+                slug.push('_');
+            }
+            slug.push(ch);
+            separator_pending = false;
+        } else {
+            separator_pending = true;
+        }
+    }
+    let slug = slug.trim_matches(|c| c == '_' || c == '-');
+    let slug = if slug.is_empty() { "server" } else { slug };
+    let digest = Sha256::digest(display_name.as_bytes());
+    let hash: String = digest[..6].iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{slug}_{hash}")
 }
 
 #[cfg(test)]
@@ -630,6 +672,50 @@ mod tests {
         assert!(
             !names.contains(&"off-http"),
             "禁用的 http server 应被过滤: {names:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 旧版中文名称写给引擎时必须生成稳定的 ASCII server 标识，且不能
+    /// 反向改掉用户的权威配置。
+    #[test]
+    fn unicode_mcp_name_is_normalized_only_in_derived_config() {
+        let dir = test_dir("unicode-mcp-name");
+        let _ = fs::remove_dir_all(&dir);
+        let display_name = "我的知识库";
+        let cfg = DesktopConfig {
+            mcp_servers: serde_json::json!({
+                display_name: { "url": "https://example.invalid/mcp" },
+                "english-server": { "command": "mcp-server" },
+            }),
+            ..Default::default()
+        };
+
+        write_ohmyagent_config(&dir, &cfg, None).unwrap();
+
+        let mcp: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("mcp.json")).unwrap()).unwrap();
+        let names: Vec<&str> = mcp["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|server| server["name"].as_str())
+            .collect();
+        let engine_name = engine_mcp_server_name(display_name);
+        assert_ne!(engine_name, display_name);
+        assert!(
+            engine_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+            "引擎名称必须满足 OpenAI tool name 约束: {engine_name}"
+        );
+        assert!(names.contains(&engine_name.as_str()), "派生名称缺失: {names:?}");
+        assert!(names.contains(&"english-server"), "合法名称不应改变: {names:?}");
+        assert_eq!(engine_mcp_server_name(display_name), engine_name);
+        assert_ne!(engine_mcp_server_name("另一个知识库"), engine_name);
+        assert!(
+            cfg.mcp_servers.get(display_name).is_some(),
+            "权威配置中的中文展示名不应改变"
         );
         let _ = fs::remove_dir_all(&dir);
     }
