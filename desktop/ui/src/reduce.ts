@@ -329,7 +329,10 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
 export function reduceFrame(s: ChatState, f: Frame): ChatState {
   switch (f.type) {
     case "task-started":
-      return { ...s, running: true };
+      // plan/todo 是轮次级状态:上一轮的最终清单可在结束后保留供回顾,
+      // 新一轮开始时只清掉已全部完成的清单;还有未完成项则跨轮保留,
+      // 直到本轮 plan 帧继续更新它。
+      return { ...s, running: true, plan: s.plan.length > 0 && s.plan.every((e) => e.status === "completed") ? [] : s.plan };
     case "task-ended":
       return {
         ...s,

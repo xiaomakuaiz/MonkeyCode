@@ -389,6 +389,16 @@ export function ChatView({
     if (el && e.clientX > el.getBoundingClientRect().right - 20) pinnedRef.current = false;
   };
 
+  // 用户从历史位置发出新消息时,这次发送本身就是回到当前轮次的
+  // 明确意图:立即结束锚点恢复并重新贴底。后续 user-input / 流式帧到达时
+  // alignLog effect 会持续跟到最新内容;空输入或未连接的未接受发送不改变位置。
+  const sendAndFollow = () => {
+    if (!session.send()) return;
+    restoreRef.current = null;
+    pinnedRef.current = true;
+    alignLog();
+  };
+
   // 粘贴附件:剪贴板里的 file item(截图/复制的文件)上传为附件,文本粘贴不受影响
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const files: File[] = [];
@@ -603,7 +613,7 @@ export function ChatView({
           placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片/文件可作为附件"}
           sendActive={!!input.trim() || atts.length > 0}
           onChange={session.setInput}
-          onSend={session.send}
+          onSend={sendAndFollow}
           onPaste={onPaste}
           above={
             atts.length > 0 && (

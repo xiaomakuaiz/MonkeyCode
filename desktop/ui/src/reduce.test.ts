@@ -263,6 +263,41 @@ describe("计划卡片", () => {
     expect(s.items.map((it) => it.kind)).toEqual(["agent"]);
     expect(s.plan).toEqual([{ content: "步骤一", status: "completed" }]);
   });
+
+  it("新一轮开始时清空上一轮已全部完成的任务清单", () => {
+    const previous = run([
+      frame("task-started"),
+      acp({ sessionUpdate: "plan", entries: [{ content: "上一轮任务", status: "completed" }] }),
+      frame("task-ended"),
+    ]);
+    expect(previous.plan).toHaveLength(1);
+
+    const next = reduceBatch(previous, [
+      frame("user-input", { content: b64encode("开始下一轮") }),
+      frame("task-started"),
+    ]);
+    expect(next.plan).toEqual([]);
+    expect(next.running).toBe(true);
+  });
+
+  it("新一轮开始时保留上一轮尚未完成的任务清单", () => {
+    const entries = [
+      { content: "已完成", status: "completed" },
+      { content: "继续处理", status: "in_progress" },
+    ];
+    const previous = run([
+      frame("task-started"),
+      acp({ sessionUpdate: "plan", entries }),
+      frame("task-ended"),
+    ]);
+
+    const next = reduceBatch(previous, [
+      frame("user-input", { content: b64encode("继续做") }),
+      frame("task-started"),
+    ]);
+    expect(next.plan).toEqual(entries);
+    expect(next.running).toBe(true);
+  });
 });
 
 describe("审批卡片状态机", () => {

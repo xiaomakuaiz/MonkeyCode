@@ -61,8 +61,9 @@ export interface SessionHandle {
   /** 断开并复位;forget 时一并清掉"上次会话"记忆(删除流程) */
   close(forget?: boolean): void;
   setInput(v: string): void;
-  /** 发送输入+附件;运行中自动排队,本轮结束发出 */
-  send(): void;
+  /** 发送输入+附件;运行中自动排队,本轮结束发出。
+   * 返回本次输入是否已接受(已发送或已排队),视图据此决定是否跟随最新消息。 */
+  send(): boolean;
   stop(): void;
   clearQueued(): void;
   addFiles(files: File[]): Promise<void>;
@@ -226,16 +227,16 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   // 卸载即断开
   useEffect(() => () => connRef.current?.close(), []);
 
-  const send = () => {
+  const send = (): boolean => {
     const lines = atts.map((a) => `${a.isImage ? "[图片]" : "[文件]"} ${a.path}`);
     const text = [input.trim(), ...lines].filter(Boolean).join("\n");
-    if (!text || !connRef.current) return;
+    if (!text || !connRef.current) return false;
     if (chat.running) {
       // 运行中先排队,本轮结束自动发送(可取消)
       setQueued(text);
       setInput("");
       setAtts([]);
-      return;
+      return true;
     }
     void connRef.current.send("user-input", { content: b64encode(text) }).then((ok) => {
       // 失败时保留输入与附件(原因已经 onStatus 外显),用户可重试
@@ -244,6 +245,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
         setAtts([]);
       }
     });
+    return true;
   };
 
   const addFiles = async (files: File[]) => {
