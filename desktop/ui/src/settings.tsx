@@ -288,7 +288,7 @@ function BrowserExtCard() {
   } else if (!st) {
     statusLine = <>{dot("var(--t5)")}<span>读取状态中…</span></>;
   } else if (!st.enabled) {
-    statusLine = <>{dot("var(--err)")}<span>扩展桥未启用{st.error ? `: ${st.error}` : ""}</span></>;
+    statusLine = <>{dot("var(--err)")}<span>浏览器功能未启用{st.error ? `：${st.error}` : ""}</span></>;
   } else if (st.connected) {
     statusLine = (
       <>
@@ -300,9 +300,9 @@ function BrowserExtCard() {
       </>
     );
   } else if (st.paired) {
-    statusLine = <>{dot("var(--warn)")}<span>已配对,等待扩展连接(浏览器未开或扩展未启用)</span></>;
+    statusLine = <>{dot("var(--warn)")}<span>等待扩展连接，请确认 Chrome/Edge 已打开且扩展已启用</span></>;
   } else {
-    statusLine = <>{dot("var(--warn)")}<span>未配对</span></>;
+    statusLine = <>{dot("var(--warn)")}<span>尚未配对</span></>;
   }
 
   return (
@@ -319,7 +319,7 @@ function BrowserExtCard() {
         </div>
         {st?.enabled && !st.paired && code && (
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 12, color: "var(--t4)", flex: "none" }}>配对码</span>
+            <span style={{ fontSize: 12, color: "var(--t4)", flex: "none" }}>一次性配对码</span>
             <span style={{ fontFamily: MONO, fontSize: 18, fontWeight: 700, letterSpacing: 2, color: "var(--t1)" }}>{codeShown}</span>
             <button className="hv" onClick={copyCode} style={{ ...whiteBtn, height: 24, padding: "0 9px", fontSize: 11.5, flex: "none" }}>
               {copied ? "已复制" : "复制"}
@@ -327,13 +327,17 @@ function BrowserExtCard() {
           </div>
         )}
         {st?.enabled && st.addr && (
-          <span style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>桥接地址: {st.addr}</span>
+          <span style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>本地连接地址：{st.addr}</span>
         )}
       </div>
       <div style={{ fontSize: 12.5, color: "var(--t4)", lineHeight: 1.8 }}>
-        安装 MonkeyCode 浏览器扩展后,agent 可以在你的浏览器里打开网页、点击、输入、截图(共享登录态,操作前会请求授权):
-        <ol style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+        <div style={{ color: "var(--t2)", fontWeight: 650 }}>首次使用，请按下面 3 步连接浏览器</div>
+        <div style={{ marginTop: 2 }}>
+          连接后，MonkeyCode 可以打开网页、点击、输入和截图，并使用 Chrome/Edge 中已有的登录状态。
+        </div>
+        <ol style={{ margin: "8px 0 0", paddingLeft: 20 }}>
           <li>
+            <strong style={{ color: "var(--t2)" }}>安装扩展。</strong>
             {inDesktopShell() ? (
               <>
                 点击
@@ -348,17 +352,23 @@ function BrowserExtCard() {
                 >
                   打开扩展目录
                 </button>
-                → 在 Chrome/Edge 扩展管理页(chrome://extensions)开启「开发者模式」→「加载已解压的扩展程序」选择该目录;
+                。在 Chrome 地址栏输入 chrome://extensions（Edge 请输入 edge://extensions），开启「开发者模式」，点击「加载已解压的扩展程序」，选择刚打开的文件夹。
               </>
             ) : (
-              <>在 Chrome/Edge 打开扩展管理页(chrome://extensions),开启「开发者模式」,「加载已解压的扩展程序」选择仓库的 browser-extension/dist 目录(构建见其 README);</>
+              <>先按照 browser-extension/README.md 构建扩展。然后打开 Chrome 的 chrome://extensions（Edge 为 edge://extensions），开启「开发者模式」，点击「加载已解压的扩展程序」，选择仓库中的 browser-extension/dist 文件夹。</>
             )}
           </li>
-          <li>点击扩展图标 → 选项,填入上方配对码完成配对;</li>
-          <li>状态变为「已连接」即可在对话中使用;操作标签页顶部会显示浏览器自带的调试提示条,点击其「取消」即收回控制。</li>
+          <li>
+            <strong style={{ color: "var(--t2)" }}>连接 MonkeyCode。</strong>
+            点击浏览器工具栏中的「MonkeyCode 浏览器助手」，选择「去设置页配对」。输入上方的一次性配对码，端口保持为空，再点击「连接并配对」。
+          </li>
+          <li>
+            <strong style={{ color: "var(--t2)" }}>授权要操作的页面。</strong>
+            上方状态显示「已连接」后，打开目标网页，再次点击扩展图标，选择「把此标签页交给 agent 操作」，即可授权 MonkeyCode 操作当前页面。
+          </li>
         </ol>
         {extDirMsg && <div style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO, marginTop: 4 }}>{extDirMsg}</div>}
-        操作你已打开的页面:点扩展图标 →「把此标签页交给 agent 操作」。
+        <div style={{ marginTop: 6 }}>需要停止时，可在扩展中点击「收回」，也可以点击浏览器顶部提示条中的「取消」。</div>
       </div>
     </>
   );
