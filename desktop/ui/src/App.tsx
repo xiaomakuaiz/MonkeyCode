@@ -623,12 +623,12 @@ export default function App() {
           escRef={drawerEscRef}
           headerExtra={
             <button
-              className="hv"
+              className="hv-acc"
               title={currentMeta?.workdir ?? ""}
               onClick={() => void revealPath("")}
-              style={{ flex: "none", height: 26, border: "1px solid var(--btnBd)", background: "var(--card)", color: "var(--t3)", borderRadius: 7, padding: "0 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "var(--cardSh)" }}
+              style={{ flex: "none", height: 26, border: "none", background: "var(--acc)", color: "var(--onAcc)", borderRadius: 7, padding: "0 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "var(--accSh)" }}
             >
-              <IconFolder size={12} color="var(--t4)" />
+              <IconFolder size={12} color="var(--onAcc)" />
               {IS_MAC ? "在访达中打开" : "打开文件夹"}
             </button>
           }
