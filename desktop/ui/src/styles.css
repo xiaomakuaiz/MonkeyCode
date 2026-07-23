@@ -377,7 +377,13 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   overscroll-behavior-x: contain;
 }
 .md-table-scroll:focus-visible { outline: 2px solid var(--accBd); outline-offset: 2px; }
-.md-table-scroll table { width: 100%; margin: 0; border-collapse: collapse; }
+.md-table-scroll table {
+  width: 100%;
+  min-width: var(--md-table-min-width);
+  max-width: var(--md-table-max-width);
+  margin: 0;
+  border-collapse: collapse;
+}
 .md th, .md td {
   min-width: 96px;
   max-width: 320px;

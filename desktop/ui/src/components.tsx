@@ -59,7 +59,9 @@ marked.use({
     },
     table(token) {
       const table = baseRenderer.table.call(this, token);
-      return `<div class="md-table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0">${table}</div>`;
+      const columns = Math.max(1, token.header.length);
+      const widths = `--md-table-min-width:${columns * 120}px;--md-table-max-width:${columns * 320}px`;
+      return `<div class="md-table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0" style="${widths}">${table}</div>`;
     },
   },
 });
