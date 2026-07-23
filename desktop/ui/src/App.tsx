@@ -621,6 +621,17 @@ export default function App() {
           changesEmptyText="本轮还没有文件改动"
           viewerCloseTitle="关闭,回到文件列表 (esc)"
           escRef={drawerEscRef}
+          headerExtra={
+            <button
+              className="hv"
+              title={currentMeta?.workdir ?? ""}
+              onClick={() => void revealPath("")}
+              style={{ flex: "none", height: 26, border: "none", background: "transparent", color: "var(--t3)", borderRadius: 7, padding: "0 8px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <IconFolder size={12} color="var(--t4)" />
+              {IS_MAC ? "在访达中打开" : "打开文件夹"}
+            </button>
+          }
           viewerExtra={(path) => {
             const st = changeMap.get(path);
             const kind = st ? CHANGE_KIND[st] : undefined;
@@ -639,24 +650,6 @@ export default function App() {
               </>
             );
           }}
-          footer={
-            /* 底部动作栏:不给普通用户看路径(不认识),给任务语言 + 平台母语按钮;
-               完整路径留在按钮悬停提示里给开发者 */
-            <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px 9px 16px", borderTop: "1px solid var(--line2)", whiteSpace: "nowrap" }}>
-              <span className="ellipsis" style={{ flex: 1, fontSize: 11.5, color: "var(--t5)" }}>
-                这个任务的文件都保存在这台电脑上
-              </span>
-              <button
-                className="hv-acc"
-                title={currentMeta?.workdir ?? ""}
-                onClick={() => void revealPath("")}
-                style={{ flex: "none", height: 26, border: "none", background: "var(--acc)", color: "var(--onAcc)", borderRadius: 8, padding: "0 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "var(--accSh)" }}
-              >
-                <IconFolder size={12} color="var(--onAcc)" />
-                {IS_MAC ? "在访达中打开" : "打开文件夹"}
-              </button>
-            </div>
-          }
         />
       )}
 

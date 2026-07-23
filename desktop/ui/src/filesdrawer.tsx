@@ -98,15 +98,14 @@ export function FilesDrawer({
   externalErr,
   resizable,
   errPad,
-  listPadTop = 0,
   dirChangeBadges,
   ghostDeleted,
   emptyRootState,
   changesEmptyText,
   changesLoadingText,
+  headerExtra,
   viewerExtra,
   viewerCloseTitle,
-  footer,
   escRef,
 }: {
   adapter: FsAdapter;
@@ -120,8 +119,6 @@ export function FilesDrawer({
   resizable?: boolean;
   /** 错误行内边距(两侧历史几何不同,原样保留) */
   errPad: string;
-  /** 列表容器顶部内边距(本地 0 / 云端 6,历史几何差异原样保留) */
-  listPadTop?: number;
   /** 树中目录行显示其下改动计数「N 处改动」(本地) */
   dirChangeBadges?: boolean;
   /** 本层已删除文件以划线幽灵行缀在末尾(本地) */
@@ -131,11 +128,11 @@ export function FilesDrawer({
   changesEmptyText: string;
   /** changes 尚未加载(null)时的空态文案(云端「加载中…」;缺省同 changesEmptyText) */
   changesLoadingText?: string;
+  /** 抽屉 header 的扩展动作位(本地:在系统文件管理器中打开工作区) */
+  headerExtra?: ReactNode;
   /** 预览头部在路径与关闭钮之间的扩展位(本地:改动标签 + 文件管理器定位按钮) */
   viewerExtra?: (path: string) => ReactNode;
   viewerCloseTitle: string;
-  /** 底部动作栏(本地:「文件都保存在这台电脑上」+ 打开文件夹) */
-  footer?: ReactNode;
   /** Esc 处理挂点:预览打开时关预览并返回 true,否则返回 false(调用方关抽屉) */
   escRef?: MutableRefObject<(() => boolean) | null>;
 }) {
@@ -437,9 +434,12 @@ export function FilesDrawer({
               </span>
             )}
           </button>
-          <button className="hv2 icon-btn" title="关闭 (esc)" onClick={onClose} style={{ marginLeft: "auto", alignSelf: "center", width: 24, height: 24 }}>
-            <IconX size={11} color="var(--t4)" />
-          </button>
+          <span style={{ marginLeft: "auto", alignSelf: "center", display: "flex", alignItems: "center", gap: 4 }}>
+            {headerExtra}
+            <button className="hv2 icon-btn" title="关闭 (esc)" onClick={onClose} style={{ width: 24, height: 24 }}>
+              <IconX size={11} color="var(--t4)" />
+            </button>
+          </span>
         </div>
 
         {(fsErr || externalErr) && (
@@ -454,7 +454,7 @@ export function FilesDrawer({
             height: viewer && splitH ? splitH : undefined,
             maxHeight: viewer ? (splitH ? "calc(100% - 190px)" : "38%") : undefined,
             overflowY: "auto",
-            padding: `${listPadTop}px 12px 10px`,
+            padding: "6px 12px 10px",
             display: "flex",
             flexDirection: "column",
             gap: 1,
@@ -549,8 +549,6 @@ export function FilesDrawer({
             </div>
           </>
         )}
-
-        {footer}
       </div>
     </>
   );

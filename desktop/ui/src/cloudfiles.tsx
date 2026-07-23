@@ -85,7 +85,6 @@ export function CloudFilesDrawer({ taskId, onClose }: { taskId: string; onClose:
       changes={changes}
       externalErr={ctrlErr}
       errPad="6px 20px 0"
-      listPadTop={6}
       changesEmptyText="还没有文件改动"
       changesLoadingText="加载中…"
       viewerCloseTitle="关闭预览"
