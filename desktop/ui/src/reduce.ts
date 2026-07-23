@@ -225,6 +225,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
         tcId: u.toolCallId ?? "",
         title: u.title || u.kind || "工具调用",
         ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
+        ...(timestamp !== undefined ? { startedAt: timestamp } : {}),
         status: "run",
         out: "",
       });
@@ -256,6 +257,12 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
           const raw = typeof u.rawOutput === "string" ? u.rawOutput : "";
           const out = raw.split("\n")[0].slice(0, 160);
           const images = Array.isArray(u.images) ? (u.images as string[]) : it.images;
+          const durationMs = it.durationMs ?? (
+            timestamp !== undefined && it.startedAt !== undefined && timestamp >= it.startedAt
+              ? timestamp - it.startedAt
+              : undefined
+          );
+          const timing = durationMs !== undefined ? { durationMs } : {};
           const backgroundLaunch = raw.includes("子代理已转入后台继续执行");
           if (backgroundLaunch) {
             // Agent 工具调用虽已返回 completed,子代理仍在后台执行:卡片视觉
@@ -271,14 +278,15 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
               out: error ? "后台执行失败" : "后台执行完成",
               result: raw,
               images,
+              ...timing,
               lastLine: undefined,
               backgroundNoticePending: true,
             };
             return { ...s, items, streamKind: "" };
           }
           // 完整结果一并保留:子代理卡把最终产出按 markdown 展示,
-          // 普通工具卡仍只显示首行摘要
-          items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, result: raw, images, lastLine: undefined };
+          // 普通工具卡仅在失败时外显首行摘要
+          items[i] = { ...it, status: u.status === "completed" ? "ok" : "fail", out, result: raw, images, ...timing, lastLine: undefined };
           break;
         }
       }

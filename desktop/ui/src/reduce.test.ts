@@ -70,6 +70,14 @@ describe("工具调用生命周期", () => {
     expect(toolItem(s, "t1").rawInput).toEqual(rawInput);
   });
 
+  it("起止帧都有时间时记录工具最终耗时", () => {
+    const s = run([
+      { ...acp({ sessionUpdate: "tool_call", toolCallId: "timed", title: "Read a.txt" }), timestamp: 1_000 },
+      { ...acp({ sessionUpdate: "tool_call_update", toolCallId: "timed", status: "completed" }), timestamp: 2_250 },
+    ]);
+    expect(toolItem(s, "timed")).toMatchObject({ startedAt: 1_000, durationMs: 1_250 });
+  });
+
   it("completed 置 ok,rawOutput 取首行且截断 160 字符", () => {
     const long = "x".repeat(200) + "\n第二行";
     const s = run([

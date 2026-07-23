@@ -383,6 +383,7 @@ function ToolTargetText({
   const common: CSSProperties = {
     color: "var(--t3)",
     font: `${compact ? 11 : 11.5}px/1.55 ${MONO}`,
+    flex: 1,
     minWidth: 0,
   };
   if (kind !== "path") {
@@ -399,6 +400,18 @@ function ToolTargetText({
       <span className="ellipsis" style={{ flex: "none", maxWidth: "70%", color: "var(--t3)" }}>{filename}</span>
     </span>
   );
+}
+
+/** 工具卡只显示可靠的最终耗时；没有完整起止时间时宁可留空。 */
+function formatToolDuration(durationMs?: number): string {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return "";
+  if (durationMs < 1_000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1).replace(/\.0$/, "")}s`;
+  const totalSeconds = Math.round(durationMs / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 /** 上传/落盘图片:src 经壳异步回读(data URL),就绪前占位不渲染。 */
@@ -484,6 +497,7 @@ export function ToolCard({
   const fullTarget = presentation.target;
   const target = presentation.targetKind === "path" ? stripWorkdir(fullTarget, workdir) : fullTarget;
   const { action, targetKind } = presentation;
+  const duration = formatToolDuration(item.durationMs);
   const stepRow: CSSProperties = {
     display: "flex",
     gap: 7,
@@ -497,26 +511,18 @@ export function ToolCard({
   };
   return (
     <div className="card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", columnGap: 9, alignItems: target ? "start" : "center", minWidth: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", columnGap: 9, alignItems: "center", minWidth: 0 }}>
         {/* 待审批:⏸ 顶掉运行状态图标,
             解答后回到 run/ok/fail 常规流转 */}
-        <span style={{ display: "flex", alignItems: "center", paddingTop: target ? 4 : 0 }}>
+        <span style={{ display: "flex", alignItems: "center" }}>
           {perm ? <span style={{ color: "var(--warn)", fontSize: 11 }}>⏸</span> : <StatusDot status={item.status} />}
         </span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, lineHeight: "18px" }}>
-            <span title={presentation.rawTool ? `原始工具：${presentation.rawTool}` : undefined} style={{ fontWeight: 650, flex: "none", color: "var(--t1)" }}>{action}</span>
-            {item.out && !summary && !agentFinished && (
-              <span className="ellipsis" style={{ color: "var(--t5)", fontSize: 11, minWidth: 0 }}>{item.out}</span>
-            )}
-          </div>
-          {target && (
-            <div style={{ marginTop: 2, minWidth: 0 }}>
-              <ToolTargetText target={target} fullTarget={fullTarget} kind={targetKind} />
-            </div>
-          )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, lineHeight: "18px" }}>
+          <span title={presentation.rawTool ? `原始工具：${presentation.rawTool}` : undefined} style={{ fontWeight: 500, flex: "none", color: "var(--t2)" }}>{action}</span>
+          {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={targetKind} />}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 18, paddingTop: target ? 1 : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 18 }}>
+          {duration && <span title={`耗时 ${duration}`} style={{ color: "var(--t5)", fontSize: 10.5, whiteSpace: "nowrap" }}>{duration}</span>}
           {item.childSessionId && onOpenChild && (
             <a
               href="#"
@@ -575,6 +581,11 @@ export function ToolCard({
       {item.status === "run" && item.lastLine && (
         <div style={{ ...stepRow, display: "block", color: "var(--t5)", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", animation: "mcpulse 1.2s infinite" }}>
           {item.lastLine}
+        </div>
+      )}
+      {item.status === "fail" && item.out && !summary && (
+        <div role="alert" title={item.result || item.out} style={{ ...stepRow, display: "block", color: "var(--err)", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {item.out}
         </div>
       )}
       {/* 内嵌审批:按钮行长在卡内底部(独立大卡不再出现);虚线分隔 +

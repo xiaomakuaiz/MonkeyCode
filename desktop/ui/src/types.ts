@@ -166,6 +166,10 @@ export type LogItem =
       rawInput?: unknown;
       status: "run" | "ok" | "fail";
       out: string;
+      /** 工具开始帧时间；与结束帧时间共同计算耗时，旧记录可缺省。 */
+      startedAt?: number;
+      /** 工具最终耗时（毫秒）；仅在起止帧都有可靠时间时写入。 */
+      durationMs?: number;
       /** 完整结果文本(子代理卡按 markdown 展示最终产出;普通卡不消费) */
       result?: string;
       /** 工具产出的图片(截图/读图)工作区相对路径,工具卡渲染缩略图 */
