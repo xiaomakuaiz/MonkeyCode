@@ -626,7 +626,7 @@ export default function App() {
               className="hv"
               title={currentMeta?.workdir ?? ""}
               onClick={() => void revealPath("")}
-              style={{ flex: "none", height: 26, border: "none", background: "transparent", color: "var(--t3)", borderRadius: 7, padding: "0 8px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+              style={{ flex: "none", height: 26, border: "1px solid var(--btnBd)", background: "var(--card)", color: "var(--t3)", borderRadius: 7, padding: "0 10px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: "var(--cardSh)" }}
             >
               <IconFolder size={12} color="var(--t4)" />
               {IS_MAC ? "在访达中打开" : "打开文件夹"}
