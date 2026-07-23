@@ -35,7 +35,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuil
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
 
-use config::{load_config, save_config_files, DesktopConfig};
+use config::{load_config, materialize_engine_config, save_ui_config_files, DesktopConfig};
 use driver::DriverHost;
 
 // macOS 桌宠面板类:普通 NSWindow 被点击会激活应用、把主窗口带到最前;
@@ -94,7 +94,7 @@ fn tray_icon() -> Image<'static> {
 // ==================== Tauri 命令(UI 调用) ====================
 
 #[tauri::command]
-fn get_config(app: AppHandle) -> DesktopConfig {
+fn get_config(app: AppHandle) -> Result<DesktopConfig, String> {
     load_config(&app)
 }
 
@@ -114,25 +114,21 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
     let dir = candidates
         .into_iter()
         .find(|p| p.join("manifest.json").is_file())
-        .ok_or_else(|| "扩展目录不存在(安装包未包含扩展,或开发环境未构建 browser-extension)".to_string())?;
+        .ok_or_else(|| {
+            "扩展目录不存在(安装包未包含扩展,或开发环境未构建 browser-extension)".to_string()
+        })?;
     tauri_plugin_opener::reveal_item_in_dir(&dir).map_err(|e| format!("打开目录失败: {e}"))?;
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// 写清单并(重)启引擎(阻塞流程:优雅停内核 ~10s + 起新内核 ~15s,
-/// 调用方负责丢 blocking 池)。save_config 与 engine_restart 共用。
-fn apply_config_and_restart(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
-    let apply = app.state::<EngineApply>();
-    let _apply = apply.0.lock().unwrap();
-    apply_config_and_restart_locked(app, config)
-}
-
-fn apply_config_and_restart_locked(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
-    // 浏览器桥 MCP 接入信息在此显式取一次传入(browser::init 在 setup 已
-    // 完成;config 模块不反向读 browser 全局态,依赖走参数)
-    save_config_files(app, config, browser::mcp_endpoint(app))?;
+/// 替换当前引擎。调用方须持 EngineApply，且已完成配置提交/物化；阻塞流程
+/// 会等待旧引擎优雅退出并等待新引擎 system/ready。
+fn restart_engine_locked(app: &AppHandle, config: &DesktopConfig) -> Result<(), String> {
     if let Some(engine) = app.state::<DriverHost>().take() {
         engine.stop();
+    }
+    if let Some(browser) = app.try_state::<browser::BrowserHost>() {
+        tauri::async_runtime::block_on(browser.mcp_sessions.reset());
     }
     let engine = driver::start_engine(app, config)?;
     app.state::<DriverHost>().set(engine);
@@ -149,23 +145,38 @@ fn schedule_browser_mcp_refresh(app: &AppHandle) {
         .wrapping_add(1);
     let app = app.clone();
     std::thread::spawn(move || {
-        if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) != generation {
+        loop {
+            if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let apply = app.state::<EngineApply>();
+            let _apply = apply.0.lock().unwrap_or_else(|e| e.into_inner());
+            if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            // 自动配对刷新不能中断正在生成的任务。DriverHost 先封住新 IPC
+            // lease、排空已进入的命令，再原子检查 running；忙时释放所有锁
+            // 后重试，最新 generation 会取消旧刷新线程。
+            let host = app.state::<DriverHost>();
+            let Some(_host_apply) = host.try_begin_idle_apply() else {
+                drop(_apply);
+                std::thread::sleep(Duration::from_millis(250));
+                continue;
+            };
+            // 必须在取得配置事务锁后再读盘：否则并发的设置保存可能先写入
+            // 新值，本线程却拿旧快照随后覆盖回去。
+            let result = load_config(&app).and_then(|config| {
+                materialize_engine_config(&app, &config, browser::mcp_endpoint(&app))?;
+                restart_engine_locked(&app, &config)
+            });
+            if let Err(e) = result {
+                eprintln!("[desktop] 浏览器 MCP 工具刷新失败: {e}");
+                return;
+            }
+            if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) == generation {
+                let _ = app.emit("browser-mcp-reloaded", ());
+            }
             return;
-        }
-        let apply = app.state::<EngineApply>();
-        let _apply = apply.0.lock().unwrap();
-        if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) != generation {
-            return;
-        }
-        // 必须在取得配置事务锁后再读盘：否则并发的设置保存可能先写入新值，
-        // 本线程却拿旧快照随后覆盖回去。
-        let config = load_config(&app);
-        if let Err(e) = apply_config_and_restart_locked(&app, &config) {
-            eprintln!("[desktop] 浏览器 MCP 工具刷新失败: {e}");
-            return;
-        }
-        if app.state::<BrowserMcpRefresh>().0.load(Ordering::SeqCst) == generation {
-            let _ = app.emit("browser-mcp-reloaded", ());
         }
     });
 }
@@ -175,24 +186,30 @@ fn schedule_browser_mcp_refresh(app: &AppHandle) {
 /// WebKitGTK IPC 重放竞态随之消失)。
 #[tauri::command]
 async fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String> {
-    // 设置视图载荷只含业务字段,壳自有偏好(桌宠)从磁盘合并保留
-    let disk = load_config(&app);
-    let config = DesktopConfig {
-        pet_enabled: disk.pet_enabled,
-        pet_pos: disk.pet_pos,
-        ..config
-    };
-    tauri::async_runtime::spawn_blocking(move || apply_config_and_restart(&app, &config))
-        .await
-        .map_err(|e| format!("保存失败: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let apply = app.state::<EngineApply>();
+        let _apply = apply.0.lock().unwrap_or_else(|e| e.into_inner());
+        let host = app.state::<DriverHost>();
+        let _host_apply = host.begin_apply();
+        // 壳自有偏好的合并与写盘在 ConfigStore 的同一事务内完成。
+        let config = save_ui_config_files(&app, config, browser::mcp_endpoint(&app))?;
+        restart_engine_locked(&app, &config)
+    })
+    .await
+    .map_err(|e| format!("保存失败: {e}"))?
 }
 
 /// 按当前配置重启引擎(引擎崩溃后 UI 一键恢复;engine-crashed 事件的出口)。
 #[tauri::command]
 async fn engine_restart(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let config = load_config(&app);
-        apply_config_and_restart(&app, &config)
+        let apply = app.state::<EngineApply>();
+        let _apply = apply.0.lock().unwrap_or_else(|e| e.into_inner());
+        let host = app.state::<DriverHost>();
+        let _host_apply = host.begin_apply();
+        let config = load_config(&app)?;
+        materialize_engine_config(&app, &config, browser::mcp_endpoint(&app))?;
+        restart_engine_locked(&app, &config)
     })
     .await
     .map_err(|e| format!("重启失败: {e}"))?
@@ -294,8 +311,16 @@ fn update_notice(app: &AppHandle, manual: bool, error: bool, msg: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
     eprintln!("[desktop] 更新: {msg}");
     if manual {
-        let kind = if error { MessageDialogKind::Error } else { MessageDialogKind::Info };
-        app.dialog().message(msg).title("检查更新").kind(kind).show(|_| {});
+        let kind = if error {
+            MessageDialogKind::Error
+        } else {
+            MessageDialogKind::Info
+        };
+        app.dialog()
+            .message(msg)
+            .title("检查更新")
+            .kind(kind)
+            .show(|_| {});
     }
 }
 
@@ -317,10 +342,16 @@ fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, Strin
         });
     // 本机测试覆盖清单地址(release 构建强制 https,http 清单只在 debug 下可用)
     if let Ok(url) = std::env::var("MC_UPDATE_MANIFEST") {
-        let u = url.parse().map_err(|e| format!("MC_UPDATE_MANIFEST 无效: {e}"))?;
-        builder = builder.endpoints(vec![u]).map_err(|e| format!("更新地址无效: {e}"))?;
+        let u = url
+            .parse()
+            .map_err(|e| format!("MC_UPDATE_MANIFEST 无效: {e}"))?;
+        builder = builder
+            .endpoints(vec![u])
+            .map_err(|e| format!("更新地址无效: {e}"))?;
     }
-    builder.build().map_err(|e| format!("初始化更新器失败: {e}"))
+    builder
+        .build()
+        .map_err(|e| format!("初始化更新器失败: {e}"))
 }
 
 /// 检查更新并在有新版时询问用户;确认则下载安装 + 重启(内核经 RunEvent::Exit 回收)。
@@ -346,11 +377,17 @@ async fn check_update(app: AppHandle, manual: bool) {
         display_version(&update.version),
         display_version(&update.current_version),
     );
-    eprintln!("[desktop] 更新: 发现新版本 {}(当前 {})", update.version, update.current_version);
+    eprintln!(
+        "[desktop] 更新: 发现新版本 {}(当前 {})",
+        update.version, update.current_version
+    );
     app.dialog()
         .message(msg)
         .title("发现新版本")
-        .buttons(MessageDialogButtons::OkCancelCustom("立即更新".into(), "以后再说".into()))
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "立即更新".into(),
+            "以后再说".into(),
+        ))
         .show({
             let app = app.clone();
             move |confirmed| {
@@ -461,7 +498,11 @@ fn ensure_pet_window(app: &AppHandle) {
     if app.get_webview_window("pet").is_some() {
         return;
     }
-    let saved = load_config(app).pet_pos;
+    let saved = *app
+        .state::<PetPos>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let win = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("pet.html".into()))
         .title("MonkeyCode 桌宠")
         .inner_size(PET_W, PET_H)
@@ -485,7 +526,9 @@ fn ensure_pet_window(app: &AppHandle) {
             #[cfg(target_os = "macos")]
             match win.to_panel::<PetPanel>() {
                 Ok(panel) => {
-                    panel.set_style_mask(StyleMask::empty().borderless().nonactivating_panel().into());
+                    panel.set_style_mask(
+                        StyleMask::empty().borderless().nonactivating_panel().into(),
+                    );
                 }
                 Err(e) => eprintln!("[desktop] 桌宠转 NSPanel 失败(点击会激活应用): {e}"),
             }
@@ -504,7 +547,11 @@ fn ensure_pet_window(app: &AppHandle) {
     if native_pet::exists(app) {
         return;
     }
-    let saved = load_config(app).pet_pos;
+    let saved = *app
+        .state::<PetPos>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let position = pet_position(app, saved);
     let scale = app
         .available_monitors()
@@ -533,17 +580,18 @@ fn ensure_pet_window(app: &AppHandle) {
 
     // 不透明、永不 show:它只是桌宠状态机与音频宿主,
     // 对 Win7 的 WebView2 透明限制零依赖。
-    if let Err(e) = WebviewWindowBuilder::new(app, "pet-service", WebviewUrl::App("pet.html".into()))
-        .title("MonkeyCode 桌宠状态服务")
-        .inner_size(1.0, 1.0)
-        .decorations(false)
-        .skip_taskbar(true)
-        .shadow(false)
-        .resizable(false)
-        .focusable(false)
-        .focused(false)
-        .visible(false)
-        .build()
+    if let Err(e) =
+        WebviewWindowBuilder::new(app, "pet-service", WebviewUrl::App("pet.html".into()))
+            .title("MonkeyCode 桌宠状态服务")
+            .inner_size(1.0, 1.0)
+            .decorations(false)
+            .skip_taskbar(true)
+            .shadow(false)
+            .resizable(false)
+            .focusable(false)
+            .focused(false)
+            .visible(false)
+            .build()
     {
         eprintln!("[desktop] 桌宠状态服务创建失败: {e}");
     }
@@ -554,11 +602,15 @@ fn ensure_pet_window(app: &AppHandle) {
 /// 否则回主显示器右下角留边(避开任务栏)。
 fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPosition<i32> {
     if let Some((x, y)) = saved {
-        let on_screen = app.available_monitors().unwrap_or_default().iter().any(|m| {
-            let p = m.position();
-            let s = m.size();
-            x >= p.x && x < p.x + s.width as i32 && y >= p.y && y < p.y + s.height as i32
-        });
+        let on_screen = app
+            .available_monitors()
+            .unwrap_or_default()
+            .iter()
+            .any(|m| {
+                let p = m.position();
+                let s = m.size();
+                x >= p.x && x < p.x + s.width as i32 && y >= p.y && y < p.y + s.height as i32
+            });
         if on_screen {
             return tauri::PhysicalPosition::new(x, y);
         }
@@ -568,7 +620,13 @@ fn pet_position(app: &AppHandle, saved: Option<(i32, i32)>) -> tauri::PhysicalPo
         .ok()
         .flatten()
         .map(|m| {
-            (m.position().x, m.position().y, m.size().width as i32, m.size().height as i32, m.scale_factor())
+            (
+                m.position().x,
+                m.position().y,
+                m.size().width as i32,
+                m.size().height as i32,
+                m.scale_factor(),
+            )
         })
         .unwrap_or((0, 0, 1280, 800, 1.0));
     let w = (PET_W * scale) as i32;
@@ -603,18 +661,19 @@ fn set_pet_visible(app: &AppHandle, show: bool) {
 }
 
 /// 桌宠偏好落盘:以磁盘配置为基础只覆写壳自有字段,只写权威 config.json
-/// (不触发引擎配置物化——含密钥的 ~/.ohmyagent 不该被无关操作反复重写)。
+/// (不触发引擎配置物化——含密钥的派生文件不该被无关操作反复重写)。
 fn persist_pet_prefs(app: &AppHandle) {
-    let mut cfg = load_config(app);
-    cfg.pet_enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
+    let enabled = app.state::<PetEnabled>().0.load(Ordering::Relaxed);
     #[cfg(target_os = "windows")]
     let pos = native_pet::position(app);
     #[cfg(not(target_os = "windows"))]
     let pos = *app.state::<PetPos>().0.lock().unwrap();
-    if let Some(pos) = pos {
-        cfg.pet_pos = Some(pos);
-    }
-    if let Err(e) = config::save_config_json(app, &cfg) {
+    if let Err(e) = config::update_config_json(app, |cfg| {
+        cfg.pet_enabled = enabled;
+        if let Some(pos) = pos {
+            cfg.pet_pos = Some(pos);
+        }
+    }) {
         eprintln!("[desktop] 桌宠偏好保存失败: {e}");
     }
 }
@@ -631,6 +690,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     let builder = builder.manage(native_pet::NativePetHost::new());
     builder
+        .manage(config::ConfigStore::new())
         .manage(DriverHost::new())
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(UiIntent(Mutex::new(None)))
@@ -689,10 +749,26 @@ fn main() {
         .setup(|app| {
             // 百智云/云端服务(壳级单例;凭证 cookie 与配置同目录)
             let cfg_dir = config::config_dir(app.handle()).map_err(std::io::Error::other)?;
-            app.manage(baizhi::BaizhiState(std::sync::Arc::new(baizhi::Service::new(cfg_dir))));
+            app.manage(baizhi::BaizhiState(std::sync::Arc::new(
+                baizhi::Service::new(cfg_dir),
+            )));
+
+            // 配置损坏且无有效备份时绝不能按默认值继续并覆写；仍创建错误页
+            // 让用户看见可行动诊断。托盘/桌宠只使用内存中的安全默认值。
+            let (cfg, config_error) = match load_config(app.handle()) {
+                Ok(cfg) => (cfg, None),
+                Err(e) => (DesktopConfig::default(), Some(e)),
+            };
+            app.state::<PetEnabled>()
+                .0
+                .store(cfg.pet_enabled, Ordering::Relaxed);
+            *app.state::<PetPos>()
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = cfg.pet_pos;
 
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
-            if let Err(e) = setup_tray(app.handle()) {
+            if let Err(e) = setup_tray(app.handle(), cfg.pet_enabled) {
                 eprintln!("[desktop] 托盘创建失败(关窗将直接退出): {e}");
                 app.state::<TrayReady>().0.store(false, Ordering::Relaxed);
             }
@@ -707,14 +783,25 @@ fn main() {
                 });
             }
 
-            // 无条件拉起引擎:无配置时写出空配置,引擎以零模型模式启动,
-            // 首启向导由 UI 的设置视图承担(壳无业务页面)。
-            let cfg = load_config(app.handle());
-            app.state::<PetEnabled>().0.store(cfg.pet_enabled, Ordering::Relaxed);
+            if let Some(e) = config_error {
+                eprintln!("[desktop] 配置加载失败: {e}");
+                create_main_window(app.handle(), &format!("error.html#{}", util::urlencode(&e)));
+                ensure_pet_window(app.handle());
+                return Ok(());
+            }
+
+            // 无模型配置时引擎以零模型模式启动，首启向导由 UI 承担。
             // 浏览器桥 + MCP server 先于引擎:配置物化要写入 MCP URL/token,
             // init 后查询一次显式传参(时序依赖由数据流表达,不靠注释约束)
             browser::init(app.handle());
-            save_config_files(app.handle(), &cfg, browser::mcp_endpoint(app.handle()))?; // 刷新物化配置
+            if let Err(e) =
+                materialize_engine_config(app.handle(), &cfg, browser::mcp_endpoint(app.handle()))
+            {
+                eprintln!("[desktop] 引擎配置物化失败: {e}");
+                create_main_window(app.handle(), &format!("error.html#{}", util::urlencode(&e)));
+                ensure_pet_window(app.handle());
+                return Ok(());
+            }
             match driver::start_engine(app.handle(), &cfg) {
                 Ok(engine) => {
                     app.state::<DriverHost>().set(engine);
@@ -722,7 +809,10 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("[desktop] 引擎启动失败: {e}");
-                    create_main_window(app.handle(), &format!("error.html#{}", util::urlencode(&e)));
+                    create_main_window(
+                        app.handle(),
+                        &format!("error.html#{}", util::urlencode(&e)),
+                    );
                 }
             }
             // 桌宠是独立常驻面板:主窗口的焦点/可见性和引擎在线状态
@@ -780,10 +870,17 @@ fn main() {
 }
 
 /// 创建托盘:菜单(显示窗口/设置/退出)+ 左键单击恢复窗口。
-fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+fn setup_tray(app: &AppHandle, pet_enabled: bool) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let pet = CheckMenuItem::with_id(app, "toggle-pet", "显示桌宠", true, load_config(app).pet_enabled, None::<&str>)?;
+    let pet = CheckMenuItem::with_id(
+        app,
+        "toggle-pet",
+        "显示桌宠",
+        true,
+        pet_enabled,
+        None::<&str>,
+    )?;
     let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &pet, &update, &quit])?;
@@ -798,14 +895,20 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             // 意图同时落待取状态,webview 未就绪丢事件时由 UI 启动后补取
             "settings" => {
                 show_any_window(app);
-                app.state::<UiIntent>().0.lock().unwrap().replace("open-settings".into());
+                app.state::<UiIntent>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .replace("open-settings".into());
                 let _ = app.emit_to("main", "open-settings", ());
             }
             // 桌宠开关:CheckMenuItem 点击自翻勾选态,这里同步运行时缓存、
             // 立即更新可见性并落盘。
             "toggle-pet" => {
                 let enabled = !app.state::<PetEnabled>().0.load(Ordering::Relaxed);
-                app.state::<PetEnabled>().0.store(enabled, Ordering::Relaxed);
+                app.state::<PetEnabled>()
+                    .0
+                    .store(enabled, Ordering::Relaxed);
                 persist_pet_prefs(app);
                 set_pet_visible(app, enabled);
             }

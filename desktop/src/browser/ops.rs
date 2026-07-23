@@ -69,7 +69,10 @@ impl BrowserSession {
         let tab = match cur {
             None => {
                 let id = self.0.cdp.tabs_create(url).await?.tab_id;
-                self.0.cdp.bridge.claim_tab(id);
+                if let Err(e) = self.0.sessions.claim_tab(&self.0.owner, id, false) {
+                    let _ = self.0.cdp.tabs_close(id).await;
+                    return Err(e);
+                }
                 {
                     let mut st = self.state();
                     st.tabs.insert(id);
@@ -696,7 +699,10 @@ impl BrowserSession {
                 };
                 validate_url(&raw)?;
                 let id = self.0.cdp.tabs_create(&raw).await?.tab_id;
-                self.0.cdp.bridge.claim_tab(id);
+                if let Err(e) = self.0.sessions.claim_tab(&self.0.owner, id, false) {
+                    let _ = self.0.cdp.tabs_close(id).await;
+                    return Err(e);
+                }
                 {
                     let mut st = self.state();
                     st.tabs.insert(id);
@@ -716,9 +722,15 @@ impl BrowserSession {
                 let Some(id) = tab_id.filter(|t| *t != 0) else {
                     return Err("select 需要 tab_id(先用 action=list 查看)".to_string());
                 };
-                // attach 由扩展校验受控集合;未受控标签页会返回引导文案
-                self.0.cdp.attach(id).await?;
-                self.0.cdp.bridge.claim_tab(id);
+                // 先在壳侧锁定 owner，避免两个 Agent 同时选择同一标签页；
+                // attach 失败则回滚新认领。
+                let newly_claimed = self.0.sessions.claim_tab(&self.0.owner, id, false)?;
+                if let Err(e) = self.0.cdp.attach(id).await {
+                    if newly_claimed {
+                        self.0.sessions.release_tab(&self.0.owner, id);
+                    }
+                    return Err(e);
+                }
                 {
                     let mut st = self.state();
                     st.tabs.insert(id);
@@ -732,8 +744,11 @@ impl BrowserSession {
                 let Some(id) = tab_id.filter(|t| *t != 0) else {
                     return Err("close 需要 tab_id".to_string());
                 };
+                if self.0.sessions.owner_of(id).as_deref() != Some(self.0.owner.as_str()) {
+                    return Err(format!("标签页 #{id} 不属于当前任务，不能关闭"));
+                }
                 self.0.cdp.tabs_close(id).await?;
-                self.0.cdp.bridge.release_tab(id);
+                self.0.sessions.release_tab(&self.0.owner, id);
                 {
                     let mut st = self.state();
                     st.tabs.remove(&id);
@@ -758,7 +773,13 @@ impl BrowserSession {
             if current == Some(t.tab_id) {
                 marks.push_str("[当前]");
             }
-            marks.push_str(if t.controlled { "[受控]" } else { "[未受控]" });
+            let owner = self.0.sessions.owner_of(t.tab_id);
+            marks.push_str(match owner.as_deref() {
+                Some(owner) if owner == self.0.owner => "[受控]",
+                Some(_) => "[其他任务]",
+                None if t.controlled => "[待认领]",
+                None => "[未受控]",
+            });
             b.push_str(&format!(
                 "#{} {} {} — {}\n",
                 t.tab_id,
@@ -767,7 +788,7 @@ impl BrowserSession {
                 t.url
             ));
         }
-        b.push_str("未受控的标签页需用户点击浏览器工具栏的 MonkeyCode 扩展图标交付后才能操作(select 仅对受控标签页有效)\n");
+        b.push_str("[待认领]可由当前任务 select；[其他任务]已隔离不可抢占；[未受控]需用户通过浏览器扩展交付\n");
         b + &self.take_notes()
     }
 }

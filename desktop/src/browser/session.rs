@@ -1,12 +1,9 @@
-// 浏览器会话现场(单会话):当前标签页、ref 表、事件旁白与 CDP 交互原语。
+// 浏览器会话现场:每个 MCP protocol session 独立持有当前标签页、ref 表、事件旁白
+// 与 CDP 交互原语；BrowserSessions 负责 tab → owner 事件路由。
 // 契约对齐 agent/internal/browser/session.go(语义逐字移植)。
 //
-// 与 Go 的差异(均为架构承担,非语义取舍):
-//   - Go 多会话(owner/RegisterSession/事件按 tabId 路由)在桌面端收敛为
-//     单会话:bridge 层只有一个事件回调(set_event_handler),tab 归属登记
-//     (claim_tab/release_tab)保留以对齐扩展侧受控集合语义,本层无 owner 概念。
-//   - 事件回调注册在 new() 时完成(Go 是首次工具调用时惰性注册);handoff
-//     待领队列仍在工具调用入口惰性消费(ensure),消费点与 Go 一致。
+// 桥仍只有一个进程级事件出口，BrowserSessions 在其后按 tab owner 分发；
+// handoff 待领队列仍在工具调用入口惰性消费(ensure),消费点与 Go 一致。
 //
 // 对兄弟模块的 API 依赖(并行开发,以任务契约为准):
 //   - bridge.rs: ExtBridge(Clone): set_event_handler(Arc<dyn Fn(Message)+Send+Sync>)
@@ -16,7 +13,7 @@
 //   - refs.rs: RefTable(Default): gen()/object_group()/rebuild(gen, Vec<ElemRef>)
 //     /lookup(&str) -> Result<ElemRef, String>/invalidate();err_ref_stale(&str) -> String
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, Weak};
 use std::time::Duration;
 
@@ -36,12 +33,148 @@ use super::refs::{err_ref_stale, RefTable};
 #[derive(Clone)]
 pub struct BrowserSession(pub(crate) Arc<SessInner>);
 
+/// 进程内浏览器现场注册表。每条 MCP protocol session 取一个
+/// BrowserSession；不同 owner 可并行操作各自标签页，同一 owner 内由 MCP
+/// 层串行，避免 ref/current-tab 状态互踩。
+#[derive(Clone)]
+pub struct BrowserSessions(Arc<BrowserSessionsInner>);
+
+struct BrowserSessionsInner {
+    bridge: ExtBridge,
+    sessions: StdMutex<HashMap<String, Weak<SessInner>>>,
+    tab_owners: StdMutex<HashMap<i64, String>>,
+}
+
 pub(crate) struct SessInner {
     pub(crate) cdp: Cdp,
     pub(crate) st: StdMutex<SessState>,
+    pub(crate) owner: String,
+    pub(crate) sessions: BrowserSessions,
     /// 事件回调可能在任意线程被调用;对话框自动应答需异步 CDP,借创建时
     /// 捕获的 runtime 句柄 spawn(对齐 Go 的 go func())。
     rt: Option<tokio::runtime::Handle>,
+}
+
+impl BrowserSessions {
+    pub fn new(bridge: ExtBridge) -> Self {
+        let inner = Arc::new(BrowserSessionsInner {
+            bridge: bridge.clone(),
+            sessions: StdMutex::new(HashMap::new()),
+            tab_owners: StdMutex::new(HashMap::new()),
+        });
+        let weak = Arc::downgrade(&inner);
+        bridge.set_event_handler(Arc::new(move |msg: Message| {
+            if let Some(inner) = weak.upgrade() {
+                inner.route_event(msg);
+            }
+        }));
+        Self(inner)
+    }
+
+    pub fn get_or_create(&self, owner: &str) -> BrowserSession {
+        let mut sessions = self.0.sessions.lock().unwrap();
+        if let Some(existing) = sessions.get(owner).and_then(Weak::upgrade) {
+            return BrowserSession(existing);
+        }
+        let inner = Arc::new(SessInner {
+            cdp: Cdp { bridge: self.0.bridge.clone() },
+            st: StdMutex::new(SessState::default()),
+            owner: owner.to_string(),
+            sessions: self.clone(),
+            rt: tokio::runtime::Handle::try_current().ok(),
+        });
+        sessions.insert(owner.to_string(), Arc::downgrade(&inner));
+        BrowserSession(inner)
+    }
+
+    /// 认领 tab。普通选择不能抢走另一任务的 tab；显式 handoff 是用户授权
+    /// 的转交，可把原 owner 的现场安全摘除后改绑。
+    pub(crate) fn claim_tab(
+        &self,
+        owner: &str,
+        tab_id: i64,
+        handoff: bool,
+    ) -> Result<bool, String> {
+        let previous = {
+            let mut owners = self.0.tab_owners.lock().unwrap();
+            match owners.get(&tab_id) {
+                Some(current) if current == owner => return Ok(false),
+                Some(_) if !handoff => {
+                    return Err(format!(
+                        "标签页 #{tab_id} 正由另一个任务使用；请新建标签页，或在浏览器扩展中重新交付该页"
+                    ));
+                }
+                Some(current) => {
+                    let previous = current.clone();
+                    owners.insert(tab_id, owner.to_string());
+                    Some(previous)
+                }
+                None => {
+                    owners.insert(tab_id, owner.to_string());
+                    None
+                }
+            }
+        };
+        self.0.bridge.claim_tab(tab_id);
+        if let Some(previous) = previous {
+            let old = self.0.sessions.lock().unwrap().get(&previous).and_then(Weak::upgrade);
+            if let Some(old) = old {
+                old.relinquish_tab(tab_id, "用户已将该标签页交付给另一个任务");
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn release_tab(&self, owner: &str, tab_id: i64) {
+        let released = {
+            let mut owners = self.0.tab_owners.lock().unwrap();
+            if owners.get(&tab_id).is_some_and(|current| current == owner) {
+                owners.remove(&tab_id);
+                true
+            } else {
+                false
+            }
+        };
+        if released {
+            self.0.bridge.release_tab(tab_id);
+        }
+    }
+
+    pub fn owner_of(&self, tab_id: i64) -> Option<String> {
+        self.0.tab_owners.lock().unwrap().get(&tab_id).cloned()
+    }
+
+    fn unregister(&self, owner: &str) {
+        self.0.sessions.lock().unwrap().remove(owner);
+        let released: Vec<i64> = {
+            let mut owners = self.0.tab_owners.lock().unwrap();
+            let tabs = owners
+                .iter()
+                .filter_map(|(tab, current)| (current == owner).then_some(*tab))
+                .collect::<Vec<_>>();
+            owners.retain(|_, current| current != owner);
+            tabs
+        };
+        for tab in released {
+            self.0.bridge.release_tab(tab);
+        }
+    }
+}
+
+impl BrowserSessionsInner {
+    fn route_event(&self, msg: Message) {
+        let Some(tab_id) = msg.tab_id else { return };
+        let owner = self.tab_owners.lock().unwrap().get(&tab_id).cloned();
+        let Some(owner) = owner else { return };
+        let session = self.sessions.lock().unwrap().get(&owner).and_then(Weak::upgrade);
+        match session {
+            Some(session) => session.handle_event(msg),
+            None => {
+                self.tab_owners.lock().unwrap().remove(&tab_id);
+                self.bridge.release_tab(tab_id);
+            }
+        }
+    }
 }
 
 /// 会话可变状态(锁内小临界区,不变式:任何 .await 前必须先释放锁)。
@@ -69,22 +202,11 @@ impl SessState {
 }
 
 impl BrowserSession {
-    /// 创建浏览器会话现场并注册事件处理器(不建立任何连接,标签页在首次
-    /// 工具调用时惰性认领/新建)。
+    /// 单现场兼容构造器(测试/独立使用)。生产 MCP 复用一个
+    /// BrowserSessions，并按 MCP 协议会话创建 owner。
+    #[cfg(test)]
     pub fn new(bridge: ExtBridge) -> Self {
-        let inner = Arc::new(SessInner {
-            cdp: Cdp { bridge: bridge.clone() },
-            st: StdMutex::new(SessState::default()),
-            rt: tokio::runtime::Handle::try_current().ok(),
-        });
-        // Weak 防环:handler 持 Arc 会让会话永不释放
-        let weak: Weak<SessInner> = Arc::downgrade(&inner);
-        bridge.set_event_handler(Arc::new(move |msg: Message| {
-            if let Some(inner) = weak.upgrade() {
-                inner.handle_event(msg);
-            }
-        }));
-        BrowserSession(inner)
+        BrowserSessions::new(bridge).get_or_create("default")
     }
 
     pub(crate) fn state(&self) -> MutexGuard<'_, SessState> {
@@ -92,8 +214,7 @@ impl BrowserSession {
     }
 
     /// 释放会话:剥离本会话标签页的 debugger(标签页保留,用户可能还要看)。
-    /// 幂等。(Go 侧还会 UnregisterSession;单会话桥无此概念)
-    #[allow(dead_code)] // 退出清理钩子备用(扩展在 WS 断开后自会回收)
+    /// 幂等，并从 owner 注册表释放标签页。
     pub async fn close(&self) {
         let tabs: Vec<i64> = {
             let mut st = self.state();
@@ -105,7 +226,9 @@ impl BrowserSession {
         };
         for id in tabs {
             let _ = tokio::time::timeout(Duration::from_secs(3), self.0.cdp.detach(id)).await;
+            self.0.sessions.release_tab(&self.0.owner, id);
         }
+        self.0.sessions.unregister(&self.0.owner);
     }
 
     /// 激活会话:无活动标签页时认领用户交付的标签页(待领队列惰性消费,
@@ -120,15 +243,15 @@ impl BrowserSession {
         }
         if no_tab {
             if let Some(tab) = self.0.cdp.bridge.take_pending_handoff() {
-                self.adopt_tab(&tab);
+                self.adopt_tab(&tab)?;
             }
         }
         Ok(())
     }
 
     /// 认领标签页(用户交付):登记归属,设为当前(若尚无),notes 记一条。
-    fn adopt_tab(&self, t: &TabInfo) {
-        self.0.cdp.bridge.claim_tab(t.tab_id);
+    fn adopt_tab(&self, t: &TabInfo) -> Result<(), String> {
+        self.0.sessions.claim_tab(&self.0.owner, t.tab_id, true)?;
         let mut st = self.state();
         st.tabs.insert(t.tab_id);
         if st.tab_id.is_none() {
@@ -140,6 +263,7 @@ impl BrowserSession {
             t.tab_id,
             first_non_empty(&[&t.title, &t.url])
         ));
+        Ok(())
     }
 
     /// 激活会话并确保当前标签页可操作(attach 幂等自愈 + 域启用)。
@@ -291,14 +415,25 @@ impl BrowserSession {
 // ==================== 事件处理(与工具调用并发,注意锁) ====================
 
 impl SessInner {
-    /// 桥事件回调(单会话桥:所有事件都到这里;handoff 不经此路,
-    /// 桥的待领队列是唯一入口)。
+    fn relinquish_tab(&self, tab_id: i64, reason: &str) {
+        let mut st = self.st.lock().unwrap();
+        if st.tabs.remove(&tab_id) {
+            st.add_note(format!("标签页 #{tab_id} 已移交：{reason}"));
+            if st.tab_id == Some(tab_id) {
+                st.tab_id = None;
+                st.refs.invalidate();
+            }
+        }
+    }
+
+    /// BrowserSessions 已按 tab owner 路由后的事件回调；handoff 不经此路，
+    /// 桥的待领队列是唯一入口。
     fn handle_event(self: &Arc<Self>, msg: Message) {
         match msg.event.as_str() {
             EVENT_CDP => self.handle_cdp_event(msg),
             EVENT_TAB_REMOVED => {
                 let Some(tab) = msg.tab_id else { return };
-                self.cdp.bridge.release_tab(tab);
+                self.sessions.release_tab(&self.owner, tab);
                 let mut st = self.st.lock().unwrap();
                 if st.tabs.remove(&tab) {
                     st.add_note(format!("标签页 #{tab} 已被关闭"));
@@ -322,7 +457,7 @@ impl SessInner {
                                 st.refs.invalidate();
                             }
                             drop(st);
-                            self.cdp.bridge.release_tab(tab);
+                            self.sessions.release_tab(&self.owner, tab);
                         }
                         reason => {
                             // 其他原因(如页面崩溃):保留成员资格,下次操作 attach 自愈

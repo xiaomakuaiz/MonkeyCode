@@ -17,44 +17,132 @@ mod session;
 mod subagent;
 mod transport;
 
-use std::sync::Mutex;
+use std::ops::Deref;
+use std::sync::{Condvar, Mutex};
 
 use ohmy::OhmyDriver;
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::config::DesktopConfig;
 use crate::repo::RepoCtx;
 
-/// 当前引擎(壳生命周期内至多一个;保存设置时整体替换)。
-/// 内层是廉价克隆的句柄:命令先克隆再 await,不跨 await 持锁。
-pub struct DriverHost(pub Mutex<Option<OhmyDriver>>);
+/// 当前引擎(壳生命周期内至多一个;保存设置时整体替换)。命令通过 lease
+/// 使用克隆句柄；维护事务先关闭新 lease，再等已有 IPC 调用退出。
+pub struct DriverHost {
+    state: Mutex<DriverHostState>,
+    idle: Condvar,
+}
 
-impl DriverHost {
-    pub fn new() -> Self {
-        Self(Mutex::new(None))
-    }
+struct DriverHostState {
+    engine: Option<OhmyDriver>,
+    applying: bool,
+    leases: usize,
+}
 
-    pub fn get(&self) -> Result<OhmyDriver, String> {
-        self.0.lock().unwrap().clone().ok_or_else(|| "引擎未运行".to_string())
-    }
+pub struct DriverLease<'a> {
+    host: &'a DriverHost,
+    engine: OhmyDriver,
+}
 
-    pub fn running(&self) -> bool {
-        self.0.lock().unwrap().is_some()
-    }
+impl Deref for DriverLease<'_> {
+    type Target = OhmyDriver;
+    fn deref(&self) -> &Self::Target { &self.engine }
+}
 
-    pub fn set(&self, e: OhmyDriver) {
-        *self.0.lock().unwrap() = Some(e);
-    }
-
-    pub fn take(&self) -> Option<OhmyDriver> {
-        self.0.lock().unwrap().take()
+impl Drop for DriverLease<'_> {
+    fn drop(&mut self) {
+        let mut state = self.host.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.leases = state.leases.saturating_sub(1);
+        self.host.idle.notify_all();
     }
 }
 
-/// 引擎能力表(对表 desktop/ui/src/client.ts 的 EngineCaps)。
-/// 能力仍是渐进的(随上游补齐翻位),单一事实来源:UI 降级与命令层
-/// 守卫都从这里读,driver 内不得各自硬编码能力判断。
+/// 持有期间 get 拒绝新命令；已有命令在 guard 创建前已排空。
+#[must_use]
+pub struct DriverApplyGuard<'a> { host: &'a DriverHost }
+
+impl Drop for DriverApplyGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.host.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.applying = false;
+        self.host.idle.notify_all();
+    }
+}
+
+impl DriverHost {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(DriverHostState { engine: None, applying: false, leases: 0 }),
+            idle: Condvar::new(),
+        }
+    }
+
+    pub fn get(&self) -> Result<DriverLease<'_>, String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.applying { return Err("引擎配置正在应用，请稍后重试".into()); }
+        let engine = state.engine.clone().ok_or_else(|| "引擎未运行".to_string())?;
+        state.leases += 1;
+        Ok(DriverLease { host: self, engine })
+    }
+
+    /// 显式设置保存/手动重启：阻止新命令，并等待已进入的 IPC 命令退出。
+    pub fn begin_apply(&self) -> DriverApplyGuard<'_> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while state.applying {
+            state = self.idle.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.applying = true;
+        while state.leases != 0 {
+            state = self.idle.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        DriverApplyGuard { host: self }
+    }
+
+    /// 自动维护只在没有运行中父任务时取得独占权。先关入口并排空 lease，
+    /// 再检查 running，消除“检查空闲后新任务刚好启动”的 TOCTOU 窗口。
+    pub fn try_begin_idle_apply(&self) -> Option<DriverApplyGuard<'_>> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // 忙碌期间刷新线程会周期重试；先读一次状态可避免每次轮询都短暂
+        // 关闭 IPC 入口。这个检查只用于快速退出，真正取得 guard 前仍会
+        // 在排空 lease 后二次检查。
+        if state.applying
+            || state
+                .engine
+                .as_ref()
+                .is_some_and(OhmyDriver::has_running_sessions)
+        {
+            return None;
+        }
+        state.applying = true;
+        while state.leases != 0 {
+            state = self.idle.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        let running = state.engine.as_ref().is_some_and(OhmyDriver::has_running_sessions);
+        if running {
+            state.applying = false;
+            self.idle.notify_all();
+            return None;
+        }
+        Some(DriverApplyGuard { host: self })
+    }
+
+    pub fn running(&self) -> bool {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).engine.is_some()
+    }
+
+    pub fn set(&self, e: OhmyDriver) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).engine = Some(e);
+    }
+
+    pub fn take(&self) -> Option<OhmyDriver> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).engine.take()
+    }
+}
+
+/// 引擎能力表(对表 desktop/ui/src/types.ts 的 EngineCaps)。
+/// 能力仍是渐进的(随上游补齐翻位),由 ready 握手与桌面壳实际能力
+/// 共同投影；UI 降级与命令层守卫都读取同一份运行时结果。
 #[derive(Clone, Copy, serde::Serialize)]
 pub struct Caps {
     /// 浏览器扩展桥(壳内 browser/ 模块,MCP 暴露给引擎)
@@ -65,8 +153,14 @@ pub struct Caps {
     pub attachments: bool,
 }
 
-pub fn caps() -> Caps {
-    Caps { browser_ext: true, usage_update: true, perm_remember: true, attachments: true }
+pub fn caps(engine: &OhmyDriver, browser_ext: bool) -> Caps {
+    Caps {
+        browser_ext,
+        usage_update: engine.has_capability("turn/stopped"),
+        perm_remember: engine.has_capability("permissionRemember"),
+        // 上传/路径注入由壳实现，不是引擎握手项。
+        attachments: true,
+    }
 }
 
 /// 日志尾部(崩溃外显用;文件缺失返回空)。
@@ -88,9 +182,10 @@ pub fn start_engine(app: &AppHandle, cfg: &DesktopConfig) -> Result<OhmyDriver, 
 // ==================== Tauri 命令 ====================
 
 #[tauri::command]
-pub async fn engine_caps(host: State<'_, DriverHost>) -> Result<Caps, String> {
-    host.get()?;
-    Ok(caps())
+pub async fn engine_caps(app: AppHandle, host: State<'_, DriverHost>) -> Result<Caps, String> {
+    let engine = host.get()?;
+    let browser_ext = app.try_state::<crate::browser::BrowserHost>().is_some();
+    Ok(caps(&engine, browser_ext))
 }
 
 #[tauri::command]

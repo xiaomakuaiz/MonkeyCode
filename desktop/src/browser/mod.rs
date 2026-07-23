@@ -12,8 +12,9 @@
 //   mcp.rs       MCP streamable-http server:配对后把工具暴露给 ohmyagent
 //                (Bearer 鉴权,URL+token 经 mcp.json 内置条目物化下发)
 //
-// 会话归属简化:MCP 工具调用不带会话身份,桥为
-// 单一共享浏览器会话(桌面单用户);handoff 队列归全局。
+// MCP initialize 为每条客户端 transport 分配协议会话；每个 protocol
+// session 各自拥有 BrowserSession，允许不同任务并行，同时隔离 current
+// tab/ref 表。只依赖标准 Mcp-Session-Id，不要求 Agent 私有扩展。
 
 pub mod bridge;
 pub mod cdp;
@@ -35,12 +36,11 @@ use tauri::{AppHandle, Manager, State};
 /// 全局桥实例(进程级单例;setup 时初始化)。
 pub struct BrowserHost {
     pub bridge: bridge::ExtBridge,
-    #[allow(dead_code)] // 后续壳命令扩展(如主动 close)保留句柄
-    pub session: session::BrowserSession,
+    pub mcp_sessions: mcp::McpSessions,
 }
 
 /// MCP server 的接入信息。config 模块不直接读它:mcp.json 物化路径由调用方
-/// (main.rs)在 init 之后查询一次、经 save_config_files 参数显式传入；
+/// (main.rs)在 init 之后查询一次、经 save_ui_config_files 参数显式传入；
 /// mcp_endpoint 还会检查长期配对凭据，未配对时返回 None。
 static MCP_ENDPOINT: OnceLock<(String, String)> = OnceLock::new(); // (url, bearer_token)
 
@@ -69,21 +69,26 @@ pub fn init(app: &AppHandle) {
         }
     };
     let b = bridge::ExtBridge::new(7440, &data_dir);
-    let sess = session::BrowserSession::new(b.clone());
-    // 截图落盘定位:惰性查当前运行会话的工作区(引擎晚于桥启动,调用时才读)
+    let mcp_sessions = mcp::McpSessions::new(b.clone());
+    // MCP 标准请求不携带调用方 cwd。唯一活跃工作区可确定时为截图落盘；
+    // 多任务并发时只跳过本地副本，图片仍通过 MCP 返回，不阻断浏览器操作。
     let app2 = app.clone();
     let wd: mcp::WorkdirFn = std::sync::Arc::new(move || {
-        app2.try_state::<crate::driver::DriverHost>()
-            .and_then(|h| h.get().ok())
-            .and_then(|d| d.active_workdir())
+        let Some(host) = app2.try_state::<crate::driver::DriverHost>() else {
+            return Err("桌面驱动尚未初始化，无法确定浏览器操作归属".into());
+        };
+        let driver = host
+            .get()
+            .map_err(|e| format!("无法确定浏览器操作归属：{e}"))?;
+        Ok(driver.single_running_workdir())
     });
-    match mcp::serve(sess.clone(), wd) {
+    match mcp::serve(mcp_sessions.clone(), wd) {
         Ok((url, token)) => {
             let _ = MCP_ENDPOINT.set((url, token));
         }
         Err(e) => eprintln!("[desktop] 浏览器 MCP server 启动失败: {e}"),
     }
-    app.manage(BrowserHost { bridge: b, session: sess });
+    app.manage(BrowserHost { bridge: b, mcp_sessions });
     let app2 = app.clone();
     app.state::<BrowserHost>()
         .bridge
@@ -101,6 +106,13 @@ pub fn browser_status(host: State<'_, BrowserHost>) -> serde_json::Value {
 }
 
 #[tauri::command]
-pub fn browser_repair(host: State<'_, BrowserHost>) -> serde_json::Value {
-    host.bridge.repair()
+pub async fn browser_repair(app: AppHandle) -> Result<serde_json::Value, String> {
+    // repair 会清桥的全局受控 tab 集合；先排空每个 MCP context 并 detach，
+    // 避免注册表仍保留旧 tabId，换浏览器后撞号导致事件错投。
+    let (sessions, bridge) = {
+        let host = app.state::<BrowserHost>();
+        (host.mcp_sessions.clone(), host.bridge.clone())
+    };
+    sessions.reset().await;
+    Ok(bridge.repair())
 }

@@ -46,10 +46,11 @@ pub(super) struct SessionState {
 }
 
 /// 会话态锁组:会话表、待发帧缓冲与审批/提问簿记。
-/// 含锁:sessions、batch、perm_remember、pending_questions、pending_perms、
-/// perm_tools(均 StdMutex)。
+/// 含锁:sessions、batch、sidecar_write、perm_remember、pending_questions、
+/// pending_perms、perm_tools(均 StdMutex)。
 /// 加锁秩序(评审梳理,不得反向):
 /// - sessions → batch:push_frame 在 sessions 锁内投递 journal 并入缓冲;
+/// - sidecar_write 只包围独立的小文件事务，不与其他状态锁嵌套;
 /// - pending_perms → pending_questions:sessions_list 的 waiting 快照;
 /// - perm_remember/perm_tools 点状取放,不与其他锁嵌套;
 /// - 跨组:subagents(SubagentState)→ sessions 允许,反向禁止,
@@ -58,6 +59,8 @@ pub(super) struct SessionsState {
     pub(super) sessions: StdMutex<HashMap<String, SessionState>>,
     /// 待发帧批量缓冲(sid → 帧列表;flusher 任务 30ms 排空)
     pub(super) batch: Arc<StdMutex<HashMap<String, Vec<Value>>>>,
+    /// sidecar 读改写锁，防并发更新互相覆盖字段。
+    pub(super) sidecar_write: StdMutex<()>,
     /// 审批记忆:工具名集合(内存 = 引擎生命周期;persist 追加落盘)。
     /// **兼容尾巴**:仅旧引擎(无 permissionRemember cap)使用——新引擎的
     /// 审批记忆归引擎自身(命令段粒度、项目级持久化),壳不再读写此集合
@@ -185,8 +188,7 @@ impl OhmyDriver {
         let result = self
             .rpc(
                 "session/create",
-                json!({ "cwd": workdir, "model": model_id,
-                    "permission_mode": ohmy_mode_of("default"), "interactive": true }),
+                engine_session_create_params(workdir, None, Some(&model_id), "default"),
             )
             .await?;
         let sid = result
@@ -246,12 +248,20 @@ impl OhmyDriver {
                 // 模型已从配置移除时不带 model,退化引擎默认(不阻断打开)
                 let mode = meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default");
                 let has_history = self.engine_session_exists(&engine_id).await;
-                let mut params = if has_history {
-                    json!({ "resume": engine_id, "permission_mode": ohmy_mode_of(mode), "interactive": true })
-                } else {
-                    json!({ "cwd": meta.get("workdir").and_then(|v| v.as_str()).unwrap_or(""),
-                        "permission_mode": ohmy_mode_of(mode), "interactive": true })
-                };
+                let mut workdir = meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if workdir.is_empty() {
+                    // 兼容没有 workdir 的旧 sidecar；不能留空让引擎隐式继承
+                    // Desktop 引擎进程 cwd，否则 resume 后会话会漂到进程目录。
+                    workdir = crate::config::home_dir()
+                        .map(|h| h.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                }
+                let mut params = engine_session_create_params(
+                    &workdir,
+                    has_history.then_some(engine_id.as_str()),
+                    None,
+                    mode,
+                );
                 let model_name = meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
                 if let Ok(model_id) = self.model_id_of(model_name) {
                     params["model"] = json!(model_id);
@@ -694,19 +704,20 @@ impl OhmyDriver {
     async fn create_resumed(&self, id: &str, model_id: &str, mode: &str) -> Result<(), String> {
         let eng = self.engine_id(id);
         let has_history = self.engine_session_exists(&eng).await;
-        let params = if has_history {
-            json!({ "resume": eng, "model": model_id, "permission_mode": ohmy_mode_of(mode), "interactive": true })
-        } else {
-            let mut workdir =
-                self.0.sess.sessions.lock().unwrap().get(id).map(|s| s.workdir.clone()).unwrap_or_default();
-            if workdir.is_empty() {
-                // 空 workdir 会触发引擎的 os.Getwd 兜底(进程 cwd),显式回退主目录
-                workdir = crate::config::home_dir()
-                    .map(|h| h.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-            }
-            json!({ "cwd": workdir, "model": model_id, "permission_mode": ohmy_mode_of(mode), "interactive": true })
-        };
+        let mut workdir =
+            self.0.sess.sessions.lock().unwrap().get(id).map(|s| s.workdir.clone()).unwrap_or_default();
+        if workdir.is_empty() {
+            // 空 workdir 会触发引擎的 os.Getwd 兜底(进程 cwd),显式回退主目录
+            workdir = crate::config::home_dir()
+                .map(|h| h.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+        let params = engine_session_create_params(
+            &workdir,
+            has_history.then_some(eng.as_str()),
+            Some(model_id),
+            mode,
+        );
         let result = self.rpc("session/create", params).await?;
         let new_eng =
             result.get("session_id").and_then(|v| v.as_str()).unwrap_or(&eng).to_string();
@@ -727,17 +738,46 @@ impl OhmyDriver {
         Ok(())
     }
 
-    /// 当前正在执行轮次的(父)会话工作区——浏览器截图落盘定位用。
-    /// 桌面单用户下同一时刻通常只有一个运行中的主会话;子代理子会话跳过。
-    pub fn active_workdir(&self) -> Option<String> {
+    /// MCP 标准工具调用不带 cwd；仅在唯一 owner 可确定时返回截图落盘路径。
+    /// 多 owner 时只跳过落盘，浏览器现场仍由 MCP session 隔离并正常并发，
+    /// 绝不因工作区不明确而拒绝工具调用。
+    pub fn single_running_workdir(&self) -> Option<String> {
+        // 显式后台 Agent 只转发 tool/error 心跳，纯文本任务可能从未物化
+        // child SessionState；background_agents 才是其存活/父归属真值。
+        let background_parents: Vec<String> = self.0.sub.background_agents.lock().unwrap()
+            .values().map(|(parent_sid, _)| parent_sid.clone()).collect();
         let subs = self.0.sub.subagents.lock().unwrap();
-        self.0
-            .sess.sessions
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(sid, s)| s.running && !s.workdir.is_empty() && !subs.contains_key(*sid))
-            .map(|(_, s)| s.workdir.clone())
+        let sessions = self.0.sess.sessions.lock().unwrap();
+        let mut owners: HashMap<String, String> = HashMap::new();
+        for (sid, session) in sessions.iter().filter(|(_, session)| session.running) {
+            let (owner, workdir) = match subs.get(sid) {
+                Some(route) => (
+                    route.parent_sid.clone(),
+                    sessions.get(&route.parent_sid)
+                        .map(|parent| parent.workdir.clone())
+                        .unwrap_or_else(|| session.workdir.clone()),
+                ),
+                None => (sid.clone(), session.workdir.clone()),
+            };
+            owners.entry(owner).or_insert(workdir);
+        }
+        for parent_sid in background_parents {
+            let workdir = sessions.get(&parent_sid)
+                .map(|parent| parent.workdir.clone()).unwrap_or_default();
+            owners.entry(parent_sid).or_insert(workdir);
+        }
+        let active: Vec<String> = owners.into_values().collect();
+        match active.as_slice() {
+            [workdir] if !workdir.is_empty() => Some(workdir.clone()),
+            _ => None,
+        }
+    }
+
+    /// 自动维护不得中断父任务或仍在后台执行的子代理。
+    pub fn has_running_sessions(&self) -> bool {
+        let foreground = self.0.sess.sessions.lock().unwrap().values()
+            .any(|session| session.running);
+        foreground || !self.0.sub.background_agents.lock().unwrap().is_empty()
     }
 
     fn session_created(&self, id: &str) -> bool {
@@ -888,19 +928,22 @@ impl Inner {
     /// async command 里的调用点按需套 spawn_blocking(session_send/
     /// session_delete/sessions_list),reader 线程本就是专用 std 线程。
     pub(super) fn write_sidecar(&self, id: &str, f: impl FnOnce(&mut Value)) {
+        let _write = self.sess.sidecar_write.lock().unwrap_or_else(|e| e.into_inner());
         let mut meta = self.read_sidecar(id);
         f(&mut meta);
         meta["updated_at"] = json!(frame::now_ms());
         let path = self.sidecar_path(id);
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        // 同目录临时文件 + rename 原子替换(与 baizhi/cookies.rs 的落盘纪律
-        // 一致):直接覆写在崩溃/断电时会留半截 meta.json,读取端解析失败
-        // 静默当空 sidecar → 会话从列表消失
-        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-        if std::fs::write(&tmp, serde_json::to_vec_pretty(&meta).unwrap_or_default()).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+        let data = match serde_json::to_vec_pretty(&meta) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("[desktop] 序列化会话 sidecar {id} 失败: {e}");
+                return;
+            }
+        };
+        // Windows 的 std::fs::rename 不能可靠覆盖已有目标，共用配置层的
+        // 跨平台原子替换原语。
+        if let Err(e) = crate::config::atomic_write_private(&path, &data) {
+            eprintln!("[desktop] 写入会话 sidecar {id} 失败: {e}");
         }
     }
 
@@ -1095,14 +1138,52 @@ fn ohmy_mode_of(mode: &str) -> &'static str {
     }
 }
 
+/// 构造引擎 session/create 参数。cwd 是逐会话状态，即使 resume 也必须
+/// 显式发送；否则引擎会回退到 Desktop 启动它时的进程 cwd。
+fn engine_session_create_params(
+    cwd: &str,
+    resume: Option<&str>,
+    model_id: Option<&str>,
+    mode: &str,
+) -> Value {
+    let mut params = json!({
+        "cwd": cwd,
+        "permission_mode": ohmy_mode_of(mode),
+        "interactive": true,
+    });
+    if let Some(resume) = resume {
+        params["resume"] = json!(resume);
+    }
+    if let Some(model_id) = model_id {
+        params["model"] = json!(model_id);
+    }
+    params
+}
+
 #[cfg(test)]
 mod permission_mode_tests {
-    use super::ohmy_mode_of;
+    use super::{engine_session_create_params, ohmy_mode_of};
 
     #[test]
     fn shell_modes_map_to_agent_permission_modes() {
         assert_eq!(ohmy_mode_of("default"), "auto");
         assert_eq!(ohmy_mode_of("normal"), "normal");
         assert_eq!(ohmy_mode_of("yolo"), "bypassPermissions");
+    }
+
+    #[test]
+    fn session_create_params_keep_cwd_when_resuming() {
+        let params = engine_session_create_params(
+            "/workspace/project",
+            Some("session-1"),
+            Some("model-1"),
+            "default",
+        );
+
+        assert_eq!(params["cwd"], "/workspace/project");
+        assert_eq!(params["resume"], "session-1");
+        assert_eq!(params["model"], "model-1");
+        assert_eq!(params["permission_mode"], "auto");
+        assert_eq!(params["interactive"], true);
     }
 }

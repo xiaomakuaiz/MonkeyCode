@@ -4,29 +4,121 @@
 //   POST application/json → 应答 application/json 的 JSON-RPC(无需 SSE);
 //   通知(无 id,如 notifications/initialized)→ 202 无体;
 //   GET(standalone SSE)→ 405 即被容忍(spec §2.2.3);
-//   会话头 Mcp-Session-Id 可不发(server MAY assign)。
+//   initialize 由 server 分配 Mcp-Session-Id，后续请求据此路由独立现场。
 // 鉴权:随机 Bearer token,经 mcp.json 内置条目的 headers 下发给引擎——
 // MCP 面能驱动用户浏览器,不能对本机任意进程裸奔。
 //
-// 工具串行:所有 browser_* 共享一个浏览器会话与 debugger 连接,并行会竞争,
-// 用互斥锁保证。
+// 并发模型:每条 MCP protocol session 拥有独立 BrowserSession；同一
+// transport 内工具串行(共享 current tab/ref 表)，不同 transport 可并行。
+// Desktop 不依赖 Agent 私有字段，只使用标准 Mcp-Session-Id。
 
+use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use base64::Engine as _;
 use serde_json::{json, Value};
 
 use super::ops::tool_metas;
-use super::session::BrowserSession;
+use super::session::{BrowserSession, BrowserSessions};
 
-/// 当前运行会话的工作区(截图落盘定位;None = 无运行中会话,跳过落盘)。
-pub type WorkdirFn = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+/// 解析/校验调用工作区。None 只跳过截图落盘，不影响浏览器操作；owner
+/// 隔离由标准 MCP protocol session 完成，不再拿工作区充当并发锁。
+pub type WorkdirFn = Arc<dyn Fn() -> Result<Option<String>, String> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct McpSessions(Arc<McpSessionsInner>);
+
+struct McpSessionsInner {
+    browser: BrowserSessions,
+    clients: StdMutex<HashMap<String, Arc<McpClientSession>>>,
+}
+
+struct McpClientSession {
+    closed: AtomicBool,
+    context: Arc<McpCallContext>,
+}
+
+struct McpCallContext {
+    browser: BrowserSession,
+    call_mu: tokio::sync::Mutex<()>,
+}
+
+impl McpClientSession {
+    fn close_context(&self) -> Arc<McpCallContext> {
+        self.closed.store(true, Ordering::Release);
+        self.context.clone()
+    }
+}
+
+impl McpSessions {
+    pub fn new(bridge: super::bridge::ExtBridge) -> Self {
+        Self(Arc::new(McpSessionsInner {
+            browser: BrowserSessions::new(bridge),
+            clients: StdMutex::new(HashMap::new()),
+        }))
+    }
+
+    fn create(&self) -> Result<String, String> {
+        let id = new_token()?;
+        let context = Arc::new(McpCallContext {
+            browser: self.0.browser.get_or_create(&id),
+            call_mu: tokio::sync::Mutex::new(()),
+        });
+        self.0.clients.lock().unwrap().insert(
+            id.clone(),
+            Arc::new(McpClientSession {
+                closed: AtomicBool::new(false),
+                context,
+            }),
+        );
+        Ok(id)
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.0.clients.lock().unwrap().contains_key(id)
+    }
+
+    fn context(&self, protocol_id: &str) -> Option<Arc<McpCallContext>> {
+        let client = self.0.clients.lock().unwrap().get(protocol_id).cloned()?;
+        if client.closed.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(client.context.clone())
+    }
+
+    async fn remove(&self, id: &str) -> bool {
+        let client = self.0.clients.lock().unwrap().remove(id);
+        let Some(client) = client else { return false };
+        let context = client.close_context();
+        // DELETE 可与最后一个 tools/call 同时到达。先从协议注册表摘除，
+        // 再等调用锁，确保不会在旧调用仍操作 tab 时 detach。
+        let _guard = context.call_mu.lock().await;
+        context.browser.close().await;
+        true
+    }
+
+    /// Agent 进程整体重启/浏览器重新配对时清空旧协议会话。先同步摘掉全部
+    /// protocol id，随后逐 context 排空在途调用并 detach；返回后新 Agent
+    /// initialize 不会与旧 owner 争同一个 tab。
+    pub async fn reset(&self) {
+        let clients = {
+            let mut clients = self.0.clients.lock().unwrap();
+            std::mem::take(&mut *clients).into_values().collect::<Vec<_>>()
+        };
+        for client in clients {
+            let context = client.close_context();
+            let _guard = context.call_mu.lock().await;
+            context.browser.close().await;
+        }
+    }
+}
 
 /// 启动 MCP server(随机端口),返回 (url, bearer_token)。
 /// 阻塞式 HTTP 处理跑在独立线程(请求频率 = 工具调用频率,极低)。
-pub fn serve(sess: BrowserSession, workdir: WorkdirFn) -> Result<(String, String), String> {
+pub fn serve(sessions: McpSessions, workdir: WorkdirFn) -> Result<(String, String), String> {
     let listener =
         TcpListener::bind("127.0.0.1:0").map_err(|e| format!("MCP 监听失败: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
@@ -34,16 +126,13 @@ pub fn serve(sess: BrowserSession, workdir: WorkdirFn) -> Result<(String, String
     let url = format!("http://{addr}/mcp");
 
     let tok = token.clone();
-    // 工具串行锁(见文件头);持锁跨 await 由 tokio Mutex 承担
-    let call_mu = Arc::new(tokio::sync::Mutex::new(()));
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { continue };
-            let sess = sess.clone();
+            let sessions = sessions.clone();
             let tok = tok.clone();
-            let mu = call_mu.clone();
             let wd = workdir.clone();
-            std::thread::spawn(move || handle_conn(conn, &sess, &tok, &mu, &wd));
+            std::thread::spawn(move || handle_conn(conn, &sessions, &tok, &wd));
         }
     });
     Ok((url, token))
@@ -59,7 +148,12 @@ fn new_token() -> Result<String, String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tokio::sync::Mutex<()>, workdir: &WorkdirFn) {
+fn handle_conn(
+    mut conn: TcpStream,
+    sessions: &McpSessions,
+    token: &str,
+    workdir: &WorkdirFn,
+) {
     let Some(req) = read_http_request(&mut conn) else { return };
 
     // 常时比较(复用 bridge.rs 的 ct_eq):`!=` 明文比对逐字节短路,
@@ -69,42 +163,94 @@ fn handle_conn(mut conn: TcpStream, sess: &BrowserSession, token: &str, mu: &tok
         .as_deref()
         .is_some_and(|b| super::bridge::ct_eq(b.as_bytes(), token.as_bytes()));
     if !authed {
-        write_http(&mut conn, 401, "application/json", br#"{"error":"unauthorized"}"#);
+        write_http(
+            &mut conn,
+            401,
+            "application/json",
+            br#"{"error":"unauthorized"}"#,
+            None,
+        );
+        return;
+    }
+    if req.method == "DELETE" {
+        let Some(id) = req.mcp_session_id.as_deref() else {
+            write_http(&mut conn, 400, "text/plain", b"missing Mcp-Session-Id", None);
+            return;
+        };
+        let removed = tauri::async_runtime::block_on(sessions.remove(id));
+        write_http(
+            &mut conn,
+            if removed { 204 } else { 404 },
+            "text/plain",
+            b"",
+            None,
+        );
         return;
     }
     if req.method != "POST" {
         // GET(standalone SSE)按 spec 返回 405,go-sdk 客户端容忍
-        write_http(&mut conn, 405, "text/plain", b"method not allowed");
+        write_http(&mut conn, 405, "text/plain", b"method not allowed", None);
         return;
     }
     let Ok(rpc) = serde_json::from_slice::<Value>(&req.body) else {
-        write_http(&mut conn, 400, "text/plain", b"bad json");
+        write_http(&mut conn, 400, "text/plain", b"bad json", None);
         return;
+    };
+
+    let method = rpc.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let protocol_id = if method == "initialize" {
+        match req.mcp_session_id.as_deref() {
+            Some(id) if sessions.contains(id) => id.to_string(),
+            _ => match sessions.create() {
+                Ok(id) => id,
+                Err(e) => {
+                    write_http(&mut conn, 500, "text/plain", e.as_bytes(), None);
+                    return;
+                }
+            },
+        }
+    } else {
+        let Some(id) = req.mcp_session_id.as_deref().filter(|id| sessions.contains(id)) else {
+            write_http(&mut conn, 404, "text/plain", b"unknown MCP session", None);
+            return;
+        };
+        id.to_string()
     };
 
     // 通知(无 id):202 无体
     if rpc.get("id").is_none() {
-        write_http(&mut conn, 202, "application/json", b"");
+        write_http(&mut conn, 202, "application/json", b"", Some(&protocol_id));
         return;
     }
     let id = rpc.get("id").cloned().unwrap_or(Value::Null);
-    let method = rpc.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let params = rpc.get("params").cloned().unwrap_or(Value::Null);
 
     // 工具执行是 async(桥 call 走 tokio);当前线程无 runtime,借 tauri 全局
-    let result = tauri::async_runtime::block_on(dispatch(sess, mu, workdir, &method, params));
+    let result = tauri::async_runtime::block_on(dispatch(
+        sessions,
+        &protocol_id,
+        workdir,
+        &method,
+        params,
+    ));
     let resp = match result {
         Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
         Err((code, msg)) => {
             json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": msg } })
         }
     };
-    write_http(&mut conn, 200, "application/json", resp.to_string().as_bytes());
+    write_http(
+        &mut conn,
+        200,
+        "application/json",
+        resp.to_string().as_bytes(),
+        Some(&protocol_id),
+    );
 }
 
 async fn dispatch(
-    sess: &BrowserSession,
-    mu: &tokio::sync::Mutex<()>,
+    sessions: &McpSessions,
+    protocol_id: &str,
     workdir: &WorkdirFn,
     method: &str,
     params: Value,
@@ -135,14 +281,21 @@ async fn dispatch(
         "tools/call" => {
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            let _g = mu.lock().await;
-            // 单次工具调用总超时:导航等待/整页截图都在其内
-            let out = tokio::time::timeout(
-                std::time::Duration::from_secs(180),
-                call_tool(sess, workdir, &name, &args),
-            )
-            .await
-            .unwrap_or_else(|_| Err("浏览器操作超时(180s)".into()));
+            let context = sessions
+                .context(protocol_id)
+                .ok_or_else(|| (-32001, "MCP 会话已关闭".to_string()))?;
+            // 同一 protocol session 的 current-tab/ref 状态串行；不同
+            // transport 没有共享可变现场，可并行进入扩展桥。
+            let _g = context.call_mu.lock().await;
+            let out = match workdir() {
+                Err(e) => Err(e),
+                Ok(owner_workdir) => tokio::time::timeout(
+                    std::time::Duration::from_secs(180),
+                    call_tool(&context.browser, owner_workdir, &name, &args),
+                )
+                .await
+                .unwrap_or_else(|_| Err("浏览器操作超时(180s)".into())),
+            };
             // MCP 语义:工具失败走 isError 带回模型(可行动文案),不是协议错误
             Ok(match out {
                 Ok(content) => json!({ "content": content, "isError": false }),
@@ -161,7 +314,7 @@ async fn dispatch(
 /// 工具分派:名称/入参形态对齐 ops.rs 的 tool_metas(即 Go tools.go)。
 async fn call_tool(
     sess: &BrowserSession,
-    workdir: &WorkdirFn,
+    workdir: Option<String>,
     name: &str,
     args: &Value,
 ) -> Result<Vec<Value>, String> {
@@ -176,7 +329,7 @@ async fn call_tool(
             // 截图同时落当前会话工作区:UI 工具卡按路径内联显示
             // (帧协议传路径不传 base64);模型侧走 MCP image 块直达
             // (上游 c1d8482 起)
-            if let Some(wd) = workdir() {
+            if let Some(wd) = workdir {
                 let name = format!("browser-{}.png", crate::driver::frame::now_ms());
                 match crate::uploads::save_raw(&wd, None, &name, &png) {
                     Ok(rel) => note.push_str(&format!("\n截图已保存: {rel}")),
@@ -222,6 +375,7 @@ async fn call_tool(
 struct HttpReq {
     method: String,
     bearer: Option<String>,
+    mcp_session_id: Option<String>,
     body: Vec<u8>,
 }
 
@@ -233,6 +387,7 @@ fn read_http_request(conn: &mut TcpStream) -> Option<HttpReq> {
     reader.read_line(&mut line).ok()?;
     let method = line.split_whitespace().next()?.to_string();
     let mut bearer = None;
+    let mut mcp_session_id = None;
     let mut content_len = 0usize;
     loop {
         let mut h = String::new();
@@ -245,8 +400,14 @@ fn read_http_request(conn: &mut TcpStream) -> Option<HttpReq> {
         }
         if lower.starts_with("authorization:") {
             // 原始行取值(token 大小写敏感)
-            let v = h.splitn(2, ':').nth(1).unwrap_or("").trim();
+            let v = h.split_once(':').map(|(_, value)| value).unwrap_or("").trim();
             bearer = v.strip_prefix("Bearer ").map(str::to_string);
+        }
+        if lower.starts_with("mcp-session-id:") {
+            let value = h.split_once(':').map(|(_, value)| value).unwrap_or("").trim();
+            if !value.is_empty() {
+                mcp_session_id = Some(value.to_string());
+            }
         }
     }
     // 体量上限 4MB:工具入参不会更大,防异常端灌爆内存
@@ -255,20 +416,32 @@ fn read_http_request(conn: &mut TcpStream) -> Option<HttpReq> {
     }
     let mut body = vec![0u8; content_len];
     reader.read_exact(&mut body).ok()?;
-    Some(HttpReq { method, bearer, body })
+    Some(HttpReq { method, bearer, mcp_session_id, body })
 }
 
-fn write_http(conn: &mut TcpStream, status: u16, ctype: &str, body: &[u8]) {
+fn write_http(
+    conn: &mut TcpStream,
+    status: u16,
+    ctype: &str,
+    body: &[u8],
+    mcp_session_id: Option<&str>,
+) {
     let reason = match status {
         200 => "OK",
         202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
+        404 => "Not Found",
         405 => "Method Not Allowed",
+        500 => "Internal Server Error",
         _ => "Error",
     };
+    let session_header = mcp_session_id
+        .map(|id| format!("Mcp-Session-Id: {id}\r\n"))
+        .unwrap_or_default();
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\n{session_header}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = conn.write_all(head.as_bytes());

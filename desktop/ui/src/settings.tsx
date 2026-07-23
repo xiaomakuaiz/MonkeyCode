@@ -341,6 +341,21 @@ const emptyModel = (): HostModel => ({
   api_key: "",
   model: "",
 });
+
+/** 设置页模型草稿 → 受支持的持久化 schema；未知/旧实验字段不透传。 */
+export function modelsToConfig(models: HostModel[], defaultIdx: number): HostModel[] {
+  return models.map((m, i) => ({
+    name: m.name.trim(),
+    provider: m.provider,
+    base_url: m.base_url,
+    api_key: m.api_key,
+    model: m.model,
+    default: i === defaultIdx,
+    context_window: m.context_window,
+    vision: m.vision,
+    source: m.source,
+  }));
+}
 const emptyMcp = (): McpEntry => ({ name: "", type: "http", url: "", command: "", args: "", kv: "" });
 
 /** 百智云组整组替换(模型与 MCP 共用语义):手工条目(无 source)原样保留,
@@ -559,7 +574,9 @@ export function SettingsView({
 
   // 归一化保存载荷:save() 与 dirty 比较共用同一形态(名称 trim、default 重算、MCP 序列化)
   const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[], ke: string): HostConfig => ({
-    models: ms.map((m, i) => ({ ...m, name: m.name.trim(), default: i === di })),
+    // 显式列出内核支持的字段，避免旧版/实验 UI 字段只写进 config.json、
+    // 物化时被静默丢弃，形成“保存成功但完全不生效”的幽灵配置。
+    models: modelsToConfig(ms, di),
     mcp_servers: mcpsToServers(mc),
     kernel_env: ke,
   });
@@ -799,19 +816,6 @@ export function SettingsView({
               className="hv-bd"
             />
           </Field>
-          <label
-            title="跳过 HTTPS 证书校验,连接可被窃听或篡改。仅用于自签名证书的内网网关;公网接口在老系统(如 Win7)验不过时内核会自动用内置根证书兜底,无需开启"
-            style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--t3)", cursor: "pointer", fontSize: 12, userSelect: "none" }}
-          >
-            <input
-              type="checkbox"
-              checked={!!m.skip_tls_verify}
-              onChange={(e) => patchModel(i, { skip_tls_verify: e.target.checked || undefined })}
-              style={{ accentColor: "var(--err)", margin: 0 }}
-            />
-            跳过 TLS 证书校验
-            {m.skip_tls_verify && <span style={{ color: "var(--err)", fontWeight: 600 }}>(不安全,仅限内网自签名网关)</span>}
-          </label>
         </>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 2, fontSize: 12 }}>

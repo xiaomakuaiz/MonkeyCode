@@ -58,6 +58,7 @@ pub(super) struct TransportState {
 /// - push_frame 的调用方一半在 async command(tokio 运行时线程),同步
 ///   文件 I/O 会卡住运行时(对比 driver/mod.rs 对 repo git 操作走
 ///   spawn_blocking 的纪律)。
+///
 /// 现在 async/reader 路径只入队,写线程用缓存句柄追加。
 pub(super) enum JournalMsg {
     /// 追加一行(已含换行前的完整 JSON;按到达顺序 == seq 顺序写入)
@@ -158,17 +159,19 @@ impl OhmyDriver {
         // 全部派生路径随之落在 app_config_dir/ohmyagent,不再接管全局 ~/.ohmyagent。
         // 一次性迁移:旧接管目录的 sessions 拷过来(sidecar 权威过滤,多拷无害)。
         let engine_dir = cfg_dir.join("ohmyagent");
-        migrate_legacy_sessions(&engine_dir);
+        let process_home = app.process_home();
+        migrate_legacy_sessions(&engine_dir, process_home.as_deref());
 
         // 进程 cwd 定在主目录:打包应用从 Finder/Dock 启动时壳 cwd 是 "/",
         // 会漏给引擎的 os.Getwd 兜底与其 spawn 的 MCP stdio 子进程;
         // 会话工作目录不受影响(session/create 逐会话显式传 cwd)
-        let proc_cwd = crate::config::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let proc_cwd = process_home.unwrap_or_else(|| PathBuf::from("."));
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&proc_cwd)
             // GUI 启动时环境贫瘠,按登录 shell 补齐(只补缺,见 login_shell_env);
             // OHMYAGENT_CONFIG_DIR 在其后设置,恒不被补齐项影响
             .envs(engine_env_additions())
+            .envs(app.engine_env_overrides())
             .env("OHMYAGENT_CONFIG_DIR", &engine_dir)
             .arg("--stdio")
             .stdin(Stdio::piped())
@@ -213,6 +216,7 @@ impl OhmyDriver {
             sess: SessionsState {
                 sessions: StdMutex::new(HashMap::new()),
                 batch: Arc::new(StdMutex::new(HashMap::new())),
+                sidecar_write: StdMutex::new(()),
                 perm_remember: StdMutex::new(perm_remember),
                 pending_questions: StdMutex::new(HashMap::new()),
                 pending_perms: StdMutex::new(HashMap::new()),
@@ -479,15 +483,14 @@ impl Inner {
     }
 }
 
-/// 查找 ohmyagent 二进制:MC_OHMYAGENT_BIN → 应用同目录 → PATH(含 ~/.local/bin)。
 /// 一次性迁移:接管时代写在 ~/.ohmyagent 的会话搬进私有目录
 /// (仅当私有目录还没有 sessions;拷贝失败静默,最坏丢历史不丢功能)。
-fn migrate_legacy_sessions(engine_dir: &std::path::Path) {
+fn migrate_legacy_sessions(engine_dir: &std::path::Path, legacy_home: Option<&std::path::Path>) {
     let new_sessions = engine_dir.join("sessions");
     if new_sessions.exists() {
         return;
     }
-    let Some(home) = crate::config::home_dir() else { return };
+    let Some(home) = legacy_home else { return };
     let old_sessions = home.join(".ohmyagent").join("sessions");
     if !old_sessions.is_dir() {
         return;
@@ -666,8 +669,25 @@ mod login_env_tests {
         assert!(!out.contains_key("SSH_AUTH_SOCK"));
         assert!(!out.contains_key("PWD"));
     }
+
+    #[test]
+    fn legacy_migration_uses_the_injected_home() {
+        let root = std::env::temp_dir().join(format!("mc-migrate-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("isolated-home");
+        let old = home.join(".ohmyagent/sessions/s1");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("messages.jsonl"), b"one\n").unwrap();
+        let engine = root.join("engine");
+
+        super::migrate_legacy_sessions(&engine, Some(&home));
+
+        assert_eq!(std::fs::read(engine.join("sessions/s1/messages.jsonl")).unwrap(), b"one\n");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
+/// 查找 ohmyagent 二进制:MC_OHMYAGENT_BIN → 应用同目录 → PATH(含 ~/.local/bin)。
 pub(super) fn find_ohmyagent() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MC_OHMYAGENT_BIN") {
         let p = PathBuf::from(p);
@@ -675,20 +695,31 @@ pub(super) fn find_ohmyagent() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let name = if cfg!(windows) { "ohmyagent.exe" } else { "ohmyagent" };
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join(name);
-            if p.is_file() {
-                return Some(p);
+    // 测试必须显式钉住配套引擎，不能从开发机 PATH 捡到旧二进制。
+    #[cfg(test)]
+    return None;
+
+    #[cfg(not(test))]
+    {
+        let name = if cfg!(windows) {
+            "ohmyagent.exe"
+        } else {
+            "ohmyagent"
+        };
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let p = dir.join(name);
+                if p.is_file() {
+                    return Some(p);
+                }
             }
         }
+        let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|v| std::env::split_paths(&v).collect())
+            .unwrap_or_default();
+        if let Some(home) = crate::config::home_dir() {
+            paths.push(home.join(".local/bin"));
+        }
+        paths.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
     }
-    let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|v| std::env::split_paths(&v).collect())
-        .unwrap_or_default();
-    if let Some(home) = crate::config::home_dir() {
-        paths.push(home.join(".local/bin"));
-    }
-    paths.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
 }

@@ -14,7 +14,7 @@
 ┌──────────────────────▼────────────────────────┐
 │  src/  (Rust 壳)                               │
 │  main.rs     宿主:窗口/托盘/桌宠/更新/生命周期  │
-│  config.rs   配置权威 + 引擎配置物化(纯函数)    │
+│  config.rs   配置权威事务 + 引擎配置单向派生     │
 │  driver/     引擎驱动层                        │
 │    frame.rs    Frame 词汇唯一定义(契约 1)      │
 │    mod.rs      DriverHost + Caps + 命令层守卫   │
@@ -63,9 +63,9 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 
 ## 契约 2:能力模型(Caps)
 
-`driver/mod.rs::Caps` 是引擎能力的单一事实来源
-(browser_ext/usage_update/perm_remember/attachments)。
-能力是渐进的:上游补齐即翻位(如 usage_update 待上游按次出 usage)。
+`driver/mod.rs::Caps` 是 UI 看到的能力投影，不是手写真值表：引擎能力
+(`usage_update/perm_remember`)来自 `system/ready.capabilities`，壳能力
+(`browser_ext/attachments`)来自对应运行时模块/壳实现。不得按版本号猜测。
 
 - **强制点唯一在命令层**;driver 实现内不得再各自硬编码能力错误。
 - UI 经 `engine_caps` 读取降级(caps 未加载时按"不支持"渲染,不闪现)。
@@ -74,6 +74,7 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 
 - 命令命名 `domain_verb`(session_open/baizhi_login/browser_status…);
   新命令三处同步登记:main.rs invoke_handler、build.rs、tauri.conf.json capability。
+  `scripts/check_command_contract.py` 在 CI 同时核对这三处与 UI 字面量 invoke。
 - 事件命名 `channel:{id}`:`frames:{sid}`、`conn-status:{sid}`、
   `ws-msg:{pipe}`、`ws-closed:{pipe}`;全局事件 `session-event`、`engine-crashed`。
 - **监听先于命令**:壳会在命令处理中同步 emit(回放、管道首帧),
@@ -84,12 +85,18 @@ reduce.test.ts 补对应归约断言。云端管道帧(ping/cursor/call-response
 
 ## 契约 4:配置所有权
 
-`DesktopConfig`(config.json)是唯一权威;引擎配置是它的**纯函数物化**,
+`DesktopConfig`(config.json)是唯一权威;引擎配置是它的**单向物化**,
 在引擎(重)启时重写:`app_config_dir/ohmyagent/{settings,mcp}.json`
 (经 OHMYAGENT_CONFIG_DIR 注入引擎,桌面版私有目录,不碰用户全局
 ~/.ohmyagent;扩展完成配对后 mcp.json 才注入 mc-browser 内置条目,
-URL/Bearer 进程级新发;首次配对/重置配对会自动重启 Agent 刷新工具集)。
-壳自有偏好(桌宠)走 save_config_json,只写权威、不触发物化。
+URL/Bearer 进程级新发;首次配对/重置配对在所有前台/后台任务空闲后
+自动重启 Agent 刷新工具集)。壳自有偏好(桌宠)走原子 read-modify-write,
+只写权威、不触发物化。
+
+所有权威配置事务经 `ConfigStore` 串行：0600 同目录临时文件、fsync、
+原子替换，并保留上一份可解析配置为 `config.json.bak`。主文件损坏时只可
+从有效备份恢复且保留 `.corrupt-*` 诊断副本；无有效备份必须外显错误，
+禁止退成默认值后覆盖用户模型/API Key。启动只物化派生文件，不回写权威。
 
 数据归属:
 
@@ -97,7 +104,7 @@ URL/Bearer 进程级新发;首次配对/重置配对会自动重启 Agent 刷新
 |---|---|
 | 引擎模型上下文 | app_config_dir/ohmyagent/sessions/<engine_id>/messages.jsonl |
 | 会话索引/标题/归档/**帧日志**/engine_id 别名 | 壳 sidecar:app_config_dir/ohmy-sessions/<sid>/ |
-| 子代理子会话(壳侧实体,仅回放) | 同上(sidecar 带 parent) |
+| 子代理子会话(有流式事件时物化,仅回放) | 同上(sidecar 带 parent);显式后台纯文本任务可能仅有完成通知 |
 | 附件 | <workdir>/.monkeycode/uploads(会话工作区内,模型经相对路径可读;旧目录约定的附件按消息内路径回读) |
 | 百智云/云端凭证 | app_config_dir/*-cookies.json(双罐,互不牵连) |
 | 浏览器扩展配对凭据 | app_config_dir/ext-auth.json |
@@ -110,6 +117,8 @@ app_config_dir 走,首启自动迁移旧接管目录的 sessions。
 引擎 id 与壳 sid 解耦:壳 sid 是目录/UI 通道的稳定标识;engine_id 是
 可替换属性(空会话无法 resume 时 destroy+全新 create 换绑),出站 RPC
 映射、入站 shell_sid_of 反查、sidecar 持久化。
+sidecar 更新是串行 read-modify-write，并与配置共用跨平台原子替换；
+Windows 不得用不能覆盖既有目标的裸 `std::fs::rename`。
 
 ## 契约 5:会话状态机
 
@@ -134,8 +143,15 @@ Op/Ev/错误码、proto:1、20s ping。
 
 - 9 个 browser_* 工具经壳内 MCP streamable-http server 暴露给引擎
   (Bearer 鉴权;手写最小面:POST json 应答/通知 202/GET 405)。
-- **单一共享浏览器会话**(不按 agent 会话隔离标签页):
-  MCP 工具调用不带会话身份,桌面单用户下可接受;handoff 队列归全局。
+- **会话隔离并发**:每条 MCP transport 经 `initialize` 取得独立
+  `Mcp-Session-Id` 并拥有独立 `BrowserSession`。同一 transport 内串行保护
+  current tab/ref 表，不同 transport 可并行进入扩展桥；实现只依赖标准 MCP
+  会话头，不要求 Agent 私有 `_meta`。当前 Agent 的子任务共享父 transport，
+  因而共享父浏览器现场并按序执行；不同顶层任务各自建 transport，可并行。
+  `tabId → owner` 路由保证事件只投给所属任务；普通选择不能抢占其他任务的
+  tab，只有用户显式 handoff 才转交。MCP 标准调用不含 cwd：唯一活跃
+  workspace 可确定时落截图；无法确定时只跳过本地副本、不拒绝操作，图片
+  仍作为 MCP image 返回模型。
 - 错误码→中文可行动文案是产品契约(模型行为依赖),改动需过 e2e 断言。
 
 ## 引擎监督
@@ -143,13 +159,15 @@ Op/Ev/错误码、proto:1、20s ping。
 壳监视引擎进程(stdout EOF);非 stop() 引发的退出 → 本地和解运行中
 会话(契约 5)→ 全局事件 `engine-crashed {engine, detail, log_tail}`
 → UI 横幅 + `engine_restart` 一键重启。引擎日志:app_config_dir/ohmyagent.log。
+`DriverHost` 用 lease/维护闸门排空已进入的 IPC 命令并封住新命令，再做
+stop/start；浏览器配对这类自动维护额外要求前台会话与后台 Agent 都为空闲。
 
 ## 已知上游缺口(ohmyagent)
 
-协议缺口与对应的壳侧变通,上游补齐后应删壳侧实现:
-permission remember(现壳记忆集自动应答)、stdio 会话索引
-(现 sidecar 权威)、空会话 resume 不容忍(壳 engine_id 换绑)、
-工具错误无独立错误位(现 "Error: " 前缀约定,壳按前缀转 failed 帧)。
+协议缺口与对应的壳侧变通,上游补齐后应删壳侧实现:stdio 会话索引
+(现 sidecar 权威)、空会话 resume 不容忍(壳 engine_id 换绑)。旧引擎兼容
+尾巴仍按 ready cap 门控:
+无 permissionRemember 时壳侧记忆、无 structuredToolResult 时错误前缀回退。
 已补齐(近期):每模型独立凭据(e792858 扁平 per-model schema,
 按别名作键,壳一一对应物化,槽位冲突逻辑消亡;壳一律传别名选模型,
 防同 wire id 多网关撞 wireIndex)、会话交互性声明(8afc338,
@@ -158,7 +176,8 @@ permission remember(现壳记忆集自动应答)、stdio 会话索引
 (turn/stopped.context)、附件(提示词图片路径内联)、MCP image 结果
 直达模型(c1d8482)、工具错误发 tool_result(b02fc77,含 deferred
 直调自动提升)、子代理事件带 parent_session_id/parent_tool_call_id
-(dab1b85,壳精确认领,启发式降为旧引擎回退)。
+(dab1b85,壳精确认领)。固定引擎已删除“同步 Agent 超时后自动转后台”，
+后台执行必须由 `run_in_background:true` 显式声明。
 
 ## 开发与构建产物
 
@@ -170,6 +189,7 @@ agent/ submodule(`export OHMYAGENT_SRC=...` 可覆盖),CI 同源;externalBin 在
 ```bash
 cd ui && npm run build      # 生成 uidist(cargo build 的前置)
 npx tauri dev --config tauri.dev.conf.json   # HMR 开发
-cargo test                  # baizhi 假服务端 + 浏览器桥假扩展 + MCP 冒烟
-                            # + ohmy 假 LLM E2E(MC_OHMYAGENT_BIN 启用)
+cargo test                  # hermetic 单测；不会从 PATH 猜 ohmyagent
+MC_OHMYAGENT_BIN=/绝对路径/ohmyagent cargo test e2e_ -- --test-threads=1
+                            # 固定引擎 + 假 LLM E2E
 ```

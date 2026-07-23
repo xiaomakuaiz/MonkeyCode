@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::bridge::ExtBridge;
 use super::mcp;
-use super::session::BrowserSession;
+use super::session::{BrowserSession, BrowserSessions};
 
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("mc-browser-test-{tag}-{}", std::process::id()));
@@ -193,10 +193,19 @@ async fn mcp_smoke_initialize_list_call() {
     let dir = tmp_dir("mcp");
     let b = ExtBridge::new(27460, &dir);
     // 不 spawn 桥监听:MCP 面不依赖扩展在线
-    let sess = BrowserSession::new(b);
-    let (url, token) = mcp::serve(sess, std::sync::Arc::new(|| None)).expect("MCP 启动");
+    let sessions = mcp::McpSessions::new(b);
+    let workdir_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let workdir_calls2 = workdir_calls.clone();
+    let (url, token) = mcp::serve(
+        sessions,
+        std::sync::Arc::new(move || {
+            workdir_calls2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(None)
+        }),
+    )
+    .expect("MCP 启动");
 
-    let post = |body: Value, auth: Option<String>| {
+    let post = |body: Value, auth: Option<String>, session: Option<String>| {
         let url = url.clone();
         async move {
             let mut req = format!(
@@ -204,6 +213,9 @@ async fn mcp_smoke_initialize_list_call() {
             );
             if let Some(t) = auth {
                 req.push_str(&format!("Authorization: Bearer {t}\r\n"));
+            }
+            if let Some(session) = session {
+                req.push_str(&format!("Mcp-Session-Id: {session}\r\n"));
             }
             let body = body.to_string();
             req.push_str(&format!("Content-Length: {}\r\n\r\n{}", body.len(), body));
@@ -218,7 +230,12 @@ async fn mcp_smoke_initialize_list_call() {
     };
 
     // 未带 token → 401
-    let resp = post(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }), None).await;
+    let resp = post(
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+        None,
+        None,
+    )
+    .await;
     assert!(resp.starts_with("HTTP/1.1 401"), "缺鉴权应 401: {resp}");
 
     // initialize:回显协议版本
@@ -226,15 +243,38 @@ async fn mcp_smoke_initialize_list_call() {
         json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": { "protocolVersion": "2025-06-18" } }),
         Some(token.clone()),
+        None,
     )
     .await;
     assert!(resp.contains(r#""protocolVersion":"2025-06-18""#), "initialize 应答不对: {resp}");
     assert!(resp.contains("mc-browser"));
+    let session = resp
+        .lines()
+        .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
+        .map(str::trim)
+        .expect("initialize 应返回 Mcp-Session-Id")
+        .to_string();
+
+    // 每条 MCP transport 都拿独立协议会话，不能退化成进程级共享现场。
+    let resp = post(
+        json!({ "jsonrpc": "2.0", "id": 11, "method": "initialize", "params": {} }),
+        Some(token.clone()),
+        None,
+    )
+    .await;
+    let session2 = resp
+        .lines()
+        .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
+        .map(str::trim)
+        .expect("第二次 initialize 应返回 Mcp-Session-Id")
+        .to_string();
+    assert_ne!(session, session2, "不同 transport 不应共享 protocol session");
 
     // tools/list:9 个工具,名字与扩展契约一致
     let resp = post(
         json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         Some(token.clone()),
+        Some(session.clone()),
     )
     .await;
     for name in [
@@ -250,18 +290,152 @@ async fn mcp_smoke_initialize_list_call() {
         json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "browser_snapshot", "arguments": {} } }),
         Some(token.clone()),
+        Some(session.clone()),
     )
     .await;
     assert!(resp.contains(r#""isError":true"#), "应 isError: {resp}");
     assert!(resp.contains("当前没有活动标签页"), "缺可行动文案: {resp}");
+    assert_eq!(
+        workdir_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "标准 tools/call 应经过 Desktop 工作区解析"
+    );
 
     // 通知 → 202
     let resp = post(
         json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-        Some(token),
+        Some(token.clone()),
+        Some(session.clone()),
     )
     .await;
     assert!(resp.starts_with("HTTP/1.1 202"), "通知应 202: {resp}");
+
+    // DELETE 释放对应 protocol session；其后旧 id 必须失效，不能复活现场。
+    let addr = url.strip_prefix("http://").unwrap().split('/').next().unwrap().to_string();
+    let req = format!(
+        "DELETE /mcp HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\
+         Mcp-Session-Id: {session2}\r\nContent-Length: 0\r\n\r\n"
+    );
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut conn = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    conn.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    let _ = conn.read_to_end(&mut buf).await;
+    let resp = String::from_utf8_lossy(&buf);
+    assert!(resp.starts_with("HTTP/1.1 204"), "DELETE 应释放会话: {resp}");
+    let resp = post(
+        json!({ "jsonrpc": "2.0", "id": 12, "method": "tools/list" }),
+        Some(token),
+        Some(session2),
+    )
+    .await;
+    assert!(resp.starts_with("HTTP/1.1 404"), "已删除会话必须失效: {resp}");
+}
+
+/// 不同 MCP transport 必须真正并行，不能只做到状态分表后仍被一个全局
+/// mutex 串行。隔离只依赖标准 Mcp-Session-Id，不要求 Agent 私有元数据。
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_protocol_sessions_execute_in_parallel() {
+    let dir = tmp_dir("mcp-parallel");
+    let sessions = mcp::McpSessions::new(ExtBridge::new(27465, &dir));
+    let gate = std::sync::Arc::new((
+        std::sync::Mutex::new(0usize),
+        std::sync::Condvar::new(),
+    ));
+    let timed_out = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate2 = gate.clone();
+    let timed_out2 = timed_out.clone();
+    let (url, token) = mcp::serve(
+        sessions,
+        std::sync::Arc::new(move || {
+            let (lock, ready) = &*gate2;
+            let mut entered = lock.lock().unwrap();
+            *entered += 1;
+            ready.notify_all();
+            let (entered, wait) = ready
+                .wait_timeout_while(entered, Duration::from_secs(2), |entered| *entered < 2)
+                .unwrap();
+            if wait.timed_out() && *entered < 2 {
+                timed_out2.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(None)
+        }),
+    )
+    .expect("MCP 启动");
+    let addr = url.strip_prefix("http://").unwrap().split('/').next().unwrap().to_string();
+
+    async fn post(addr: &str, token: &str, session: Option<&str>, body: Value) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let body = body.to_string();
+        let session = session
+            .map(|id| format!("Mcp-Session-Id: {id}\r\n"))
+            .unwrap_or_default();
+        let req = format!(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+             Authorization: Bearer {token}\r\n{session}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        conn.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        let _ = conn.read_to_end(&mut buf).await;
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    let init_one = post(
+        &addr,
+        &token,
+        None,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+    )
+    .await;
+    let session_one = init_one
+        .lines()
+        .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
+        .map(str::trim)
+        .expect("initialize 应返回 session id")
+        .to_string();
+    let init_two = post(
+        &addr,
+        &token,
+        None,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }),
+    )
+    .await;
+    let session_two = init_two
+        .lines()
+        .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
+        .map(str::trim)
+        .expect("第二个 initialize 应返回 session id")
+        .to_string();
+    assert_ne!(session_one, session_two);
+    let one = post(
+        &addr,
+        &token,
+        Some(&session_one),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "browser_snapshot", "arguments": {}
+        } }),
+    );
+    let two = post(
+        &addr,
+        &token,
+        Some(&session_two),
+        json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+            "name": "browser_snapshot", "arguments": {}
+        } }),
+    );
+    let (one, two) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(one, two)
+    })
+    .await
+    .expect("不同 MCP protocol session 不应互相阻塞");
+    assert!(one.contains(r#""isError":true"#) && two.contains(r#""isError":true"#));
+    assert_eq!(*gate.0.lock().unwrap(), 2, "两个 protocol session 都应进入 resolver");
+    assert!(
+        !timed_out.load(std::sync::atomic::Ordering::SeqCst),
+        "两个 MCP protocol session 被全局锁串行了"
+    );
 }
 
 /// R4:模拟 go-sdk StreamableClientTransport(实测 v1.6.1)的实际发包形态——
@@ -271,8 +445,8 @@ async fn mcp_smoke_initialize_list_call() {
 async fn mcp_gosdk_wire_shape() {
     let dir = tmp_dir("mcp-wire");
     let b = ExtBridge::new(27470, &dir);
-    let sess = BrowserSession::new(b);
-    let (url, token) = mcp::serve(sess, std::sync::Arc::new(|| None)).expect("MCP 启动");
+    let sessions = mcp::McpSessions::new(b);
+    let (url, token) = mcp::serve(sessions, std::sync::Arc::new(|| Ok(None))).expect("MCP 启动");
     let addr = url.strip_prefix("http://").unwrap().split('/').next().unwrap().to_string();
 
     async fn raw(addr: &str, req: String) -> String {
@@ -294,14 +468,33 @@ async fn mcp_gosdk_wire_shape() {
     .await;
     assert!(resp.starts_with("HTTP/1.1 405"), "GET 应 405: {resp}");
 
-    // initialize 之后 go-sdk 每个请求都带 MCP-Protocol-Version 头 + 双类型 Accept
+    let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": { "protocolVersion": "2025-06-18" } }).to_string();
+    let resp = raw(
+        &addr,
+        format!(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\nAuthorization: Bearer {token}\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            init.len(),
+            init
+        ),
+    )
+    .await;
+    let session = resp
+        .lines()
+        .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
+        .map(str::trim)
+        .expect("initialize 应返回 session id");
+
+    // initialize 之后 go-sdk 每个请求都带 protocol/session 头 + 双类型 Accept
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
     let resp = raw(
         &addr,
         format!(
             "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
              Accept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2025-06-18\r\n\
-             Authorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{}",
+             Mcp-Session-Id: {session}\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
             body
         ),
@@ -770,7 +963,7 @@ async fn bridge_preempt_wakes_inflight_call_from_ops_view() {
         vec![ok_res(json!([{ "tabId": 3, "url": "https://b", "title": "B", "controlled": true }]))],
     );
     let out = sess.tabs("list", None, None).await.expect("新连上的调用应成功");
-    assert!(out.contains("#3 [受控] B — https://b"), "标签页列表不对: {out}");
+    assert!(out.contains("#3 [待认领] B — https://b"), "标签页列表不对: {out}");
 }
 
 /// 锁什么:session 事件处理。① tab.removed → 双侧清理(桥受控集合 +
@@ -819,4 +1012,35 @@ async fn session_tab_removed_cleanup_and_dialog_auto_reply() {
         "alert 旁白不对: {notes}"
     );
     assert!(notes.contains("confirm 对话框(已自动取消)"), "confirm 旁白不对: {notes}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_browser_sessions_keep_tab_ownership_and_events_isolated() {
+    let dir = tmp_dir("multi-session");
+    let bridge = ExtBridge::new(27530, &dir);
+    bridge.spawn();
+    let sessions = BrowserSessions::new(bridge.clone());
+    let one = sessions.get_or_create("agent-one");
+    let two = sessions.get_or_create("agent-two");
+    let (fake, _) = pair(&bridge).await;
+
+    adopt_tab(&fake, &bridge, &one, 7).await;
+    adopt_tab(&fake, &bridge, &two, 8).await;
+    assert_eq!(one.state().tab_id, Some(7));
+    assert_eq!(two.state().tab_id, Some(8));
+    assert_eq!(sessions.owner_of(7).as_deref(), Some("agent-one"));
+    assert_eq!(sessions.owner_of(8).as_deref(), Some("agent-two"));
+
+    let err = two
+        .tabs("select", Some(7), None)
+        .await
+        .expect_err("另一任务不得抢占 tab");
+    assert!(err.contains("另一个任务"), "归属冲突文案不对: {err}");
+
+    fake.send_event(json!({ "event": "tab.removed", "tabId": 7 })).await;
+    barrier(&fake, &bridge).await;
+    assert_eq!(one.state().tab_id, None, "tab #7 事件应只清理 owner one");
+    assert_eq!(two.state().tab_id, Some(8), "tab #7 事件不应污染 owner two");
+    assert_eq!(sessions.owner_of(7), None);
+    assert_eq!(sessions.owner_of(8).as_deref(), Some("agent-two"));
 }

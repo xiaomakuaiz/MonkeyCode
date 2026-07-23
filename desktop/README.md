@@ -22,7 +22,7 @@ cd .. && cargo build && ./target/debug/monkeycode-desktop
 # HMR 开发(devUrl overlay)
 npx tauri dev --config tauri.dev.conf.json
 
-# 测试(含 ohmy 假 LLM E2E、浏览器桥假扩展、MCP 冒烟)
+# 测试(含 ohmy 假 LLM E2E、浏览器桥假扩展、MCP 冒烟；E2E 不从 PATH 猜版本)
 MC_OHMYAGENT_BIN=$OHMYAGENT_SRC/bin/ohmyagent cargo test
 cd ui && npm test
 ```
@@ -46,4 +46,6 @@ make windows          # NSIS 安装包(在 Windows 上执行;或走 CI)
 
 `../browser-extension/` 随包分发(设置页引导加载);扩展经
 `ws://127.0.0.1:{7440-7449}/ext` 连壳内桥,配对码在设置页展示。
-browser_* 工具经壳内 MCP server 暴露给引擎。
+browser_* 工具经壳内 MCP server 暴露给引擎；每条 MCP transport 有独立
+浏览器现场和标签页归属，不同 transport 可并行，同一 transport 内按调用
+顺序执行。该隔离只依赖标准 `Mcp-Session-Id`，不修改 Agent。

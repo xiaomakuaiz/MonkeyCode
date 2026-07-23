@@ -2,13 +2,10 @@
 // 契约逐字对齐 agent/internal/browser/bridge.go(546 行版本);行为断言见
 // agent/internal/browser/bridge_test.go。
 //
-// 与 Go 版的唯一语义偏差:**单会话简化**。桌面端单用户,MCP 工具调用不带会话
-// 身份,故去掉「会话注册表 + tabId→会话属主」的多会话路由,收敛为:
-//   - 受控标签页集合(claim/release/owns)
-//   - 待领 handoff 队列(FIFO)
-//   - 唯一事件处理器(set_event_handler)
-// 事件路由规则从「tab 属主的回调」退化为「tab 在受控集合内 → 唯一回调」。
-// 其余全部语义(端口顺延、hello 3s 首帧、constant-time 鉴权、配对码作废时机、
+// 桥只负责进程级连接、全局受控标签页集合和唯一事件出口。其后的
+// BrowserSessions 维护 tabId→owner 并把事件路由到独立会话；这样无需让扩展
+// 协议感知 Agent 身份，也能让不同任务并行而不共享 current tab/ref 现场。
+// 其余语义(端口顺延、hello 3s 首帧、constant-time 鉴权、配对码作废时机、
 // 新连顶旧连、ping 保活、断连唤醒在途等待者、状态字段、repair)照 Go 原样。
 //
 // 并发不变式:
@@ -72,11 +69,11 @@ struct Inner {
     /// call() 请求号发号器(从 1 起;0 保留给 ping 等不占号帧)。
     req_id: AtomicI64,
     st: StdMutex<BridgeState>,
-    /// 单会话简化:受控标签页集合(对应 Go 的 tabOwner,去掉属主维度)。
+    /// 进程级受控标签页集合；owner 维度由 BrowserSessions 维护。
     tabs: StdMutex<HashSet<i64>>,
     /// 用户交付(handoff)的标签页待领队列(FIFO)。
     handoffs: StdMutex<Vec<TabInfo>>,
-    /// 唯一事件处理器(对应 Go 的 sessions 表,单会话只留一个)。
+    /// 唯一事件出口；生产中注册 BrowserSessions 的 owner 路由器。
     handler: StdMutex<Option<Arc<dyn Fn(Message) + Send + Sync>>>,
     /// 配对状态变化回调。桌面壳据此重写 mcp.json 并重启 Agent；
     /// 只在 false→true / true→false 时触发，普通断线重连不触发。
@@ -236,14 +233,12 @@ impl ExtBridge {
         }
     }
 
-    /// 设置唯一事件处理器(对应 Go RegisterSession 的单会话版)。
-    /// 单会话约定守卫(见 mod.rs 头部「会话归属简化」):桥只有一个事件出口,
-    /// 二次注册意味着旧会话被静默顶掉失聪——那是编码错误,debug/测试构建
-    /// 立即暴露;release 下保持覆盖(新会话可用,不因守卫拖垮宿主)。
+    /// 设置进程级事件出口。生产中只注册一次 BrowserSessions 路由器；二次
+    /// 注册意味着旧路由器被静默顶掉失聪，是编码错误。
     pub fn set_event_handler(&self, f: Arc<dyn Fn(Message) + Send + Sync>) {
         // 下划线前缀:release 构建 debug_assert 不求值,避免未用变量警告
         let _prev = self.0.handler.lock().unwrap().replace(f);
-        debug_assert!(_prev.is_none(), "ExtBridge 事件处理器重复注册:违反单会话约定");
+        debug_assert!(_prev.is_none(), "ExtBridge 事件路由器重复注册");
     }
 
     /// 声明标签页受控(新建/认领交付时调用;幂等)。
@@ -377,8 +372,8 @@ impl ExtBridge {
         Err("unauthorized".to_string())
     }
 
-    /// 扩展事件分发。单会话简化:handoff 进待领队列;其余带 tabId 的事件,
-    /// tab 在受控集合内即路由到唯一 handler(Go 是路由到 tab 属主会话)。
+    /// 扩展事件分发：handoff 进待领队列；其余带 tabId 的事件先按进程级
+    /// 受控集合过滤，再交给 BrowserSessions 做 tab owner 路由。
     fn handle_event(&self, msg: Message) {
         match msg.event.as_str() {
             EVENT_PONG | "" => {}

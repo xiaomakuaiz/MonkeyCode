@@ -20,8 +20,13 @@ use crate::driver::subagent::SubagentState;
 use crate::driver::transport::{find_ohmyagent, spawn_journal_writer, TransportState};
 
 
-/// E2E 串行锁:两个 E2E 都改进程级 HOME/XDG 环境变量,并行会互踩
-static E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// E2E 串行锁:限制真实引擎 + 假 LLM 的并发资源占用。async-aware 锁不会
+/// 阻塞 tokio worker，也没有一次断言失败毒化其余 E2E 的问题。
+static E2E_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn e2e_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    E2E_LOCK.lock().await
+}
 
 fn sse_event(name: &str, data: Value) -> String {
     format!("event: {name}\ndata: {data}")
@@ -121,17 +126,30 @@ fn fake_anthropic_steps(delay_ms: u64, steps: Vec<String>) -> String {
 
 /// 端到端:mock 壳 + 真实 ohmyagent + 假 LLM,验证 create → send → 归一化
 /// 帧日志(user-input/task-started/agent 文本/task-ended)与回放。
-/// 需要 ohmyagent 二进制:MC_OHMYAGENT_BIN 或 PATH;找不到则跳过。
+/// 需要 MC_OHMYAGENT_BIN 显式指定配套的 ohmyagent；未指定则跳过。
 struct TestCtx(PathBuf);
 impl ShellCtx for TestCtx {
     fn emit_json(&self, _event: &str, _payload: Value) {}
     fn config_dir(&self) -> Result<PathBuf, String> {
         Ok(self.0.clone())
     }
+    fn process_home(&self) -> Option<PathBuf> {
+        self.0.parent().map(PathBuf::from)
+    }
+    fn engine_env_overrides(&self) -> Vec<(String, std::ffi::OsString)> {
+        let home = self.0.parent().unwrap_or(&self.0);
+        let mut env = vec![
+            ("HOME".into(), home.as_os_str().to_owned()),
+            ("XDG_CONFIG_HOME".into(), home.join("xdg").into_os_string()),
+        ];
+        if cfg!(windows) {
+            env.push(("USERPROFILE".into(), home.as_os_str().to_owned()));
+        }
+        env
+    }
 }
 
-/// 隔离 HOME(ohmyagent 配置/会话)与壳配置目录,写配置并起驱动。
-/// 改进程级环境变量,须持 E2E_LOCK 后调用。
+/// 隔离 HOME 与壳配置目录；HOME/XDG 只注入引擎子进程。
 fn e2e_setup(tag: &str, llm_delay_ms: u64) -> (OhmyDriver, PathBuf) {
     e2e_setup_steps(tag, llm_delay_ms, vec![sse_text("你好,任务完成")])
 }
@@ -140,7 +158,7 @@ fn e2e_setup_steps(tag: &str, llm_delay_ms: u64, steps: Vec<String>) -> (OhmyDri
     e2e_setup_cfg(tag, llm_delay_ms, steps, json!({}))
 }
 
-/// extra_settings:并进引擎 settings.json 的顶层键(如 subagent_timeout)。
+/// extra_settings:并进引擎 settings.json 的顶层键。
 fn e2e_setup_cfg(
     tag: &str,
     llm_delay_ms: u64,
@@ -151,9 +169,6 @@ fn e2e_setup_cfg(
     let _ = std::fs::remove_dir_all(&home);
     // 引擎配置写进壳私有目录(driver 会以 OHMYAGENT_CONFIG_DIR 注入)
     std::fs::create_dir_all(home.join("shellcfg/ohmyagent")).unwrap();
-    std::env::set_var("HOME", &home);
-    std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
-
     let llm = fake_anthropic_steps(llm_delay_ms, steps);
     let mut settings = json!({
         "default_model": "测试模型",
@@ -189,7 +204,7 @@ async fn e2e_chat_normalization() {
         eprintln!("skip: 未找到 ohmyagent 二进制");
         return;
     }
-    let _g = E2E_LOCK.lock().unwrap();
+    let _g = e2e_lock().await;
     let (driver, home) = e2e_setup("chat", 0);
 
     let workdir = home.to_string_lossy().into_owned();
@@ -273,7 +288,7 @@ async fn e2e_stop_reconciles_running_session() {
         eprintln!("skip: 未找到 ohmyagent 二进制");
         return;
     }
-    let _g = E2E_LOCK.lock().unwrap();
+    let _g = e2e_lock().await;
     // 慢速假 LLM(8s,超过引擎 5s 的内部 shutdown 预算):轮次挂在模型
     // 调用上。stop() 预算 = 引擎宣告 grace(5s)+ 3s 余量,引擎会在
     // 5s 强制收敛后优雅退出,壳等得到;等不到(引擎挂死)才 kill
@@ -329,7 +344,7 @@ async fn e2e_ask_user_question_flow() {
         eprintln!("skip: 未找到 ohmyagent 二进制");
         return;
     }
-    let _g = E2E_LOCK.lock().unwrap();
+    let _g = e2e_lock().await;
     let steps = vec![
         sse_tool_use("tu_1", "ToolSearch", &json!({ "query": "AskUserQuestion" })),
         sse_tool_use("tu_2", "AskUserQuestion", &json!({ "questions": [{
@@ -411,6 +426,7 @@ fn bare_inner(tag: &str) -> Arc<Inner> {
         sess: SessionsState {
             sessions: StdMutex::new(HashMap::new()),
             batch: Arc::new(StdMutex::new(HashMap::new())),
+            sidecar_write: StdMutex::new(()),
             perm_remember: StdMutex::new(HashSet::new()),
             pending_questions: StdMutex::new(HashMap::new()),
             pending_perms: StdMutex::new(HashMap::new()),
@@ -444,6 +460,113 @@ fn bare_session(sid: &str) -> SessionState {
         mode: "default".into(),
         title: String::new(),
     }
+}
+
+#[test]
+fn concurrent_sidecar_updates_do_not_lose_fields() {
+    let inner = bare_inner("sidecar-race");
+    let start = Arc::new(std::sync::Barrier::new(33));
+    let mut workers = Vec::new();
+    for i in 0..32u64 {
+        let inner = inner.clone();
+        let start = start.clone();
+        workers.push(std::thread::spawn(move || {
+            start.wait();
+            inner.write_sidecar("s1", |meta| {
+                meta.as_object_mut().unwrap().insert(format!("field_{i}"), json!(i));
+            });
+        }));
+    }
+    start.wait();
+    for worker in workers { worker.join().unwrap(); }
+
+    let meta = inner.read_sidecar("s1");
+    for i in 0..32u64 {
+        let key = format!("field_{i}");
+        assert_eq!(meta.get(&key).and_then(Value::as_u64), Some(i));
+    }
+    assert!(meta.get("updated_at").and_then(Value::as_u64).is_some());
+}
+
+#[test]
+fn browser_workdir_fallback_does_not_reject_concurrency() {
+    let inner = bare_inner("browser-owner");
+    let mut one = bare_session("s1");
+    one.workdir = "/workspace/one".into();
+    let mut two = bare_session("s2");
+    two.workdir = "/workspace/two".into();
+    {
+        let mut sessions = inner.sess.sessions.lock().unwrap();
+        sessions.insert("s1".into(), one);
+        sessions.insert("s2".into(), two);
+    }
+    let driver = OhmyDriver(inner.clone());
+    assert_eq!(driver.single_running_workdir(), None, "多任务时仅停用旧式落盘兜底");
+
+    inner.sess.sessions.lock().unwrap().get_mut("s2").unwrap().running = false;
+    assert_eq!(driver.single_running_workdir().as_deref(), Some("/workspace/one"));
+
+    // 即使没有子会话流，显式后台登记也继续归属父 workspace，并阻止维护重启。
+    inner.sess.sessions.lock().unwrap().get_mut("s1").unwrap().running = false;
+    inner.sub.background_agents.lock().unwrap()
+        .insert("agent-1".into(), ("s1".into(), "tc-1".into()));
+    assert_eq!(driver.single_running_workdir().as_deref(), Some("/workspace/one"));
+    assert!(driver.has_running_sessions());
+}
+
+#[test]
+fn public_caps_follow_the_ready_handshake() {
+    let inner = bare_inner("caps");
+    inner.transport.engine_caps.lock().unwrap().insert("turn/stopped".into());
+    let driver = OhmyDriver(inner);
+    let caps = crate::driver::caps(&driver, false);
+    assert!(!caps.browser_ext);
+    assert!(caps.usage_update);
+    assert!(!caps.perm_remember);
+    assert!(caps.attachments);
+}
+
+#[test]
+fn driver_host_maintenance_drains_leases_and_closes_the_command_gate() {
+    let host = Arc::new(crate::driver::DriverHost::new());
+    host.set(OhmyDriver(bare_inner("host-lease")));
+    let lease = host.get().unwrap();
+    let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker_host = host.clone();
+    let worker = std::thread::spawn(move || {
+        let _apply = worker_host.begin_apply();
+        acquired_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+
+    assert!(acquired_rx.recv_timeout(Duration::from_millis(30)).is_err());
+    drop(lease);
+    acquired_rx.recv_timeout(Duration::from_secs(1)).expect("维护应在 lease 释放后进入");
+    let error = match host.get() {
+        Err(error) => error,
+        Ok(_) => panic!("维护期间不应发放新 lease"),
+    };
+    assert!(error.contains("正在应用"));
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    assert!(host.get().is_ok());
+}
+
+#[test]
+fn idle_maintenance_does_not_churn_the_command_gate_while_work_is_running() {
+    let host = crate::driver::DriverHost::new();
+    let inner = bare_inner("host-busy");
+    inner
+        .sess
+        .sessions
+        .lock()
+        .unwrap()
+        .insert("s1".into(), bare_session("s1"));
+    host.set(OhmyDriver(inner));
+
+    assert!(host.try_begin_idle_apply().is_none());
+    assert!(host.get().is_ok(), "忙碌轮询不应短暂关闭命令入口");
 }
 
 /// 回放窗口不丢帧(修复:旧实现 opened=false 期间到达的帧只入日志
@@ -523,7 +646,7 @@ async fn e2e_subagent_progress() {
         eprintln!("skip: 未找到 ohmyagent 二进制");
         return;
     }
-    let _g = E2E_LOCK.lock().unwrap();
+    let _g = e2e_lock().await;
     let steps = vec![
         sse_tool_use("tu_1", "Agent", &json!({ "prompt": "调查并汇报", "description": "调查任务" })),
         sse_text("子代理调查结果:一切正常\n"),
@@ -614,7 +737,7 @@ async fn e2e_perm_remember_engine_rules() {
         eprintln!("skip: 未找到 ohmyagent 二进制");
         return;
     }
-    let _g = E2E_LOCK.lock().unwrap();
+    let _g = e2e_lock().await;
     // git push 不在引擎安全命令白名单 → default 模式必弹审批;
     // 同一命令连发两次:第一次批准并记住,第二次考验引擎侧规则
     let steps = vec![
@@ -786,10 +909,9 @@ fn unstamped_subagent_event_not_claimed() {
     );
 }
 
-// ==================== 超时转后台的子代理(async_launched) ====================
+// ==================== 显式后台子代理(async_launched) ====================
 //
-// 事件序列 ground truth(真实引擎 35ba211 实测,subagent_timeout=1s +
-// 假 LLM 每请求延迟 2s;超时前已流式的情形子代理事件在 tool_result 之前):
+// 事件序列 ground truth(当前固定引擎,Agent 入参 run_in_background=true):
 //   tool_call(Agent tu_1)
 //   tool_result(tu_1){content=async_launched JSON:{agentId,agentType,
 //     description,name,note,reason,status:"async_launched"}——**无 content
@@ -808,7 +930,6 @@ fn async_launched_json(agent_id: &str, name: &str, desc: &str) -> String {
         "description": desc,
         "name": name,
         "note": "The agent will notify you with a <task-notification> when it finishes.",
-        "reason": "still running after 2m0s; moved to the background",
         "status": "async_launched",
     }))
     .unwrap()
@@ -829,7 +950,7 @@ fn journal_frames(inner: &Inner, sid: &str) -> Vec<Value> {
         .collect()
 }
 
-/// 用户实测回归(超时前子代理已流式认领):async_launched 不把原始 JSON
+/// 后台子代理已流式认领时:async_launched 不把原始 JSON
 /// 灌卡、不关活着的子代理路由;turn/stopped 放过后台子会话(跨轮存活);
 /// task_notification 以 Result 正文回填父卡终态 + 📌 系统行 + 子会话收尾;
 /// 通知全文不再以 agent_text 混进模型正文气泡。
@@ -846,12 +967,12 @@ fn backgrounded_subagent_survives_and_backfills() {
         "tc1",
         json!({ "name": "Agent", "input": { "description": "设计解耦接口方案", "prompt": "去设计", "name": "bd" } }),
     ));
-    // 超时前子代理已流式(带戳记)→ 认领并投喂父卡
+    // 后台子代理流式事件(带戳记)→ 认领并投喂父卡
     inner.handle_event(json!({ "type": "model_delta", "session_id": "child1",
         "parent_session_id": "s1", "parent_tool_call_id": "tc1",
         "parent_description": "设计解耦接口方案", "data": { "text": "调查中…\n" } }));
     assert!(inner.sess.sessions.lock().unwrap().contains_key("child1"), "子代理未认领");
-    // 超时转后台:tool_result 回 async_launched JSON(无 content 字段)
+    // 显式后台:tool_result 回 async_launched JSON(无 content 字段)
     inner.handle_event(ev(
         "tool_result",
         "tc1",
@@ -1003,26 +1124,28 @@ fn task_notification_without_registry_falls_back_stripped() {
     assert!(!text.contains("<task-notification>"), "包装标签未剥: {text}");
 }
 
-/// E2E:真实引擎 subagent_timeout=1s + 假 LLM 每请求 2s——Agent 同步调用
-/// 超时转后台,整条链路(async_launched 卡文案 → 后台完成通知回填 →
-/// 📌 系统行 → 子会话收尾)对着真实事件序列验证。
+/// E2E:真实引擎显式 run_in_background + 假 LLM，验证 async_launched
+/// 卡文案 → 后台完成通知回填 → 📌 系统行 → 子会话收尾整条链路。
 #[tokio::test(flavor = "multi_thread")]
-async fn e2e_subagent_timeout_backgrounded() {
+async fn e2e_explicit_background_subagent() {
     if find_ohmyagent().is_none() {
         eprintln!("skip: 未找到 ohmyagent 二进制");
         return;
     }
-    let _g = E2E_LOCK.lock().unwrap();
+    let _g = e2e_lock().await;
     let steps = vec![
-        // req0 父轮:派 Agent;req1 子代理应答(延迟 2s > 超时 1s → 转后台);
+        // req0 父轮:显式后台 Agent;req1 子代理应答;
         // req2 父轮继续(Bash 给循环一次迭代机会,好在轮内排空通知);
         // req3 父轮收尾(模型已看到 <task-notification>)
-        sse_tool_use("tu_1", "Agent", &json!({ "prompt": "深入调查并汇报", "description": "后台调查任务", "name": "bg-worker" })),
+        sse_tool_use("tu_1", "Agent", &json!({
+            "prompt": "深入调查并汇报", "description": "后台调查任务",
+            "name": "bg-worker", "run_in_background": true
+        })),
         sse_text("子代理最终结论:一切正常\n"),
         sse_tool_use("tu_2", "Bash", &json!({ "command": "echo ok" })),
         sse_text("父任务收尾完成"),
     ];
-    let (driver, home) = e2e_setup_cfg("bg", 2000, steps, json!({ "subagent_timeout": 1000 }));
+    let (driver, home) = e2e_setup_steps("bg", 2000, steps);
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
@@ -1070,26 +1193,8 @@ async fn e2e_subagent_timeout_backgrounded() {
             && u["content"]["text"].as_str().map(|t| t.contains("Background agent")).unwrap_or(false)
     });
     assert!(!leaked, "通知全文混进正文气泡");
-    // 子会话物化 + 收尾(认领晚于 async_launched 的顺序也要能闭合)
-    let child_id = journal
-        .iter()
-        .filter_map(acp_update)
-        .find_map(|u| {
-            if u.get("toolCallId").and_then(|v| v.as_str()) != Some("tu_1") {
-                return None;
-            }
-            let p = u.get("progress")?;
-            if p.get("kind").and_then(|v| v.as_str()) != Some("child_session") {
-                return None;
-            }
-            p.get("childSessionId").and_then(|v| v.as_str()).map(String::from)
-        })
-        .expect("缺 child_session 链接");
-    let ctypes: Vec<String> = driver
-        .read_journal(&child_id)
-        .iter()
-        .filter_map(|f| f.get("type").and_then(|v| v.as_str()).map(String::from))
-        .collect();
-    assert!(ctypes.iter().any(|t| t == "task-ended"), "后台子会话未收尾: {ctypes:?}");
+    // 当前引擎对显式后台 Agent 只转发 tool/error 心跳，纯文本子任务不承诺
+    // child_session；task_notification 才是完成真值，并须消费存活登记。
+    assert!(driver.0.sub.background_agents.lock().unwrap().is_empty());
     driver.stop();
 }

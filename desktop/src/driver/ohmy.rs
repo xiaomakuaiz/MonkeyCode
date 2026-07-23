@@ -17,6 +17,7 @@
 // - subagent.rs  子代理认领/预览/关闭
 // - ohmy_tests.rs 测试(经下方 #[path] 挂为 tests 子模块)
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -32,6 +33,11 @@ use super::transport::TransportState;
 pub trait ShellCtx: Send + Sync + 'static {
     fn emit_json(&self, event: &str, payload: Value);
     fn config_dir(&self) -> Result<PathBuf, String>;
+
+    /// 引擎进程的 home/cwd 与额外环境。生产默认跟随当前用户；测试替身可
+    /// 逐子进程注入隔离目录，禁止通过 set_var 污染并行测试进程。
+    fn process_home(&self) -> Option<PathBuf> { crate::config::home_dir() }
+    fn engine_env_overrides(&self) -> Vec<(String, OsString)> { Vec::new() }
 }
 
 impl ShellCtx for AppHandle {
@@ -47,6 +53,11 @@ impl ShellCtx for AppHandle {
 
 #[derive(Clone)]
 pub struct OhmyDriver(pub(super) Arc<Inner>);
+
+impl OhmyDriver {
+    /// system/ready 的增量能力是引擎/壳协商的唯一事实来源。
+    pub fn has_capability(&self, capability: &str) -> bool { self.0.has_cap(capability) }
+}
 
 /// 驱动共享状态。锁字段按职责归为三个锁组(各组文档注释写明含哪些锁
 /// 与允许的嵌套秩序;跨组嵌套仅 subagents → sessions 一条,见

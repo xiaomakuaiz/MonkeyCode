@@ -28,7 +28,7 @@ pub(super) struct SubagentRoute {
 /// 子代理态锁组:子会话路由与 Agent 工具入参/结果暂存。
 /// 含锁:subagents、agent_results、agent_inputs(均 StdMutex)。
 /// 加锁秩序(评审梳理,不得反向):subagents → sessions(SessionsState;
-/// reconcile_all/active_workdir 持 subagents 期间读 sessions 表,
+/// reconcile_all/single_running_workdir 持 subagents 期间读 sessions 表,
 /// 反向嵌套禁止);agent_results/agent_inputs 点状取放,不与其他锁嵌套。
 pub(super) struct SubagentState {
     /// 子代理事件路由(child_sid → 父会话/父 Agent 工具)。上游把子循环事件
@@ -45,7 +45,7 @@ pub(super) struct SubagentState {
     /// 子会话物化时作标题与首条输入
     pub(super) agent_inputs: StdMutex<HashMap<String, (String, String)>>,
     /// 后台代理登记(agent_id → (父 sid, 父 Agent tc_id)):Agent 工具回
-    /// async_launched(超时转后台/显式后台)时登记,task_notification 按
+    /// async_launched(显式 run_in_background)时登记,task_notification 按
     /// agent_id 反查父卡回填最终结果并收尾;引擎不再服务时随会话和解清除
     pub(super) background_agents: StdMutex<HashMap<String, (String, String)>>,
 }
@@ -140,7 +140,7 @@ impl Inner {
             m["title"] = json!(title);
             m["status"] = json!(SessionStatus::Running.as_str());
         });
-        // 认领晚于 async_launched 的情形(子代理首个转发事件在超时之后才到):
+        // 认领晚于 async_launched 的情形(后台子代理首个转发事件稍后才到):
         // 登记表已有该父工具的后台标记,路由生来即后台,跨轮存活
         let background = self
             .sub.background_agents
@@ -312,7 +312,7 @@ impl Inner {
         }
     }
 
-    /// Agent 工具应答 async_launched(同步超时转后台/显式 run_in_background):
+    /// Agent 工具应答 async_launched(显式 run_in_background):
     /// 子代理还活着——不关路由,登记 agent_id → 父卡供 task_notification
     /// 反查,已认领路由补后台标记(超时前已流式认领的情形;认领在后的
     /// 情形由 claim_subagent 查登记表)。工具卡以友好文案按 completed

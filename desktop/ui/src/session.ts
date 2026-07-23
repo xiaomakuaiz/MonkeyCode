@@ -18,11 +18,11 @@ export const deleteSession = (id: string) =>
 
 /** 重命名会话(标题非空,内核截断到 80 字符)。 */
 export const setSessionTitle = (id: string, title: string) =>
-  invoke<SessionMeta>("session_patch", { id, patch: { title } });
+  invoke<{ ok: boolean }>("session_patch", { id, patch: { title } });
 
 /** 归档/取消归档会话。 */
 export const setSessionArchived = (id: string, archived: boolean) =>
-  invoke<SessionMeta>("session_patch", { id, patch: { archived } });
+  invoke<{ ok: boolean }>("session_patch", { id, patch: { archived } });
 
 /** 订阅全局会话事件流(session-status / session-ask);返回取消订阅函数。 */
 export function subscribeEvents(onEvent: (e: SessionEvent) => void): () => void {

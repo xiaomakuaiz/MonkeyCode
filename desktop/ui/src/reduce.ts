@@ -243,7 +243,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
         };
       }
       if (u.status === "in_progress") {
-        // 注:已闭合卡也接受 progress——超时转后台的 Agent 卡先以
+        // 注:已闭合卡也接受 progress——显式转后台的 Agent 卡先以
         // "已转入后台"文案 completed,后台代理继续流式,进度窗照常直播
         return u.progress ? applyProgress(s, u.toolCallId ?? "", u.progress) : s;
       }

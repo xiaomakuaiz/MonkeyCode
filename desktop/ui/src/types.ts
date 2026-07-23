@@ -43,8 +43,6 @@ export interface HostModel {
   context_window?: number;
   /** 支持图片输入(视觉);未勾选时读图降级为文本占位,不发图片块 */
   vision?: boolean;
-  /** 跳过 TLS 证书校验(不安全,仅自签名内网网关),高级项 */
-  skip_tls_verify?: boolean;
   /** 条目来源("baizhi"=百智云同步);缺省=手工添加。重同步时按它整组替换 */
   source?: string;
 }

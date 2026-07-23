@@ -314,7 +314,7 @@ impl Inner {
                     content.starts_with("Error: ")
                 };
                 // Agent 工具结果:agent_result 暂存(全量,不截断)为权威;
-                // 无暂存时先分流 async_launched(超时转后台/显式后台的应答,
+                // 无暂存时先分流 async_launched(显式后台的应答,
                 // 引擎 subagent.go asyncLaunchedResult——**没有 content 字段**,
                 // 走下面的退回解析会 unwrap_or 把整段原始 JSON 灌进卡),
                 // 其余退回解析截断 500 字符的 {status,…,content} JSON——

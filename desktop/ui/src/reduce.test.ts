@@ -164,7 +164,7 @@ describe("执行期进度(in_progress progress)", () => {
   });
 });
 
-describe("后台子代理(Agent 超时转后台)", () => {
+describe("后台子代理(Agent 显式转后台)", () => {
   const open = acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Agent 后台调查" });
   // 驱动侧 async_launched 的友好文案闭卡
   const launched = acp({
