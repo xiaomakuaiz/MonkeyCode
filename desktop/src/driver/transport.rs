@@ -164,12 +164,15 @@ impl OhmyDriver {
         let process_home = app.process_home();
         migrate_legacy_sessions(&engine_dir, process_home.as_deref());
 
-        // 进程 cwd 定在主目录:打包应用从 Finder/Dock 启动时壳 cwd 是 "/",
-        // 会漏给引擎的 os.Getwd 兜底与其 spawn 的 MCP stdio 子进程;
-        // 会话工作目录不受影响(session/create 逐会话显式传 cwd)
-        let proc_cwd = process_home.unwrap_or_else(|| PathBuf::from("."));
+        // agent 会把 <进程 cwd>/.ohmyagent/settings.json 当项目级配置加载。
+        // 若 cwd 是用户主目录，旧版 Desktop 遗留的 ~/.ohmyagent 会反过来
+        // 覆盖 OHMYAGENT_CONFIG_DIR 指向的壳私有配置（典型表现是 200k 又
+        // 退回 128k）。因此进程固定在私有引擎目录；各会话工作目录仍由
+        // session/create 显式传入，不受这里影响。
+        std::fs::create_dir_all(&engine_dir)
+            .map_err(|e| format!("创建引擎运行目录失败({}): {e}", engine_dir.display()))?;
         let mut cmd = Command::new(&bin);
-        cmd.current_dir(&proc_cwd)
+        cmd.current_dir(&engine_dir)
             // GUI 启动时环境贫瘠,按登录 shell 补齐(只补缺,见 login_shell_env);
             // OHMYAGENT_CONFIG_DIR 在其后设置,恒不被补齐项影响
             .envs(engine_env_additions())

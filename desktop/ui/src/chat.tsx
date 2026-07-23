@@ -94,10 +94,6 @@ function ContextRing({ usage }: { usage: Usage | null }) {
               <span style={{ font: "12px " + MONO, color: "var(--t1)" }}>
                 {usage.used.toLocaleString()} / {usage.size.toLocaleString()} tokens
               </span>
-              <span style={{ fontSize: 11, color: frac > 0.85 ? "var(--err)" : "var(--t4)" }}>
-                已用 {(frac * 100).toFixed(1)}%
-                {frac > 0.85 ? " · 接近上限,即将自动压缩" : `,剩余 ${fmtK(Math.max(0, usage.size - usage.used))}`}
-              </span>
             </>
           ) : (
             <span style={{ fontSize: 11.5, color: "var(--t4)" }}>暂无数据,本轮请求后更新</span>

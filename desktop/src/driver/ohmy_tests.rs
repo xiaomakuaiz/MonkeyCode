@@ -188,6 +188,18 @@ fn e2e_setup_cfg(
     )
     .unwrap();
 
+    // 模拟旧版 Desktop 曾写入的全局配置。引擎私有配置由
+    // OHMYAGENT_CONFIG_DIR 指向 shellcfg/ohmyagent；即使全局同名模型仍在，
+    // 也不能被误当成“项目配置”覆盖私有条目的 context_window。
+    let mut legacy_settings = settings.clone();
+    legacy_settings["models"]["测试模型"]["context_window"] = json!(128000);
+    std::fs::create_dir_all(home.join(".ohmyagent")).unwrap();
+    std::fs::write(
+        home.join(".ohmyagent/settings.json"),
+        serde_json::to_vec_pretty(&legacy_settings).unwrap(),
+    )
+    .unwrap();
+
     let ctx: Arc<dyn ShellCtx> = Arc::new(TestCtx(home.join("shellcfg")));
     let cfg = DesktopConfig {
         models: json!([{ "name": "测试模型", "provider": "anthropic",
