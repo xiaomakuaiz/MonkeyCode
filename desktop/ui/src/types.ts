@@ -238,6 +238,14 @@ export interface SessionEvent {
   open?: boolean;
 }
 
+/** Composer 上方的短暂提示；targetSessionId 存在时可点击跳转。 */
+export type NoticeTone = "info" | "success" | "warning" | "error";
+export interface SessionNotice {
+  text: string;
+  tone: NoticeTone;
+  targetSessionId?: string;
+}
+
 /** 引擎能力(UI 按此降级;引擎未运行时 reject)。 */
 export interface EngineCaps {
   browser_ext: boolean;

@@ -32,6 +32,7 @@ import { inspectMcAccount } from "./mcaccount";
 import { workspaceRelativePath } from "./markdownPaths";
 import { NewTaskView, type NewTaskPrefill } from "./newtask";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
+import { noticeForSessionEvent } from "./sessionNotice";
 import { groupByProject, Sidebar } from "./sidebar";
 import { SettingsView } from "./settings";
 import TitleBar from "./titlebar";
@@ -201,8 +202,8 @@ export default function App() {
 
   const session = useSession({ onSessionsChanged: () => void refreshSessions() });
 
-  // 后台会话结束提醒:内核事件流推送状态变更(不轮询),非当前会话到达终态时
-  // 标记侧栏未读点 + 状态行提示;打开该会话即消除
+  // 后台会话提醒:内核事件流推送状态变更(不轮询),非当前会话等待审批/
+  // 到达终态时在 Composer 上方给带类型、可跳转的短暂提示。
   const [attention, setAttention] = useState<Set<string>>(new Set());
   const sessionIdRef = useRef(session.id);
   sessionIdRef.current = session.id;
@@ -214,14 +215,10 @@ export default function App() {
         if (e.type !== "session-status" && e.type !== "session-ask") return;
         void refreshSessions(); // waiting_ask/status 都在列表快照里,任一事件都重拉
         if (e.id === sessionIdRef.current) return;
-        if (e.type === "session-ask") {
-          if (e.open) notifyRef.current(`「${e.title || "任务"}」等待权限审批`);
-          return;
-        }
-        if (e.status === "running") return;
-        setAttention((prev) => new Set(prev).add(e.id));
-        const label = e.status === "finished" ? "已完成" : e.status === "error" ? "出错了" : "已中断";
-        notifyRef.current(`「${e.title || "任务"}」${label}`);
+        const notice = noticeForSessionEvent(e);
+        if (!notice) return;
+        if (e.type === "session-status") setAttention((prev) => new Set(prev).add(e.id));
+        notifyRef.current(notice.text, { tone: notice.tone, targetSessionId: notice.targetSessionId });
       }),
     [refreshSessions],
   );
@@ -237,6 +234,28 @@ export default function App() {
     });
     setView("session");
     setDrawer(null);
+  };
+
+  // 点击后台会话提示:优先用现有侧栏快照,极小竞态下重拉一次再打开。
+  const openNoticeSession = async (id: string) => {
+    if (id === session.id) {
+      session.dismissNotice();
+      return;
+    }
+    let target = sessions.find((m) => m.id === id);
+    if (!target) {
+      try {
+        target = (await refreshSessions()).find((m) => m.id === id);
+      } catch {
+        // 下方统一给不可跳转提示
+      }
+    }
+    if (!target) {
+      session.notify("无法打开对应会话,它可能已被删除", { tone: "error" });
+      return;
+    }
+    session.dismissNotice();
+    openSession(target);
   };
 
   // 归档/取消归档:仅列表位置变化,当前打开的会话不强制关闭
@@ -594,6 +613,7 @@ export default function App() {
             currentModel={currentModel}
             onOpenDrawer={openDrawer}
             onOpenChild={setChildView}
+            onOpenNoticeSession={(id) => void openNoticeSession(id)}
             onArchive={() => currentMeta && void archiveSession(currentMeta)}
             onDelete={() => currentMeta && void removeSession(currentMeta)}
           />

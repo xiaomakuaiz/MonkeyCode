@@ -22,11 +22,11 @@ import {
   type MenuState,
 } from "./components";
 import { Composer, QueuedChip, RunningBar } from "./composer";
-import { IconArchive, IconCheck, IconChevronDown, IconFolder, IconShield, IconX } from "./icons";
+import { IconArchive, IconCheck, IconChevronDown, IconFolder, IconInfo, IconShield, IconTaskDone, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
-import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type Usage } from "./types";
+import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type SessionNotice, type Usage } from "./types";
 
 // IME 守卫随 composer 收敛到 composer.tsx;从这转口保持既有引用面
 // (sidebar/newtask 均 import 自 ./chat)
@@ -315,6 +315,84 @@ export function ModelPicker({
   );
 }
 
+const NOTICE_VISUAL: Record<SessionNotice["tone"], { color: string; background: string; border: string }> = {
+  success: { color: "var(--ok)", background: "var(--addBg)", border: "var(--accBd)" },
+  warning: { color: "var(--warnT)", background: "var(--warnBg)", border: "var(--warnBd2)" },
+  error: { color: "var(--err)", background: "var(--errBg)", border: "var(--errBd)" },
+  info: { color: "var(--acc)", background: "var(--accBgSoft)", border: "var(--accBd)" },
+};
+
+/** Composer 上方短暂提示；后台会话提示的主体可点击跳转，关闭按钮只关闭。 */
+export function SessionNoticeBanner({
+  notice,
+  onDismiss,
+  onOpenSession,
+}: {
+  notice: SessionNotice;
+  onDismiss: () => void;
+  onOpenSession: (id: string) => void;
+}) {
+  const visual = NOTICE_VISUAL[notice.tone];
+  const content = (
+    <>
+      {notice.tone === "success" ? <IconTaskDone size={13} color={visual.color} /> : <IconInfo size={13} color={visual.color} />}
+      <span className="ellipsis" style={{ flex: 1 }}>{notice.text}</span>
+      {notice.targetSessionId && <span style={{ flex: "none", fontSize: 11.5, fontWeight: 700 }}>查看 ›</span>}
+    </>
+  );
+  const mainStyle = {
+    minWidth: 0,
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "7px 8px 7px 12px",
+    border: "none",
+    borderRadius: "8px 0 0 8px",
+    background: "transparent",
+    color: "inherit",
+    fontSize: 12.5,
+    textAlign: "left" as const,
+  };
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        borderRadius: 9,
+        border: `1px solid ${visual.border}`,
+        background: visual.background,
+        color: visual.color,
+        animation: "mcin .12s ease",
+        overflow: "hidden",
+      }}
+    >
+      {notice.targetSessionId ? (
+        <button
+          className="hv-op"
+          title="打开对应会话"
+          onClick={() => onOpenSession(notice.targetSessionId!)}
+          style={{ ...mainStyle, cursor: "pointer" }}
+        >
+          {content}
+        </button>
+      ) : (
+        <span style={mainStyle}>{content}</span>
+      )}
+      <button
+        onClick={onDismiss}
+        style={{ width: 28, alignSelf: "stretch", flex: "none", border: "none", background: "transparent", color: visual.color, cursor: "pointer", fontSize: 13, padding: 0 }}
+        title="关闭"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
 export function ChatView({
   meta,
   session,
@@ -322,6 +400,7 @@ export function ChatView({
   currentModel,
   onOpenDrawer,
   onOpenChild,
+  onOpenNoticeSession,
   onArchive,
   onDelete,
 }: {
@@ -333,6 +412,7 @@ export function ChatView({
   currentModel: string;
   onOpenDrawer: (tab?: "files" | "changes") => void;
   onOpenChild: (id: string) => void;
+  onOpenNoticeSession: (id: string) => void;
   onArchive: () => void;
   onDelete: () => void;
 }) {
@@ -646,31 +726,9 @@ export function ChatView({
       <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {/* 实时任务面板(todo_update 驱动;钉住,不进对话流) */}
         {chat.plan.length > 0 && <TaskPanel entries={chat.plan} />}
-        {/* 操作告警横幅(切模型/权限/附件失败;独立于连接状态行,自动消退) */}
+        {/* 短暂提示:操作错误 + 可跳转的后台会话状态；独立于连接状态行。 */}
         {session.notice && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "7px 12px",
-              borderRadius: 9,
-              border: "1px solid var(--errBd)",
-              background: "var(--errBg, transparent)",
-              color: "var(--err)",
-              fontSize: 12.5,
-              animation: "mcin .12s ease",
-            }}
-          >
-            <span className="ellipsis" style={{ flex: 1 }}>{session.notice}</span>
-            <button
-              onClick={session.dismissNotice}
-              style={{ border: "none", background: "transparent", color: "var(--err)", cursor: "pointer", fontSize: 13, padding: 0 }}
-              title="关闭"
-            >
-              ✕
-            </button>
-          </div>
+          <SessionNoticeBanner notice={session.notice} onDismiss={session.dismissNotice} onOpenSession={onOpenNoticeSession} />
         )}
         {chat.running && (
           <RunningBar

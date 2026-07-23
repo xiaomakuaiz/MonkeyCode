@@ -6,7 +6,7 @@ import { connect, type Conn } from "./session";
 import { uploadFile, uploadFileURL } from "./uploads";
 import { b64encode } from "./codec";
 import { answerAsk as applyAskAnswer, answerPerm as applyPermAnswer, initialChat, reduceBatch, type ChatState } from "./reduce";
-import type { Attachment, FileChange, FileEntry, Frame } from "./types";
+import type { Attachment, FileChange, FileEntry, Frame, SessionNotice } from "./types";
 
 export type PermAction = "allow" | "always" | "persist" | "deny";
 
@@ -37,10 +37,10 @@ export interface SessionHandle {
   chat: ChatState;
   /** 连接状态文案(侧栏状态行,只反映连接) */
   status: string;
-  /** 操作失败告警(会话区横幅展示,自动消退;与连接状态分渠道——
+  /** 会话区短暂提示(自动消退;与连接状态分渠道——
    * 此前混用状态行,一条"切换失败"一闪即被 conn-status 覆盖,
    * 表现为"点了没反应") */
-  notice: string | null;
+  notice: SessionNotice | null;
   dismissNotice(): void;
   connected: boolean;
   /** 会话当前模型(空 = 未知,调用方回退默认模型展示) */
@@ -82,8 +82,8 @@ export interface SessionHandle {
   readFile(path: string): Promise<{ result?: { content?: string }; error?: string }>;
   /** repo_reveal:在系统文件管理器中定位(内核本机执行,浏览器模式同样可用) */
   reveal(path: string): Promise<{ result?: { ok?: boolean }; error?: string }>;
-  /** 外显一条操作告警(App 级操作失败共用 notice 渠道) */
-  notify(text: string): void;
+  /** 外显一条提示；默认错误色，targetSessionId 存在时由视图提供跳转。 */
+  notify(text: string, options?: Partial<Pick<SessionNotice, "tone" | "targetSessionId">>): void;
 }
 
 export function useSession(opts: { onSessionsChanged?: () => void } = {}): SessionHandle {
@@ -92,13 +92,20 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   const [status, setStatus] = useState("未连接");
   // 连接态取 onStatus 回调的权威布尔,不从 status 文案推导
   const [connected, setConnected] = useState(false);
-  // 操作告警独立渠道(自动消退),不占用连接状态行
-  const [notice, setNotice] = useState<string | null>(null);
+  // 短暂提示独立渠道(自动消退),不占用连接状态行
+  const [notice, setNotice] = useState<SessionNotice | null>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
-  const pushNotice = (text: string) => {
-    setNotice(text);
+  const pushNotice = (
+    text: string,
+    options: Partial<Pick<SessionNotice, "tone" | "targetSessionId">> = {},
+  ) => {
+    setNotice({ text, tone: options.tone ?? "error", targetSessionId: options.targetSessionId });
     window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(null), 8000);
+  };
+  const dismissNotice = () => {
+    window.clearTimeout(noticeTimer.current);
+    setNotice(null);
   };
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
   const [input, setInput] = useState("");
@@ -358,7 +365,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     chat,
     status,
     notice,
-    dismissNotice: () => setNotice(null),
+    dismissNotice,
     connected,
     // 由 chat 派生对外(SessionHandle 形状不变):ChatState 是唯一真值
     model: chat.model,
