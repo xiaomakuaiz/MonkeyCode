@@ -9,8 +9,8 @@ export const listSessions = () => invoke<SessionMeta[]>("sessions_list");
 
 export const listModels = () => invoke<ModelInfo[]>("models_list");
 
-export const createSession = (workdir: string, model: string, createDir = false) =>
-  invoke<SessionMeta>("session_create", { workdir, model, createDir });
+export const createSession = (workdir: string, model: string, createDir = false, kind: "local" | "chat" = "local") =>
+  invoke<SessionMeta>("session_create", { workdir, model, createDir, kind });
 
 /** 删除会话(级联子会话,不可恢复);运行中壳/内核拒绝。 */
 export const deleteSession = (id: string) =>

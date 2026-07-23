@@ -1,5 +1,5 @@
-// 新建任务视图:居中卡片(文件夹选择 + 任务输入 + 本地/云端 + 模型 + 开始)。
-// 布局与数值取自设计稿 New Task 屏。云端模式:选仓库(可不选=快速开始)+ 云端模型,
+// 新建任务视图:居中卡片(任务输入 + 本地/云端/对话模式 + 模型 + 开始)。
+// 本地模式选择工作目录；云端模式选择仓库(可不选=快速开始)+ 云端模型，
 // 经内核代理真实创建 monkeycode 云端任务,成功后进桌面内详情视图跟看。
 // 表单状态(目录/文本/模型/错误/busy + 附件/云端选项)整体收口在本组件:
 // 状态随视图挂载与卸载,App 只注入数据(models/recentDirs/lastDir)与编排回调
@@ -21,6 +21,7 @@ import {
 } from "./cloud";
 import {
   IconCheck,
+  IconChat,
   IconChevronDown,
   IconCloud,
   IconFolder,
@@ -35,8 +36,10 @@ import type { ModelInfo, SessionMeta } from "./types";
 
 /** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
 export const DEFAULT_DIR = "~/MonkeyCode";
+/** 普通对话仍需给引擎一个 cwd；放到独立隐藏目录，不混入用户项目。 */
+export const CHAT_DIR = "~/.monkeycode/chat-workspace";
 
-export type NewTaskMode = "local" | "cloud";
+export type NewTaskMode = "local" | "cloud" | "chat";
 
 export interface NewTaskPrefill {
   dir?: string | null;
@@ -57,12 +60,12 @@ export function NewTaskView({
   lastDir: string;
   /** 侧栏同款项目分组目录(App 从 sessions 派生;当前目录不在其中时头部补入) */
   recentDirs: string[];
-  /** 外部触发的预填(侧栏本地/云端 +、项目行 +):每次触发都是新对象,
+  /** 外部触发的预填(侧栏本地/云端/对话 +、项目行 +):每次触发都是新对象,
    * 同入口重复点击也能生效;mode 直达对应模式,dir 预填目录并停止跟随 */
   prefill: NewTaskPrefill | null;
   /** MonkeyCode 云端账号已显式关联(云端派发的前提) */
   cloudReady: boolean;
-  /** 本地会话创建成功:App 刷新列表并进入会话;first/files 随首条消息发出
+  /** 本地任务/独立对话创建成功:App 刷新列表并进入会话;first/files 随首条消息发出
    * (附件由 useSession 在会话连上后上传并拼接) */
   onCreated: (meta: SessionMeta, first?: string, files?: File[]) => Promise<void> | void;
   /** 云端任务创建成功:App 打开桌面内详情视图跟看 */
@@ -101,7 +104,7 @@ export function NewTaskView({
     }
   }, [prefill]);
 
-  // ===== 附件暂存(仅本地模式;云端任务不支持附件)=====
+  // ===== 附件暂存(本地/普通对话可用;云端任务不支持附件)=====
   // 此刻会话还没创建,File 只能留在内存;createTask 成功后随 onCreated 交给
   // App,会话建好、WS 连上时由 useSession 上传落盘并随首条消息发出
   const [atts, setAtts] = useState<{ file: File; preview?: string }[]>([]);
@@ -128,7 +131,7 @@ export function NewTaskView({
 
   // 粘贴附件:剪贴板里的 file item(截图/复制的文件),文本粘贴不受影响
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (mode !== "local") return;
+    if (mode === "cloud") return;
     const files: File[] = [];
     for (const item of e.clipboardData.items) {
       if (item.kind === "file") {
@@ -144,7 +147,7 @@ export function NewTaskView({
 
   // 拖拽文件进页面(与 ChatView 同款热区交互)
   const onDragEnter = (e: DragEvent<HTMLDivElement>) => {
-    if (mode !== "local" || ![...e.dataTransfer.items].some((i) => i.kind === "file")) return;
+    if (mode === "cloud" || ![...e.dataTransfer.items].some((i) => i.kind === "file")) return;
     e.preventDefault();
     dragDepth.current++;
     setDragging(true);
@@ -160,7 +163,7 @@ export function NewTaskView({
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
-    if (mode !== "local") return;
+    if (mode === "cloud") return;
     const files = [...e.dataTransfer.files];
     if (files.length) addFiles(files);
   };
@@ -232,24 +235,25 @@ export function NewTaskView({
     }
   };
 
-  // 本地会话创建:成功后交给 App 编排(刷新列表 + 进入会话);目录不存在
-  // 时给"创建该目录并继续"入口
+  // 本地任务/普通对话创建:对话使用独立隐藏 cwd，并用持久化 kind 与项目会话区分。
+  // 成功后交给 App 编排(刷新列表 + 进入会话);项目目录不存在时给确认入口。
   const createTask = async (createDir = false, files?: File[]) => {
-    const d = dir.trim();
+    const chatMode = mode === "chat";
+    const d = chatMode ? CHAT_DIR : dir.trim();
     if (!d || busy) return;
     setBusy(true);
     setErr("");
     setOfferCreate(false);
     try {
-      // 自有默认目录静默创建;用户自填的目录不存在仍走确认流程
-      const meta = await createSession(d, model, createDir || d === DEFAULT_DIR);
+      // 自有目录静默创建;用户自填的项目目录不存在仍走确认流程
+      const meta = await createSession(d, model, createDir || d === DEFAULT_DIR || chatMode, chatMode ? "chat" : "local");
       const first = text.trim();
       setText("");
       await onCreated(meta, first || undefined, files);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setErr("创建失败: " + msg);
-      if (msg.includes("目录不存在")) setOfferCreate(true);
+      if (!chatMode && msg.includes("目录不存在")) setOfferCreate(true);
     } finally {
       setBusy(false);
     }
@@ -339,8 +343,12 @@ export function NewTaskView({
       <div style={{ margin: "0 auto", width: "100%", maxWidth: 640, padding: "max(0px, 14vh - 50px) 36px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <img src={logoUrl} alt="" draggable={false} style={{ width: 52, height: 52 }} />
-          <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.2, marginTop: 6 }}>开始一个新任务</div>
-          <div style={{ fontSize: 12, color: "var(--t6)" }}>告诉我要做什么,剩下的交给我</div>
+          <div style={{ fontSize: 18, fontWeight: 750, letterSpacing: 0.1, marginTop: 6 }}>
+            {mode === "chat" ? "开始一段新对话" : "开始一个新任务"}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--t5)" }}>
+            {mode === "chat" ? "不绑定项目，随时记录、讨论或梳理想法" : "告诉我要做什么，剩下的交给我"}
+          </div>
         </div>
 
         <div
@@ -407,7 +415,7 @@ export function NewTaskView({
                   </>
                 )}
               </>
-            ) : (
+            ) : mode === "local" ? (
               <>
                 <button
                   className="hv"
@@ -495,10 +503,25 @@ export function NewTaskView({
                   </>
                 )}
               </>
+            ) : (
+              <div
+                style={{
+                  height: 28,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  padding: "0 9px",
+                  color: "var(--t4)",
+                  fontSize: 12,
+                }}
+              >
+                <IconChat size={13} color="var(--acc)" />
+                独立对话 · 不关联本地项目
+              </div>
             )}
           </div>
 
-          {mode === "local" && atts.length > 0 && (
+          {mode !== "cloud" && atts.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
               {atts.map((a, i) => (
                 <span key={i} style={{ position: "relative", display: "flex" }}>
@@ -560,7 +583,13 @@ export function NewTaskView({
             onCompositionEnd={markImeEnd}
             onKeyDown={onKey}
             onPaste={onPaste}
-            placeholder={mode === "local" ? "描述要做的事…粘贴或拖入图片/文件可作为附件,留空则先建会话" : "描述要做的事…留空则先建会话"}
+            placeholder={
+              mode === "chat"
+                ? "想聊点什么？也可以粘贴或拖入图片、文件…"
+                : mode === "local"
+                  ? "描述要做的事…粘贴或拖入图片、文件可作为附件，留空则先建会话"
+                  : "描述要做的事…留空则先建会话"
+            }
             style={{
               border: "none",
               outline: "none",
@@ -583,6 +612,10 @@ export function NewTaskView({
               <span onClick={() => setMode("cloud")} title="跑在云上服务器,关掉客户端也继续" style={segItem(mode === "cloud", "var(--warn)")}>
                 <IconCloud size={11} color={mode === "cloud" ? "var(--warn)" : "var(--t5)"} />
                 云端
+              </span>
+              <span onClick={() => setMode("chat")} title="不绑定项目的普通对话" style={segItem(mode === "chat", "var(--acc)")}>
+                <IconChat size={11} color={mode === "chat" ? "var(--acc)" : "var(--t5)"} />
+                对话
               </span>
             </span>
             {mode === "cloud" ? (
@@ -642,7 +675,7 @@ export function NewTaskView({
                 opacity: submitDisabled ? 0.6 : 1,
               }}
             >
-              {busy || cloudBusy ? "创建中…" : cloudDisconnected ? "请先连接" : "开始任务"}
+              {busy || cloudBusy ? "创建中…" : cloudDisconnected ? "请先连接" : mode === "chat" ? "开始对话" : "开始任务"}
               <IconSend size={11} />
             </button>
           </div>

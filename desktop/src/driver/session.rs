@@ -155,6 +155,7 @@ impl OhmyDriver {
                     "id": id,
                     "title": meta.get("title").and_then(|v| v.as_str()).unwrap_or(""),
                     "workdir": meta.get("workdir").and_then(|v| v.as_str()).unwrap_or(""),
+                    "kind": meta.get("kind").and_then(|v| v.as_str()).unwrap_or("local"),
                     "model": meta.get("model_name").and_then(|v| v.as_str()).unwrap_or(""),
                     "mode": meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default"),
                     "turns": meta.get("turns").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -171,7 +172,18 @@ impl OhmyDriver {
         Ok(Value::Array(items.into_iter().map(|(_, v)| v).collect()))
     }
 
+    #[cfg(test)]
     pub async fn session_create(&self, workdir: &str, model_name: &str, create_dir: bool) -> Result<Value, String> {
+        self.session_create_with_kind(workdir, model_name, create_dir, "local").await
+    }
+
+    pub async fn session_create_with_kind(
+        &self,
+        workdir: &str,
+        model_name: &str,
+        create_dir: bool,
+        kind: &str,
+    ) -> Result<Value, String> {
         let model_id = self.model_id_of(model_name)?;
         // ohmyagent 不展开 ~ 也不校验/创建目录,壳补齐:
         // 展开主目录、按需创建,否则前置校验——避免建出 cwd 不存在的会话
@@ -217,11 +229,13 @@ impl OhmyDriver {
         self.write_sidecar(&sid, |m| {
             m["model_name"] = json!(model_name);
             m["workdir"] = json!(workdir);
+            m["kind"] = json!(kind);
             m["status"] = json!(SessionStatus::Created.as_str());
         });
         Ok(json!({
             "id": sid, "title": "", "workdir": workdir, "model": model_name,
-            "mode": "default", "turns": 0, "status": SessionStatus::Created.as_str(),
+            "kind": kind, "mode": "default", "turns": 0,
+            "status": SessionStatus::Created.as_str(),
         }))
     }
 

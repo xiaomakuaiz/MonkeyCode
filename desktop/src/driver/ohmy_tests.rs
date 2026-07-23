@@ -223,6 +223,7 @@ async fn e2e_chat_normalization() {
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     // 契约 5:新建未运行的会话是 created(不是 finished)
     assert_eq!(meta.get("status").and_then(|v| v.as_str()), Some("created"));
+    assert_eq!(meta.get("kind").and_then(|v| v.as_str()), Some("local"));
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
     driver.session_open(&sid).await.expect("打开会话");
 
@@ -272,6 +273,7 @@ async fn e2e_chat_normalization() {
     let items = list.as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].get("status").and_then(|v| v.as_str()), Some("finished"));
+    assert_eq!(items[0].get("kind").and_then(|v| v.as_str()), Some("local"));
     assert!(items[0].get("title").and_then(|v| v.as_str()).unwrap_or("").contains("hello world"));
 
     // session/switchMode、session/switchModel 通路(会话已激活,走原生 RPC)

@@ -22,7 +22,7 @@ import {
   type MenuState,
 } from "./components";
 import { Composer, QueuedChip, RunningBar } from "./composer";
-import { IconArchive, IconCheck, IconChevronDown, IconFolder, IconInfo, IconShield, IconTaskDone, IconX } from "./icons";
+import { IconArchive, IconChat, IconCheck, IconChevronDown, IconFolder, IconInfo, IconShield, IconTaskDone, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
@@ -42,9 +42,8 @@ const scrollMemo = new Map<string, { anchor: number; offset: number; pinned: boo
 const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
 
-/** 对话/composer 共用列宽:680 起随窗口加宽,宽屏封顶 860(保持可读行长) */
-/** 对话列宽(ChatView 与云端任务视图共用,两处几何保持一致) */
-export const COL_MAX = "clamp(680px, 55vw, 860px)";
+/** 对话与操作区共用稳定内容轨；正文自身再由消息 maxWidth 保持可读行长。 */
+export const COL_MAX = "min(840px, calc(100% - 24px))";
 
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
 
@@ -394,6 +393,7 @@ export function ChatView({
   session,
   models,
   currentModel,
+  chatMode = false,
   onOpenDrawer,
   onOpenChild,
   onOpenNoticeSession,
@@ -406,6 +406,8 @@ export function ChatView({
   models: ModelInfo[];
   /** 展示用模型名(session.model 为空时 App 已回退默认) */
   currentModel: string;
+  /** 普通对话有隐藏 cwd 供引擎运行，但界面不暴露为项目，也不显示文件入口。 */
+  chatMode?: boolean;
   onOpenDrawer: (tab?: "files" | "changes") => void;
   onOpenChild: (id: string) => void;
   onOpenNoticeSession: (id: string) => void;
@@ -619,46 +621,55 @@ export function ChatView({
       )}
       {/* ==== 标题栏(共享 ViewHeader:56px 双行,空白区可拖拽窗口)==== */}
       <ViewHeader
-        title={meta?.title || "新任务"}
+        title={meta?.title || (chatMode ? "新对话" : "新任务")}
         subtitle={
-          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
-            <IconFolder size={11} color="var(--t6)" />
-            <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>{basename(workdir)}</span>
-            <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
-            <span className="ellipsis" style={{ fontFamily: MONO }}>{workdir}</span>
-          </span>
+          chatMode ? (
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t5)" }}>
+              <IconChat size={11} color="var(--t5)" />
+              独立对话 · 不关联项目
+            </span>
+          ) : (
+            <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t5)", minWidth: 0 }}>
+              <IconFolder size={11} color="var(--t6)" />
+              <span style={{ fontWeight: 600, color: "var(--t3)", flex: "none" }}>{basename(workdir)}</span>
+              <span style={{ color: "var(--t7)", flex: "none" }}>·</span>
+              <span className="ellipsis" style={{ fontFamily: MONO }}>{workdir}</span>
+            </span>
+          )
         }
       >
-        <HeaderFilesButton
-          title="浏览工作区文件(标注本轮改动)"
-          onClick={() => onOpenDrawer()}
-          badge={
-            changesCount > 0 && (
-              <span
-                title="查看本轮改动"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenDrawer("changes");
-                }}
-                style={{
-                  minWidth: 16,
-                  height: 16,
-                  borderRadius: 8,
-                  background: "var(--accBg)",
-                  color: "var(--acc)",
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: "0 4px",
-                }}
-              >
-                {changesCount}
-              </span>
-            )
-          }
-        />
+        {!chatMode && (
+          <HeaderFilesButton
+            title="浏览工作区文件(标注本轮改动)"
+            onClick={() => onOpenDrawer()}
+            badge={
+              changesCount > 0 && (
+                <span
+                  title="查看本轮改动"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenDrawer("changes");
+                  }}
+                  style={{
+                    minWidth: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    background: "var(--accBg)",
+                    color: "var(--acc)",
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "0 4px",
+                  }}
+                >
+                  {changesCount}
+                </span>
+              )
+            }
+          />
+        )}
         <HeaderMenu
           menu={menu}
           setMenu={setMenu}
@@ -684,12 +695,14 @@ export function ChatView({
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24 }}>
           <img src={logoUrl} alt="" draggable={false} style={{ width: 52, height: 52 }} />
           <div style={{ fontSize: 15, fontWeight: 700, textAlign: "center", maxWidth: 420 }}>
-            在 <span style={{ whiteSpace: "nowrap", fontFamily: MONO, fontSize: 13.5 }}>{workdir}</span> 开始新任务
+            {chatMode ? (
+              "开始一段新对话"
+            ) : (
+              <>在 <span style={{ whiteSpace: "nowrap", fontFamily: MONO, fontSize: 13.5 }}>{workdir}</span> 开始新任务</>
+            )}
           </div>
           <div style={{ fontSize: 12.5, color: "var(--t5)", textAlign: "center", lineHeight: 1.6 }}>
-            描述你想做的事,比如修一个 Bug、加一个功能、
-            <br />
-            或者让我先看看这个项目。
+            {chatMode ? "可以用来记录想法、讨论方案，或者快速问一个问题。" : "描述你想做的事，比如修一个 Bug、加一个功能，或者让我先看看这个项目。"}
           </div>
         </div>
       ) : (
@@ -702,7 +715,7 @@ export function ChatView({
           onMouseDown={onLogMouseDown}
           style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
         >
-          <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ width: "100%", maxWidth: COL_MAX, margin: "0 auto", padding: "26px 28px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
             <LogList
               items={chat.items}
               onPermAnswer={session.answerPerm}
@@ -719,33 +732,41 @@ export function ChatView({
       {/* ==== 运行条 + 排队 + composer(680 列,钉在底部)====
           width 扣掉 16px:对话列在滚动容器内被 scrollbar-gutter 双侧各让 8px,
           composer 在容器外,同步扣减后两列在任意窗口宽度下公式一致、像素对齐 */}
-      <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 36px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 28px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
         {/* 实时任务面板(todo_update 驱动;钉住,不进对话流) */}
         {chat.plan.length > 0 && <TaskPanel entries={chat.plan} />}
         {/* 短暂提示:操作错误 + 可跳转的后台会话状态；独立于连接状态行。 */}
         {session.notice && (
           <SessionNoticeBanner notice={session.notice} onDismiss={session.dismissNotice} onOpenSession={onOpenNoticeSession} />
         )}
-        {chat.running && (
-          <RunningBar
-            label={runningLabel}
-            detail={`第 ${roundNo} 轮${usage ? ` · 已用 ${fmtK(usage.used)} tokens` : ""}`}
-            onStop={session.stop}
-          />
-        )}
-
         {queued && <QueuedChip text={queued} hint="运行结束后自动发送" onClear={session.clearQueued} />}
 
         <Composer
           value={input}
-          placeholder={chat.running ? "补充说明…运行中发送会排队" : "输入任务…粘贴或拖入图片/文件可作为附件"}
+          placeholder={
+            chat.running
+              ? "补充说明…运行中发送会排队"
+              : chatMode
+                ? "输入消息…粘贴或拖入图片、文件可作为附件"
+                : "输入任务…粘贴或拖入图片、文件可作为附件"
+          }
           sendActive={!!input.trim() || atts.length > 0}
           onChange={session.setInput}
           onSend={sendAndFollow}
           onPaste={onPaste}
           above={
-            atts.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
+            (chat.running || atts.length > 0) && (
+              <>
+                {chat.running && (
+                  <div style={{ padding: "7px 11px", borderBottom: "1px solid var(--line2)", borderRadius: "11px 11px 0 0", background: "var(--accBgSoft)" }}>
+                    <RunningBar
+                      label={runningLabel}
+                      detail={`第 ${roundNo} 轮${usage ? ` · ${fmtK(usage.used)} tokens` : ""}`}
+                      onStop={session.stop}
+                    />
+                  </div>
+                )}
+                {atts.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
                 {atts.map((a, i) => (
                   <span key={a.path} style={{ position: "relative", display: "flex" }}>
                     {a.isImage ? (
@@ -796,7 +817,8 @@ export function ChatView({
                     </button>
                   </span>
                 ))}
-              </div>
+                </div>}
+              </>
             )
           }
           controls={

@@ -64,6 +64,8 @@ export interface SessionMeta {
   id: string;
   title: string;
   workdir: string;
+  /** 会话空间；旧 sidecar 缺省为 local。chat 仍有隐藏 cwd，但界面不绑定项目。 */
+  kind?: "local" | "chat";
   model: string;
   /** 权限模式("yolo" 全放行;缺省 = default) */
   mode?: string;

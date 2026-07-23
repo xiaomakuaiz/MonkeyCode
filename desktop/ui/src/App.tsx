@@ -78,7 +78,7 @@ export default function App() {
   const drawerEscRef = useRef<(() => boolean) | null>(null);
   const [childView, setChildView] = useState<string | null>(null);
   // 新建任务表单状态整体在 NewTaskView 内(随视图生命周期);App 只保留外部
-  // 预填触发(侧栏本地/云端 +、项目行 +)——每次触发都换新对象,同入口重复点击也生效
+  // 预填触发(侧栏本地/云端/对话 +、项目行 +)——每次触发都换新对象,同入口重复点击也生效
   const [newTaskPrefill, setNewTaskPrefill] = useState<NewTaskPrefill | null>(null);
 
   // ===== MonkeyCode 云端账号与任务 =====
@@ -367,7 +367,9 @@ export default function App() {
 
   // 新任务默认工作目录跟随最近会话:数据在这派生,跟随逻辑在 NewTaskView 内
   const lastDir =
-    [...sessions].sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))[0]?.workdir ?? "";
+    [...sessions]
+      .filter((m) => m.kind !== "chat")
+      .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))[0]?.workdir ?? "";
 
   // 本地文件抽屉的数据适配:与云端同名协议(repo_file_list / repo_read_file /
   // repo_file_diff)经会话 WS(useSession 句柄);渲染在共享 FilesDrawer
@@ -439,7 +441,7 @@ export default function App() {
   // 文件抽屉预览头的改动标注:路径 → 状态(树/列表内的标注在 FilesDrawer)
   const changeMap = new Map((changes ?? []).map((c) => [c.path, c.status] as const));
   // 最近用过的项目目录(侧栏同款分组;当前目录补入/截断在 NewTaskView 内做)
-  const recentDirs = groupByProject(sessions.filter((m) => !m.archived)).map((g) => g.dir);
+  const recentDirs = groupByProject(sessions.filter((m) => !m.archived && m.kind !== "chat")).map((g) => g.dir);
 
   // ===== 全局快捷键:⇧⇥ 权限模式、⏎/esc 应答审批、esc 关闭浮层 =====
   useEffect(() => {
@@ -572,6 +574,10 @@ export default function App() {
             setNewTaskPrefill({ dir, mode: "local" });
             setView("new");
           }}
+          onNewChat={() => {
+            setNewTaskPrefill({ mode: "chat" });
+            setView("new");
+          }}
           onOpenSettings={openSettings}
           onArchive={(m) => void archiveSession(m)}
           onDelete={(m) => void removeSession(m)}
@@ -626,6 +632,7 @@ export default function App() {
             session={session}
             models={menuModels}
             currentModel={currentModel}
+            chatMode={currentMeta?.kind === "chat"}
             onOpenDrawer={openDrawer}
             onOpenChild={setChildView}
             onOpenNoticeSession={(id) => void openNoticeSession(id)}

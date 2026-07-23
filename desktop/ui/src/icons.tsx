@@ -92,6 +92,31 @@ export function IconMonitor({ size = 14, color = "var(--t5)", strokeWidth = 1.2,
   );
 }
 
+/** 对话气泡 */
+export function IconChat({ size = 14, color = "var(--t5)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ ...base, ...style }}>
+      <path
+        d="M3.2 3h9.6A1.7 1.7 0 0 1 14.5 4.7v5.1a1.7 1.7 0 0 1-1.7 1.7H7l-3.7 2v-2H3.2a1.7 1.7 0 0 1-1.7-1.7V4.7A1.7 1.7 0 0 1 3.2 3z"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M4.5 6.2h7M4.5 8.5h4.8" stroke={color} strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 搜索 */
+export function IconSearch({ size = 13, color = "var(--t5)", style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ ...base, ...style }}>
+      <circle cx="7" cy="7" r="4.5" stroke={color} strokeWidth="1.25" />
+      <path d="m10.4 10.4 3.2 3.2" stroke={color} strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** 地球(浏览器) */
 export function IconGlobe({ size = 14, color = "var(--t5)", style }: IconProps) {
   return (

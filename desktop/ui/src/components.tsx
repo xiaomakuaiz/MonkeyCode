@@ -262,7 +262,7 @@ function ThoughtView({ text }: { text: string }) {
 /** 实时任务面板:钉在 composer 上方,不进对话流。收起 = 一行摘要
  * (进度 + 当前项),展开 = 限高滚动的勾选列表;整卡随 todo_update 更新。 */
 export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const done = entries.filter((e) => e.status === "completed").length;
   const current = entries.find((e) => e.status === "in_progress") ?? entries.find((e) => e.status === "pending");
   // 依赖提示(上游 todo_update 携带 id/depends_on 时):id → 序号与标题,
@@ -287,7 +287,7 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
   // 有任何依赖关系时全员编号,"等 #N" 才有落点
   const numbered = entries.some((e) => e.depends_on?.length);
   return (
-    <div className="card" style={{ padding: 0, overflow: "hidden", animation: "mcin .18s ease" }}>
+    <div className="card" style={{ padding: 0, overflow: "hidden", boxShadow: "none", animation: "mcin .18s ease" }}>
       <button
         className="hv2"
         onClick={() => setOpen(!open)}
@@ -303,7 +303,7 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
         </span>
         {!open && current && (
           <span className="ellipsis" style={{ color: "var(--t4)", flex: 1, minWidth: 0 }}>
-            · {current.status === "in_progress" ? "正在" : "接下来"}:{current.content}
+            · {current.status === "in_progress" ? "正在" : "接下来"}：{current.content}
           </span>
         )}
         <IconChevronRight
@@ -751,14 +751,18 @@ function PermCard({
   );
 }
 
-/** 轮次分隔线:横线 + 居中小字(设计稿"本轮结束") */
+/** 轮次边界只保留呼吸间距；消息天然按用户/助手交替，不再用横线切碎正文。 */
 function TurnDivider() {
-  const line = <span style={{ flex: 1, height: 1, background: "var(--line2)" }} />;
+  return <div aria-label="本轮结束" style={{ height: 2 }} />;
+}
+
+/** 连续模型切换属于一件系统事件，折成一条路径，避免多行居中文字占满对话。 */
+function ModelSwitchEvent({ names }: { names: string[] }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--t6)", fontSize: 10.5, letterSpacing: 1 }}>
-      {line}
-      本轮结束
-      {line}
+    <div style={{ display: "flex", justifyContent: "center" }}>
+      <span style={{ maxWidth: "90%", padding: "3px 9px", borderRadius: 999, background: "var(--codeBg)", color: "var(--t5)", fontSize: 10.5 }}>
+        模型 · {names.join(" → ")}
+      </span>
     </div>
   );
 }
@@ -1317,7 +1321,19 @@ export function LogList({
   const out: ReactElement[] = [];
   for (let i = 0; i < items.length; ) {
     const it = items[i];
-    if (it.kind === "tool") {
+    const modelName = it.kind === "sys" && !it.error ? it.text.match(/^模型已切换为\s*(.+)$/)?.[1] : undefined;
+    if (modelName) {
+      const start = i;
+      const names: string[] = [];
+      while (i < items.length) {
+        const next = items[i];
+        const name = next.kind === "sys" && !next.error ? next.text.match(/^模型已切换为\s*(.+)$/)?.[1] : undefined;
+        if (!name) break;
+        names.push(name);
+        i++;
+      }
+      out.push(<ModelSwitchEvent key={"models" + start} names={names} />);
+    } else if (it.kind === "tool") {
       const start = i;
       const group: Extract<LogItem, { kind: "tool" }>[] = [];
       while (i < items.length) {

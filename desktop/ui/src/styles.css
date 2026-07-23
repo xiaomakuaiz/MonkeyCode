@@ -6,8 +6,11 @@
  * var() 引用,禁止 color-mix()/相对颜色语法/CSS 嵌套/light-dark()(均 >109);
  * 透明变体各开独立令牌,不做运行时颜色计算。主题切换 = 根节点换 data-theme。 */
 :root {
-  --bg: #fcfdfc;            /* 主区底色 */
-  --side: #eef1ee;          /* 侧栏底色 */
+  --bg: #fbfcfb;            /* 主区底色 */
+  --rail: #e8edea;          /* 一级空间导航 */
+  --side: #f3f6f4;          /* 二级内容侧栏 */
+  --railSel: rgba(255, 255, 255, 0.82);
+  --sidebarInput: rgba(255, 255, 255, 0.68);
   --line: rgba(30, 40, 35, 0.12);
   --line2: rgba(30, 40, 35, 0.08);
   --t1: #1d221f;            /* 标题/正文强调 */
@@ -25,6 +28,7 @@
   --accBg2: rgba(31, 138, 91, 0.15); /* 激活底(比 --accBg 深一档,设置齿轮) */
   --onAcc: #fff;
   --ok: #28a866;
+  --okBg: rgba(40, 168, 102, 0.13);
   --err: #c2503e;
   --errBg: rgba(194, 80, 62, 0.09);
   --warn: #a16207;
@@ -256,6 +260,17 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 }
 .mc-ask-option:focus-visible { box-shadow: 0 0 0 2px var(--accBg2); }
 .mc-ask-input:focus { border-color: var(--acc) !important; }
+
+/* 双层侧栏：输入框聚焦时只加强边界，不引入第三层投影。 */
+.mc-sidebar-panel label:focus-within {
+  border-color: var(--accBd2) !important;
+  background: var(--card) !important;
+}
+
+@media (max-width: 1080px) {
+  .mc-nav-rail { width: 58px !important; }
+  .mc-sidebar-panel { width: 212px !important; }
+}
 
 /* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */
 .mc-preview-line::before {

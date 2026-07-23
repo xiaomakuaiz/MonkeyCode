@@ -1,11 +1,12 @@
-// 侧栏:云端任务空态 + 本地会话分组列表 + 连接状态/设置入口。
-// 布局与数值取自设计稿 Sidebar 区块;macOS 壳内顶部为红绿灯预留拖拽区。
-import { useState, type CSSProperties } from "react";
+// 双层侧栏:窄主导航负责空间切换，内容栏只展示当前空间的数据。
+// 一级空间保持稳定(云端 / 本地 / 对话)，项目、任务、会话属于二级内容；
+// 这比把所有对象塞进一条长列表更利于检索，也给后续空间扩展留出位置。
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { isImeEnter, markImeEnd } from "./chat";
 import { ConfirmPane, DeleteMenuItem, type MenuState } from "./components";
-import { MacDragSpacer } from "./titlebar";
 import {
   IconArchive,
+  IconChat,
   IconChevronRight,
   IconCloud,
   IconDots,
@@ -14,8 +15,11 @@ import {
   IconPencil,
   IconPlus,
   IconRefresh,
+  IconSearch,
+  IconX,
 } from "./icons";
 import logoUrl from "./logo.png";
+import { MacDragSpacer } from "./titlebar";
 import type { CloudTask, McConnectionState, SessionMeta } from "./types";
 
 export interface ProjectGroup {
@@ -25,17 +29,15 @@ export interface ProjectGroup {
   items: SessionMeta[];
 }
 
-/** 会话按项目(工作区目录)分组 */
+/** 本地会话按项目目录分组；普通对话在调用方提前过滤，不进入项目树。 */
 export function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
   const map = new Map<string, SessionMeta[]>();
   for (const m of sessions) {
-    const dir = m.workdir;
-    const list = map.get(dir);
+    const list = map.get(m.workdir);
     if (list) list.push(m);
-    else map.set(dir, [m]);
+    else map.set(m.workdir, [m]);
   }
   const groups = [...map.entries()].map(([dir, items]) => {
-    // String():防非字符串 updated_at(异构引擎/历史数据)炸掉整个渲染树
     items.sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
     return {
       dir,
@@ -48,38 +50,43 @@ export function groupByProject(sessions: SessionMeta[]): ProjectGroup[] {
   return groups;
 }
 
-const sectionHeader: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 5,
-  fontSize: 11,
-  fontWeight: 700,
-  color: "var(--t4)",
-  padding: "6px 6px 4px",
-  letterSpacing: 0.4,
-};
+export type SidebarSpace = "cloud" | "local" | "chat";
 
-/** 云端任务状态文案(与 web/移动端 TaskStatus 词汇一致) */
+/** “多久没碰”比轮数更适合作为个人检索线索；一周后改短日期。 */
+export function relativeTime(value?: string | number): string {
+  if (value === undefined || value === null || value === "") return "";
+  const raw = typeof value === "number" && value < 10_000_000_000 ? value * 1000 : value;
+  const time = new Date(raw).getTime();
+  if (!Number.isFinite(time)) return "";
+  const delta = Math.max(0, Date.now() - time);
+  if (delta < 60_000) return "刚刚";
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`;
+  if (delta < 7 * 86_400_000) return `${Math.floor(delta / 86_400_000)} 天前`;
+  const d = new Date(time);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 const CLOUD_STATUS: Record<string, { text: string; color: string }> = {
   pending: { text: "排队中", color: "var(--warn)" },
   processing: { text: "运行中", color: "var(--acc)" },
-  error: { text: "出错", color: "var(--err)" },
-  finished: { text: "已完成", color: "inherit" },
+  error: { text: "运行出错", color: "var(--err)" },
+  finished: { text: "已完成", color: "var(--t4)" },
 };
 
-/** 会话行状态文案(时间无信息量,不展示) */
 function rowStatus(meta: SessionMeta): { text: string; color: string } {
-  // 等待审批优先于"运行中":任务卡住在等人,和真在跑必须可区分
-  if (meta.waiting_ask) return { text: "等待审批", color: "var(--warn)" };
+  if (meta.waiting_ask) return { text: "等待确认", color: "var(--warn)" };
   switch (meta.status) {
     case "running":
       return { text: "运行中", color: "var(--acc)" };
     case "error":
-      return { text: "出错", color: "var(--err)" };
+      return { text: "运行出错", color: "var(--err)" };
     case "interrupted":
-      return { text: "已中断", color: "inherit" };
+      return { text: "已中断", color: "var(--t4)" };
+    case "finished":
+      return { text: "已完成", color: "var(--t4)" };
     default:
-      return { text: meta.turns > 0 ? meta.turns + " 轮" : "", color: "inherit" };
+      return { text: "尚未开始", color: "var(--t5)" };
   }
 }
 
@@ -88,6 +95,7 @@ function SessionRow({
   active,
   attention,
   archived,
+  nested = false,
   onClick,
   onArchive,
   onDelete,
@@ -95,174 +103,143 @@ function SessionRow({
 }: {
   meta: SessionMeta;
   active: boolean;
-  /** 后台结束未查看:行尾未读点 */
   attention: boolean;
   archived: boolean;
+  nested?: boolean;
   onClick: () => void;
   onArchive: () => void;
   onDelete: () => void;
   onRename: (title: string) => void;
 }) {
-  const [hover, setHover] = useState(false); // WKWebView 的 CSS :hover 不可靠,用状态控制
+  const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState<MenuState>("closed");
-  // 行内重命名:Enter 确认 / Esc 取消 / 失焦确认;空值或未变则放弃
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
+  const st = rowStatus(meta);
+  const showActions = hover || menu !== "closed";
+  const selected = active && !archived;
+  const title = meta.title || (meta.kind === "chat" ? "新对话" : "新任务");
+
+  const closeMenu = () => setMenu("closed");
   const commitRename = () => {
     setEditing(false);
-    const t = draft.trim();
-    if (t && t !== (meta.title || "")) onRename(t);
+    const next = draft.trim();
+    if (next && next !== (meta.title || "")) onRename(next);
   };
-  // 菜单以 fixed 定位(脱离侧栏滚动容器的裁剪),按 ⋯ 的视口位置计算;
-  // 底部空间不足时向上弹,避免被视口遮住
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
-  const running = meta.status === "running";
-  const showActions = hover || menu !== "closed";
-  const st = rowStatus(meta);
-  const bg = active ? (archived ? "var(--hov3)" : "var(--accSel)") : "transparent";
-  const fg = active && !archived ? "var(--accSelT)" : "var(--t2)";
-  const closeMenu = () => setMenu("closed");
 
   return (
-    <div
-      style={{ position: "relative" }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
+    <div style={{ position: "relative" }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <div
         className={active ? undefined : "hv"}
-        title={meta.workdir}
+        title={`${title}\n${meta.kind === "chat" ? "独立对话" : meta.workdir}`}
         onClick={onClick}
         style={{
-          height: 28,
+          minHeight: 50,
           display: "flex",
-          alignItems: "center",
-          gap: 2,
-          padding: "0 5px 0 23px",
-          borderRadius: 6,
+          flexDirection: "column",
+          justifyContent: "center",
+          gap: 4,
+          padding: nested ? "6px 7px 6px 24px" : "6px 8px 6px 10px",
+          borderRadius: 8,
           cursor: "pointer",
-          fontSize: 12.5,
-          background: bg,
-          color: fg,
-          fontWeight: active ? 500 : 400,
-          whiteSpace: "nowrap",
+          background: active ? (archived ? "var(--hov2)" : "var(--accSel)") : "transparent",
+          color: selected ? "var(--accSelT)" : "var(--t2)",
           minWidth: 0,
         }}
       >
-        {editing ? (
-          <input
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onClick={(e) => e.stopPropagation()}
-            onCompositionEnd={markImeEnd}
-            onBlur={commitRename}
-            onKeyDown={(e) => {
-              e.stopPropagation(); // 不触发全局快捷键(⏎ 审批/esc 关浮层)
-              if (e.key === "Enter" && !isImeEnter(e)) commitRename();
-              else if (e.key === "Escape") setEditing(false);
-            }}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              border: "1px solid var(--accBd)",
-              borderRadius: 5,
-              padding: "2px 6px",
-              fontSize: 12.5,
-              background: "var(--card)",
-              color: "var(--t1)",
-              outline: "none",
-            }}
-          />
-        ) : (
-          <span className="ellipsis" style={{ flex: 1 }}>{meta.title || "新任务"}</span>
-        )}
-        {!showActions ? (
-          <span style={{ display: "flex", alignItems: "center", gap: 5, flex: "none", paddingRight: 3 }}>
-            {attention && (
-              <span
-                title="任务已在后台结束"
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: meta.status === "error" ? "var(--err)" : "var(--acc)",
-                  flex: "none",
-                }}
-              />
-            )}
-            <span style={{ fontSize: 11, opacity: 0.7, fontWeight: 400, color: st.color === "inherit" ? undefined : st.color }}>
-              {st.text}
+        <div style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
+          {editing ? (
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onCompositionEnd={markImeEnd}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter" && !isImeEnter(e)) commitRename();
+                else if (e.key === "Escape") setEditing(false);
+              }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: 23,
+                border: "1px solid var(--accBd)",
+                borderRadius: 5,
+                padding: "2px 6px",
+                fontSize: 12.5,
+                background: "var(--card)",
+                color: "var(--t1)",
+                outline: "none",
+              }}
+            />
+          ) : (
+            <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.25, fontWeight: active ? 650 : 500 }}>
+              {title}
             </span>
+          )}
+          {!showActions ? (
+            attention && (
+              <span
+                title={meta.status === "error" ? "后台任务出错" : "会话有新进展"}
+                style={{ width: 7, height: 7, borderRadius: "50%", background: meta.status === "error" ? "var(--err)" : "var(--acc)", flex: "none" }}
+              />
+            )
+          ) : (
+            <button
+              title="更多操作"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (menu !== "closed") return closeMenu();
+                const r = e.currentTarget.getBoundingClientRect();
+                const up = r.bottom + 160 > window.innerHeight;
+                setPos({
+                  left: Math.min(r.left, window.innerWidth - 170),
+                  ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+                });
+                setMenu("open");
+              }}
+              className="hv3 icon-btn"
+              style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent" }}
+            >
+              <IconDots color={selected ? "var(--accSelDim)" : "var(--t3)"} />
+            </button>
+          )}
+        </div>
+        <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, minWidth: 0, fontSize: 10.5, lineHeight: 1.2 }}>
+          <span style={{ width: 5, height: 5, borderRadius: "50%", background: st.color, flex: "none" }} />
+          <span className="ellipsis" style={{ color: selected ? "var(--accSelDim)" : st.color, minWidth: 0 }}>
+            {st.text}
           </span>
-        ) : (
-          <button
-            title="更多操作"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (menu !== "closed") return closeMenu();
-              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              const up = r.bottom + 160 > window.innerHeight; // 预估菜单高度(确认态更高)
-              setPos({
-                left: Math.min(r.left, window.innerWidth - 170),
-                ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
-              });
-              setMenu("open");
-            }}
-            className="hv3 icon-btn"
-            style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent" }}
-          >
-            <IconDots color={active && !archived ? "var(--accSelDim)" : "var(--t3)"} />
-          </button>
-        )}
+          <span style={{ color: selected ? "var(--accSelDim)" : "var(--t6)", marginLeft: "auto", flex: "none" }}>
+            {relativeTime(meta.updated_at)}
+          </span>
+        </div>
       </div>
+
       {menu !== "closed" && (
         <>
-          <div
-            className="backdrop"
-            onClick={(e) => {
-              e.stopPropagation();
-              closeMenu();
-            }}
-          />
-          <div
-            className="pop"
-            style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: 118 }}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="backdrop" onClick={(e) => { e.stopPropagation(); closeMenu(); }} />
+          <div className="pop" style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: 122 }} onClick={(e) => e.stopPropagation()}>
             {menu === "open" ? (
               <>
-                <button
-                  className="hv menu-item"
-                  onClick={() => {
-                    closeMenu();
-                    setDraft(meta.title || "");
-                    setEditing(true);
-                  }}
-                >
+                <button className="hv menu-item" onClick={() => { closeMenu(); setDraft(meta.title || ""); setEditing(true); }}>
                   <IconPencil />
                   重命名
                 </button>
-                <button
-                  className="hv menu-item"
-                  onClick={() => {
-                    closeMenu();
-                    onArchive();
-                  }}
-                >
+                <button className="hv menu-item" onClick={() => { closeMenu(); onArchive(); }}>
                   <IconArchive />
                   {meta.archived ? "取消归档" : "归档"}
                 </button>
-                <DeleteMenuItem running={running} onDelete={() => setMenu("confirm")} />
+                <DeleteMenuItem running={meta.status === "running"} onDelete={() => setMenu("confirm")} />
               </>
             ) : (
               <ConfirmPane
                 message="删除后不可恢复。"
                 confirmLabel="确认删除"
-                onConfirm={() => {
-                  closeMenu();
-                  onDelete();
-                }}
+                onConfirm={() => { closeMenu(); onDelete(); }}
                 onCancel={closeMenu}
               />
             )}
@@ -273,66 +250,199 @@ function SessionRow({
   );
 }
 
-function Group({
+function ProjectGroup({
   name,
-  nameColor,
+  detail,
   expanded,
+  muted,
   onToggle,
   onNewTask,
   children,
 }: {
   name: string;
-  nameColor?: string;
+  detail?: string;
   expanded: boolean;
+  muted?: boolean;
   onToggle: () => void;
   onNewTask?: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const [hover, setHover] = useState(false);
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
       <div
         className="hv"
+        title={detail}
         onClick={onToggle}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
-          height: 28,
+          minHeight: 32,
           display: "flex",
           alignItems: "center",
           gap: 6,
-          padding: "0 4px 0 8px",
-          borderRadius: 6,
+          padding: "0 5px 0 7px",
+          borderRadius: 7,
           cursor: "pointer",
           userSelect: "none",
-          fontWeight: 600,
+          fontWeight: 650,
           fontSize: 12.5,
+          color: muted ? "var(--t5)" : "var(--t1)",
         }}
       >
         <span style={{ width: 12, height: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <IconChevronRight style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
+          <IconChevronRight size={9} style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
         </span>
-        <span className="ellipsis" style={{ flex: 1, color: nameColor ?? "var(--t1)" }}>
-          {name}
-        </span>
+        <span className="ellipsis" style={{ flex: 1 }}>{name}</span>
         {onNewTask && hover && (
           <button
             className="hv3 icon-btn"
-            title="在此文件夹新建任务"
-            onClick={(e) => {
-              e.stopPropagation();
-              onNewTask();
-            }}
-            style={{ width: 20, height: 20, borderRadius: 5 }}
+            title="在此项目新建任务"
+            onClick={(e) => { e.stopPropagation(); onNewTask(); }}
+            style={{ width: 22, height: 22, borderRadius: 6 }}
           >
             <IconPlus size={10} color="var(--t3)" />
           </button>
         )}
       </div>
-      {expanded && <div style={{ display: "flex", flexDirection: "column", gap: 1, paddingBottom: 3 }}>{children}</div>}
+      {expanded && <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingBottom: 6 }}>{children}</div>}
     </div>
   );
 }
+
+function CloudTaskRow({ task, active, onClick }: { task: CloudTask; active: boolean; onClick: () => void }) {
+  const label = task.title || task.summary || task.content || "云端任务";
+  const st = CLOUD_STATUS[task.status ?? ""] ?? { text: "云端任务", color: "var(--t5)" };
+  return (
+    <div
+      className={active ? undefined : "hv"}
+      title={label}
+      onClick={onClick}
+      style={{
+        minHeight: 50,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        gap: 4,
+        padding: "6px 9px 6px 10px",
+        borderRadius: 8,
+        cursor: "pointer",
+        background: active ? "var(--accSel)" : "transparent",
+        color: active ? "var(--accSelT)" : "var(--t2)",
+        minWidth: 0,
+      }}
+    >
+      <span className="ellipsis" style={{ width: "100%", fontSize: 12.5, lineHeight: 1.25, fontWeight: active ? 650 : 500 }}>{label}</span>
+      <span style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, lineHeight: 1.2 }}>
+        <span style={{ width: 5, height: 5, borderRadius: "50%", background: st.color, flex: "none" }} />
+        <span style={{ color: active ? "var(--accSelDim)" : st.color }}>{st.text}</span>
+        <span style={{ marginLeft: "auto", color: active ? "var(--accSelDim)" : "var(--t6)" }}>{relativeTime(task.created_at)}</span>
+      </span>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
+  return (
+    <div style={{ margin: "14px 4px", padding: "20px 14px", border: "1px dashed var(--dashBd)", borderRadius: 11, display: "flex", flexDirection: "column", alignItems: "center", gap: 7, textAlign: "center" }}>
+      {icon}
+      <span style={{ fontSize: 12.5, fontWeight: 650, color: "var(--t3)" }}>{title}</span>
+      <span style={{ maxWidth: 170, fontSize: 11, lineHeight: 1.55, color: "var(--t5)" }}>{detail}</span>
+    </div>
+  );
+}
+
+function SearchBox({ value, placeholder, onChange }: { value: string; placeholder: string; onChange: (value: string) => void }) {
+  return (
+    <label style={{ height: 30, margin: "0 10px 8px", padding: "0 9px", display: "flex", alignItems: "center", gap: 7, border: "1px solid var(--line2)", borderRadius: 8, background: "var(--sidebarInput)", color: "var(--t5)" }}>
+      <IconSearch size={12} />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{ flex: 1, minWidth: 0, border: "none", outline: "none", padding: 0, background: "transparent", color: "var(--t2)", fontSize: 11.5 }}
+      />
+      {value && (
+        <button className="hv2 icon-btn" title="清除搜索" onClick={() => onChange("")} style={{ width: 18, height: 18, borderRadius: 5 }}>
+          <IconX size={8} />
+        </button>
+      )}
+    </label>
+  );
+}
+
+function RailButton({
+  active,
+  label,
+  badge,
+  icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  badge?: number;
+  icon: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={active ? undefined : "hv"}
+      title={`切换到${label}`}
+      aria-pressed={active}
+      onClick={onClick}
+      style={{
+        position: "relative",
+        width: 48,
+        minHeight: 48,
+        border: "none",
+        borderRadius: 12,
+        background: active ? "var(--railSel)" : "transparent",
+        color: active ? "var(--accSelT)" : "var(--t4)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        fontSize: 10,
+        fontWeight: active ? 700 : 550,
+        cursor: "pointer",
+      }}
+    >
+      {icon}
+      {label}
+      {!!badge && (
+        <span style={{ position: "absolute", top: 5, right: 4, minWidth: 15, height: 15, padding: "0 4px", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--acc)", color: "var(--onAcc)", border: "2px solid var(--rail)", fontSize: 8.5, fontWeight: 800 }}>
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function PanelHeader({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
+  return (
+    <div style={{ height: 48, flex: "none", padding: "0 11px 0 13px", display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 13.5, fontWeight: 750, color: "var(--t1)" }}>{title}</span>
+        <span className="ellipsis" style={{ fontSize: 10.5, color: "var(--t5)" }}>{detail}</span>
+      </span>
+      <span style={{ flex: 1 }} />
+      {children}
+    </div>
+  );
+}
+
+const headerAction: CSSProperties = {
+  width: 26,
+  height: 26,
+  border: "none",
+  borderRadius: 8,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+  flex: "none",
+};
 
 export function Sidebar({
   sessions,
@@ -355,6 +465,7 @@ export function Sidebar({
   onOpenCloudTask,
   onSelect,
   onNewTask,
+  onNewChat,
   onOpenSettings,
   onArchive,
   onDelete,
@@ -362,43 +473,37 @@ export function Sidebar({
 }: {
   sessions: SessionMeta[];
   currentId: string | null;
-  /** 后台结束未查看的会话(行尾未读点,打开后消除) */
   attention: Set<string>;
-  /** 当前处于会话视图(选中态只在会话视图下渲染) */
   sessionActive: boolean;
   connected: boolean;
   status: string;
-  /** 新版本信息(available 时左下角出常驻横幅;设置齿轮同步亮点) */
   update?: { available: boolean; latest?: string } | null;
-  /** 更新下载安装中(横幅置忙态防重复点击) */
   updateBusy?: boolean;
-  /** 点击更新横幅:下载安装并重启 */
   onUpdate?: () => void;
-  /** MonkeyCode 云端账号关联态(与百智云登录态相互独立) */
   mcConnection: McConnectionState;
-  /** 已关联账号的云端任务;空数组只表示暂无任务 */
   cloudTasks: CloudTask[];
-  /** 当前在主区打开的云端任务(行高亮) */
   activeCloudId?: string | null;
-  /** 云端列表同步中(刷新按钮转圈) */
   cloudSyncing?: boolean;
-  /** 已关联但任务列表刷新失败(保留已有列表时作为非阻塞提示) */
   cloudError?: string;
-  /** 显式关联 MonkeyCode(不会由百智云登录自动触发) */
   onConnectCloud: () => void;
-  /** 手动刷新云端任务列表 */
   onRefreshCloud?: () => void;
-  /** 打开新建页并直接选择云端模式 */
   onNewCloudTask: () => void;
-  /** 点击云端任务:在桌面内打开详情视图 */
-  onOpenCloudTask: (t: CloudTask) => void;
-  onSelect: (m: SessionMeta) => void;
+  onOpenCloudTask: (task: CloudTask) => void;
+  onSelect: (meta: SessionMeta) => void;
   onNewTask: (dir?: string) => void;
+  onNewChat: () => void;
   onOpenSettings: () => void;
-  onArchive: (m: SessionMeta) => void;
-  onDelete: (m: SessionMeta) => void;
-  onRename: (m: SessionMeta, title: string) => void;
+  onArchive: (meta: SessionMeta) => void;
+  onDelete: (meta: SessionMeta) => void;
+  onRename: (meta: SessionMeta, title: string) => void;
 }) {
+  const activeMeta = sessions.find((m) => m.id === currentId);
+  const inferred: SidebarSpace = activeCloudId ? "cloud" : activeMeta?.kind === "chat" ? "chat" : "local";
+  const [space, setSpace] = useState<SidebarSpace>(() => {
+    const saved = localStorage.getItem("mc.sidebarSpace");
+    return saved === "cloud" || saved === "chat" || saved === "local" ? saved : inferred;
+  });
+  const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
       return new Set(JSON.parse(localStorage.getItem("mc.collapsedGroups") || "[]") as string[]);
@@ -408,13 +513,19 @@ export function Sidebar({
   });
   const [archivedOpen, setArchivedOpen] = useState(() => localStorage.getItem("mc.archivedOpen") === "1");
   const [cloudHistoryOpen, setCloudHistoryOpen] = useState(() => localStorage.getItem("mc.cloudHistoryOpen") === "1");
-  const toggleCloudHistory = () => {
-    setCloudHistoryOpen((o) => {
-      localStorage.setItem("mc.cloudHistoryOpen", o ? "0" : "1");
-      return !o;
-    });
-  };
 
+  // 外部入口(桌宠提醒、通知跳转)真正打开另一个空间时同步主导航；
+  // 单纯点主导航不会因当前主视图没变而被 effect 立即弹回。
+  useEffect(() => {
+    if (activeCloudId) setSpace("cloud");
+    else if (sessionActive && activeMeta) setSpace(activeMeta.kind === "chat" ? "chat" : "local");
+  }, [activeCloudId, sessionActive, currentId, activeMeta?.kind]);
+
+  const selectSpace = (next: SidebarSpace) => {
+    setSpace(next);
+    setQuery("");
+    localStorage.setItem("mc.sidebarSpace", next);
+  };
   const toggleGroup = (dir: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -425,351 +536,223 @@ export function Sidebar({
     });
   };
   const toggleArchived = () => {
-    setArchivedOpen((o) => {
-      localStorage.setItem("mc.archivedOpen", o ? "0" : "1");
-      return !o;
+    setArchivedOpen((open) => {
+      localStorage.setItem("mc.archivedOpen", open ? "0" : "1");
+      return !open;
+    });
+  };
+  const toggleCloudHistory = () => {
+    setCloudHistoryOpen((open) => {
+      localStorage.setItem("mc.cloudHistoryOpen", open ? "0" : "1");
+      return !open;
     });
   };
 
-  const list = sessions.filter((m) => !m.archived);
-  const archived = sessions
-    .filter((m) => m.archived)
-    .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
+  const norm = query.trim().toLocaleLowerCase();
+  const matchesSession = (m: SessionMeta) =>
+    !norm || `${m.title} ${m.workdir} ${rowStatus(m).text}`.toLocaleLowerCase().includes(norm);
+  const matchesCloud = (task: CloudTask) =>
+    !norm || `${task.title ?? ""} ${task.summary ?? ""} ${task.content ?? ""} ${CLOUD_STATUS[task.status ?? ""]?.text ?? ""}`.toLocaleLowerCase().includes(norm);
 
-  const row = (m: SessionMeta, inArchived: boolean) => (
+  const localAll = sessions.filter((m) => m.kind !== "chat");
+  const chatAll = sessions.filter((m) => m.kind === "chat");
+  const local = localAll.filter((m) => !m.archived && matchesSession(m));
+  const chats = chatAll.filter((m) => !m.archived && matchesSession(m));
+  const localArchived = localAll.filter((m) => m.archived && matchesSession(m));
+  const chatArchived = chatAll.filter((m) => m.archived && matchesSession(m));
+  const projectGroups = groupByProject(local);
+  const localAttention = [...attention].filter((id) => localAll.some((m) => m.id === id)).length;
+  const chatAttention = [...attention].filter((id) => chatAll.some((m) => m.id === id)).length;
+  const cloudRunning = cloudTasks.filter((task) => task.status === "pending" || task.status === "processing");
+  const cloudPast = cloudTasks.filter((task) => task.status !== "pending" && task.status !== "processing");
+  const filteredCloudRunning = cloudRunning.filter(matchesCloud);
+  const filteredCloudPast = cloudPast.filter(matchesCloud);
+
+  const sessionRow = (meta: SessionMeta, archived: boolean, nested = false) => (
     <SessionRow
-      key={m.id}
-      meta={m}
-      active={m.id === currentId && sessionActive}
-      attention={attention.has(m.id)}
-      archived={inArchived}
-      onClick={() => onSelect(m)}
-      onArchive={() => onArchive(m)}
-      onDelete={() => onDelete(m)}
-      onRename={(title) => onRename(m, title)}
+      key={meta.id}
+      meta={meta}
+      active={meta.id === currentId && sessionActive}
+      attention={attention.has(meta.id)}
+      archived={archived}
+      nested={nested}
+      onClick={() => onSelect(meta)}
+      onArchive={() => onArchive(meta)}
+      onDelete={() => onDelete(meta)}
+      onRename={(title) => onRename(meta, title)}
     />
   );
 
-  return (
-    <div
-      style={{
-        width: 256,
-        flex: "none",
-        background: "var(--side)",
-        borderRight: "1px solid var(--line)",
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 0,
-      }}
-    >
-      {/* macOS 壳:标题栏 Overlay,红绿灯落在此区,整条可拖拽窗口 */}
-      <MacDragSpacer />
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "2px 16px 14px" }}>
-        <img src={logoUrl} alt="" draggable={false} style={{ width: 30, height: 30, borderRadius: 8, flex: "none" }} />
-        <span style={{ fontWeight: 700, fontSize: 14 }}>MonkeyCode</span>
-        <span
-          style={{
-            fontSize: 9.5,
-            fontWeight: 700,
-            letterSpacing: 0.5,
-            color: "var(--acc)",
-            background: "var(--accBg)",
-            borderRadius: 5,
-            padding: "1.5px 6px",
-            flex: "none",
-          }}
-        >
-          Work
-        </span>
-      </div>
+  const stateCard = (content: string, action?: { label: string; run: () => void }) => (
+    <div style={{ margin: "6px 3px 12px", padding: "11px 12px", border: "1px dashed var(--dashBd)", borderRadius: 10, color: "var(--t4)", fontSize: 11.5, lineHeight: 1.55 }}>
+      <div>{content}</div>
+      {action && (
+        <button onClick={action.run} style={{ marginTop: 7, padding: 0, border: "none", background: "transparent", color: "var(--acc)", font: "inherit", fontWeight: 700, cursor: "pointer" }}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
 
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-        {/* 云端任务:用户显式关联 MonkeyCode 后同步。
-            默认只列未结束(排队中/运行中),已结束折叠进"历史任务"按需展开 */}
-        <div style={{ ...sectionHeader, marginTop: -1 }}>
-          <IconCloud style={{ marginTop: -1 }} />
-          <span style={{ flex: 1 }}>云端任务</span>
-          <button
-            className="hv2 icon-btn"
-            title="新建云端任务"
-            onClick={onNewCloudTask}
-            style={{ width: 20, height: 20, borderRadius: 5 }}
-          >
-            <IconPlus color="var(--t4)" />
-          </button>
-          {onRefreshCloud && mcConnection.phase === "connected" && (
-            <button
-              className="hv2 icon-btn"
-              title="刷新云端任务列表"
-              onClick={onRefreshCloud}
-              style={{ width: 20, height: 20, borderRadius: 5 }}
-            >
-              <IconRefresh
-                color="var(--t4)"
-                style={cloudSyncing ? { animation: "mcspin 0.9s linear infinite" } : undefined}
-              />
-            </button>
-          )}
-        </div>
-        {(() => {
-          const stateCard = (content: string, action?: { label: string; run: () => void }) => (
-            <div
-              style={{
-                borderRadius: 8,
-                border: "1px dashed var(--dashBd)",
-                padding: "9px 11px",
-                fontSize: 11.5,
-                color: "var(--t4)",
-                lineHeight: 1.55,
-                marginBottom: 8,
-              }}
-            >
-              <div>{content}</div>
-              {action && (
-                <button
-                  className="hv-t1"
-                  onClick={action.run}
-                  style={{
-                    marginTop: 6,
-                    padding: 0,
-                    border: "none",
-                    background: "none",
-                    color: "var(--acc)",
-                    font: "inherit",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
-                >
-                  {action.label}
-                </button>
-              )}
-            </div>
-          );
-          if (mcConnection.phase === "checking") return stateCard("正在检查 MonkeyCode 关联状态…");
-          if (mcConnection.phase === "connecting") return stateCard("正在连接 MonkeyCode…");
-          if (mcConnection.phase === "disconnecting") return stateCard("正在断开 MonkeyCode…");
-          if (mcConnection.phase === "error") {
-            return stateCard(`状态检查失败: ${mcConnection.error || "无法连接 MonkeyCode"}`, onRefreshCloud ? { label: "重试", run: onRefreshCloud } : undefined);
-          }
-          if (mcConnection.phase === "disconnected") {
-            const text = mcConnection.error
-              ? `连接失败: ${mcConnection.error}`
-              : "连接 MonkeyCode 后可查看和跟看远端任务。";
-            return stateCard(text, { label: mcConnection.error ? "重试连接" : "连接 MonkeyCode", run: onConnectCloud });
-          }
-          const taskRow = (t: CloudTask) => {
-            const st = CLOUD_STATUS[t.status ?? ""] ?? { text: "", color: "inherit" };
-            const label = t.title || t.summary || t.content;
-            const active = t.id === activeCloudId;
-            return (
-              <div
-                key={t.id}
-                className={active ? undefined : "hv"}
-                title={label}
-                onClick={() => onOpenCloudTask(t)}
-                style={{
-                  height: 28,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "0 8px 0 23px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontSize: 12.5,
-                  background: active ? "var(--accSel)" : "transparent",
-                  color: active ? "var(--accSelT)" : "var(--t2)",
-                  fontWeight: active ? 500 : 400,
-                  whiteSpace: "nowrap",
-                  minWidth: 0,
-                }}
-              >
-                <span className="ellipsis" style={{ flex: 1 }}>{label || "云端任务"}</span>
-                <span
-                  style={{
-                    flex: "none",
-                    fontSize: 11,
-                    opacity: 0.7,
-                    // 运行/排队/错误等语义色不因行选中而变化;只有普通
-                    // “已完成”状态在浅绿选中底上使用次级灰绿色。
-                    color: st.color === "inherit" ? (active ? "var(--accSelDim)" : undefined) : st.color,
-                  }}
-                >
-                  {st.text}
-                </span>
-              </div>
-            );
-          };
-          if (cloudTasks.length === 0) {
-            return cloudError
-              ? stateCard(`任务列表刷新失败: ${cloudError}`, onRefreshCloud ? { label: "重试", run: onRefreshCloud } : undefined)
-              : stateCard("还没有云端任务。在网页或手机端派发的任务会同步到这里。");
-          }
-          const running = cloudTasks.filter((t) => t.status === "pending" || t.status === "processing");
-          const past = cloudTasks.filter((t) => t.status !== "pending" && t.status !== "processing");
-          return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 1, marginBottom: 8 }}>
-              {cloudError && (
-                <div title={cloudError} className="ellipsis" style={{ padding: "2px 8px 4px 23px", fontSize: 11, color: "var(--warn)" }}>
-                  刷新失败,当前显示上次结果
-                </div>
-              )}
-              {running.map(taskRow)}
-              {running.length === 0 && (
-                <div style={{ padding: "3px 8px 4px 23px", fontSize: 11.5, color: "var(--t5)" }}>
-                  没有进行中的云端任务
-                </div>
-              )}
-              {past.length > 0 && (
-                <>
-                  <div
-                    className="hv"
-                    onClick={toggleCloudHistory}
-                    style={{
-                      height: 26,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "0 8px 0 5px",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                      userSelect: "none",
-                      fontSize: 11.5,
-                      fontWeight: 600,
-                      color: "var(--t5)",
-                    }}
-                  >
-                    <span style={{ width: 12, height: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <IconChevronRight
-                        size={8}
-                        style={{ transform: cloudHistoryOpen ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}
-                      />
-                    </span>
-                    历史任务 ({past.length})
-                  </div>
-                  {cloudHistoryOpen && past.map(taskRow)}
-                </>
-              )}
-            </div>
-          );
-        })()}
-
-        <div style={sectionHeader}>
-          <IconMonitor style={{ marginTop: -1 }} />
-          <span style={{ flex: 1 }}>本地会话</span>
-          <button className="hv2 icon-btn" title="新建任务" onClick={() => onNewTask()} style={{ width: 20, height: 20, borderRadius: 5 }}>
-            <IconPlus color="var(--t4)" />
-          </button>
-        </div>
-
-        {sessions.length === 0 && (
-          <div
-            style={{
-              borderRadius: 8,
-              border: "1px dashed var(--dashBd)",
-              padding: "9px 11px",
-              fontSize: 11.5,
-              color: "var(--t4)",
-              lineHeight: 1.55,
-            }}
-          >
-            还没有会话。点上方 + 开始第一个任务。
+  const cloudContent = () => {
+    if (mcConnection.phase === "checking") return stateCard("正在检查 MonkeyCode 连接状态…");
+    if (mcConnection.phase === "connecting") return stateCard("正在连接 MonkeyCode…");
+    if (mcConnection.phase === "disconnecting") return stateCard("正在断开 MonkeyCode…");
+    if (mcConnection.phase === "error") {
+      return stateCard(`状态检查失败：${mcConnection.error || "无法连接 MonkeyCode"}`, onRefreshCloud ? { label: "重试", run: onRefreshCloud } : undefined);
+    }
+    if (mcConnection.phase === "disconnected") {
+      return stateCard(mcConnection.error ? `连接失败：${mcConnection.error}` : "连接 MonkeyCode 后，可在这里查看和跟进云端任务。", {
+        label: mcConnection.error ? "重试连接" : "连接 MonkeyCode",
+        run: onConnectCloud,
+      });
+    }
+    if (cloudTasks.length === 0 && !cloudError) {
+      return <EmptyState icon={<IconCloud size={21} color="var(--t6)" />} title="还没有云端任务" detail="从这里新建，或在网页和手机端派发任务。" />;
+    }
+    return (
+      <>
+        {cloudError && <div title={cloudError} className="ellipsis" style={{ margin: "2px 4px 7px", padding: "6px 8px", borderRadius: 7, background: "var(--warnBg)", color: "var(--warn)", fontSize: 10.5 }}>刷新失败，当前显示上次结果</div>}
+        {filteredCloudRunning.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 8 }}>
+            <span style={{ padding: "4px 9px 3px", color: "var(--t5)", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.35 }}>进行中</span>
+            {filteredCloudRunning.map((task) => <CloudTaskRow key={task.id} task={task} active={task.id === activeCloudId} onClick={() => onOpenCloudTask(task)} />)}
           </div>
         )}
-
-        {groupByProject(list).map((g) => (
-          <Group
-            key={g.dir}
-            name={g.name}
-            expanded={!collapsed.has(g.dir)}
-            onToggle={() => toggleGroup(g.dir)}
-            onNewTask={() => onNewTask(g.dir)}
-          >
-            {g.items.map((m) => row(m, false))}
-          </Group>
-        ))}
-
-        {archived.length > 0 && (
-          <Group name="已归档" nameColor="var(--t5)" expanded={archivedOpen} onToggle={toggleArchived}>
-            {archived.map((m) => row(m, true))}
-          </Group>
+        {filteredCloudPast.length > 0 && (
+          <ProjectGroup name={`历史任务 · ${filteredCloudPast.length}`} expanded={!!norm || cloudHistoryOpen} muted onToggle={toggleCloudHistory}>
+            {filteredCloudPast.map((task) => <CloudTaskRow key={task.id} task={task} active={task.id === activeCloudId} onClick={() => onOpenCloudTask(task)} />)}
+          </ProjectGroup>
         )}
-      </div>
+        {norm && filteredCloudRunning.length === 0 && filteredCloudPast.length === 0 && (
+          <EmptyState icon={<IconSearch size={19} color="var(--t6)" />} title="没有匹配的任务" detail="试试任务标题或描述中的其他关键词。" />
+        )}
+      </>
+    );
+  };
 
-      {/* 左下角更新横幅:有新版常驻可见,点击直接下载安装(设置页深处
-          的更新区仍在,这里是显眼入口) */}
-      {update?.available && (
-        <div
-          className="hv2"
-          onClick={() => !updateBusy && onUpdate?.()}
-          title={updateBusy ? "正在下载更新…" : `新版本 ${update.latest ?? ""} 可用,点击下载安装并重启`}
-          style={{
-            flex: "none",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            margin: "6px 8px",
-            padding: "7px 10px",
-            borderRadius: 9,
-            border: "1px solid var(--line)",
-            background: "var(--card)",
-            cursor: updateBusy ? "default" : "pointer",
-          }}
-        >
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: "var(--notice)",
-              flex: "none",
-              animation: updateBusy ? "mcpulse 1.2s infinite" : "none",
-            }}
-          />
-          <span className="ellipsis" style={{ fontSize: 12, fontWeight: 600, color: "var(--t2)", flex: 1, minWidth: 0 }}>
-            {updateBusy ? "正在下载更新…" : `新版本 ${update.latest ?? ""} 可用`}
-          </span>
-          {!updateBusy && (
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--acc)", flex: "none" }}>更新</span>
+  const panel = (() => {
+    if (space === "cloud") {
+      return {
+        title: "云端任务",
+        detail: cloudRunning.length ? `${cloudRunning.length} 个正在进行` : `${cloudTasks.length} 个任务`,
+        placeholder: "搜索云端任务",
+        actions: (
+          <>
+            {onRefreshCloud && mcConnection.phase === "connected" && (
+              <button className="hv icon-btn" title="刷新云端任务" onClick={onRefreshCloud} style={{ ...headerAction, background: "transparent" }}>
+                <IconRefresh size={12} style={cloudSyncing ? { animation: "mcspin .9s linear infinite" } : undefined} />
+              </button>
+            )}
+            <button className="hv-acc icon-btn" title="新建云端任务" onClick={onNewCloudTask} style={{ ...headerAction, background: "var(--acc)" }}>
+              <IconPlus size={11} color="var(--onAcc)" />
+            </button>
+          </>
+        ),
+        content: cloudContent(),
+      };
+    }
+    if (space === "chat") {
+      return {
+        title: "对话",
+        detail: `${chatAll.filter((m) => !m.archived).length} 条独立对话`,
+        placeholder: "搜索对话",
+        actions: (
+          <button className="hv-acc icon-btn" title="新建对话" onClick={onNewChat} style={{ ...headerAction, background: "var(--acc)" }}>
+            <IconPlus size={11} color="var(--onAcc)" />
+          </button>
+        ),
+        content: (
+          <>
+            {chats.length ? <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>{chats.map((m) => sessionRow(m, false))}</div> : (
+              <EmptyState icon={norm ? <IconSearch size={19} color="var(--t6)" /> : <IconChat size={21} color="var(--t6)" />} title={norm ? "没有匹配的对话" : "还没有独立对话"} detail={norm ? "试试标题中的其他关键词。" : "新建一段不绑定项目的普通对话。"} />
+            )}
+            {chatArchived.length > 0 && (
+              <ProjectGroup name={`已归档 · ${chatArchived.length}`} expanded={!!norm || archivedOpen} muted onToggle={toggleArchived}>
+                {chatArchived.map((m) => sessionRow(m, true))}
+              </ProjectGroup>
+            )}
+          </>
+        ),
+      };
+    }
+    return {
+      title: "本地项目",
+      detail: `${groupByProject(localAll.filter((m) => !m.archived)).length} 个项目 · ${localAll.filter((m) => !m.archived).length} 个会话`,
+      placeholder: "搜索项目或会话",
+      actions: (
+        <button className="hv-acc icon-btn" title="新建本地任务" onClick={() => onNewTask()} style={{ ...headerAction, background: "var(--acc)" }}>
+          <IconPlus size={11} color="var(--onAcc)" />
+        </button>
+      ),
+      content: (
+        <>
+          {projectGroups.length ? projectGroups.map((group) => (
+            <ProjectGroup
+              key={group.dir}
+              name={group.name}
+              detail={group.dir}
+              expanded={!!norm || !collapsed.has(group.dir)}
+              onToggle={() => toggleGroup(group.dir)}
+              onNewTask={() => onNewTask(group.dir)}
+            >
+              {group.items.map((m) => sessionRow(m, false, true))}
+            </ProjectGroup>
+          )) : (
+            <EmptyState icon={norm ? <IconSearch size={19} color="var(--t6)" /> : <IconMonitor size={21} color="var(--t6)" />} title={norm ? "没有匹配的会话" : "还没有本地项目"} detail={norm ? "试试项目名、目录或会话标题。" : "选择一个文件夹，开始第一个本地任务。"} />
           )}
+          {localArchived.length > 0 && (
+            <ProjectGroup name={`已归档 · ${localArchived.length}`} expanded={!!norm || archivedOpen} muted onToggle={toggleArchived}>
+              {localArchived.map((m) => sessionRow(m, true))}
+            </ProjectGroup>
+          )}
+        </>
+      ),
+    };
+  })();
+
+  return (
+    <div className="mc-sidebar-shell" style={{ flex: "none", display: "flex", minHeight: 0 }}>
+      <div className="mc-nav-rail" style={{ width: 64, flex: "none", display: "flex", flexDirection: "column", alignItems: "center", background: "var(--rail)", borderRight: "1px solid var(--line2)" }}>
+        <MacDragSpacer />
+        <img src={logoUrl} alt="MonkeyCode" draggable={false} style={{ width: 31, height: 31, borderRadius: 9, margin: "2px 0 15px" }} />
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+          <RailButton active={space === "cloud"} label="云端" badge={cloudRunning.length} icon={<IconCloud size={16} color={space === "cloud" ? "var(--accSelT)" : "var(--t4)"} />} onClick={() => selectSpace("cloud")} />
+          <RailButton active={space === "local"} label="本地" badge={localAttention} icon={<IconMonitor size={16} color={space === "local" ? "var(--accSelT)" : "var(--t4)"} strokeWidth={1.25} />} onClick={() => selectSpace("local")} />
+          <RailButton active={space === "chat"} label="对话" badge={chatAttention} icon={<IconChat size={16} color={space === "chat" ? "var(--accSelT)" : "var(--t4)"} />} onClick={() => selectSpace("chat")} />
         </div>
-      )}
-
-      <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", gap: 7, padding: "0 14px", borderTop: "1px solid var(--line)" }}>
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            background: connected ? "var(--ok)" : "var(--t6)",
-            flex: "none",
-          }}
-        />
-        <span title={status} className="ellipsis" style={{ fontSize: 12, color: "var(--t3)", flex: 1 }}>
-          {status}
+        <span style={{ flex: 1 }} />
+        <span title={status} style={{ width: 32, height: 24, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "var(--ok)" : "var(--t6)", boxShadow: connected ? "0 0 0 3px var(--okBg)" : "none" }} />
         </span>
-        <button
-          className="hv2 icon-btn"
-          title="设置"
-          onClick={onOpenSettings}
-          style={{ position: "relative", width: 26, height: 26, borderRadius: 7, background: "transparent" }}
-        >
-          {update?.available && (
-            <span
-              style={{
-                position: "absolute",
-                top: 2,
-                right: 2,
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: "var(--notice)",
-                border: "1.5px solid var(--side)",
-              }}
-            />
-          )}
-          <IconGear />
+        <button className="hv icon-btn" title="设置" onClick={onOpenSettings} style={{ position: "relative", width: 36, height: 36, borderRadius: 10, marginBottom: 12 }}>
+          <IconGear size={15} />
+          {update?.available && <span style={{ position: "absolute", top: 6, right: 6, width: 7, height: 7, borderRadius: "50%", background: "var(--notice)", border: "1.5px solid var(--rail)" }} />}
         </button>
       </div>
+
+      <aside className="mc-sidebar-panel" style={{ width: 224, flex: "none", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--side)", borderRight: "1px solid var(--line)" }}>
+        <MacDragSpacer />
+        <PanelHeader title={panel.title} detail={panel.detail}>{panel.actions}</PanelHeader>
+        <SearchBox value={query} placeholder={panel.placeholder} onChange={setQuery} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 9px 10px", display: "flex", flexDirection: "column", gap: 3 }}>
+          {panel.content}
+        </div>
+        {update?.available && (
+          <button
+            className="hv2"
+            disabled={updateBusy}
+            onClick={() => !updateBusy && onUpdate?.()}
+            style={{ margin: "6px 9px 9px", minHeight: 36, padding: "7px 9px", border: "1px solid var(--line)", borderRadius: 9, background: "var(--card)", display: "flex", alignItems: "center", gap: 7, color: "var(--t2)", cursor: updateBusy ? "default" : "pointer" }}
+          >
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--notice)", animation: updateBusy ? "mcpulse 1.2s infinite" : "none" }} />
+            <span className="ellipsis" style={{ flex: 1, minWidth: 0, textAlign: "left", fontSize: 11.5, fontWeight: 600 }}>
+              {updateBusy ? "正在下载更新…" : `新版本 ${update.latest ?? ""} 可用`}
+            </span>
+            {!updateBusy && <span style={{ color: "var(--acc)", fontSize: 10.5, fontWeight: 700 }}>更新</span>}
+          </button>
+        )}
+      </aside>
     </div>
   );
 }

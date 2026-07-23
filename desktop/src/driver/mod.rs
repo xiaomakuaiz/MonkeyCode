@@ -199,8 +199,13 @@ pub async fn session_create(
     workdir: String,
     model: String,
     create_dir: bool,
+    kind: Option<String>,
 ) -> Result<Value, String> {
-    host.get()?.session_create(&workdir, &model, create_dir).await
+    let kind = kind.as_deref().unwrap_or("local");
+    if !matches!(kind, "local" | "chat") {
+        return Err(format!("不支持的会话类型: {kind}"));
+    }
+    host.get()?.session_create_with_kind(&workdir, &model, create_dir, kind).await
 }
 
 #[tauri::command]
