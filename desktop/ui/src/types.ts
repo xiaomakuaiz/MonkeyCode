@@ -309,6 +309,15 @@ export interface McStatus {
   user?: McUser;
 }
 
+/** MonkeyCode 云端账号在 UI 中的独立关联状态。
+ * 百智云登录只提供桥接授权,不会再隐式把本状态推进到 connected。 */
+export interface McConnectionState {
+  phase: "checking" | "disconnected" | "connecting" | "connected" | "disconnecting" | "error";
+  host: string;
+  user?: McUser;
+  error?: string;
+}
+
 /** 云端任务(backend ProjectTask 的侧栏子集,字段与云端 JSON 一致)。
  * 实测线上 title 常为空、任务文案落在 summary,展示优先 title → summary → content。 */
 export interface CloudTask {

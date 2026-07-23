@@ -53,7 +53,7 @@ export function NewTaskView({
   /** 外部触发的预填(侧栏"新建任务"/项目行 +):每次触发都是新对象,
    * 同目录重复点击也能生效;带 dir 则预填目录并停止跟随最近会话 */
   prefill: { dir?: string | null } | null;
-  /** monkeycode 云端账号已同步(云端派发的前提) */
+  /** MonkeyCode 云端账号已显式关联(云端派发的前提) */
   cloudReady: boolean;
   /** 本地会话创建成功:App 刷新列表并进入会话;first/files 随首条消息发出
    * (附件由 useSession 在会话连上后上传并拼接) */
@@ -633,7 +633,7 @@ export function NewTaskView({
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 10px 10px", padding: "8px 11px", borderRadius: 9, background: "var(--warnBg)", border: "1px solid var(--warnBd2)" }}>
               <IconInfo color="var(--warn)" />
               <span style={{ fontSize: 12, color: "var(--warnT)", lineHeight: 1.5 }}>
-                云端任务需要先登录百智云账号(设置 → 百智云账号),登录后自动同步。
+                云端任务需要先连接 MonkeyCode（设置 → 账号与云端）。
               </span>
             </div>
           )}

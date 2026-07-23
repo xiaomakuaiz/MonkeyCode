@@ -2,8 +2,7 @@
 // Chat / New Task / Settings 三屏间切换。会话协议状态(WS/帧归约/composer)
 // 收口在 useSession 句柄里;视觉对照「MonkeyCode 桌面应用设计」。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { baizhiStatus } from "./baizhiapi";
-import { mcLogin, mcStatus, mcTasks } from "./cloudapi";
+import { mcLogin, mcLogout } from "./cloudapi";
 import {
   getHostInfo,
   inDesktopShell,
@@ -29,13 +28,14 @@ import { CloudTaskView } from "./cloudtask";
 import { LogList, MONO } from "./components";
 import { CHANGE_KIND, changeTag, FilesDrawer, type FsAdapter } from "./filesdrawer";
 import { IconFolder, IconX } from "./icons";
+import { inspectMcAccount } from "./mcaccount";
 import { NewTaskView } from "./newtask";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
 import { groupByProject, Sidebar } from "./sidebar";
 import { SettingsView } from "./settings";
 import TitleBar from "./titlebar";
 import { lastSessionId, useSession } from "./useSession";
-import type { CloudTask, EngineCrash, LogItem, ModelInfo, SessionMeta, UpdateStatus } from "./types";
+import type { CloudTask, EngineCrash, LogItem, McConnectionState, ModelInfo, SessionMeta, UpdateStatus } from "./types";
 
 /** 内核与页面同机(serve 仅绑 loopback),浏览器 UA 即宿主平台 */
 const IS_MAC = /Mac/.test(navigator.userAgent);
@@ -77,35 +77,93 @@ export default function App() {
   // 预填触发(侧栏"新建任务"/项目行 +)——每次触发都换新对象,同目录重复点击也生效
   const [newTaskPrefill, setNewTaskPrefill] = useState<{ dir?: string | null } | null>(null);
 
-  // ===== 云端任务:百智云会话桥接 monkeycode 账号后自动同步 =====
-  // null = 未同步(空态给登录引导);已同步后 60s 轮询任务列表
-  const [cloudTasks, setCloudTasks] = useState<CloudTask[] | null>(null);
-  const [mcHost, setMcHost] = useState("monkeycode-ai.com");
+  // ===== MonkeyCode 云端账号与任务 =====
+  // 百智云登录只用于显式桥接授权;这里独立持有 MonkeyCode 关联态。
+  // 任务数组不再以 null 兼任账号状态,空列表只表示“已关联但暂无任务”。
+  const [cloudTask, setCloudTaskOpen] = useState<CloudTask | null>(null);
+  const [cloudTasks, setCloudTasks] = useState<CloudTask[]>([]);
+  const [mcConnection, setMcConnection] = useState<McConnectionState>({
+    phase: "checking",
+    host: "monkeycode-ai.com",
+  });
   const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [cloudError, setCloudError] = useState("");
+  // 聚焦刷新、手动连接/断开可能交叠;只允许最后一次操作回写状态。
+  const cloudOp = useRef(0);
   const syncCloud = useCallback(async () => {
+    const op = ++cloudOp.current;
     setCloudSyncing(true);
+    setCloudError("");
     try {
-      const st = await mcStatus();
-      if (st.host) setMcHost(st.host);
+      // 只探测既有会话;inspectMcAccount 的依赖面不包含登录操作。
+      const snapshot = await inspectMcAccount();
+      if (op !== cloudOp.current) return;
+      const st = snapshot.status;
+      const host = st.host || "monkeycode-ai.com";
       if (!st.logged_in) {
-        // 云端会话缺失/失效:有百智会话就静默桥接一次,没有则保持未同步空态
-        const bz = await baizhiStatus();
-        if (!bz.logged_in) {
-          setCloudTasks(null);
-          return;
-        }
-        await mcLogin();
+        setMcConnection({ phase: "disconnected", host });
+        setCloudTasks([]);
+        return;
       }
-      // 默认视图只展示未结束任务,取 20 条保证"历史任务"折叠区也有内容
-      const r = await mcTasks(1, 20);
-      setCloudTasks(r.tasks ?? []);
-    } catch {
-      /* 静默:云端同步失败不打扰本地使用,下次轮询/回到主界面再试 */
+      setMcConnection({ phase: "connected", host, user: st.user });
+      // 失败时保留上次列表;账号关联态和列表请求错误分渠道展示。
+      if (snapshot.taskError) setCloudError(snapshot.taskError);
+      else setCloudTasks(snapshot.tasks);
+    } catch (e) {
+      if (op !== cloudOp.current) return;
+      setMcConnection((cur) => ({
+        ...cur,
+        phase: "error",
+        error: e instanceof Error ? e.message : String(e),
+      }));
+      setCloudTasks([]);
     } finally {
-      setCloudSyncing(false);
+      if (op === cloudOp.current) setCloudSyncing(false);
     }
   }, []);
-  // 启动即试同步;离开设置页也再试(用户可能刚在设置里登录了百智云)
+
+  const connectCloud = useCallback(async () => {
+    const op = ++cloudOp.current;
+    setCloudSyncing(false);
+    setCloudError("");
+    setMcConnection((cur) => ({ ...cur, phase: "connecting", error: undefined }));
+    try {
+      await mcLogin();
+      if (op !== cloudOp.current) return;
+      await syncCloud();
+    } catch (e) {
+      if (op !== cloudOp.current) return;
+      setMcConnection((cur) => ({
+        ...cur,
+        phase: "disconnected",
+        error: e instanceof Error ? e.message : String(e),
+      }));
+      setCloudTasks([]);
+    }
+  }, [syncCloud]);
+
+  const disconnectCloud = useCallback(async () => {
+    const op = ++cloudOp.current;
+    setCloudSyncing(false);
+    setCloudError("");
+    setMcConnection((cur) => ({ ...cur, phase: "disconnecting", error: undefined }));
+    try {
+      await mcLogout();
+      if (op !== cloudOp.current) return;
+      setMcConnection((cur) => ({ phase: "disconnected", host: cur.host }));
+      setCloudTasks([]);
+      setCloudTaskOpen(null);
+    } catch (e) {
+      if (op !== cloudOp.current) return;
+      setMcConnection((cur) => ({
+        ...cur,
+        phase: "connected",
+        error: "断开失败: " + (e instanceof Error ? e.message : String(e)),
+      }));
+    }
+  }, []);
+
+  // 启动只恢复已有 MonkeyCode 会话;离开设置页也重查,但不再自动桥接登录。
   useEffect(() => {
     if (view !== "settings") void syncCloud();
   }, [view, syncCloud]);
@@ -115,14 +173,13 @@ export default function App() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [syncCloud]);
-  const cloudSynced = cloudTasks !== null;
+  const cloudConnected = mcConnection.phase === "connected";
   useEffect(() => {
-    if (!cloudSynced) return;
+    if (!cloudConnected) return;
     const t = setInterval(() => void syncCloud(), 60_000);
     return () => clearInterval(t);
-  }, [cloudSynced, syncCloud]);
+  }, [cloudConnected, syncCloud]);
   // 桌面内打开的云端任务(view === "cloud" 时渲染详情视图)
-  const [cloudTask, setCloudTaskOpen] = useState<CloudTask | null>(null);
   const openCloudTask = (t: CloudTask) => {
     setCloudTaskOpen(t);
     setDrawer(null);
@@ -462,9 +519,12 @@ export default function App() {
           update={update}
           updateBusy={updateBusy}
           onUpdate={() => void installUpdate()}
+          mcConnection={mcConnection}
           cloudTasks={cloudTasks}
           activeCloudId={view === "cloud" ? cloudTask?.id ?? null : null}
           cloudSyncing={cloudSyncing}
+          cloudError={cloudError}
+          onConnectCloud={() => void connectCloud()}
           onRefreshCloud={() => void syncCloud()}
           onOpenCloudTask={openCloudTask}
           onSelect={(m) => openSession(m)}
@@ -490,12 +550,16 @@ export default function App() {
             hostVersion={hostVersion}
             update={update}
             onUpdateStatus={setUpdate}
+            mcConnection={mcConnection}
+            onConnectMc={() => void connectCloud()}
+            onRetryMc={() => void syncCloud()}
+            onDisconnectMc={() => void disconnectCloud()}
           />
         ) : view === "cloud" && cloudTask ? (
           <CloudTaskView
             key={cloudTask.id}
             task={cloudTask}
-            mcHost={mcHost}
+            mcHost={mcConnection.host}
             onTasksChanged={() => void syncCloud()}
           />
         ) : isNewView ? (
@@ -504,7 +568,7 @@ export default function App() {
             lastDir={lastDir}
             recentDirs={recentDirs}
             prefill={newTaskPrefill}
-            cloudReady={cloudSynced}
+            cloudReady={cloudConnected}
             onCloudCreated={(t) => {
               openCloudTask(t);
               void syncCloud();

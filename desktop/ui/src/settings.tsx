@@ -21,7 +21,7 @@ import {
 } from "./host";
 import { engineCaps } from "./session";
 import { MONO } from "./components";
-import { IconBack, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
+import { IconBack, IconCloud, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
@@ -35,6 +35,7 @@ import {
   type EngineCaps,
   type HostConfig,
   type HostModel,
+  type McConnectionState,
   type UpdateStatus,
 } from "./types";
 
@@ -368,7 +369,7 @@ function replaceBaizhiGroup<T extends { name: string; source?: string }>(
 type SectionKey = "account" | "models" | "mcp" | "browser" | "general";
 
 const NAV: { key: SectionKey; label: string; icon: (p: { size?: number; color?: string }) => JSX.Element }[] = [
-  { key: "account", label: "百智云账号", icon: BaizhiLogo },
+  { key: "account", label: "账号与云端", icon: BaizhiLogo },
   { key: "models", label: "模型", icon: IconSpark },
   { key: "mcp", label: "MCP 服务器", icon: IconMonitor },
   { key: "browser", label: "浏览器", icon: IconGlobe },
@@ -397,6 +398,107 @@ const emptyCard: CSSProperties = {
   lineHeight: 1.7,
 };
 
+function mcIdentity(s: McConnectionState): string {
+  const u = s.user;
+  return u?.name || u?.username || u?.email || u?.id || "MonkeyCode 用户";
+}
+
+/** MonkeyCode 云端任务关联卡。百智云只是显式连接时的授权前提,
+ * 两者状态和退出操作互不代替。 */
+function MonkeyCodeAccountCard({
+  connection,
+  baizhiLoggedIn,
+  onConnect,
+  onRetry,
+  onDisconnect,
+}: {
+  connection: McConnectionState;
+  baizhiLoggedIn: boolean;
+  onConnect: () => void;
+  onRetry: () => void;
+  onDisconnect: () => void;
+}) {
+  const busy = connection.phase === "checking" || connection.phase === "connecting" || connection.phase === "disconnecting";
+  const connected = connection.phase === "connected";
+  const status =
+    connection.phase === "checking"
+      ? "检查中"
+      : connection.phase === "connecting"
+        ? "连接中"
+        : connection.phase === "disconnecting"
+          ? "断开中"
+          : connected
+            ? "已关联"
+            : connection.phase === "error"
+              ? "状态异常"
+              : "未关联";
+  const message = (() => {
+    if (connection.error) return connection.error;
+    if (connection.phase === "checking") return "正在读取 MonkeyCode 关联状态…";
+    if (connection.phase === "connecting") return "正在使用百智云账号完成授权…";
+    if (connection.phase === "disconnecting") return "正在清除本机 MonkeyCode 会话…";
+    if (connected) return `已关联为 ${mcIdentity(connection)}，远端任务会显示在主界面侧栏。`;
+    if (!baizhiLoggedIn) return "请先登录上方百智云账号，再连接 MonkeyCode。";
+    return "连接后可查看、创建并实时跟看 MonkeyCode 远端任务。";
+  })();
+  const canConnect = baizhiLoggedIn && !busy;
+
+  return (
+    <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--accBg)", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+          <IconCloud size={16} color="var(--acc)" />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>MonkeyCode 云端任务</span>
+          <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>{connection.host}</span>
+        </div>
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            flex: "none",
+            padding: "2px 7px",
+            borderRadius: 6,
+            fontSize: 10.5,
+            fontWeight: 700,
+            color: connected ? "var(--ok)" : connection.phase === "error" ? "var(--err)" : "var(--t4)",
+            background: connected ? "var(--accBg)" : "var(--hov)",
+          }}
+        >
+          {status}
+        </span>
+        {connected || connection.phase === "disconnecting" ? (
+          <button className="hv" disabled={busy} onClick={onDisconnect} style={{ ...whiteBtn, flex: "none", opacity: busy ? 0.6 : 1 }}>
+            {connection.phase === "disconnecting" ? "断开中…" : "断开关联"}
+          </button>
+        ) : connection.phase === "error" ? (
+          <button className="hv" disabled={busy} onClick={onRetry} style={{ ...whiteBtn, flex: "none", opacity: busy ? 0.6 : 1 }}>
+            重试状态
+          </button>
+        ) : (
+          <button
+            className="hv-acc"
+            disabled={!canConnect}
+            onClick={onConnect}
+            style={{
+              ...whiteBtn,
+              flex: "none",
+              background: "var(--acc)",
+              borderColor: "var(--acc)",
+              color: "var(--onAcc)",
+              opacity: canConnect ? 1 : 0.55,
+              cursor: canConnect ? "pointer" : "default",
+            }}
+          >
+            {connection.phase === "connecting" ? "连接中…" : "连接 MonkeyCode"}
+          </button>
+        )}
+      </div>
+      <span style={{ fontSize: 11.5, color: connection.error ? "var(--err)" : "var(--t5)", lineHeight: 1.6 }}>{message}</span>
+    </div>
+  );
+}
+
 // ---- 设置视图 ----
 
 export function SettingsView({
@@ -405,6 +507,10 @@ export function SettingsView({
   update,
   onUpdateStatus,
   onDirtyChange,
+  mcConnection,
+  onConnectMc,
+  onRetryMc,
+  onDisconnectMc,
 }: {
   onClose: () => void;
   hostVersion: string | null;
@@ -412,6 +518,10 @@ export function SettingsView({
   onUpdateStatus: (s: UpdateStatus) => void;
   /** 脏状态上报(宿主据此在关闭前确认);卸载时自动报 false */
   onDirtyChange?: (dirty: boolean) => void;
+  mcConnection: McConnectionState;
+  onConnectMc: () => void;
+  onRetryMc: () => void;
+  onDisconnectMc: () => void;
 }) {
   const desktop = inDesktopShell();
   const [active, setActive] = useState<SectionKey>("account");
@@ -1035,14 +1145,27 @@ export function SettingsView({
   );
 
   const accountSection = () => (
-    <BaizhiCard
-      status={bzStatus}
-      statusErr={bzErr}
-      refreshStatus={refreshBz}
-      onSynced={applySynced}
-      knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
-      preselectNames={() => models.filter((m) => m.source === SOURCE_BAIZHI || !m.source).map((m) => m.name.trim())}
-    />
+    <>
+      <Section label="百智云账号">
+        <BaizhiCard
+          status={bzStatus}
+          statusErr={bzErr}
+          refreshStatus={refreshBz}
+          onSynced={applySynced}
+          knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
+          preselectNames={() => models.filter((m) => m.source === SOURCE_BAIZHI || !m.source).map((m) => m.name.trim())}
+        />
+      </Section>
+      <Section label="MonkeyCode">
+        <MonkeyCodeAccountCard
+          connection={mcConnection}
+          baizhiLoggedIn={loggedIn}
+          onConnect={onConnectMc}
+          onRetry={onRetryMc}
+          onDisconnect={onDisconnectMc}
+        />
+      </Section>
+    </>
   );
 
   const activeLabel = NAV.find((n) => n.key === active)?.label ?? "设置";

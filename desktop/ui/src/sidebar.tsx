@@ -16,7 +16,7 @@ import {
   IconRefresh,
 } from "./icons";
 import logoUrl from "./logo.png";
-import type { CloudTask, SessionMeta } from "./types";
+import type { CloudTask, McConnectionState, SessionMeta } from "./types";
 
 export interface ProjectGroup {
   dir: string;
@@ -344,9 +344,12 @@ export function Sidebar({
   update,
   updateBusy,
   onUpdate,
+  mcConnection,
   cloudTasks,
   activeCloudId,
   cloudSyncing,
+  cloudError,
+  onConnectCloud,
   onRefreshCloud,
   onOpenCloudTask,
   onSelect,
@@ -370,12 +373,18 @@ export function Sidebar({
   updateBusy?: boolean;
   /** 点击更新横幅:下载安装并重启 */
   onUpdate?: () => void;
-  /** 云端任务:null = 未同步云端账号(空态给登录引导),[] = 已同步无任务 */
-  cloudTasks: CloudTask[] | null;
+  /** MonkeyCode 云端账号关联态(与百智云登录态相互独立) */
+  mcConnection: McConnectionState;
+  /** 已关联账号的云端任务;空数组只表示暂无任务 */
+  cloudTasks: CloudTask[];
   /** 当前在主区打开的云端任务(行高亮) */
   activeCloudId?: string | null;
   /** 云端列表同步中(刷新按钮转圈) */
   cloudSyncing?: boolean;
+  /** 已关联但任务列表刷新失败(保留已有列表时作为非阻塞提示) */
+  cloudError?: string;
+  /** 显式关联 MonkeyCode(不会由百智云登录自动触发) */
+  onConnectCloud: () => void;
   /** 手动刷新云端任务列表 */
   onRefreshCloud?: () => void;
   /** 点击云端任务:在桌面内打开详情视图 */
@@ -472,12 +481,12 @@ export function Sidebar({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-        {/* 云端任务:百智云登录后内核桥接 monkeycode 账号自动同步。
+        {/* 云端任务:用户显式关联 MonkeyCode 后同步。
             默认只列未结束(排队中/运行中),已结束折叠进"历史任务"按需展开 */}
         <div style={{ ...sectionHeader, marginTop: -1 }}>
           <IconCloud style={{ marginTop: -1 }} />
           <span style={{ flex: 1 }}>云端任务</span>
-          {onRefreshCloud && (
+          {onRefreshCloud && mcConnection.phase === "connected" && (
             <button
               className="hv2 icon-btn"
               title="刷新云端任务列表"
@@ -492,6 +501,51 @@ export function Sidebar({
           )}
         </div>
         {(() => {
+          const stateCard = (content: string, action?: { label: string; run: () => void }) => (
+            <div
+              style={{
+                borderRadius: 8,
+                border: "1px dashed var(--dashBd)",
+                padding: "9px 11px",
+                fontSize: 11.5,
+                color: "var(--t4)",
+                lineHeight: 1.55,
+                marginBottom: 8,
+              }}
+            >
+              <div>{content}</div>
+              {action && (
+                <button
+                  className="hv-t1"
+                  onClick={action.run}
+                  style={{
+                    marginTop: 6,
+                    padding: 0,
+                    border: "none",
+                    background: "none",
+                    color: "var(--acc)",
+                    font: "inherit",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {action.label}
+                </button>
+              )}
+            </div>
+          );
+          if (mcConnection.phase === "checking") return stateCard("正在检查 MonkeyCode 关联状态…");
+          if (mcConnection.phase === "connecting") return stateCard("正在连接 MonkeyCode…");
+          if (mcConnection.phase === "disconnecting") return stateCard("正在断开 MonkeyCode…");
+          if (mcConnection.phase === "error") {
+            return stateCard(`状态检查失败: ${mcConnection.error || "无法连接 MonkeyCode"}`, onRefreshCloud ? { label: "重试", run: onRefreshCloud } : undefined);
+          }
+          if (mcConnection.phase === "disconnected") {
+            const text = mcConnection.error
+              ? `连接失败: ${mcConnection.error}`
+              : "连接 MonkeyCode 后可查看和跟看远端任务。";
+            return stateCard(text, { label: mcConnection.error ? "重试连接" : "连接 MonkeyCode", run: onConnectCloud });
+          }
           const taskRow = (t: CloudTask) => {
             const st = CLOUD_STATUS[t.status ?? ""] ?? { text: "", color: "inherit" };
             const label = t.title || t.summary || t.content;
@@ -534,29 +588,20 @@ export function Sidebar({
               </div>
             );
           };
-          if (!cloudTasks || cloudTasks.length === 0) {
-            return (
-              <div
-                style={{
-                  borderRadius: 8,
-                  border: "1px dashed var(--dashBd)",
-                  padding: "9px 11px",
-                  fontSize: 11.5,
-                  color: "var(--t4)",
-                  lineHeight: 1.55,
-                  marginBottom: 8,
-                }}
-              >
-                {cloudTasks
-                  ? "还没有云端任务。在网页或手机端派发的任务会同步到这里。"
-                  : "登录百智云账号后,云端任务会自动同步到这里。"}
-              </div>
-            );
+          if (cloudTasks.length === 0) {
+            return cloudError
+              ? stateCard(`任务列表刷新失败: ${cloudError}`, onRefreshCloud ? { label: "重试", run: onRefreshCloud } : undefined)
+              : stateCard("还没有云端任务。在网页或手机端派发的任务会同步到这里。");
           }
           const running = cloudTasks.filter((t) => t.status === "pending" || t.status === "processing");
           const past = cloudTasks.filter((t) => t.status !== "pending" && t.status !== "processing");
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: 1, marginBottom: 8 }}>
+              {cloudError && (
+                <div title={cloudError} className="ellipsis" style={{ padding: "2px 8px 4px 23px", fontSize: 11, color: "var(--warn)" }}>
+                  刷新失败,当前显示上次结果
+                </div>
+              )}
               {running.map(taskRow)}
               {running.length === 0 && (
                 <div style={{ padding: "3px 8px 4px 23px", fontSize: 11.5, color: "var(--t5)" }}>
