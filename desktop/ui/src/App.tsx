@@ -627,11 +627,11 @@ export default function App() {
           onClose={() => setDrawer(null)}
           initialTab={drawer}
           changes={changes}
+          showChangesTab={session.isGitRepo === true}
           externalErr={session.changesErr}
           resizable
           errPad="0 20px 8px"
           dirChangeBadges
-          ghostDeleted
           emptyRootState={
             <div style={{ padding: "36px 0 28px", display: "flex", flexDirection: "column", alignItems: "center", gap: 9 }}>
               <IconFolder size={22} color="var(--t6)" />

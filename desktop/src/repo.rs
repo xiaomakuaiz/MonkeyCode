@@ -89,10 +89,17 @@ impl RepoCtx {
 /// 统一入口:kind 分派,返回 {result} 或 {error}(与内核 call-response 载荷同构)。
 pub fn dispatch(ctx: &RepoCtx, kind: &str, payload: &Value) -> Value {
     let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if kind == "repo_file_changes" {
+        return match file_changes(ctx) {
+            Ok((changes, is_git_repo)) => {
+                json!({ "result": changes, "is_git_repo": is_git_repo })
+            }
+            Err(e) => json!({ "error": e }),
+        };
+    }
     let r = match kind {
         "repo_file_list" => list_files(ctx, path),
         "repo_read_file" => read_file(ctx, path),
-        "repo_file_changes" => file_changes(ctx),
         "repo_file_diff" => file_diff(ctx, path),
         "repo_reveal" => reveal(ctx, path),
         _ => Err(format!("未知 call kind: {kind}")),
@@ -144,12 +151,13 @@ fn read_file(ctx: &RepoCtx, rel: &str) -> Result<Value, String> {
     Ok(json!({ "path": rel, "content": String::from_utf8_lossy(&data) }))
 }
 
-/// 相对 HEAD 的变更列表(含未跟踪文件)。非 git 仓库返回空。
+/// 相对 HEAD 的变更列表(含未跟踪文件)，同时返回工作区是否属于 git 仓库。
 /// 路径统一为相对 workdir(porcelain 输出仓库根相对路径,须剥前缀);
 /// quotepath 关闭,否则非 ASCII 文件名被转成八进制转义乱码。
-fn file_changes(ctx: &RepoCtx) -> Result<Value, String> {
-    if !ctx.is_git_repo() {
-        return Ok(Value::Array(vec![]));
+fn file_changes(ctx: &RepoCtx) -> Result<(Value, bool), String> {
+    let is_git_repo = ctx.is_git_repo();
+    if !is_git_repo {
+        return Ok((Value::Array(vec![]), false));
     }
     let prefix = ctx.git(&["rev-parse", "--show-prefix"]).unwrap_or_default().trim().to_string();
     let out = ctx
@@ -184,8 +192,9 @@ fn file_changes(ctx: &RepoCtx) -> Result<Value, String> {
         changes.push((path, status));
     }
     changes.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(Value::Array(
-        changes.into_iter().map(|(p, s)| json!({ "path": p, "status": s })).collect(),
+    Ok((
+        Value::Array(changes.into_iter().map(|(p, s)| json!({ "path": p, "status": s })).collect()),
+        true,
     ))
 }
 
@@ -236,4 +245,46 @@ fn reveal(ctx: &RepoCtx, rel: &str) -> Result<Value, String> {
     // Start 不等退出:explorer.exe 成功也返回非零码,等待会误报错误
     r.map_err(|e| format!("打开文件管理器失败: {e}"))?;
     Ok(json!({ "ok": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_response_marks_non_git_workspace() {
+        let dir = std::env::temp_dir().join(format!("mc-non-git-changes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = RepoCtx {
+            workdir: dir.to_string_lossy().into_owned(),
+            wsl_distro: None,
+        };
+
+        let response = dispatch(&ctx, "repo_file_changes", &json!({}));
+
+        assert_eq!(response["is_git_repo"], false);
+        assert_eq!(response["result"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn changes_response_marks_git_workspace() {
+        let dir = std::env::temp_dir().join(format!("mc-git-changes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let initialized = Command::new("git").args(["init", "-q"]).current_dir(&dir).status().unwrap();
+        assert!(initialized.success());
+        std::fs::write(dir.join("new.txt"), b"new").unwrap();
+        let ctx = RepoCtx {
+            workdir: dir.to_string_lossy().into_owned(),
+            wsl_distro: None,
+        };
+
+        let response = dispatch(&ctx, "repo_file_changes", &json!({}));
+
+        assert_eq!(response["is_git_repo"], true);
+        assert_eq!(response["result"], json!([{ "path": "new.txt", "status": "A" }]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

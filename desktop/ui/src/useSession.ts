@@ -50,6 +50,8 @@ export interface SessionHandle {
   queued: string | null;
   atts: Attachment[];
   changes: FileChange[] | null;
+  /** null = 尚未探测；false 时文件抽屉不展示“改动”页。 */
+  isGitRepo: boolean | null;
   changesErr: string;
   /** 已上传附件/工作区图片的回读 URL(无会话时 undefined) */
   uploadUrl?: (path: string) => Promise<string>;
@@ -112,6 +114,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   const [queued, setQueued] = useState<string | null>(null);
   const [atts, setAtts] = useState<Attachment[]>([]);
   const [changes, setChanges] = useState<FileChange[] | null>(null);
+  const [isGitRepo, setIsGitRepo] = useState<boolean | null>(null);
   const [changesErr, setChangesErr] = useState("");
 
   const connRef = useRef<Conn | null>(null);
@@ -127,19 +130,25 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     const conn = connRef.current;
     if (!conn) return [];
     try {
-      const r = await conn.call<{ result?: FileChange[]; error?: string }>("repo_file_changes");
+      const r = await conn.call<{ result?: FileChange[]; is_git_repo?: boolean; error?: string }>("repo_file_changes");
+      if (connRef.current !== conn) return [];
       if (r.error) {
         setChangesErr(r.error);
         setChanges([]);
+        setIsGitRepo(null);
         return [];
       }
       setChangesErr("");
+      // 缺字段时兼容旧壳：只在明确返回 false 时隐藏改动页。
+      setIsGitRepo(r.is_git_repo ?? true);
       const list = r.result ?? [];
       setChanges(list);
       return list;
     } catch (e) {
+      if (connRef.current !== conn) return [];
       setChangesErr(e instanceof Error ? e.message : String(e));
       setChanges([]);
+      setIsGitRepo(null);
       return [];
     }
   }, []);
@@ -154,6 +163,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     setQueued(null);
     setAtts([]);
     setChanges(null);
+    setIsGitRepo(null);
     setChangesErr("");
     pendingMsgRef.current = o.firstMessage ?? null;
     pendingFilesRef.current = o.firstFiles?.length ? { sid, files: o.firstFiles } : null;
@@ -180,6 +190,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     setQueued(null);
     setAtts([]);
     setChanges(null);
+    setIsGitRepo(null);
     setChangesErr("");
     if (forget) localStorage.removeItem(LAST_SESSION_KEY);
   }, []);
@@ -374,6 +385,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     queued,
     atts,
     changes,
+    isGitRepo,
     changesErr,
     uploadUrl: id ? (p: string) => uploadFileURL(id, p) : undefined,
     open,

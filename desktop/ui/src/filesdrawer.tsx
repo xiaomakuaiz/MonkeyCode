@@ -3,7 +3,7 @@
 // 各持一份九成相同的实现、靠注释对表,现收敛于此;两侧数据协议同名
 // (repo_file_list / repo_read_file / repo_file_diff / repo_file_changes),
 // 载荷细节(base64 解码、超时参数、离线文案)与两侧的历史差异
-// (调宽/分栏拖拽、目录改动计数、幽灵行、预览头扩展位)走 FsAdapter 与 props。
+// (调宽/分栏拖拽、目录改动计数、预览头扩展位)走 FsAdapter 与 props。
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
 import { basename } from "./chat";
 import { CodeView, DiffPanel, MONO } from "./components";
@@ -95,11 +95,11 @@ export function FilesDrawer({
   onClose,
   initialTab = "files",
   changes,
+  showChangesTab = true,
   externalErr,
   resizable,
   errPad,
   dirChangeBadges,
-  ghostDeleted,
   emptyRootState,
   changesEmptyText,
   changesLoadingText,
@@ -113,6 +113,8 @@ export function FilesDrawer({
   initialTab?: "files" | "changes";
   /** 改动列表(null = 未加载;数据归属在调用方——本地随会话轮次刷新) */
   changes: FsChange[] | null;
+  /** 非 Git 工作区关闭此项，仅保留文件浏览。 */
+  showChangesTab?: boolean;
   /** 适配层外部渠道的错误(本地: 改动查询失败;云端: 控制流放弃重连) */
   externalErr?: string;
   /** 抽屉宽度 + 列表/预览分栏可拖拽调整并记忆(本地;云端固定 600) */
@@ -121,8 +123,6 @@ export function FilesDrawer({
   errPad: string;
   /** 树中目录行显示其下改动计数「N 处改动」(本地) */
   dirChangeBadges?: boolean;
-  /** 本层已删除文件以划线幽灵行缀在末尾(本地) */
-  ghostDeleted?: boolean;
   /** 根目录为空时的整块空态(本地「工作区是空的」;缺省用「(空)」行) */
   emptyRootState?: ReactNode;
   changesEmptyText: string;
@@ -136,7 +136,9 @@ export function FilesDrawer({
   /** Esc 处理挂点:预览打开时关预览并返回 true,否则返回 false(调用方关抽屉) */
   escRef?: MutableRefObject<(() => boolean) | null>;
 }) {
-  const [tab, setTab] = useState<"files" | "changes">(initialTab);
+  const [tab, setTab] = useState<"files" | "changes">(
+    initialTab === "changes" && !showChangesTab ? "files" : initialTab,
+  );
   // 树形浏览:目录 → 子项缓存("" = 工作区根),展开集合,按目录粒度的加载中标记
   const [tree, setTree] = useState<Map<string, FsEntry[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -158,16 +160,35 @@ export function FilesDrawer({
   });
   const [splitDragging, setSplitDragging] = useState(false);
   const listRef = useRef<HTMLDivElement>(null); // 分栏拖拽的定位基准
+  const previewRequest = useRef(0); // 切文件/Tab/关闭时使旧异步读取结果失效
 
   // 适配层经 ref 转接:调用方每次渲染的新对象不搅动 mount effect
   const adapterRef = useRef(adapter);
   adapterRef.current = adapter;
 
+  const closeViewer = () => {
+    previewRequest.current++;
+    setViewer(null);
+  };
+  const selectTab = (next: "files" | "changes") => {
+    if (next === tab || (next === "changes" && !showChangesTab)) return;
+    closeViewer();
+    setTab(next);
+  };
+
+  // Git 状态异步探测完成后，非 Git 工作区可能从“未知”变为 false。
+  useEffect(() => {
+    if (showChangesTab || tab !== "changes") return;
+    previewRequest.current++;
+    setViewer(null);
+    setTab("files");
+  }, [showChangesTab, tab]);
+
   // Esc 挂点:先关预览再关抽屉(闭包取最新 viewer,卸载时清挂点)
   if (escRef)
     escRef.current = () => {
       if (viewer) {
-        setViewer(null);
+        closeViewer();
         return true;
       }
       return false;
@@ -220,19 +241,24 @@ export function FilesDrawer({
   };
 
   const showDiff = async (path: string) => {
+    const request = ++previewRequest.current;
     setViewer({ path, kind: adapter.diffTransientKind, text: "加载中…" });
     try {
       const text = await adapterRef.current.diff(path);
-      setViewer({ path, kind: "diff", text });
+      if (request === previewRequest.current) setViewer({ path, kind: "diff", text });
     } catch (e) {
-      setViewer({ path, kind: adapterRef.current.diffTransientKind, text: "✗ " + (e instanceof Error ? e.message : e) });
+      if (request === previewRequest.current) {
+        setViewer({ path, kind: adapterRef.current.diffTransientKind, text: "✗ " + (e instanceof Error ? e.message : e) });
+      }
     }
   };
 
   const showFile = async (en: FsEntry) => {
+    const request = ++previewRequest.current;
     setViewer({ path: en.path, kind: "plain", text: "加载中…" });
     try {
       const r = await adapterRef.current.readFile(en);
+      if (request !== previewRequest.current) return;
       if ("plain" in r) {
         setViewer({ path: en.path, kind: "plain", text: r.plain });
         return;
@@ -242,7 +268,9 @@ export function FilesDrawer({
       else if (content.includes("\0")) setViewer({ path: en.path, kind: "plain", text: "二进制文件,不支持预览" });
       else setViewer({ path: en.path, kind: "code", text: content });
     } catch (e) {
-      setViewer({ path: en.path, kind: "plain", text: "✗ " + (e instanceof Error ? e.message : e) });
+      if (request === previewRequest.current) {
+        setViewer({ path: en.path, kind: "plain", text: "✗ " + (e instanceof Error ? e.message : e) });
+      }
     }
   };
 
@@ -309,7 +337,7 @@ export function FilesDrawer({
   const viewerKind = viewerSt ? CHANGE_KIND[viewerSt] : undefined;
 
   // 树形文件列表:展开的文件夹原地铺开子项,层级用缩进表达(每层 16px)。
-  // 本层已删除的文件以划线幽灵行缀在末尾(本地);子项懒加载,加载中给骨架行。
+  // 已删除文件只属于“改动”页；文件页仅展示当前真实存在的文件。
   const renderTree = (dir: string, depth: number): ReactNode[] => {
     const pad = 10 + depth * 16;
     const rows: ReactNode[] = [];
@@ -338,7 +366,7 @@ export function FilesDrawer({
           key={en.path}
           className={active ? undefined : "hv"}
           title={en.path}
-          onClick={() => (en.isDir ? toggleDir(en.path) : kind ? void showDiff(en.path) : void showFile(en))}
+          onClick={() => (en.isDir ? toggleDir(en.path) : void showFile(en))}
           style={{ ...fileRow, paddingLeft: pad, background: active ? "var(--hov)" : "transparent" }}
         >
           <span style={{ width: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -367,24 +395,7 @@ export function FilesDrawer({
       );
       if (open) rows.push(...renderTree(en.path, depth + 1));
     }
-    const ghosts = ghostDeleted
-      ? (changes ?? []).filter(
-          (c) => c.status === "D" && (c.path.includes("/") ? c.path.slice(0, c.path.lastIndexOf("/")) : "") === dir,
-        )
-      : [];
-    for (const c of ghosts) {
-      rows.push(
-        <div key={"del:" + c.path} className="hv" title={c.path} onClick={() => void showDiff(c.path)} style={{ ...fileRow, paddingLeft: pad }}>
-          <span style={{ width: 12, flex: "none" }} />
-          <IconFile color={CHANGE_KIND.D.fg} />
-          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t5)", textDecoration: "line-through" }}>
-            {basename(c.path)}
-          </span>
-          <span style={{ ...changeTag, color: CHANGE_KIND.D.fg, background: CHANGE_KIND.D.bg }}>{CHANGE_KIND.D.text}</span>
-        </div>,
-      );
-    }
-    if (items.length === 0 && ghosts.length === 0) {
+    if (items.length === 0) {
       if (dir === "" && emptyRootState) {
         rows.push(<Fragment key="empty-root">{emptyRootState}</Fragment>);
       } else {
@@ -423,17 +434,19 @@ export function FilesDrawer({
         )}
         {/* 头部:文件/改动下划线 tab(共用下方预览窗格),hairline 与主体分层 */}
         <div style={{ display: "flex", alignItems: "flex-end", gap: 16, padding: "6px 14px 0 20px", borderBottom: "1px solid var(--line2)", flex: "none", whiteSpace: "nowrap" }}>
-          <button className={tab === "files" ? undefined : "hv-t1"} style={drawerTabStyle(tab === "files")} onClick={() => setTab("files")}>
+          <button className={tab === "files" ? undefined : "hv-t1"} style={drawerTabStyle(tab === "files")} onClick={() => selectTab("files")}>
             文件
           </button>
-          <button className={tab === "changes" ? undefined : "hv-t1"} style={drawerTabStyle(tab === "changes")} onClick={() => setTab("changes")}>
-            改动
-            {changes && changes.length > 0 && (
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--acc)", background: "var(--accBg)", borderRadius: 8, padding: "0 6px", lineHeight: "15px" }}>
-                {changes.length}
-              </span>
-            )}
-          </button>
+          {showChangesTab && (
+            <button className={tab === "changes" ? undefined : "hv-t1"} style={drawerTabStyle(tab === "changes")} onClick={() => selectTab("changes")}>
+              改动
+              {changes && changes.length > 0 && (
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--acc)", background: "var(--accBg)", borderRadius: 8, padding: "0 6px", lineHeight: "15px" }}>
+                  {changes.length}
+                </span>
+              )}
+            </button>
+          )}
           <span style={{ marginLeft: "auto", alignSelf: "center", display: "flex", alignItems: "center", gap: 4 }}>
             {headerExtra}
             <button className="hv2 icon-btn" title="关闭 (esc)" onClick={onClose} style={{ width: 24, height: 24 }}>
@@ -511,7 +524,7 @@ export function FilesDrawer({
           )}
         </div>
 
-        {/* 文件查看器:改动文件看 diff,其余看内容;✕/esc 回到列表 */}
+        {/* 文件查看器:文件页看当前内容，改动页看 diff；✕/esc 回到列表 */}
         {viewer && (
           <>
             {resizable && (
@@ -529,7 +542,7 @@ export function FilesDrawer({
               <button
                 className="hv2 icon-btn"
                 title={viewerCloseTitle}
-                onClick={() => setViewer(null)}
+                onClick={closeViewer}
                 style={{ marginLeft: viewerExtra ? undefined : "auto", width: 22, height: 22 }}
               >
                 <IconX size={10} color="var(--t4)" />
