@@ -370,8 +370,24 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 }
 .mdcode:hover .mdcopy, .mdcode .mdcopy.ok { opacity: 1; }
 .mdcode .mdcopy.ok { color: var(--acc); border-color: var(--acc); }
-.md table { border-collapse: collapse; }
-.md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
+.md-table-scroll {
+  max-width: 100%;
+  margin: 1em 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.md-table-scroll:focus-visible { outline: 2px solid var(--accBd); outline-offset: 2px; }
+.md-table-scroll table { width: 100%; margin: 0; border-collapse: collapse; }
+.md th, .md td {
+  min-width: 96px;
+  max-width: 320px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
 .md blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 12px; color: var(--t4); }
 .md img { max-width: 100%; height: auto; border-radius: 9px; }
 

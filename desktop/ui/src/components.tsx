@@ -57,6 +57,10 @@ marked.use({
     code(token) {
       return `<div class="mdcode">${baseRenderer.code(token)}<button class="mdcopy" type="button">复制</button></div>`;
     },
+    table(token) {
+      const table = baseRenderer.table.call(this, token);
+      return `<div class="md-table-scroll" role="region" aria-label="可横向滚动的表格" tabindex="0">${table}</div>`;
+    },
   },
 });
 
