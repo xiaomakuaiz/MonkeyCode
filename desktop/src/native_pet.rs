@@ -39,10 +39,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const LOGICAL_H: f64 = 120.0;
 const LOGICAL_SPRITE: f64 = 88.0;
 const SOURCE_FRAME: usize = 176;
-const FRAME_COUNT: usize = 31;
+const FRAME_COUNT: usize = 52;
 const SUBCLASS_ID: usize = 0x4D43_5045_54; // "MCPET"
 const TIMER_ID: usize = 0x5045_54;
-const TIMER_MS: u32 = 100;
+const TIMER_MS: u32 = 80;
 const WM_RENDER: u32 = WM_APP + 0x51;
 const WINDOW_CLASS_NAME: windows::core::PCWSTR = w!("MonkeyCodeNativePetLayeredWindow");
 static WINDOW_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
@@ -121,7 +121,7 @@ struct NativePet {
     // 窗口/GDI 调用仍通过 PostMessage 回到创建窗口的 UI 线程。
     hwnd: isize,
     app: AppHandle,
-    /// 31 帧横条,2x 源图(5456x176),RGBA row-major。
+    /// 52 帧横条,2x 源图(9152x176),RGBA row-major。
     sprite: tauri::image::Image<'static>,
     visual: Mutex<VisualState>,
     mouse: Mutex<MouseState>,
@@ -325,10 +325,10 @@ impl NativePet {
         let ms = elapsed.as_millis() as usize;
         match mode {
             Mode::Idle => (ms / 2500) % 7,
-            Mode::Running => 7 + (ms / 133) % 9,
-            Mode::Waiting => 16 + (ms / 229) % 7,
-            Mode::Celebrate => 23 + (ms / 200).min(6),
-            Mode::Offline => 30,
+            Mode::Running => 7 + (ms / 160) % 30,
+            Mode::Waiting => 37 + (ms / 229) % 7,
+            Mode::Celebrate => 44 + (ms / 200).min(6),
+            Mode::Offline => 51,
         }
     }
 

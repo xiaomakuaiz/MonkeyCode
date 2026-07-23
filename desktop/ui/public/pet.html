@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!-- 桌宠状态页:macOS/Linux 直接作为透明置顶小窗;
      Windows(含 Win7)上隐藏运行,只承担状态聚合与音效,画面推送给壳的原生 layered window。
-     形象:官方吉祥物 8 帧"点头打盹"精灵图(pet-sprite.webp,88px@2x),
-     CSS steps(8) 逐帧播放——待机慢速打盹、运行中快速点头、等审批定格
+     形象:官方吉祥物 52 帧精灵图(pet-sprite.webp,88px@2x),
+     CSS steps 逐帧播放——待机慢速打盹、运行中正面敲键盘、等审批定格
      摇晃、离线定格在低头睡着帧并灰化。
      数据流:sessions_list 命令取快照 → session-event 壳事件持续更新
      (壳聚合引擎状态,引擎重启对本页透明);快照失败视为引擎离线,
@@ -41,28 +41,28 @@
   #bubble.err { background:rgba(185,52,52,.92); color:#ffecec; }
   #bubble.err::after { border-top-color:rgba(185,52,52,.92); }
 
-  /* ---- 吉祥物精灵图:31 帧横条("多状态表演长动画"四阶段 + 旧组睡着帧)。
-         帧段:1-7 无所事事 / 8-16 写代码 / 17-23 看通知 / 24-30 庆祝 / 31 睡着。
+  /* ---- 吉祥物精灵图:52 帧横条。
+         帧段:1-7 无所事事 / 8-37 正面敲键盘 / 38-44 看通知 / 45-51 庆祝 / 52 睡着。
          各状态在自己的帧段内 steps 循环;庆祝只播一遍后定格末姿势 ---- */
   #wrap { width:88px; height:88px; }
   #sprite {
     width:88px; height:88px;
-    background:url(pet-sprite.webp) 0 0 / 2728px 88px no-repeat;
+    background:url(pet-sprite.webp) 0 0 / 4576px 88px no-repeat;
   }
   @keyframes idle-loop   { from { background-position-x:0; }       to { background-position-x:-616px; } }
-  @keyframes work-loop   { from { background-position-x:-616px; }  to { background-position-x:-1408px; } }
-  @keyframes notify-loop { from { background-position-x:-1408px; } to { background-position-x:-2024px; } }
-  @keyframes cheer-once  { from { background-position-x:-2024px; } to { background-position-x:-2640px; } }
+  @keyframes work-loop   { from { background-position-x:-616px; }  to { background-position-x:-3256px; } }
+  @keyframes notify-loop { from { background-position-x:-3256px; } to { background-position-x:-3872px; } }
+  @keyframes cheer-once  { from { background-position-x:-3872px; } to { background-position-x:-4488px; } }
 
   /* 空闲 7 帧全是独立姿势(非补间)。桌宠挂在余光位,动作越频繁越抢注意力,
      而空闲正是最不该抢注意力的状态:2.5s/姿势 ≈ 人发呆时的小动作节奏 */
   body.st-idle      #sprite { animation:idle-loop 17.5s steps(7) infinite; }
-  body.st-running   #sprite { animation:work-loop 1.2s steps(9) infinite; }
+  body.st-running   #sprite { animation:work-loop 4.8s steps(30) infinite; }
   body.st-waiting   #sprite { animation:notify-loop 1.6s steps(7) infinite; }
-  /* 庆祝:播一遍(帧 24-30),动画结束回落到基准位 = 末帧叉腰挺胸,撑满气泡时长 */
-  body.st-celebrate #sprite { background-position-x:-2552px; animation:cheer-once 1.4s steps(7); }
+  /* 庆祝:播一遍(帧 45-51),动画结束回落到基准位 = 末帧叉腰挺胸,撑满气泡时长 */
+  body.st-celebrate #sprite { background-position-x:-4400px; animation:cheer-once 1.4s steps(7); }
   body.st-offline   #sprite {
-    background-position-x:-2640px; /* 第 31 帧:完全低头睡着 */
+    background-position-x:-4488px; /* 第 52 帧:完全低头睡着 */
     filter:grayscale(.7) brightness(.92); opacity:.85;
   }
 </style>
@@ -235,7 +235,7 @@
   const MAC_HIT_POLL_MS = 50;
   const SPRITE_CSS_SIZE = 88;
   const SPRITE_SOURCE_SIZE = 176;
-  const SPRITE_FRAMES = 31;
+  const SPRITE_FRAMES = 52;
   const SPRITE_ALPHA_HIT = 20;
   let macSpriteMasks = null;
   let macWindowOrigin = null;
