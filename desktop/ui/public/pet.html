@@ -77,9 +77,14 @@
   const sprite = document.getElementById('sprite');
   const nativeWindowsPet = /Windows/i.test(navigator.userAgent || '');
 
-  function syncNative(state, tone, text) {
+  function syncNative(state, tone, text, sessionId) {
     if (!nativeWindowsPet) return;
-    invoke('pet_native_render', { state, tone: tone || '', text: text || '' }).catch(() => {});
+    invoke('pet_native_render', {
+      state,
+      tone: tone || '',
+      text: text || '',
+      sessionId: sessionId || null,
+    }).catch(() => {});
   }
 
   // 事件音效:桌宠被用户隐藏时 webview 仍在运行,所以音效仍会响。
@@ -118,10 +123,11 @@
   }
 
   // ---- 聚合状态:会话表(快照 + 事件增量) ----
-  const sessions = new Map(); // id -> { status, waiting }
+  const sessions = new Map(); // id -> { status, waiting, touchedAt }
   let retryTimer = null;
-  let flash = null; // { tone, text } 终态闪现,几秒后回落
+  let flash = null; // { tone, text, sessionId } 终态闪现,几秒后回落
   let flashTimer = null;
+  let clickSessionId = null;
 
   function setBubble(tone, text) {
     bubble.className = tone || '';
@@ -134,13 +140,22 @@
       armIdle(false);
       document.body.className = 'st-offline';
       setBubble('', '内核休息中 Zzz');
-      syncNative('offline', '', '内核休息中 Zzz');
+      clickSessionId = null;
+      syncNative('offline', '', '内核休息中 Zzz', null);
       return;
     }
-    let running = 0, waiting = 0;
-    for (const s of sessions.values()) {
-      if (s.waiting) waiting++;
-      else if (s.status === 'running') running++;
+    let running = 0, waiting = 0, runningTarget = null, waitingTarget = null, waitingAt = -1;
+    for (const [id, s] of sessions) {
+      if (s.waiting) {
+        waiting++;
+        if ((s.touchedAt || 0) > waitingAt) {
+          waitingAt = s.touchedAt || 0;
+          waitingTarget = id;
+        }
+      } else if (s.status === 'running') {
+        running++;
+        runningTarget = id;
+      }
     }
     armIdle(running === 0 && waiting === 0);
     const state = flash && flash.cheer
@@ -150,14 +165,17 @@
     const text = flash ? flash.text
       : waiting ? '等你审批!'
       : running ? running + ' 个任务运行中' : '';
+    clickSessionId = flash && flash.sessionId
+      ? flash.sessionId
+      : waitingTarget || (running === 1 ? runningTarget : null);
     document.body.className = 'st-' + state;
     setBubble(tone, text);
-    syncNative(state, tone, text);
+    syncNative(state, tone, text, clickSessionId);
   }
 
   /** cheer=true 时闪现期间播庆祝动作(仅任务完成用) */
-  function showFlash(tone, text, cheer) {
-    flash = { tone, text, cheer };
+  function showFlash(tone, text, cheer, sessionId) {
+    flash = { tone, text, cheer, sessionId };
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => { flash = null; render(false); }, 4000);
     render(false);
@@ -180,7 +198,11 @@
     }
     sessions.clear();
     for (const m of list) {
-      sessions.set(m.id, { status: m.status, waiting: !!m.waiting_ask });
+      sessions.set(m.id, {
+        status: m.status,
+        waiting: !!m.waiting_ask,
+        touchedAt: Date.parse(m.updated_at || '') || 0,
+      });
     }
     online = true;
     render(false);
@@ -194,14 +216,15 @@
   window.__TAURI__.event.listen('session-event', (evt) => {
     const e = evt.payload;
     if (!e || !e.id) return;
-    const s = sessions.get(e.id) || { status: '', waiting: false };
+    const s = sessions.get(e.id) || { status: '', waiting: false, touchedAt: 0 };
+    s.touchedAt = Date.now();
     if (e.type === 'session-status') {
       s.status = e.status;
       if (e.status === 'finished') {
-        showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓', true);
+        showFlash('ok', '「' + (e.title || '任务') + '」完成 ✓', true, e.id);
         play('end');
       } else if (e.status === 'error') {
-        showFlash('err', '「' + (e.title || '任务') + '」出错 ✗');
+        showFlash('err', '「' + (e.title || '任务') + '」出错 ✗', false, e.id);
         play('error');
       }
     } else if (e.type === 'session-ask') {
@@ -373,7 +396,7 @@
     }
   });
   document.addEventListener('mouseup', () => {
-    if (down && !dragged) invoke('show_main');
+    if (down && !dragged) invoke('show_main', { sessionId: clickSessionId });
     down = null;
   });
   document.addEventListener('contextmenu', (e) => e.preventDefault());

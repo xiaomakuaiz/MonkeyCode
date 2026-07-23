@@ -109,12 +109,20 @@ export async function windowIsMaximized(): Promise<boolean> {
 /** 监听窗口尺寸变化(最大化/还原图标切换用);返回解除监听函数。 */
 export const onWindowResized = (cb: () => void): (() => void) => onHostEvent("tauri://resize", cb);
 
-/** 订阅壳事件(如托盘"设置"),返回退订函数;非壳环境为空操作。 */
-export function onHostEvent(name: string, cb: () => void): () => void {
-  return listen(name, () => cb());
+/** 订阅壳事件(如托盘"设置"/桌宠打开会话),返回退订函数;非壳环境为空操作。 */
+export function onHostEvent<T = unknown>(name: string, cb: (payload: T) => void): () => void {
+  return listen(name, (payload) => cb(payload as T));
 }
 
-/** 取走(消费)壳的待处理意图(如托盘"设置")。事件发后不管,页面未就绪时
+/** 从壳的字符串意图中取出桌宠要求打开的会话 ID。 */
+export function sessionIdFromUiIntent(intent: string | null): string | null {
+  const prefix = "open-session:";
+  if (!intent?.startsWith(prefix)) return null;
+  const id = intent.slice(prefix.length);
+  return id || null;
+}
+
+/** 取走(消费)壳的待处理意图(如托盘"设置"/桌宠打开会话)。事件发后不管,页面未就绪时
  * 会丢;意图同时落在壳的待取状态,启动完成后经此补取。非壳环境返回 null。 */
 export async function takeUiIntent(): Promise<string | null> {
   if (!tauri()?.core?.invoke) return null;

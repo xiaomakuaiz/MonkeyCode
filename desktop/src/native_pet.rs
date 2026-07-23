@@ -90,6 +90,7 @@ struct VisualState {
     mode: Mode,
     tone: Tone,
     text: String,
+    target_session_id: Option<String>,
     since: Instant,
     generation: u64,
     last_key: Option<(usize, u64, u32, u32)>,
@@ -101,6 +102,7 @@ impl Default for VisualState {
             mode: Mode::Offline,
             tone: Tone::Normal,
             text: "内核休息中 Zzz".into(),
+            target_session_id: None,
             since: Instant::now(),
             generation: 0,
             last_key: None,
@@ -278,7 +280,7 @@ pub fn position(app: &AppHandle) -> Option<(i32, i32)> {
 }
 
 /// 由隐藏 pet-service WebView 推送已聚合的视觉状态。
-pub fn update(app: &AppHandle, mode: &str, tone: &str, text: &str) {
+pub fn update(app: &AppHandle, mode: &str, tone: &str, text: &str, session_id: Option<&str>) {
     let pet = app.state::<NativePetHost>().get();
     let Some(pet) = pet else { return };
     {
@@ -298,6 +300,12 @@ pub fn update(app: &AppHandle, mode: &str, tone: &str, text: &str) {
         };
         // IPC 载荷受壳内页控制,仍在原生边界做长度上限。
         visual.text = text.chars().take(80).collect();
+        visual.target_session_id = session_id
+            .map(str::trim)
+            .filter(|id| {
+                !id.is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
+            })
+            .map(str::to_string);
         visual.since = Instant::now();
         visual.generation = visual.generation.wrapping_add(1);
     }
@@ -752,7 +760,8 @@ unsafe extern "system" fn window_proc(
             let _ = ReleaseCapture();
             drop(mouse);
             if clicked {
-                crate::show_any_window(&pet.app);
+                let target = pet.visual.lock().unwrap().target_session_id.clone();
+                crate::show_main_session(&pet.app, target.as_deref());
             }
             return LRESULT(0);
         }

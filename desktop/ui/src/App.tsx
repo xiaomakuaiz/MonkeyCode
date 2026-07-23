@@ -8,6 +8,7 @@ import {
   inDesktopShell,
   isWindowsShell,
   onHostEvent,
+  sessionIdFromUiIntent,
   takeUiIntent,
   updateCheck,
   updateInstall,
@@ -209,6 +210,7 @@ export default function App() {
   sessionIdRef.current = session.id;
   const notifyRef = useRef(session.notify);
   notifyRef.current = session.notify;
+  const openNoticeSessionRef = useRef<(id: string) => Promise<void>>(async () => {});
   useEffect(
     () =>
       subscribeEvents((e) => {
@@ -240,6 +242,8 @@ export default function App() {
   const openNoticeSession = async (id: string) => {
     if (id === session.id) {
       session.dismissNotice();
+      setView("session");
+      setDrawer(null);
       return;
     }
     let target = sessions.find((m) => m.id === id);
@@ -257,6 +261,7 @@ export default function App() {
     session.dismissNotice();
     openSession(target);
   };
+  openNoticeSessionRef.current = openNoticeSession;
 
   // 归档/取消归档:仅列表位置变化,当前打开的会话不强制关闭
   const archiveSession = async (m: SessionMeta) => {
@@ -296,7 +301,7 @@ export default function App() {
 
   // 打开设置视图:先复位 App 级浮层(文件抽屉的遮罩不能盖在设置页上),
   // 与 openSession/removeSession 的复位语义对齐。侧栏齿轮与托盘事件共用。
-  const settingsRequestedRef = useRef(false); // 托盘请求过设置:启动恢复会话不得覆盖
+  const latestUiIntentRef = useRef<string | null>(null); // 启动恢复会话不得覆盖托盘/桌宠请求
   const openSettings = () => {
     setDrawer(null);
     setView("settings");
@@ -306,9 +311,15 @@ export default function App() {
   // 订阅壳的托盘"设置"事件(唤起页内设置视图),静默检查一次应用更新(齿轮小圆点)。
   useEffect(() => {
     const offSettings = onHostEvent("open-settings", () => {
-      settingsRequestedRef.current = true;
+      latestUiIntentRef.current = "open-settings";
       void takeUiIntent(); // 事件已送达:消费壳的待取副本,防下次整页加载重放
       openSettings();
+    });
+    const offSession = onHostEvent<string>("open-session", (id) => {
+      if (!id) return;
+      latestUiIntentRef.current = `open-session:${id}`;
+      void takeUiIntent();
+      void openNoticeSessionRef.current(id);
     });
     const offBrowserMcp = onHostEvent("browser-mcp-reloaded", () => {
       if (settingsDirty.current) {
@@ -326,8 +337,11 @@ export default function App() {
         if (ms.length === 0 && inDesktopShell()) setView("settings");
         // 托盘"设置"兜底:页面未就绪时事件会丢(壳侧发后不管),意图落在壳的
         // 待取状态,这里补取;启动期间事件先到、又被上面恢复会话覆盖的同理。
-        void takeUiIntent().then((intent) => {
-          if (intent === "open-settings" || settingsRequestedRef.current) openSettings();
+        void takeUiIntent().then((pendingIntent) => {
+          const intent = pendingIntent ?? latestUiIntentRef.current;
+          const requestedSession = sessionIdFromUiIntent(intent);
+          if (requestedSession) void openNoticeSessionRef.current(requestedSession);
+          else if (intent === "open-settings") openSettings();
         });
       })
       .catch((e) => session.notify("无法连接服务: " + (e instanceof Error ? e.message : e)));
@@ -344,6 +358,7 @@ export default function App() {
     }
     return () => {
       offSettings();
+      offSession();
       offBrowserMcp();
       clearInterval(updateTimer);
     };

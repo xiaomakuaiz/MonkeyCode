@@ -239,21 +239,58 @@ fn probe_log(msg: String) {
     eprintln!("[probe] {msg}");
 }
 
+const OPEN_SESSION_INTENT_PREFIX: &str = "open-session:";
+
+/// 桌宠携带的会话 ID 只来自壳内 pet.html；仍在 IPC/原生窗口边界做基本
+/// 限长与控制字符过滤，避免异常载荷长期占住 UiIntent。
+fn open_session_intent(session_id: &str) -> Option<String> {
+    let id = session_id.trim();
+    if id.is_empty() || id.len() > 512 || id.chars().any(char::is_control) {
+        return None;
+    }
+    Some(format!("{OPEN_SESSION_INTENT_PREFIX}{id}"))
+}
+
+/// 唤回主窗口，并在桌宠当前状态有明确目标时要求主 UI 打开对应会话。
+/// 事件负责已就绪页面的实时跳转，UiIntent 负责页面尚未开始监听时的兜底。
+fn show_main_session(app: &AppHandle, session_id: Option<&str>) {
+    let target = session_id.and_then(|id| {
+        open_session_intent(id).map(|intent| (id.trim().to_string(), intent))
+    });
+    if let Some((_, intent)) = &target {
+        app.state::<UiIntent>()
+            .0
+            .lock()
+            .unwrap()
+            .replace(intent.clone());
+    }
+    show_any_window(app);
+    if let Some((id, _)) = target {
+        let _ = app.emit_to("main", "open-session", id);
+    }
+}
+
 /// 唤回主窗口(桌宠点击)。
 #[tauri::command]
-fn show_main(app: AppHandle) {
-    show_any_window(&app);
+fn show_main(app: AppHandle, session_id: Option<String>) {
+    show_main_session(&app, session_id.as_deref());
 }
 
 /// Windows 隐藏状态页→原生 layered window 的视觉快照。
 /// 非 Windows 继续由 pet.html 自己渲染,命令保留为跨平台空操作,
 /// 使同一份内置页不需分叉打包。
 #[tauri::command]
-fn pet_native_render(app: AppHandle, state: String, tone: String, text: String) {
+fn pet_native_render(
+    app: AppHandle,
+    state: String,
+    tone: String,
+    text: String,
+    session_id: Option<String>,
+) {
     #[cfg(target_os = "windows")]
-    native_pet::update(&app, &state, &tone, &text);
+    native_pet::update(&app, &state, &tone, &text, session_id.as_deref());
     #[cfg(not(target_os = "windows"))]
-    let _ = (app, state, tone, text);
+    let _ = (app, state, tone, text, session_id);
 }
 
 /// 枚举 WSL 发行版(设置视图"运行环境"下拉用)。
@@ -944,5 +981,21 @@ fn show_any_window(app: &AppHandle) {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod ui_intent_tests {
+    use super::open_session_intent;
+
+    #[test]
+    fn session_intent_accepts_normal_id_and_rejects_invalid_input() {
+        assert_eq!(
+            open_session_intent(" session-1 ").as_deref(),
+            Some("open-session:session-1")
+        );
+        assert!(open_session_intent("").is_none());
+        assert!(open_session_intent("bad\nid").is_none());
+        assert!(open_session_intent(&"x".repeat(513)).is_none());
     }
 }
