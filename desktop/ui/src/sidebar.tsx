@@ -351,6 +351,7 @@ export function Sidebar({
   cloudError,
   onConnectCloud,
   onRefreshCloud,
+  onNewCloudTask,
   onOpenCloudTask,
   onSelect,
   onNewTask,
@@ -387,6 +388,8 @@ export function Sidebar({
   onConnectCloud: () => void;
   /** 手动刷新云端任务列表 */
   onRefreshCloud?: () => void;
+  /** 打开新建页并直接选择云端模式 */
+  onNewCloudTask: () => void;
   /** 点击云端任务:在桌面内打开详情视图 */
   onOpenCloudTask: (t: CloudTask) => void;
   onSelect: (m: SessionMeta) => void;
@@ -486,6 +489,14 @@ export function Sidebar({
         <div style={{ ...sectionHeader, marginTop: -1 }}>
           <IconCloud style={{ marginTop: -1 }} />
           <span style={{ flex: 1 }}>云端任务</span>
+          <button
+            className="hv2 icon-btn"
+            title="新建云端任务"
+            onClick={onNewCloudTask}
+            style={{ width: 20, height: 20, borderRadius: 5 }}
+          >
+            <IconPlus color="var(--t4)" />
+          </button>
           {onRefreshCloud && mcConnection.phase === "connected" && (
             <button
               className="hv2 icon-btn"

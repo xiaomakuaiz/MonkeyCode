@@ -36,6 +36,13 @@ import type { ModelInfo, SessionMeta } from "./types";
 /** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
 export const DEFAULT_DIR = "~/MonkeyCode";
 
+export type NewTaskMode = "local" | "cloud";
+
+export interface NewTaskPrefill {
+  dir?: string | null;
+  mode?: NewTaskMode;
+}
+
 export function NewTaskView({
   models,
   lastDir,
@@ -50,9 +57,9 @@ export function NewTaskView({
   lastDir: string;
   /** 侧栏同款项目分组目录(App 从 sessions 派生;当前目录不在其中时头部补入) */
   recentDirs: string[];
-  /** 外部触发的预填(侧栏"新建任务"/项目行 +):每次触发都是新对象,
-   * 同目录重复点击也能生效;带 dir 则预填目录并停止跟随最近会话 */
-  prefill: { dir?: string | null } | null;
+  /** 外部触发的预填(侧栏本地/云端 +、项目行 +):每次触发都是新对象,
+   * 同入口重复点击也能生效;mode 直达对应模式,dir 预填目录并停止跟随 */
+  prefill: NewTaskPrefill | null;
   /** MonkeyCode 云端账号已显式关联(云端派发的前提) */
   cloudReady: boolean;
   /** 本地会话创建成功:App 刷新列表并进入会话;first/files 随首条消息发出
@@ -62,7 +69,7 @@ export function NewTaskView({
   onCloudCreated: (t: CloudTask) => void;
 }) {
   const [folderOpen, setFolderOpen] = useState(false);
-  const [mode, setMode] = useState<"local" | "cloud">("local");
+  const [mode, setMode] = useState<NewTaskMode>(() => prefill?.mode ?? "local");
   const [manualDir, setManualDir] = useState("");
 
   // ===== 本地表单主状态(此前拆在 App 里经 15 个 props 注入,现随视图生命周期)=====
@@ -82,11 +89,12 @@ export function NewTaskView({
     setDir(lastDir || DEFAULT_DIR);
   }, [lastDir]);
 
-  // 外部预填:清掉上一次的错误态;带目录则预填并停止跟随
+  // 外部预填:切换目标模式并清掉上一次的本地错误态;带目录则预填并停止跟随
   useEffect(() => {
     if (!prefill) return;
     setErr("");
     setOfferCreate(false);
+    if (prefill.mode) setMode(prefill.mode);
     if (prefill.dir) {
       dirTouchedRef.current = true;
       setDir(prefill.dir);
@@ -192,6 +200,10 @@ export function NewTaskView({
   const createCloud = async () => {
     const content = text.trim();
     if (cloudBusy) return;
+    if (!cloudReady) {
+      setCloudErr("请先连接 MonkeyCode（设置 → 账号与云端）");
+      return;
+    }
     if (!content) {
       setCloudErr("云端任务需要先描述要做的事");
       return;
@@ -287,6 +299,8 @@ export function NewTaskView({
     cursor: "pointer",
     userSelect: "none",
   });
+  const cloudDisconnected = mode === "cloud" && !cloudReady;
+  const submitDisabled = busy || cloudBusy || cloudDisconnected;
 
   return (
     <div
@@ -605,6 +619,8 @@ export function NewTaskView({
             <span style={{ flex: 1 }} />
             <button
               className="hv-acc"
+              disabled={submitDisabled}
+              title={cloudDisconnected ? "请先连接 MonkeyCode 后再创建云端任务" : undefined}
               onClick={submit}
               style={{
                 height: 30,
@@ -614,17 +630,17 @@ export function NewTaskView({
                 color: "var(--onAcc)",
                 fontSize: 12.5,
                 fontWeight: 700,
-                cursor: "pointer",
+                cursor: submitDisabled ? "not-allowed" : "pointer",
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
                 padding: "0 15px",
                 flex: "none",
                 boxShadow: "var(--accSh)",
-                opacity: busy || cloudBusy ? 0.6 : 1,
+                opacity: submitDisabled ? 0.6 : 1,
               }}
             >
-              {busy || cloudBusy ? "创建中…" : "开始任务"}
+              {busy || cloudBusy ? "创建中…" : cloudDisconnected ? "请先连接" : "开始任务"}
               <IconSend size={11} />
             </button>
           </div>

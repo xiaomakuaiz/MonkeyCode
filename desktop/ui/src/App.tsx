@@ -30,7 +30,7 @@ import { CHANGE_KIND, changeTag, FilesDrawer, type FsAdapter } from "./filesdraw
 import { IconFolder, IconX } from "./icons";
 import { inspectMcAccount } from "./mcaccount";
 import { workspaceRelativePath } from "./markdownPaths";
-import { NewTaskView } from "./newtask";
+import { NewTaskView, type NewTaskPrefill } from "./newtask";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
 import { groupByProject, Sidebar } from "./sidebar";
 import { SettingsView } from "./settings";
@@ -76,8 +76,8 @@ export default function App() {
   const drawerEscRef = useRef<(() => boolean) | null>(null);
   const [childView, setChildView] = useState<string | null>(null);
   // 新建任务表单状态整体在 NewTaskView 内(随视图生命周期);App 只保留外部
-  // 预填触发(侧栏"新建任务"/项目行 +)——每次触发都换新对象,同目录重复点击也生效
-  const [newTaskPrefill, setNewTaskPrefill] = useState<{ dir?: string | null } | null>(null);
+  // 预填触发(侧栏本地/云端 +、项目行 +)——每次触发都换新对象,同入口重复点击也生效
+  const [newTaskPrefill, setNewTaskPrefill] = useState<NewTaskPrefill | null>(null);
 
   // ===== MonkeyCode 云端账号与任务 =====
   // 百智云登录只用于显式桥接授权;这里独立持有 MonkeyCode 关联态。
@@ -528,10 +528,14 @@ export default function App() {
           cloudError={cloudError}
           onConnectCloud={() => void connectCloud()}
           onRefreshCloud={() => void syncCloud()}
+          onNewCloudTask={() => {
+            setNewTaskPrefill({ mode: "cloud" });
+            setView("new");
+          }}
           onOpenCloudTask={openCloudTask}
           onSelect={(m) => openSession(m)}
           onNewTask={(dir) => {
-            setNewTaskPrefill({ dir });
+            setNewTaskPrefill({ dir, mode: "local" });
             setView("new");
           }}
           onOpenSettings={openSettings}
