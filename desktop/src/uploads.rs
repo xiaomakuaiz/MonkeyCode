@@ -1,8 +1,9 @@
 // 对话附件上传/回读。落盘 <workdir>/.monkeycode/uploads/(会话工作区内,
 // 模型经相对路径 Read 查看)。回读返回 data URL(Tauri 下 <img> 无法带鉴权头,
-// 又不想开 asset scope 到任意工作区,小图 base64 内联最稳)。
+// 又不想开 asset scope 到任意工作区,小图 base64 内联最稳)。Markdown 里的
+// 本地图片也走同一通道,但只放行工作区内的常见图片且限制体积。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde_json::{json, Value};
@@ -55,6 +56,22 @@ fn uploads_root(workdir: &str, wsl_distro: Option<&str>) -> Result<PathBuf, Stri
 
 fn uploads_dir(workdir: &str, wsl_distro: Option<&str>) -> Result<PathBuf, String> {
     Ok(uploads_root(workdir, wsl_distro)?.join(".monkeycode").join("uploads"))
+}
+
+fn image_mime(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
 }
 
 /// 保存原始字节到上传目录(浏览器截图等壳内生成物),返回工作区相对路径。
@@ -115,24 +132,127 @@ pub fn save(workdir: &str, wsl_distro: Option<&str>, name: &str, media_type: &st
     Ok(json!({ "path": format!(".monkeycode/uploads/{fname}") }))
 }
 
-/// 回读已上传文件为 data URL(UI 气泡缩略图)。仅允许 uploads 目录内的文件名。
-pub fn read_data_url(workdir: &str, wsl_distro: Option<&str>, path: &str) -> Result<String, String> {
-    // 回读按消息内存储的相对路径走;只放行工作区内的上传目录,
-    // 拒绝越界与绝对路径
-    let rel = path.trim_start_matches("./");
-    let in_uploads = rel.starts_with(".monkeycode/uploads/");
-    if !in_uploads || rel.contains('\\') || rel.split('/').any(|seg| seg == "..") {
-        return Err("非法附件路径".into());
+/// 回读文件为 data URL:
+/// - `.monkeycode/uploads/` 内仍允许任意附件(下载用,未知类型按 octet-stream);
+/// - 其他路径只允许工作区内的常见图片(Markdown `<img>` 用)。
+/// 绝对路径与相对路径都先 canonicalize 并校验仍在工作区内,防 `..` 和符号链接越界。
+pub fn read_data_url(
+    workdir: &str,
+    wsl_distro: Option<&str>,
+    path: &str,
+) -> Result<String, String> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Err("图片路径为空".into());
     }
-    let p = uploads_root(workdir, wsl_distro)?.join(rel);
-    let data = std::fs::read(&p).map_err(|e| format!("读取失败: {e}"))?;
-    let mime = match p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        // 非图片一律按二进制下发,防 html 等在应用源下渲染执行
-        _ => "application/octet-stream",
+    let root = std::fs::canonicalize(uploads_root(workdir, wsl_distro)?)
+        .map_err(|e| format!("工作区路径无效: {e}"))?;
+    let requested = Path::new(raw);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
     };
-    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&data)))
+    let p = std::fs::canonicalize(&candidate).map_err(|e| format!("读取失败: {e}"))?;
+    if !p.starts_with(&root) {
+        return Err("图片路径超出工作区".into());
+    }
+    let rel = p
+        .strip_prefix(&root)
+        .map_err(|_| "图片路径超出工作区".to_string())?;
+    let in_uploads = rel.starts_with(Path::new(".monkeycode").join("uploads"));
+    let mime = match image_mime(&p) {
+        Some(m) => m,
+        None if in_uploads => "application/octet-stream",
+        None => return Err("仅支持工作区内的 PNG、JPEG、GIF 或 WebP 图片".into()),
+    };
+    let meta = std::fs::metadata(&p).map_err(|e| format!("读取失败: {e}"))?;
+    if !meta.is_file() {
+        return Err("图片路径不是文件".into());
+    }
+    if meta.len() > UPLOAD_MAX_BYTES as u64 {
+        return Err(format!(
+            "文件过大({} 字节,上限 {})",
+            meta.len(),
+            UPLOAD_MAX_BYTES
+        ));
+    }
+    let data = std::fs::read(&p).map_err(|e| format!("读取失败: {e}"))?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&data)
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("monkeycode-uploads-{}-{nonce}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn markdown_image_accepts_relative_and_absolute_paths_inside_workspace() {
+        let tmp = TempDir::new();
+        let image = tmp.0.join("cat.jpg");
+        std::fs::write(&image, [0xff, 0xd8, 0xff, 0xd9]).unwrap();
+        let workdir = tmp.0.to_string_lossy();
+        let expected = "data:image/jpeg;base64,/9j/2Q==";
+        assert_eq!(read_data_url(&workdir, None, "cat.jpg").unwrap(), expected);
+        assert_eq!(
+            read_data_url(&workdir, None, &image.to_string_lossy()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn markdown_image_rejects_outside_workspace_and_non_images() {
+        let parent = TempDir::new();
+        let workspace = parent.0.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let outside = parent.0.join("outside.jpg");
+        std::fs::write(&outside, [0xff, 0xd8]).unwrap();
+        std::fs::write(workspace.join("notes.txt"), b"not an image").unwrap();
+        let workdir = workspace.to_string_lossy();
+        assert!(read_data_url(&workdir, None, &outside.to_string_lossy())
+            .unwrap_err()
+            .contains("超出工作区"));
+        assert!(read_data_url(&workdir, None, "notes.txt")
+            .unwrap_err()
+            .contains("仅支持"));
+    }
+
+    #[test]
+    fn uploaded_non_image_remains_downloadable() {
+        let tmp = TempDir::new();
+        let uploads = tmp.0.join(".monkeycode/uploads");
+        std::fs::create_dir_all(&uploads).unwrap();
+        std::fs::write(uploads.join("notes.txt"), b"hello").unwrap();
+        let url = read_data_url(
+            &tmp.0.to_string_lossy(),
+            None,
+            ".monkeycode/uploads/notes.txt",
+        )
+        .unwrap();
+        assert_eq!(url, "data:application/octet-stream;base64,aGVsbG8=");
+    }
 }

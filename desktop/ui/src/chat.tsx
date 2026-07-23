@@ -24,6 +24,7 @@ import {
 import { Composer, QueuedChip, RunningBar } from "./composer";
 import { IconArchive, IconChevronDown, IconFolder, IconShield, IconX } from "./icons";
 import logoUrl from "./logo.png";
+import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
 import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type Usage } from "./types";
 
@@ -437,6 +438,19 @@ export function ChatView({
   };
 
   const workdir = meta?.workdir ?? "";
+  const revealMarkdownLink = (path: string) => {
+    const rel = workspaceRelativePath(path, workdir);
+    if (rel === null) {
+      session.notify("⚠ 只能打开当前工作区内的文件");
+      return;
+    }
+    session
+      .reveal(rel)
+      .then((r) => {
+        if (r.error) session.notify("⚠ 无法定位文件: " + r.error);
+      })
+      .catch((e) => session.notify("⚠ 无法定位文件: " + (e instanceof Error ? e.message : String(e))));
+  };
   const empty = chat.items.length === 0 && !chat.running;
   const openPerm = [...chat.items].reverse().find((it) => it.kind === "perm" && it.state === "open") as
     | Extract<LogItem, { kind: "perm" }>
@@ -561,7 +575,15 @@ export function ChatView({
           style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
         >
           <div style={{ maxWidth: COL_MAX, margin: "0 auto", padding: "26px 36px 16px", display: "flex", flexDirection: "column", gap: 18 }}>
-            <LogList items={chat.items} onPermAnswer={session.answerPerm} onAskAnswer={session.answerAsk} onOpenChild={onOpenChild} uploadUrl={session.uploadUrl} workdir={workdir} />
+            <LogList
+              items={chat.items}
+              onPermAnswer={session.answerPerm}
+              onAskAnswer={session.answerAsk}
+              onOpenChild={onOpenChild}
+              uploadUrl={session.uploadUrl}
+              onLocalLink={revealMarkdownLink}
+              workdir={workdir}
+            />
           </div>
         </div>
       )}

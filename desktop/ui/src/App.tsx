@@ -29,11 +29,13 @@ import { LogList, MONO } from "./components";
 import { CHANGE_KIND, changeTag, FilesDrawer, type FsAdapter } from "./filesdrawer";
 import { IconFolder, IconX } from "./icons";
 import { inspectMcAccount } from "./mcaccount";
+import { workspaceRelativePath } from "./markdownPaths";
 import { NewTaskView } from "./newtask";
 import { initialChat, reduceBatch, type ChatState } from "./reduce";
 import { groupByProject, Sidebar } from "./sidebar";
 import { SettingsView } from "./settings";
 import TitleBar from "./titlebar";
+import { uploadFileURL } from "./uploads";
 import { lastSessionId, useSession } from "./useSession";
 import type { CloudTask, EngineCrash, HostInfo, LogItem, McConnectionState, ModelInfo, SessionMeta, UpdateStatus } from "./types";
 
@@ -705,19 +707,44 @@ export default function App() {
 function SessionViewer({ id, workdir }: { id: string; workdir?: string }) {
   const [chat, setChat] = useState<ChatState>(initialChat);
   const [status, setStatus] = useState("连接中…");
+  const connRef = useRef<ReturnType<typeof connect> | null>(null);
 
   useEffect(() => {
     const conn = connect(id, {
       onFrames: (batch) => setChat((s) => reduceBatch(s, batch)),
       onStatus: (text) => setStatus(text),
     });
-    return () => conn.close();
+    connRef.current = conn;
+    return () => {
+      connRef.current = null;
+      conn.close();
+    };
   }, [id]);
+
+  const revealLocalLink = (path: string) => {
+    const rel = workspaceRelativePath(path, workdir ?? "");
+    if (rel === null) {
+      setStatus("只能打开当前工作区内的文件");
+      return;
+    }
+    const conn = connRef.current;
+    if (!conn) return;
+    conn
+      .call<{ error?: string }>("repo_reveal", { path: rel })
+      .then((r) => r.error && setStatus("无法定位文件: " + r.error))
+      .catch((e) => setStatus("无法定位文件: " + (e instanceof Error ? e.message : String(e))));
+  };
 
   return (
     <div style={{ overflowY: "auto", flex: 1, paddingRight: 6, display: "flex", flexDirection: "column", gap: 14, lineHeight: 1.8 }}>
       <div style={{ color: "var(--t4)", fontSize: 12 }}>{status}</div>
-      <LogList items={chat.items} onPermAnswer={() => {}} workdir={workdir} />
+      <LogList
+        items={chat.items}
+        onPermAnswer={() => {}}
+        uploadUrl={(path) => uploadFileURL(id, path)}
+        onLocalLink={revealLocalLink}
+        workdir={workdir}
+      />
     </div>
   );
 }

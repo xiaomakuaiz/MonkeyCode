@@ -51,7 +51,7 @@ export interface SessionHandle {
   atts: Attachment[];
   changes: FileChange[] | null;
   changesErr: string;
-  /** 已上传文件的回读 URL(无会话时 undefined) */
+  /** 已上传附件/工作区图片的回读 URL(无会话时 undefined) */
   uploadUrl?: (path: string) => Promise<string>;
 
   /** 打开会话并接上 WS;firstMessage 在连接就绪后自动发出(新建会话的

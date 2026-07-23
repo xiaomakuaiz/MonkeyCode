@@ -6,8 +6,9 @@ import { invoke } from "./ipc";
 export const uploadFile = (sessionId: string, name: string, mediaType: string, dataB64: string) =>
   invoke<{ path: string }>("upload_file", { id: sessionId, name, mediaType, data: dataB64 });
 
-/** 已上传文件的回读 data URL(<img> 直接可用;壳读盘 base64 内联)。
- * 注意:异步(旧版是同步拼 URL);调用方 <img src> 前需 await。 */
+/** 已上传附件或工作区图片的回读 data URL(<img> 直接可用;壳读盘 base64 内联)。
+ * 壳侧只允许上传目录中的附件和工作区内的常见图片。注意:异步,调用方
+ * 设置 <img src> 前需 await。 */
 export function uploadFileURL(sessionId: string, path: string): Promise<string> {
   return invoke<string>("upload_read", { id: sessionId, path });
 }

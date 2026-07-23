@@ -22,6 +22,7 @@ import { marked } from "marked";
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
@@ -41,6 +42,7 @@ import {
   IconTaskRunning,
   IconTrash,
 } from "./icons";
+import { resolveMarkdownResource } from "./markdownPaths";
 import { permAnchors } from "./reduce";
 import { localizedToolTitleText, presentToolCall, toolDisplayName, type ToolTargetKind } from "./toolLabels";
 import type { LogItem, PlanEntry } from "./types";
@@ -83,7 +85,7 @@ export const MONO = '"JetBrains Mono","HarmonyOS Sans SC",ui-monospace,Menlo,Con
 
 /** 正文里的链接一律不走 webview 导航(WKWebView 里点 <a> 会把应用页面跳走):
  * http(s) 交系统浏览器/新标签页,其余协议直接拦下。 */
-function onMarkdownClick(e: ReactMouseEvent<HTMLDivElement>) {
+function onMarkdownClick(e: ReactMouseEvent<HTMLDivElement>, onLocalLink?: (path: string) => void) {
   const target = e.target as HTMLElement;
   const copy = target.closest<HTMLButtonElement>("button.mdcopy");
   if (copy) {
@@ -99,14 +101,90 @@ function onMarkdownClick(e: ReactMouseEvent<HTMLDivElement>) {
   const a = target.closest("a");
   if (!a) return;
   e.preventDefault();
+  const local = a.dataset.mcLocalHref;
+  if (local) {
+    onLocalLink?.(local);
+    return;
+  }
   const href = a.getAttribute("href") || "";
   if (/^https?:/i.test(href)) openExternal(href);
 }
 
+/** 在 inert template 中先标记本地资源,再交给 DOMPurify 净化。
+ * file: 等地址会被净化器移除,所以顺序不能反过来。 */
+function markdownHtml(text: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = marked.parse(text, { async: false }) as string;
+  for (const img of template.content.querySelectorAll<HTMLImageElement>("img[src]")) {
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    const source = resolveMarkdownResource(img.getAttribute("src") || "");
+    if (source.kind === "local") {
+      img.dataset.mcLocalSrc = source.path;
+      img.removeAttribute("src");
+    } else if (source.kind === "url") {
+      img.setAttribute("src", source.src);
+    }
+  }
+  for (const a of template.content.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+    const source = resolveMarkdownResource(a.getAttribute("href") || "");
+    if (source.kind === "local") {
+      a.dataset.mcLocalHref = source.path;
+      a.setAttribute("href", "#");
+    } else if (source.kind === "url") {
+      a.setAttribute("href", source.src);
+    }
+  }
+  return DOMPurify.sanitize(template.innerHTML);
+}
+
 /** agent 正文按 Markdown 渲染(净化后注入);流式期间随批次重渲染 */
-export function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false }) as string), [text]);
-  return <div className="md" onClick={onMarkdownClick} dangerouslySetInnerHTML={{ __html: html }} />;
+export function Markdown({
+  text,
+  localImageUrl,
+  onLocalLink,
+}: {
+  text: string;
+  localImageUrl?: (path: string) => Promise<string>;
+  onLocalLink?: (path: string) => void;
+}) {
+  const html = useMemo(() => markdownHtml(text), [text]);
+  const root = useRef<HTMLDivElement>(null);
+  const cache = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!localImageUrl || !root.current) return;
+    let alive = true;
+    for (const img of root.current.querySelectorAll<HTMLImageElement>("img[data-mc-local-src]")) {
+      const path = img.dataset.mcLocalSrc;
+      if (!path) continue;
+      const cached = cache.current.get(path);
+      if (cached) {
+        img.src = cached;
+        continue;
+      }
+      img.setAttribute("aria-busy", "true");
+      localImageUrl(path).then(
+        (url) => {
+          if (!alive) return;
+          cache.current.set(path, url);
+          img.src = url;
+          img.removeAttribute("aria-busy");
+        },
+        (e) => {
+          if (!alive) return;
+          img.removeAttribute("aria-busy");
+          img.dataset.mcLocalError = "true";
+          img.title = `本地图片加载失败: ${e instanceof Error ? e.message : String(e)}`;
+        },
+      );
+    }
+    return () => {
+      alive = false;
+    };
+    // localImageUrl 随 SessionHandle 渲染生成新闭包;同一条消息只按 HTML 变化重跑。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [html]);
+  return <div ref={root} className="md" onClick={(e) => onMarkdownClick(e, onLocalLink)} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /** 单行内联 markdown(子代理 feed 行:加粗/行内代码等,不产生块级元素,
@@ -370,6 +448,7 @@ export function ToolCard({
   item,
   onOpenChild,
   uploadUrl,
+  onLocalLink,
   workdir,
   perm,
   onPermAnswer,
@@ -378,6 +457,8 @@ export function ToolCard({
   onOpenChild?: (id: string) => void;
   /** 已上传/落盘图片路径 → 可渲染 URL(异步 data URL;不传则不渲染图) */
   uploadUrl?: (path: string) => Promise<string>;
+  /** Markdown 中工作区文件链接的安全打开动作 */
+  onLocalLink?: (path: string) => void;
   workdir?: string;
   /** 锚定到本卡的待决审批(permAnchors 判定):头部 ⏸ + 底部内嵌按钮行,
    * 独立审批大卡随之不渲染;已决后由调用方不再传入,卡片回归常态 */
@@ -488,7 +569,7 @@ export function ToolCard({
       )}
       {summary && (
         <div style={{ marginLeft: 5, borderLeft: "2px solid var(--line)", padding: "2px 0 2px 13px" }}>
-          <Markdown text={summary} />
+          <Markdown text={summary} localImageUrl={uploadUrl} onLocalLink={onLocalLink} />
         </div>
       )}
       {item.status === "run" && item.lastLine && (
@@ -802,11 +883,13 @@ function ItemView({
   onPermAnswer,
   onAskAnswer,
   uploadUrl,
+  onLocalLink,
 }: {
   item: Exclude<LogItem, { kind: "tool" }>;
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
   onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
   uploadUrl?: (path: string) => Promise<string>;
+  onLocalLink?: (path: string) => void;
 }) {
   switch (item.kind) {
     case "user":
@@ -817,7 +900,7 @@ function ItemView({
           className="mc-message-row"
           style={{ position: "relative", maxWidth: "92%", wordBreak: "break-word", animation: "mcin .25s ease" }}
         >
-          <Markdown text={item.text} />
+          <Markdown text={item.text} localImageUrl={uploadUrl} onLocalLink={onLocalLink} />
           <MessageTime timestamp={item.timestamp} align="start" />
         </div>
       );
@@ -1190,6 +1273,7 @@ export function LogList({
   onAskAnswer,
   onOpenChild,
   uploadUrl,
+  onLocalLink,
   workdir,
 }: {
   items: LogItem[];
@@ -1197,8 +1281,10 @@ export function LogList({
   /** 回答 AI 提问卡(云端任务);缺省则提问卡只读 */
   onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
   onOpenChild?: (id: string) => void;
-  /** 已上传图片路径 → 可渲染 URL(气泡缩略图;不传则图片行按纯文本展示) */
+  /** 已上传附件/工作区图片路径 → 可渲染 URL(不传则本地图片不加载) */
   uploadUrl?: (path: string) => Promise<string>;
+  /** Markdown 中工作区文件链接的安全打开动作 */
+  onLocalLink?: (path: string) => void;
   /** 工作区根:工具卡标题里的绝对路径按它收敛为相对路径 */
   workdir?: string;
 }) {
@@ -1227,6 +1313,7 @@ export function LogList({
               item={t}
               onOpenChild={onOpenChild}
               uploadUrl={uploadUrl}
+              onLocalLink={onLocalLink}
               workdir={workdir}
               perm={anchors.get(t.tcId)}
               onPermAnswer={onPermAnswer}
@@ -1239,7 +1326,16 @@ export function LogList({
         i++; // 已嵌进工具卡,独立卡不渲染
         continue;
       }
-      out.push(<ItemView key={i} item={it} onPermAnswer={onPermAnswer} onAskAnswer={onAskAnswer} uploadUrl={uploadUrl} />);
+      out.push(
+        <ItemView
+          key={i}
+          item={it}
+          onPermAnswer={onPermAnswer}
+          onAskAnswer={onAskAnswer}
+          uploadUrl={uploadUrl}
+          onLocalLink={onLocalLink}
+        />,
+      );
       i++;
     }
   }
