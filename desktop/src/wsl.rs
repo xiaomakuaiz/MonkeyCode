@@ -83,17 +83,159 @@ pub fn run_wsl(args: &[String], timeout: Duration) -> Result<String, String> {
 }
 
 /// 枚举 WSL 发行版(设置视图"运行环境"下拉用);未装 WSL/任何失败 → 空。
+/// Windows 直接读取当前用户的 Lxss 注册表，避免为了填一个下拉框启动
+/// wsl.exe（会唤醒 WSL，部分机器还会闪出控制台窗口）。
 pub fn list_distros() -> Vec<String> {
-    if cfg!(not(windows)) && std::env::var("MC_WSL_EXE").is_err() {
-        return Vec::new();
-    }
-    match run_wsl(&["-l".into(), "-q".into()], Duration::from_secs(10)) {
-        Ok(out) => parse_distro_list(&out),
-        Err(e) => {
-            eprintln!("[desktop] 枚举 WSL 发行版失败: {e}");
-            Vec::new()
+    #[cfg(windows)]
+    {
+        match list_distros_from_registry() {
+            Ok(names) => names,
+            Err(e) => {
+                eprintln!("[desktop] 枚举 WSL 发行版失败: {e}");
+                Vec::new()
+            }
         }
     }
+
+    // Linux 开发机保留 MC_WSL_EXE 假脚本入口，用于冒烟 WSL 命令链路。
+    #[cfg(not(windows))]
+    {
+        if std::env::var("MC_WSL_EXE").is_err() {
+            return Vec::new();
+        }
+        match run_wsl(&["-l".into(), "-q".into()], Duration::from_secs(10)) {
+            Ok(out) => parse_distro_list(&out),
+            Err(e) => {
+                eprintln!("[desktop] 枚举 WSL 发行版失败: {e}");
+                Vec::new()
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn list_distros_from_registry() -> Result<Vec<String>, String> {
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
+        KEY_READ, REG_SZ,
+    };
+
+    struct RegKey(HKEY);
+    impl Drop for RegKey {
+        fn drop(&mut self) {
+            // SAFETY:句柄只由本函数成功的 RegOpenKeyExW 创建，并由此 guard
+            // 唯一持有；预定义的 HKEY_CURRENT_USER 不放入 guard。
+            unsafe {
+                let _ = RegCloseKey(self.0);
+            }
+        }
+    }
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn open_key(parent: HKEY, path: &str) -> Result<RegKey, String> {
+        let path = wide(path);
+        let mut key = HKEY::default();
+        // SAFETY:path 是以 NUL 结尾且在调用期间存活的 UTF-16；key 是有效
+        // 输出指针。只请求 KEY_READ，不会写注册表或触发 UAC。
+        let status =
+            unsafe { RegOpenKeyExW(parent, PCWSTR(path.as_ptr()), None, KEY_READ, &mut key) };
+        if status != ERROR_SUCCESS {
+            return Err(format!("打开注册表项失败({})", status.0));
+        }
+        Ok(RegKey(key))
+    }
+
+    fn string_value(key: HKEY, name: &str) -> Result<String, String> {
+        let name = wide(name);
+        let mut value_type = Default::default();
+        let mut byte_len = 0u32;
+        // SAFETY:name 是有效的 NUL 结尾 UTF-16；第一次查询只获取长度和类型。
+        let status = unsafe {
+            RegQueryValueExW(
+                key,
+                PCWSTR(name.as_ptr()),
+                None,
+                Some(&mut value_type),
+                None,
+                Some(&mut byte_len),
+            )
+        };
+        if status != ERROR_SUCCESS || value_type != REG_SZ {
+            return Err(format!("读取注册表字符串长度失败({})", status.0));
+        }
+
+        let mut value = vec![0u16; (byte_len as usize).div_ceil(2).max(1)];
+        // SAFETY:value 以 u16 对齐，容量至少为注册表报告的 byte_len；API
+        // 按字节写入，返回后仍按 UTF-16 解释。
+        let status = unsafe {
+            RegQueryValueExW(
+                key,
+                PCWSTR(name.as_ptr()),
+                None,
+                Some(&mut value_type),
+                Some(value.as_mut_ptr().cast()),
+                Some(&mut byte_len),
+            )
+        };
+        if status != ERROR_SUCCESS || value_type != REG_SZ {
+            return Err(format!("读取注册表字符串失败({})", status.0));
+        }
+        let units = (byte_len as usize / 2).min(value.len());
+        let value = &value[..units];
+        let end = value.iter().position(|&u| u == 0).unwrap_or(value.len());
+        Ok(String::from_utf16_lossy(&value[..end]))
+    }
+
+    let lxss = open_key(
+        HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Lxss",
+    )?;
+    let mut names = Vec::new();
+    let mut index = 0u32;
+    loop {
+        // WSL 的子项名是 GUID；留 256 个 UTF-16 单元也兼容未来扩展。
+        let mut subkey_name = [0u16; 256];
+        let mut name_len = (subkey_name.len() - 1) as u32;
+        // SAFETY:缓冲区和长度指针在调用期间有效；其余可选输出均不需要。
+        let status = unsafe {
+            RegEnumKeyExW(
+                lxss.0,
+                index,
+                Some(PWSTR(subkey_name.as_mut_ptr())),
+                &mut name_len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if status == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if status != ERROR_SUCCESS {
+            return Err(format!("枚举注册表子项失败({})", status.0));
+        }
+        index += 1;
+
+        let subkey_name = String::from_utf16_lossy(&subkey_name[..name_len as usize]);
+        let Ok(subkey) = open_key(lxss.0, &subkey_name) else {
+            continue;
+        };
+        let Ok(name) = string_value(subkey.0, "DistributionName") else {
+            continue;
+        };
+        if !name.is_empty() && !name.starts_with("docker-desktop") {
+            names.push(name);
+        }
+    }
+    names.sort_unstable_by_key(|name| name.to_lowercase());
+    names.dedup();
+    Ok(names)
 }
 
 fn parse_distro_list(out: &str) -> Vec<String> {
