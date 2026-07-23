@@ -57,9 +57,11 @@ jobs:
           git config --global url."https://x-access-token:${OHMYAGENT_REPO_TOKEN}@github.com/".insteadOf "git@github.com:"
           git submodule update --init agent
           cd agent
+          AGENT_VERSION="$(git rev-parse --short HEAD)"
+          echo "ohmyagent version: ${AGENT_VERSION}"
           # Desktop 专用 sidecar 链成 GUI 子系统:stdio 仍走壳提供的管道,
           # 但 Windows 不再给 ohmyagent.exe 分配常驻控制台黑框。
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H=windowsgui" \
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H=windowsgui -X main.Version=${AGENT_VERSION}" \
             -o "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" ./cmd/ohmyagent
           python "$GITHUB_WORKSPACE/desktop/scripts/check-pe-subsystem.py" \
             "$GITHUB_WORKSPACE/desktop/binaries/ohmyagent-x86_64-pc-windows-msvc.exe" gui

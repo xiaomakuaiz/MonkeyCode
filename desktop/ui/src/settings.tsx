@@ -119,10 +119,12 @@ function serversToMcps(servers: Record<string, unknown>): McpEntry[] {
 
 function AboutCard({
   version,
+  engineVersion,
   update,
   onUpdateStatus,
 }: {
   version: string;
+  engineVersion: string;
   update: UpdateStatus | null;
   onUpdateStatus: (s: UpdateStatus) => void;
 }) {
@@ -167,7 +169,10 @@ function AboutCard({
       <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
         <span style={{ fontWeight: 700, fontSize: 13 }}>MonkeyCode</span>
         <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>
-          {found ? `${update?.current ?? version} → ${update?.latest} 可用` : version}
+          应用 {found ? `${update?.current ?? version} → ${update?.latest} 可用` : version}
+        </span>
+        <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }} title={engineVersion}>
+          内核 {engineVersion}
         </span>
       </div>
       <span style={{ flex: 1 }} />
@@ -519,6 +524,7 @@ function MonkeyCodeAccountCard({
 export function SettingsView({
   onClose,
   hostVersion,
+  engineVersion,
   update,
   onUpdateStatus,
   onDirtyChange,
@@ -529,6 +535,7 @@ export function SettingsView({
 }: {
   onClose: () => void;
   hostVersion: string | null;
+  engineVersion: string | null;
   update: UpdateStatus | null;
   onUpdateStatus: (s: UpdateStatus) => void;
   /** 脏状态上报(宿主据此在关闭前确认);卸载时自动报 false */
@@ -1142,7 +1149,7 @@ export function SettingsView({
       )}
       {desktop && (
         <Section label="关于">
-          <AboutCard version={hostVersion ?? "—"} update={update} onUpdateStatus={onUpdateStatus} />
+          <AboutCard version={hostVersion ?? "—"} engineVersion={engineVersion ?? "—"} update={update} onUpdateStatus={onUpdateStatus} />
         </Section>
       )}
     </>

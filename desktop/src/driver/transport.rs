@@ -30,7 +30,7 @@ const FRAME_FLUSH_MS: u64 = 30;
 const SUPPORTED_PROTOCOL_VERSION: &str = "1.0";
 
 /// 传输态锁组:引擎进程与 JSON-RPC 通道的共享状态。
-/// 含锁:child、pending、engine_caps(均 StdMutex);next_id/
+/// 含锁:child、pending、engine_caps、engine_version(均 StdMutex);next_id/
 /// shutdown_grace_ms/stopped 为原子,stdin_tx/journal_tx 为通道端。
 /// 加锁秩序:本组各锁均为点状取放,不与本组或其他锁组的锁嵌套持有。
 pub(super) struct TransportState {
@@ -44,6 +44,8 @@ pub(super) struct TransportState {
     pub(super) journal_tx: mpsc::UnboundedSender<JournalMsg>,
     /// system/ready 宣告的引擎能力(版本握手:缺 switch RPC 时回退 destroy+resume)
     pub(super) engine_caps: StdMutex<HashSet<String>>,
+    /// system/ready.version；发布包由 Desktop 构建链注入 Agent commit hash。
+    pub(super) engine_version: StdMutex<String>,
     /// 引擎宣告的优雅退出预算毫秒(system/ready.shutdownGraceMs,缺省 5000):
     /// stop() 的等待预算取此值 + 3s 余量——必须**严格大于**引擎内部等待,
     /// 否则两边各等 5s 时壳先到期,优雅退出永远被 kill 抢断
@@ -210,6 +212,7 @@ impl OhmyDriver {
                 next_id: AtomicI64::new(1),
                 journal_tx: spawn_journal_writer(data_dir.clone()),
                 engine_caps: StdMutex::new(HashSet::new()),
+                engine_version: StdMutex::new(String::new()),
                 shutdown_grace_ms: AtomicI64::new(5000),
                 stopped: Arc::new(AtomicBool::new(false)),
             },
@@ -299,6 +302,7 @@ impl OhmyDriver {
                         let version =
                             params.get("version").and_then(|v| v.as_str()).unwrap_or("?").to_string();
                         eprintln!("[desktop] ohmyagent 就绪 version={version} caps={}", caps.len());
+                        *inner_r.transport.engine_version.lock().unwrap() = version;
                         *inner_r.transport.engine_caps.lock().unwrap() = caps;
                         // 停止预算协商:记下引擎内部的优雅退出预算,stop()
                         // 的等待取 grace+3s(见 shutdown_grace_ms 字段注释)

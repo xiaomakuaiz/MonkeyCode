@@ -420,6 +420,7 @@ fn bare_inner(tag: &str) -> Arc<Inner> {
             next_id: AtomicI64::new(1),
             journal_tx: spawn_journal_writer(data_dir.clone()),
             engine_caps: StdMutex::new(HashSet::new()),
+            engine_version: StdMutex::new("agent-test-commit".into()),
             shutdown_grace_ms: AtomicI64::new(5000),
             stopped: Arc::new(AtomicBool::new(false)),
         },
@@ -526,6 +527,12 @@ fn public_caps_follow_the_ready_handshake() {
     assert!(caps.usage_update);
     assert!(!caps.perm_remember);
     assert!(caps.attachments);
+}
+
+#[test]
+fn driver_exposes_the_ready_version() {
+    let driver = OhmyDriver(bare_inner("version"));
+    assert_eq!(driver.version(), "agent-test-commit");
 }
 
 #[test]

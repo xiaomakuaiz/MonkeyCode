@@ -35,7 +35,7 @@ import { groupByProject, Sidebar } from "./sidebar";
 import { SettingsView } from "./settings";
 import TitleBar from "./titlebar";
 import { lastSessionId, useSession } from "./useSession";
-import type { CloudTask, EngineCrash, LogItem, McConnectionState, ModelInfo, SessionMeta, UpdateStatus } from "./types";
+import type { CloudTask, EngineCrash, HostInfo, LogItem, McConnectionState, ModelInfo, SessionMeta, UpdateStatus } from "./types";
 
 /** 内核与页面同机(serve 仅绑 loopback),浏览器 UA 即宿主平台 */
 const IS_MAC = /Mac/.test(navigator.userAgent);
@@ -49,7 +49,7 @@ export default function App() {
     setView(session.id ? "session" : "new");
   };
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [hostVersion, setHostVersion] = useState<string | null>(null);
+  const [hostInfo, setHostInfo] = useState<HostInfo | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   // 侧栏更新横幅:下载安装并重启(成功不返回;失败解除忙态并外显)
@@ -312,7 +312,7 @@ export default function App() {
       .catch((e) => session.notify("无法连接服务: " + (e instanceof Error ? e.message : e)));
     let updateTimer: ReturnType<typeof setInterval> | undefined;
     if (inDesktopShell()) {
-      void getHostInfo().then((info) => setHostVersion(info?.version ?? null));
+      void getHostInfo().then(setHostInfo);
       const silentCheck = () =>
         updateCheck()
           .then(setUpdate)
@@ -547,7 +547,8 @@ export default function App() {
             onDirtyChange={(d) => {
               settingsDirty.current = d;
             }}
-            hostVersion={hostVersion}
+            hostVersion={hostInfo?.version ?? null}
+            engineVersion={hostInfo?.engine_version ?? null}
             update={update}
             onUpdateStatus={setUpdate}
             mcConnection={mcConnection}

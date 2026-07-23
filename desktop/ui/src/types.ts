@@ -246,6 +246,12 @@ export interface EngineCaps {
   attachments: boolean;
 }
 
+/** 设置页“关于”展示的宿主与内核版本。 */
+export interface HostInfo {
+  version: string;
+  engine_version: string | null;
+}
+
 /** 引擎崩溃信息(壳的进程监视发现非正常退出时推送)。 */
 export interface EngineCrash {
   engine: string;

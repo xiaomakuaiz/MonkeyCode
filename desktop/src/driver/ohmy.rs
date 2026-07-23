@@ -57,6 +57,9 @@ pub struct OhmyDriver(pub(super) Arc<Inner>);
 impl OhmyDriver {
     /// system/ready 的增量能力是引擎/壳协商的唯一事实来源。
     pub fn has_capability(&self, capability: &str) -> bool { self.0.has_cap(capability) }
+
+    /// system/ready 宣告的内核版本；发布产物为 Agent commit hash。
+    pub fn version(&self) -> String { self.0.transport.engine_version.lock().unwrap().clone() }
 }
 
 /// 驱动共享状态。锁字段按职责归为三个锁组(各组文档注释写明含哪些锁

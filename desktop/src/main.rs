@@ -222,10 +222,14 @@ fn take_ui_intent(app: AppHandle) -> Option<String> {
     app.state::<UiIntent>().0.lock().unwrap().take()
 }
 
-/// 宿主信息(设置视图"关于"卡片展示)。
+/// 宿主与内核信息(设置视图"关于"卡片展示)。
 #[tauri::command]
-fn host_info(app: AppHandle) -> serde_json::Value {
-    serde_json::json!({ "version": display_version(&app.package_info().version.to_string()) })
+fn host_info(app: AppHandle, host: tauri::State<'_, DriverHost>) -> serde_json::Value {
+    let engine_version = host.get().ok().map(|engine| engine.version());
+    serde_json::json!({
+        "version": display_version(&app.package_info().version.to_string()),
+        "engine_version": engine_version,
+    })
 }
 
 /// 无头探针的备用上报通道(仅 MC_DESKTOP_IPC_PROBE 下注册使用):

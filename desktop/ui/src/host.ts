@@ -2,7 +2,7 @@
 // 应用更新、宿主事件/意图、外链打开。IPC 原语在 ipc.ts,载荷纯数据类型
 // 在 types.ts。
 import { invoke, listen, tauri } from "./ipc";
-import type { BrowserExtStatus, HostConfig, UpdateStatus } from "./types";
+import type { BrowserExtStatus, HostConfig, HostInfo, UpdateStatus } from "./types";
 
 // ==================== 浏览器扩展桥(壳内 browser/ 模块) ====================
 
@@ -125,11 +125,11 @@ export async function takeUiIntent(): Promise<string | null> {
   }
 }
 
-/** 宿主信息(应用版本等);非壳环境返回 null。 */
-export async function getHostInfo(): Promise<{ version: string } | null> {
+/** 宿主与内核信息(应用版本、Agent commit hash);非壳环境返回 null。 */
+export async function getHostInfo(): Promise<HostInfo | null> {
   if (!tauri()?.core?.invoke) return null;
   try {
-    return await invoke<{ version: string }>("host_info");
+    return await invoke<HostInfo>("host_info");
   } catch {
     return null;
   }

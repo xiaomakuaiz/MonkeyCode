@@ -15,14 +15,16 @@
 
 # 缺省 = agent/ submodule;未初始化时下方守卫会给出可执行的报错
 OHMYAGENT_SRC ?= $(abspath $(CURDIR)/../agent)
+# 写入 Agent 的 --version/system/ready，始终对应实际参与构建的 checkout。
+AGENT_VERSION ?= $(shell git -C "$(OHMYAGENT_SRC)" rev-parse --short HEAD 2>/dev/null)
 BIN_DIR     := binaries
 SIDECAR_ARM := $(BIN_DIR)/ohmyagent-aarch64-apple-darwin
 SIDECAR_X64 := $(BIN_DIR)/ohmyagent-x86_64-apple-darwin
 SIDECAR_UNI := $(BIN_DIR)/ohmyagent-universal-apple-darwin
 SIDECAR_WIN := $(BIN_DIR)/ohmyagent-x86_64-pc-windows-msvc.exe
 TAURI       := npx --yes @tauri-apps/cli@^2
-GOFLAGS     := -trimpath -ldflags "-s -w"
-GOFLAGS_WIN := -trimpath -ldflags "-s -w -H=windowsgui"
+GOFLAGS     := -trimpath -ldflags "-s -w -X main.Version=$(AGENT_VERSION)"
+GOFLAGS_WIN := -trimpath -ldflags "-s -w -H=windowsgui -X main.Version=$(AGENT_VERSION)"
 
 .PHONY: dev run macos macos-release set-release-version windows windows-release check-signing check-macos check-windows check-ohmy-src engine-universal engine-windows browser-extension icons clean
 
@@ -80,6 +82,8 @@ check-ohmy-src:
 		{ echo "错误: 引擎源码不存在($(OHMYAGENT_SRC))。初始化 submodule:"; \
 		  echo "  git submodule update --init agent"; \
 		  echo "或指向别处检出: export OHMYAGENT_SRC=/path/to/ohmyagent"; exit 1; }
+	@[ -n "$(AGENT_VERSION)" ] || \
+		{ echo "错误: 无法读取引擎提交哈希($(OHMYAGENT_SRC))"; exit 1; }
 
 # 双架构编译引擎 sidecar。universal 打包会按架构各编译一遍,每遍的
 # tauri_build 都要求存在 <name>-<本架构 triple> 文件,最终 bundle 阶段
