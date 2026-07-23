@@ -22,7 +22,7 @@ import {
   type MenuState,
 } from "./components";
 import { Composer, QueuedChip, RunningBar } from "./composer";
-import { IconArchive, IconChevronDown, IconFolder, IconShield, IconX } from "./icons";
+import { IconArchive, IconCheck, IconChevronDown, IconFolder, IconShield, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
@@ -137,6 +137,81 @@ function PermPill({ yolo, onToggle }: { yolo: boolean; onToggle: () => void }) {
   );
 }
 
+/** 模型菜单的共享选项行:本地/云端统一为整行 hover + 当前项勾选。 */
+export function ModelMenuItem({
+  label,
+  selected,
+  hint,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  hint?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="hv menu-item"
+      aria-current={selected ? "true" : undefined}
+      onClick={onClick}
+      style={{
+        width: "100%",
+        minWidth: 0,
+        padding: "7px 10px",
+        color: selected ? "var(--acc)" : "var(--t2)",
+        fontWeight: selected ? 600 : 400,
+      }}
+    >
+      <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{label}</span>
+      {hint && <span style={{ flex: "none", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>{hint}</span>}
+      {selected && <IconCheck size={11} color="var(--acc)" strokeWidth={1.6} />}
+    </button>
+  );
+}
+
+/** 模型选择触发按钮:新建页、本地会话、云端会话共用同一几何与开合态。 */
+export function ModelPickerTrigger({
+  label,
+  open,
+  disabled,
+  title,
+  onClick,
+}: {
+  label: string;
+  open: boolean;
+  disabled?: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={disabled ? undefined : "hv"}
+      disabled={disabled}
+      title={title}
+      onClick={onClick}
+      style={{
+        height: 24,
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "0 7px",
+        border: "none",
+        borderRadius: 6,
+        background: open ? "var(--hov)" : "transparent",
+        fontSize: 12,
+        color: disabled ? "var(--t5)" : "var(--t3)",
+        cursor: disabled ? "default" : "pointer",
+        fontWeight: 500,
+        maxWidth: 220,
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <span className="ellipsis">{label || "模型"}</span>
+      <IconChevronDown style={{ marginTop: 1 }} />
+    </button>
+  );
+}
+
 /** 模型选择按钮 + 上弹菜单(按来源分组;模型多时带过滤框) */
 export function ModelPicker({
   models,
@@ -170,36 +245,21 @@ export function ModelPicker({
 
   return (
     <div style={{ position: "relative", flex: "none" }}>
-      <button
-        className={disabled ? undefined : "hv"}
+      <ModelPickerTrigger
+        label={current}
+        open={open}
+        disabled={disabled}
         title={disabled ? "轮次执行中,结束后可切换" : "切换模型(下一轮生效)"}
         onClick={() => {
           if (disabled) return;
           setFilter("");
           setOpen(!open);
         }}
-        style={{
-          height: 24,
-          display: "flex",
-          alignItems: "center",
-          gap: 4,
-          padding: "0 7px",
-          border: "none",
-          borderRadius: 6,
-          background: "transparent",
-          fontSize: 12,
-          color: disabled ? "var(--t5)" : "var(--t3)",
-          cursor: disabled ? "default" : "pointer",
-          fontWeight: 500,
-        }}
-      >
-        {current || "模型"}
-        <IconChevronDown style={{ marginTop: 1 }} />
-      </button>
+      />
       {open && (
         <>
           <div className="backdrop" onClick={() => setOpen(false)} />
-          <div className="pop" style={{ position: "absolute", bottom: 30, right: 0, minWidth: 220 }}>
+          <div className="pop model-menu" style={{ position: "absolute", bottom: 30, right: 0 }}>
             {showFilter && (
               <div style={{ padding: "6px 8px 4px" }}>
                 <input
@@ -234,24 +294,16 @@ export function ModelPicker({
                     </div>
                   )}
                   {g.items.map((m) => (
-                    <button
+                    <ModelMenuItem
                       key={m.name}
-                      className="hv menu-item"
+                      label={m.name}
+                      selected={m.name === current}
+                      hint={m.default ? "默认" : undefined}
                       onClick={() => {
                         setOpen(false);
                         onPick(m.name);
                       }}
-                      style={{
-                        padding: "7px 10px",
-                        color: m.name === current ? "var(--acc)" : "var(--t2)",
-                        fontWeight: m.name === current ? 600 : 400,
-                      }}
-                    >
-                      {m.name}
-                      <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>
-                        {m.default ? "默认" : ""}
-                      </span>
-                    </button>
+                    />
                   ))}
                 </div>
               ))}

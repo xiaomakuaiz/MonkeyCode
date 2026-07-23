@@ -5,7 +5,7 @@
 // 状态随视图挂载与卸载,App 只注入数据(models/recentDirs/lastDir)与编排回调
 // (onCreated/onCloudCreated)及外部预填(prefill)。
 import { useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent } from "react";
-import { basename, isImeEnter, markImeEnd, ModelPicker } from "./chat";
+import { basename, isImeEnter, markImeEnd, ModelMenuItem, ModelPicker, ModelPickerTrigger } from "./chat";
 import { MONO } from "./components";
 import { mcTaskCreate, mcTaskOptions } from "./cloudapi";
 import { inDesktopShell, pickDirectory, workdirPickBase } from "./host";
@@ -587,24 +587,26 @@ export function NewTaskView({
             </span>
             {mode === "cloud" ? (
               <span style={{ position: "relative", flex: "none" }}>
-                <button
-                  className="hv"
+                <ModelPickerTrigger
+                  label={cloudModelName}
+                  open={cloudModelOpen}
                   title="云端模型(按订阅档位)"
                   onClick={() => setCloudModelOpen(!cloudModelOpen)}
-                  style={{ display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 8px", border: "none", borderRadius: 7, background: cloudModelOpen ? "var(--hov)" : "transparent", cursor: "pointer", fontSize: 11.5, color: "var(--t3)", maxWidth: 200 }}
-                >
-                  <span className="ellipsis">{cloudModelName}</span>
-                  <IconChevronDown color="var(--t5)" />
-                </button>
+                />
                 {cloudModelOpen && (
                   <>
                     <div className="backdrop" onClick={() => setCloudModelOpen(false)} />
-                    <div className="pop" style={{ position: "absolute", bottom: 30, left: 0, borderRadius: 10, minWidth: 210, maxHeight: 280, overflowY: "auto" }}>
+                    <div className="pop model-menu" style={{ position: "absolute", bottom: 30, left: 0, maxHeight: 320, overflowY: "auto" }}>
                       {cloudModels.map((m) => (
-                        <button key={m.id} className="hv menu-item" onClick={() => { setCloudModelId(m.id!); setCloudModelOpen(false); }} style={{ gap: 8 }}>
-                          <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t2)" }}>{cloudModelLabel(m)}</span>
-                          {m.id === cloudModelId && <IconCheck size={11} color="var(--acc)" strokeWidth={1.6} />}
-                        </button>
+                        <ModelMenuItem
+                          key={m.id}
+                          label={cloudModelLabel(m)}
+                          selected={m.id === cloudModelId}
+                          onClick={() => {
+                            setCloudModelId(m.id!);
+                            setCloudModelOpen(false);
+                          }}
+                        />
                       ))}
                       {cloudModels.length === 0 && (
                         <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>{cloudOpts ? "没有可用的云端模型" : "加载中…"}</span>

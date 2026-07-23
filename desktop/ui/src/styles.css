@@ -151,6 +151,8 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   text-align: left;
   white-space: nowrap;
 }
+/* 本地/云端模型下拉共用尺寸；具体定位由各 composer 给出。 */
+.model-menu { min-width: 220px; border-radius: 9px; }
 /* 白卡底座(工具/计划卡 padding 11px 14px 在使用处;设置卡用 .card-lg) */
 .card {
   background: var(--card);

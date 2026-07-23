@@ -8,10 +8,10 @@ import type { CloudTask, CloudTaskDetail } from "./types";
 import { cloudModelLabel } from "./cloud";
 import { CloudFilesDrawer } from "./cloudfiles";
 import { CloudTerminal } from "./cloudterm";
-import { COL_MAX } from "./chat";
+import { COL_MAX, ModelMenuItem, ModelPickerTrigger } from "./chat";
 import { HeaderFilesButton, HeaderMenu, LogList, TaskPanel, ViewHeader, type MenuState } from "./components";
 import { Composer, QueuedChip, RunningBar } from "./composer";
-import { IconCheck, IconChevronDown, IconCloud, IconGlobe, IconMonitor, IconStop, IconX } from "./icons";
+import { IconCloud, IconGlobe, IconMonitor, IconStop, IconX } from "./icons";
 import { useCloudTask } from "./useCloudTask";
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {
@@ -308,47 +308,27 @@ export function CloudTaskView({
                 <span style={{ flex: 1 }} />
                 {/* 云端模型切换(经控制流 switch_model,保留会话上下文;执行中禁用) */}
                 <span style={{ position: "relative", flex: "none" }}>
-                  <button
-                    className="hv"
+                  <ModelPickerTrigger
+                    label={h.switching ? "切换中…" : cloudModelLabel(meta?.model)}
+                    open={modelOpen}
                     title={running ? "执行中不可切换模型" : "切换云端模型"}
                     disabled={running || h.switching}
                     onClick={openModelPicker}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                      height: 24,
-                      padding: "0 8px",
-                      border: "none",
-                      borderRadius: 7,
-                      background: modelOpen ? "var(--hov)" : "transparent",
-                      cursor: running || h.switching ? "default" : "pointer",
-                      fontSize: 11.5,
-                      color: "var(--t3)",
-                      maxWidth: 200,
-                      opacity: running || h.switching ? 0.5 : 1,
-                    }}
-                  >
-                    <span className="ellipsis">{h.switching ? "切换中…" : cloudModelLabel(meta?.model) || "模型"}</span>
-                    <IconChevronDown color="var(--t5)" />
-                  </button>
+                  />
                   {modelOpen && (
                     <>
                       <div className="backdrop" onClick={() => setModelOpen(false)} />
-                      <div className="pop" style={{ position: "absolute", bottom: 30, right: 0, borderRadius: 10, minWidth: 210, maxHeight: 280, overflowY: "auto" }}>
+                      <div className="pop model-menu" style={{ position: "absolute", bottom: 30, right: 0, maxHeight: 320, overflowY: "auto" }}>
                         {(h.cloudModels ?? []).map((m) => (
-                          <button
+                          <ModelMenuItem
                             key={m.id}
-                            className="hv menu-item"
+                            label={cloudModelLabel(m)}
+                            selected={m.id === meta?.model?.id}
                             onClick={() => {
                               setModelOpen(false);
                               void h.switchModel(m.id!);
                             }}
-                            style={{ gap: 8 }}
-                          >
-                            <span className="ellipsis" style={{ flex: 1, fontSize: 12.5, color: "var(--t2)" }}>{cloudModelLabel(m)}</span>
-                            {m.id === meta?.model?.id && <IconCheck size={11} color="var(--acc)" strokeWidth={1.6} />}
-                          </button>
+                          />
                         ))}
                         {h.cloudModels === null && (
                           <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>加载中…</span>
