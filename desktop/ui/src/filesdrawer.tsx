@@ -519,7 +519,6 @@ export function FilesDrawer({
                 className={splitDragging ? "resize-handle-h dragging" : "resize-handle-h"}
                 title="拖动调整列表/预览高度"
                 onMouseDown={startSplitResize}
-                style={{ margin: "-5px 0 0" }}
               />
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px 9px 20px", borderTop: "1px solid var(--line2)", background: "var(--bg)", flex: "none", whiteSpace: "nowrap", overflow: "hidden" }}>

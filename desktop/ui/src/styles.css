@@ -280,20 +280,53 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .hl .hljs-strong { font-weight: 700; }
 .hl .hljs-deletion { color: var(--delT); background: var(--delBg); }
 
-/* 抽屉左缘拖拽把手:悬停/拖动中显示强调色细条 */
+/* 抽屉宽度与预览高度都只在分隔线中点显示一个短拖动柄。 */
 .resize-handle {
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 5px;
+  left: -6px;
+  top: 50%;
+  width: 12px;
+  height: 36px;
+  transform: translateY(-50%);
   cursor: col-resize;
-  z-index: 2;
+  z-index: 3;
 }
-.resize-handle:hover, .resize-handle.dragging { background: var(--accBd); }
-/* 列表/预览分隔的横向拖拽把手 */
-.resize-handle-h { height: 5px; flex: none; cursor: row-resize; }
-.resize-handle-h:hover, .resize-handle-h.dragging { background: var(--accBd); }
+.resize-handle::after,
+.resize-handle-h::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 999px;
+  background: var(--t5);
+  opacity: 0.55;
+  transform: translate(-50%, -50%);
+}
+.resize-handle::after {
+  width: 3px;
+  height: 22px;
+}
+.resize-handle-h {
+  position: relative;
+  z-index: 3;
+  height: 12px;
+  width: 36px;
+  margin: -6px 0;
+  align-self: center;
+  flex: none;
+  cursor: row-resize;
+}
+.resize-handle-h::after {
+  width: 22px;
+  height: 3px;
+}
+.resize-handle:hover::after,
+.resize-handle.dragging::after,
+.resize-handle-h:hover::after,
+.resize-handle-h.dragging::after {
+  background: var(--acc);
+  opacity: 1;
+}
 
 /* markdown 渲染产物(无法内联) */
 .md { font-size: 13.5px; line-height: 1.8; color: var(--t2); }
