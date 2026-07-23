@@ -1,4 +1,5 @@
-// 浏览器会话现场:每个 MCP protocol session 独立持有当前标签页、ref 表、事件旁白
+// 浏览器会话现场:每个 MCP protocol + Agent session context 独立持有当前
+// 标签页、ref 表、事件旁白
 // 与 CDP 交互原语；BrowserSessions 负责 tab → owner 事件路由。
 // 契约对齐 agent/internal/browser/session.go(语义逐字移植)。
 //
@@ -33,9 +34,9 @@ use super::refs::{err_ref_stale, RefTable};
 #[derive(Clone)]
 pub struct BrowserSession(pub(crate) Arc<SessInner>);
 
-/// 进程内浏览器现场注册表。每条 MCP protocol session 取一个
-/// BrowserSession；不同 owner 可并行操作各自标签页，同一 owner 内由 MCP
-/// 层串行，避免 ref/current-tab 状态互踩。
+/// 进程内浏览器现场注册表。每个 MCP protocol + Agent session context 取
+/// 一个 BrowserSession；不同 owner 可并行操作各自标签页，同一 owner 内由
+/// MCP 层串行，避免 ref/current-tab 状态互踩。
 #[derive(Clone)]
 pub struct BrowserSessions(Arc<BrowserSessionsInner>);
 
@@ -203,7 +204,7 @@ impl SessState {
 
 impl BrowserSession {
     /// 单现场兼容构造器(测试/独立使用)。生产 MCP 复用一个
-    /// BrowserSessions，并按 MCP 协议会话创建 owner。
+    /// BrowserSessions，并按 MCP 协议会话/Agent session 创建 owner。
     #[cfg(test)]
     pub fn new(bridge: ExtBridge) -> Self {
         BrowserSessions::new(bridge).get_or_create("default")

@@ -738,9 +738,19 @@ impl OhmyDriver {
         Ok(())
     }
 
-    /// MCP 标准工具调用不带 cwd；仅在唯一 owner 可确定时返回截图落盘路径。
-    /// 多 owner 时只跳过落盘，浏览器现场仍由 MCP session 隔离并正常并发，
-    /// 绝不因工作区不明确而拒绝工具调用。
+    /// 按 Agent/壳 session id 精确查工作区。新 MCP 调用同时显式携带
+    /// work_dir；本方法用于兼容元数据缺失或旧 Agent。
+    pub fn browser_workdir_for(&self, id: &str) -> Option<String> {
+        let sessions = self.0.sess.sessions.lock().unwrap();
+        sessions
+            .get(id)
+            .or_else(|| sessions.values().find(|session| session.engine_id == id))
+            .map(|session| session.workdir.clone())
+            .filter(|workdir| !workdir.is_empty())
+    }
+
+    /// 旧 Agent 没有 MCP 调用元数据时的截图落盘兜底：仅在唯一 owner 可
+    /// 确定时返回路径。多 owner 时只跳过落盘，浏览器现场仍正常并发。
     pub fn single_running_workdir(&self) -> Option<String> {
         // 显式后台 Agent 只转发 tool/error 心跳，纯文本任务可能从未物化
         // child SessionState；background_agents 才是其存活/父归属真值。

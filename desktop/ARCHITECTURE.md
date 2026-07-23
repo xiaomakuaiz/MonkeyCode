@@ -144,14 +144,13 @@ Op/Ev/错误码、proto:1、20s ping。
 - 9 个 browser_* 工具经壳内 MCP streamable-http server 暴露给引擎
   (Bearer 鉴权;手写最小面:POST json 应答/通知 202/GET 405)。
 - **会话隔离并发**:每条 MCP transport 经 `initialize` 取得独立
-  `Mcp-Session-Id` 并拥有独立 `BrowserSession`。同一 transport 内串行保护
-  current tab/ref 表，不同 transport 可并行进入扩展桥；实现只依赖标准 MCP
-  会话头，不要求 Agent 私有 `_meta`。当前 Agent 的子任务共享父 transport，
-  因而共享父浏览器现场并按序执行；不同顶层任务各自建 transport，可并行。
+  `Mcp-Session-Id`；Agent 的 `tools/call._meta` 再携带实际 `session_id` 与
+  `work_dir`。两级 key 为父任务和共享 transport 的子 Agent 分配独立
+  `BrowserSession`。同一现场串行保护 current tab/ref，不同现场可并行。
   `tabId → owner` 路由保证事件只投给所属任务；普通选择不能抢占其他任务的
-  tab，只有用户显式 handoff 才转交。MCP 标准调用不含 cwd：唯一活跃
-  workspace 可确定时落截图；无法确定时只跳过本地副本、不拒绝操作，图片
-  仍作为 MCP image 返回模型。
+  tab，只有用户显式 handoff 才转交。截图按 `work_dir` 精确落盘；旧 Agent
+  缺少元数据时回退唯一活跃 workspace，无法确定只跳过本地副本、不拒绝
+  操作，图片仍作为 MCP image 返回模型。
 - 错误码→中文可行动文案是产品契约(模型行为依赖),改动需过 e2e 断言。
 
 ## 引擎监督

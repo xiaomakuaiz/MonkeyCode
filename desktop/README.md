@@ -46,6 +46,6 @@ make windows          # NSIS 安装包(在 Windows 上执行;或走 CI)
 
 `../browser-extension/` 随包分发(设置页引导加载);扩展经
 `ws://127.0.0.1:{7440-7449}/ext` 连壳内桥,配对码在设置页展示。
-browser_* 工具经壳内 MCP server 暴露给引擎；每条 MCP transport 有独立
-浏览器现场和标签页归属，不同 transport 可并行，同一 transport 内按调用
-顺序执行。该隔离只依赖标准 `Mcp-Session-Id`，不修改 Agent。
+browser_* 工具经壳内 MCP server 暴露给引擎；`Mcp-Session-Id` 与 Agent
+调用 `_meta.session_id` 共同标识浏览器现场，父任务/子 Agent 可并行且标签页
+归属隔离，同一现场内按调用顺序执行。

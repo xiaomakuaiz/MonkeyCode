@@ -12,9 +12,9 @@
 //   mcp.rs       MCP streamable-http server:配对后把工具暴露给 ohmyagent
 //                (Bearer 鉴权,URL+token 经 mcp.json 内置条目物化下发)
 //
-// MCP initialize 为每条客户端 transport 分配协议会话；每个 protocol
-// session 各自拥有 BrowserSession，允许不同任务并行，同时隔离 current
-// tab/ref 表。只依赖标准 Mcp-Session-Id，不要求 Agent 私有扩展。
+// MCP initialize 为每条客户端 transport 分配协议会话；Agent 在 tools/call
+// `_meta` 携带实际 session_id/work_dir。两级 key 各自拥有 BrowserSession，
+// 允许父任务与子 Agent 并行，同时隔离 current tab/ref 与截图落盘路径。
 
 pub mod bridge;
 pub mod cdp;
@@ -70,17 +70,26 @@ pub fn init(app: &AppHandle) {
     };
     let b = bridge::ExtBridge::new(7440, &data_dir);
     let mcp_sessions = mcp::McpSessions::new(b.clone());
-    // MCP 标准请求不携带调用方 cwd。唯一活跃工作区可确定时为截图落盘；
-    // 多任务并发时只跳过本地副本，图片仍通过 MCP 返回，不阻断浏览器操作。
+    // 新 Agent 直接在 tools/call._meta 携带实际 work_dir；兼容旧 Agent 时
+    // 回退 session id/唯一活跃工作区。无法确定只跳过落盘，不阻断操作。
     let app2 = app.clone();
-    let wd: mcp::WorkdirFn = std::sync::Arc::new(move || {
+    let wd: mcp::WorkdirFn = std::sync::Arc::new(move |scope| {
         let Some(host) = app2.try_state::<crate::driver::DriverHost>() else {
             return Err("桌面驱动尚未初始化，无法确定浏览器操作归属".into());
         };
         let driver = host
             .get()
             .map_err(|e| format!("无法确定浏览器操作归属：{e}"))?;
-        Ok(driver.single_running_workdir())
+        Ok(scope
+            .work_dir
+            .clone()
+            .or_else(|| {
+                scope
+                    .session_id
+                    .as_deref()
+                    .and_then(|id| driver.browser_workdir_for(id))
+            })
+            .or_else(|| driver.single_running_workdir()))
     });
     match mcp::serve(mcp_sessions.clone(), wd) {
         Ok((url, token)) => {

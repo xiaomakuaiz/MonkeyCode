@@ -194,13 +194,13 @@ async fn mcp_smoke_initialize_list_call() {
     let b = ExtBridge::new(27460, &dir);
     // 不 spawn 桥监听:MCP 面不依赖扩展在线
     let sessions = mcp::McpSessions::new(b);
-    let workdir_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let workdir_calls2 = workdir_calls.clone();
+    let scopes: std::sync::Arc<std::sync::Mutex<Vec<mcp::CallScope>>> = Default::default();
+    let scopes2 = scopes.clone();
     let (url, token) = mcp::serve(
         sessions,
-        std::sync::Arc::new(move || {
-            workdir_calls2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(None)
+        std::sync::Arc::new(move |scope| {
+            scopes2.lock().unwrap().push(scope.clone());
+            Ok(scope.work_dir.clone())
         }),
     )
     .expect("MCP 启动");
@@ -295,11 +295,25 @@ async fn mcp_smoke_initialize_list_call() {
     .await;
     assert!(resp.contains(r#""isError":true"#), "应 isError: {resp}");
     assert!(resp.contains("当前没有活动标签页"), "缺可行动文案: {resp}");
-    assert_eq!(
-        workdir_calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "标准 tools/call 应经过 Desktop 工作区解析"
-    );
+
+    // 新 Agent 发送顶层 _meta.session_id/work_dir；Desktop 必须按实际字段
+    // 消费，不能沿用旧草案里的 namespace 或 cwd 拼写。
+    let resp = post(
+        json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": { "name": "browser_snapshot", "arguments": {}, "_meta": {
+                "session_id": "agent-child", "work_dir": "/workspace/child"
+            } } }),
+        Some(token.clone()),
+        Some(session.clone()),
+    )
+    .await;
+    assert!(resp.contains(r#""isError":true"#));
+    {
+        let seen = scopes.lock().unwrap();
+        let scope = seen.last().expect("workdir resolver 应收到 scope");
+        assert_eq!(scope.session_id.as_deref(), Some("agent-child"));
+        assert_eq!(scope.work_dir.as_deref(), Some("/workspace/child"));
+    }
 
     // 通知 → 202
     let resp = post(
@@ -332,10 +346,10 @@ async fn mcp_smoke_initialize_list_call() {
     assert!(resp.starts_with("HTTP/1.1 404"), "已删除会话必须失效: {resp}");
 }
 
-/// 不同 MCP transport 必须真正并行，不能只做到状态分表后仍被一个全局
-/// mutex 串行。隔离只依赖标准 Mcp-Session-Id，不要求 Agent 私有元数据。
+/// 父/子 Agent 共用一个 MCP transport；不同 _meta.session_id 必须真正并行，
+/// 不能只做到状态分表后仍被 transport 级全局 mutex 串行。
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_protocol_sessions_execute_in_parallel() {
+async fn mcp_agent_contexts_execute_in_parallel() {
     let dir = tmp_dir("mcp-parallel");
     let sessions = mcp::McpSessions::new(ExtBridge::new(27465, &dir));
     let gate = std::sync::Arc::new((
@@ -347,7 +361,7 @@ async fn mcp_protocol_sessions_execute_in_parallel() {
     let timed_out2 = timed_out.clone();
     let (url, token) = mcp::serve(
         sessions,
-        std::sync::Arc::new(move || {
+        std::sync::Arc::new(move |_| {
             let (lock, ready) = &*gate2;
             let mut entered = lock.lock().unwrap();
             *entered += 1;
@@ -382,59 +396,47 @@ async fn mcp_protocol_sessions_execute_in_parallel() {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    let init_one = post(
+    let init = post(
         &addr,
         &token,
         None,
         json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
     )
     .await;
-    let session_one = init_one
+    let session = init
         .lines()
         .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
         .map(str::trim)
         .expect("initialize 应返回 session id")
         .to_string();
-    let init_two = post(
-        &addr,
-        &token,
-        None,
-        json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {} }),
-    )
-    .await;
-    let session_two = init_two
-        .lines()
-        .find_map(|line| line.strip_prefix("Mcp-Session-Id: "))
-        .map(str::trim)
-        .expect("第二个 initialize 应返回 session id")
-        .to_string();
-    assert_ne!(session_one, session_two);
     let one = post(
         &addr,
         &token,
-        Some(&session_one),
-        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-            "name": "browser_snapshot", "arguments": {}
+        Some(&session),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "browser_snapshot", "arguments": {},
+            "_meta": { "session_id": "agent-one", "work_dir": "/workspace/one" }
         } }),
     );
     let two = post(
         &addr,
         &token,
-        Some(&session_two),
-        json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
-            "name": "browser_snapshot", "arguments": {}
+        Some(&session),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "browser_snapshot", "arguments": {},
+            "_meta": { "session_id": "agent-two", "work_dir": "/workspace/two" }
         } }),
     );
     let (one, two) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(one, two)
     })
     .await
-    .expect("不同 MCP protocol session 不应互相阻塞");
+    .expect("不同 Agent context 不应互相阻塞");
     assert!(one.contains(r#""isError":true"#) && two.contains(r#""isError":true"#));
-    assert_eq!(*gate.0.lock().unwrap(), 2, "两个 protocol session 都应进入 resolver");
+    assert_eq!(*gate.0.lock().unwrap(), 2, "两个 Agent context 都应进入 resolver");
     assert!(
         !timed_out.load(std::sync::atomic::Ordering::SeqCst),
-        "两个 MCP protocol session 被全局锁串行了"
+        "两个 Agent context 被 transport 级锁串行了"
     );
 }
 
@@ -446,7 +448,7 @@ async fn mcp_gosdk_wire_shape() {
     let dir = tmp_dir("mcp-wire");
     let b = ExtBridge::new(27470, &dir);
     let sessions = mcp::McpSessions::new(b);
-    let (url, token) = mcp::serve(sessions, std::sync::Arc::new(|| Ok(None))).expect("MCP 启动");
+    let (url, token) = mcp::serve(sessions, std::sync::Arc::new(|_| Ok(None))).expect("MCP 启动");
     let addr = url.strip_prefix("http://").unwrap().split('/').next().unwrap().to_string();
 
     async fn raw(addr: &str, req: String) -> String {

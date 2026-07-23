@@ -8,9 +8,9 @@
 // 鉴权:随机 Bearer token,经 mcp.json 内置条目的 headers 下发给引擎——
 // MCP 面能驱动用户浏览器,不能对本机任意进程裸奔。
 //
-// 并发模型:每条 MCP protocol session 拥有独立 BrowserSession；同一
-// transport 内工具串行(共享 current tab/ref 表)，不同 transport 可并行。
-// Desktop 不依赖 Agent 私有字段，只使用标准 Mcp-Session-Id。
+// 并发模型:Mcp-Session-Id 隔离 transport，tools/call._meta.session_id 再
+// 隔离共用 transport 的父/子 Agent；每个 context 独享 BrowserSession。
+// 同一 context 内串行保护 current tab/ref，不同 context 可并行。
 
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
@@ -24,9 +24,15 @@ use serde_json::{json, Value};
 use super::ops::tool_metas;
 use super::session::{BrowserSession, BrowserSessions};
 
+#[derive(Clone, Default)]
+pub struct CallScope {
+    pub session_id: Option<String>,
+    pub work_dir: Option<String>,
+}
+
 /// 解析/校验调用工作区。None 只跳过截图落盘，不影响浏览器操作；owner
-/// 隔离由标准 MCP protocol session 完成，不再拿工作区充当并发锁。
-pub type WorkdirFn = Arc<dyn Fn() -> Result<Option<String>, String> + Send + Sync>;
+/// 隔离由 MCP protocol session + Agent session id 完成，不拿工作区充当锁。
+pub type WorkdirFn = Arc<dyn Fn(&CallScope) -> Result<Option<String>, String> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct McpSessions(Arc<McpSessionsInner>);
@@ -38,7 +44,7 @@ struct McpSessionsInner {
 
 struct McpClientSession {
     closed: AtomicBool,
-    context: Arc<McpCallContext>,
+    contexts: StdMutex<HashMap<String, Arc<McpCallContext>>>,
 }
 
 struct McpCallContext {
@@ -47,9 +53,11 @@ struct McpCallContext {
 }
 
 impl McpClientSession {
-    fn close_context(&self) -> Arc<McpCallContext> {
+    fn drain_contexts(&self) -> Vec<Arc<McpCallContext>> {
+        // 先封门再等 contexts 锁：已进临界区的创建会被随后 drain，尚未进入
+        // 的创建会看到 closed。DELETE/reset 后不会晚生幽灵 context。
         self.closed.store(true, Ordering::Release);
-        self.context.clone()
+        self.contexts.lock().unwrap().drain().map(|(_, context)| context).collect()
     }
 }
 
@@ -63,15 +71,11 @@ impl McpSessions {
 
     fn create(&self) -> Result<String, String> {
         let id = new_token()?;
-        let context = Arc::new(McpCallContext {
-            browser: self.0.browser.get_or_create(&id),
-            call_mu: tokio::sync::Mutex::new(()),
-        });
         self.0.clients.lock().unwrap().insert(
             id.clone(),
             Arc::new(McpClientSession {
                 closed: AtomicBool::new(false),
-                context,
+                contexts: StdMutex::new(HashMap::new()),
             }),
         );
         Ok(id)
@@ -81,22 +85,36 @@ impl McpSessions {
         self.0.clients.lock().unwrap().contains_key(id)
     }
 
-    fn context(&self, protocol_id: &str) -> Option<Arc<McpCallContext>> {
+    fn context(&self, protocol_id: &str, agent_id: Option<&str>) -> Option<Arc<McpCallContext>> {
         let client = self.0.clients.lock().unwrap().get(protocol_id).cloned()?;
+        let key = agent_id.filter(|id| !id.is_empty()).unwrap_or("root");
+        let mut contexts = client.contexts.lock().unwrap();
         if client.closed.load(Ordering::Acquire) {
             return None;
         }
-        Some(client.context.clone())
+        Some(
+            contexts
+                .entry(key.to_string())
+                .or_insert_with(|| {
+                    let owner = format!("{protocol_id}:{key}");
+                    Arc::new(McpCallContext {
+                        browser: self.0.browser.get_or_create(&owner),
+                        call_mu: tokio::sync::Mutex::new(()),
+                    })
+                })
+                .clone(),
+        )
     }
 
     async fn remove(&self, id: &str) -> bool {
         let client = self.0.clients.lock().unwrap().remove(id);
         let Some(client) = client else { return false };
-        let context = client.close_context();
-        // DELETE 可与最后一个 tools/call 同时到达。先从协议注册表摘除，
-        // 再等调用锁，确保不会在旧调用仍操作 tab 时 detach。
-        let _guard = context.call_mu.lock().await;
-        context.browser.close().await;
+        for context in client.drain_contexts() {
+            // DELETE 可与最后一个 tools/call 同时到达。先从协议注册表摘除，
+            // 再等 context 调用锁，确保不会在旧调用仍操作 tab 时 detach。
+            let _guard = context.call_mu.lock().await;
+            context.browser.close().await;
+        }
         true
     }
 
@@ -109,9 +127,10 @@ impl McpSessions {
             std::mem::take(&mut *clients).into_values().collect::<Vec<_>>()
         };
         for client in clients {
-            let context = client.close_context();
-            let _guard = context.call_mu.lock().await;
-            context.browser.close().await;
+            for context in client.drain_contexts() {
+                let _guard = context.call_mu.lock().await;
+                context.browser.close().await;
+            }
         }
     }
 }
@@ -281,13 +300,14 @@ async fn dispatch(
         "tools/call" => {
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            let scope = call_scope(&params);
             let context = sessions
-                .context(protocol_id)
+                .context(protocol_id, scope.session_id.as_deref())
                 .ok_or_else(|| (-32001, "MCP 会话已关闭".to_string()))?;
-            // 同一 protocol session 的 current-tab/ref 状态串行；不同
-            // transport 没有共享可变现场，可并行进入扩展桥。
+            // 同一 Agent context 的 current-tab/ref 状态串行；不同 context
+            // 没有共享可变现场，可并行进入扩展桥。
             let _g = context.call_mu.lock().await;
-            let out = match workdir() {
+            let out = match workdir(&scope) {
                 Err(e) => Err(e),
                 Ok(owner_workdir) => tokio::time::timeout(
                     std::time::Duration::from_secs(180),
@@ -308,6 +328,19 @@ async fn dispatch(
             })
         }
         _ => Err((-32601, format!("method not found: {method}"))),
+    }
+}
+
+fn call_scope(params: &Value) -> CallScope {
+    let meta = params.get("_meta");
+    let value = |key: &str| meta.and_then(|value| value.get(key)).and_then(Value::as_str);
+    CallScope {
+        session_id: value("session_id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        // work_dir 是文件系统值，不裁剪合法的首尾空格。
+        work_dir: value("work_dir").filter(|value| !value.is_empty()).map(str::to_string),
     }
 }
 

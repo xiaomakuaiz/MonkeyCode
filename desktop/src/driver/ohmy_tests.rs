@@ -489,7 +489,7 @@ fn concurrent_sidecar_updates_do_not_lose_fields() {
 }
 
 #[test]
-fn browser_workdir_fallback_does_not_reject_concurrency() {
+fn browser_context_resolves_explicit_sessions_without_rejecting_concurrency() {
     let inner = bare_inner("browser-owner");
     let mut one = bare_session("s1");
     one.workdir = "/workspace/one".into();
@@ -501,6 +501,8 @@ fn browser_workdir_fallback_does_not_reject_concurrency() {
         sessions.insert("s2".into(), two);
     }
     let driver = OhmyDriver(inner.clone());
+    assert_eq!(driver.browser_workdir_for("s1").as_deref(), Some("/workspace/one"));
+    assert_eq!(driver.browser_workdir_for("s2").as_deref(), Some("/workspace/two"));
     assert_eq!(driver.single_running_workdir(), None, "多任务时仅停用旧式落盘兜底");
 
     inner.sess.sessions.lock().unwrap().get_mut("s2").unwrap().running = false;
