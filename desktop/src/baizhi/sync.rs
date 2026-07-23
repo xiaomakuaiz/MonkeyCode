@@ -16,7 +16,8 @@ const SOURCE_BAIZHI: &str = "baizhi";
 /// 同步产出的 mcp.json 条目名(工具命名空间前缀 mcp__<name>__)。
 const MCP_ENTRY_NAME: &str = "baizhi-toolkit";
 
-/// 拉模型清单 + 确保推理密钥。要求已登录(有 cookie)。
+/// 确保推理密钥 + 用该密钥拉取 Anthropic 兼容模型清单。
+/// 密钥管理要求已登录(有 cookie),模型清单则走 Bearer 鉴权的推理接口。
 /// known_keys 是调用方已持有的候选明文密钥,能对上 ai-models 返回值就复用。
 pub async fn sync(svc: &Service, known_keys: &[String]) -> BzResult<Value> {
     let (key, key_name, created) = ensure_api_key(svc, known_keys).await?;
@@ -64,7 +65,8 @@ async fn console_call(svc: &Service, method: reqwest::Method, path: &str, body: 
     unwrap_envelope(&data, status, &ENV_CONSOLE)
 }
 
-/// ai-models 的列表 data 必须直接是数组;契约漂移时报错,不能再静默同步成空列表。
+/// ai-models 控制台列表(当前用于 API key)的 data 必须直接是数组;
+/// 契约漂移时报错,不能静默当作空列表。
 fn console_items(data: &Value) -> BzResult<Vec<Value>> {
     data.as_array()
         .cloned()
@@ -197,33 +199,98 @@ async fn enable_api_key(svc: &Service, item: &Value) -> BzResult<()> {
     .map(|_| ())
 }
 
-/// 拉模型列表并映射为同步条目。ai-models 的公开 LLM 同时支持 OpenAI 与
-/// Anthropic,桌面统一使用后者;非 LLM 跳过。
-async fn gateway_models(svc: &Service, key: &str) -> BzResult<(Vec<Value>, Vec<String>)> {
-    let data = console_call(svc, reqwest::Method::GET, "/api/console/models", None)
+/// Anthropic 兼容模型清单请求。这是面向推理密钥的权威可用列表,
+/// 不能用控制台 /api/console/models 代替:后者是管理视图,字段和可见集都不同。
+async fn model_catalog_page(svc: &Service, key: &str, after_id: Option<&str>) -> BzResult<Value> {
+    let mut url = reqwest::Url::parse(&format!("{}/api/anthropic/models", svc.ep.model_gateway))
+        .map_err(|e| other(format!("模型列表地址异常: {e}")))?;
+    if let Some(after) = after_id {
+        url.query_pairs_mut().append_pair("after_id", after);
+    }
+    let host = url.host_str().unwrap_or("").to_string();
+    let resp = svc
+        .http
+        .get(url)
+        .bearer_auth(key)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .send()
         .await
-        .map_err(|e| other(format!("获取模型列表失败: {}", e.msg())))?;
-    let items = console_items(&data)?;
+        .map_err(|e| other(format!("请求 {host} 失败: {e}")))?;
+    let status = resp.status().as_u16();
+    let data = resp
+        .bytes()
+        .await
+        .map_err(|e| other(format!("读取模型列表失败: {e}")))?;
+    let value: Value = serde_json::from_slice(&data)
+        .map_err(|e| other(format!("模型列表响应解析失败: {e}")))?;
+    if !(200..300).contains(&status) {
+        let msg = value
+            .pointer("/error/message")
+            .or_else(|| value.get("message"))
+            .and_then(Value::as_str)
+            .map(clean_message)
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| format!("模型服务请求失败(HTTP {status})"));
+        return if status == 401 {
+            Err(BzErr::Unauthorized(msg))
+        } else {
+            Err(other(msg))
+        };
+    }
+    if !value.get("data").is_some_and(Value::is_array) {
+        return Err(other("模型列表响应格式异常"));
+    }
+    Ok(value)
+}
+
+/// 拉模型列表并映射为同步条目。推理接口返回的 data 已是该密钥可用的
+/// 模型集,直接以 id 为请求模型,不再按控制台的 type=llm 字段二次过滤。
+async fn gateway_models(svc: &Service, key: &str) -> BzResult<(Vec<Value>, Vec<String>)> {
     let mut models = Vec::new();
     let mut notes = Vec::new();
-    for m in &items {
-        let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        if m.get("type").and_then(Value::as_str) != Some("llm") || name.is_empty() {
-            continue;
+    let mut seen = std::collections::HashSet::new();
+    let mut after_id: Option<String> = None;
+    // 防御服务端错误地永返 has_more=true;正常情况远少于 100 页。
+    for _ in 0..100 {
+        let page = model_catalog_page(svc, key, after_id.as_deref())
+            .await
+            .map_err(|e| other(format!("获取模型列表失败: {}", e.msg())))?;
+        let items = page
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| other("模型列表响应格式异常"))?;
+        for m in items {
+            let id = m.get("id").and_then(Value::as_str).unwrap_or("").trim();
+            if id.is_empty() || !seen.insert(id.to_string()) {
+                continue;
+            }
+            models.push(json!({
+                "name": id,
+                "provider": "anthropic",
+                "base_url": format!("{}/api/anthropic", svc.ep.model_gateway),
+                "api_key": key,
+                "model": id,
+                "source": SOURCE_BAIZHI,
+            }));
         }
-        models.push(json!({
-            "name": name,
-            "provider": "anthropic",
-            "base_url": format!("{}/api/anthropic", svc.ep.model_gateway),
-            "api_key": key,
-            "model": name,
-            "source": SOURCE_BAIZHI,
-        }));
+        if !page.get("has_more").and_then(Value::as_bool).unwrap_or(false) {
+            if models.is_empty() {
+                notes.push("推理接口下没有可用模型".to_string());
+            }
+            return Ok((models, notes));
+        }
+        let next = page
+            .get("last_id")
+            .and_then(Value::as_str)
+            .or_else(|| items.last().and_then(|m| m.get("id")).and_then(Value::as_str))
+            .unwrap_or("")
+            .trim();
+        if next.is_empty() || after_id.as_deref() == Some(next) {
+            return Err(other("模型列表分页响应缺少有效游标"));
+        }
+        after_id = Some(next.to_string());
     }
-    if models.is_empty() {
-        notes.push("网关下没有已启用的模型".to_string());
-    }
-    Ok((models, notes))
+    Err(other("模型列表分页过多,已停止同步"))
 }
 
 // ==================== MCP(agent-toolkit)====================
@@ -410,14 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_models_console_contract() {
-        let models = json!([
-            {"name": "model-a", "type": "llm", "reasoning": true},
-            {"name": "embed-a", "type": "embedding"}
-        ]);
-        assert_eq!(console_items(&models).map_err(|e| e.msg()).unwrap().len(), 2);
-        assert!(console_items(&json!({"items": []})).is_err());
-
+    fn ai_models_key_console_contract() {
         let key = json!({
             "id": "key-1",
             "name": "MonkeyCode",

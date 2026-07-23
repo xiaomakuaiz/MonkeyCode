@@ -22,7 +22,7 @@ export const baizhiWechatPoll = () =>
   invoke<{ status: "waiting" | "scanned" | "canceled" | "expired" | "ok" }>("baizhi_wechat_poll");
 
 /** 同步模型网关的模型清单与推理密钥。knownKeys 传设置表单里已有的
- * api_key(能对上网关掩码就复用,避免每次同步都新建密钥)。
+ * api_key(能对上网关密钥列表就复用,避免每次同步都新建密钥)。
  * 返回结构供 UI 展示并合并进设置表单,由用户确认后保存。 */
 export const baizhiSync = (knownKeys: string[]) =>
   invoke<BaizhiSyncResult>("baizhi_sync", { knownKeys });

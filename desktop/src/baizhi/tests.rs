@@ -16,6 +16,7 @@ struct Req {
     method: String,
     path: String, // 含查询串
     cookie: String,
+    authorization: String,
     body: Vec<u8>,
 }
 
@@ -64,6 +65,7 @@ fn serve(handler: Handler) -> (String, Arc<AtomicBool>) {
                 let method = parts.next().unwrap_or("").to_string();
                 let path = parts.next().unwrap_or("").to_string();
                 let mut cookie = String::new();
+                let mut authorization = String::new();
                 let mut content_len = 0usize;
                 loop {
                     let mut h = String::new();
@@ -74,6 +76,9 @@ fn serve(handler: Handler) -> (String, Arc<AtomicBool>) {
                     if lower.starts_with("cookie:") {
                         cookie = h[7..].trim().to_string();
                     }
+                    if lower.starts_with("authorization:") {
+                        authorization = h[14..].trim().to_string();
+                    }
                     if let Some(v) = lower.strip_prefix("content-length:") {
                         content_len = v.trim().parse().unwrap_or(0);
                     }
@@ -82,7 +87,13 @@ fn serve(handler: Handler) -> (String, Arc<AtomicBool>) {
                 if content_len > 0 {
                     let _ = reader.read_exact(&mut body);
                 }
-                let resp = handler(Req { method, path, cookie, body });
+                let resp = handler(Req {
+                    method,
+                    path,
+                    cookie,
+                    authorization,
+                    body,
+                });
                 let mut out = format!("HTTP/1.1 {} X\r\nConnection: close\r\nContent-Length: {}\r\n", resp.status, resp.body.len());
                 for (k, v) in &resp.headers {
                     out.push_str(&format!("{k}: {v}\r\n"));
@@ -106,8 +117,8 @@ fn official_model_and_mcp_gateways_are_pinned() {
     assert_eq!(super::DEFAULT_MCP_GATEWAY, "https://agent-toolkit.app.baizhi.cloud");
 }
 
-/// ai-models 真机契约:data 直接是数组、密钥字段 api_key/status、新建默认启用;
-/// 同步须过滤非 LLM,并把可用模型落为官方 anthropic 推理地址。
+/// ai-models 真机契约:控制台只管密钥;模型清单用该密钥请求
+/// /api/anthropic/models。清单按 Anthropic data/has_more 分页,条目标识为 id。
 #[tokio::test(flavor = "multi_thread")]
 async fn ai_models_sync_contract() {
     let (url, _stop) = serve(Arc::new(|req: Req| {
@@ -130,15 +141,29 @@ async fn ai_models_sync_contract() {
                     }),
                 )
             }
-            ("GET", "/api/console/models") => Resp::json(
-                200,
-                json!({
-                    "data": [
-                        {"name": "coding-model", "type": "llm", "reasoning": true},
-                        {"name": "embedding-model", "type": "embedding"}
-                    ]
-                }),
-            ),
+            ("GET", "/api/anthropic/models") => {
+                assert_eq!(req.authorization, "Bearer sk-live");
+                Resp::json(
+                    200,
+                    json!({
+                        "data": [
+                            {"id": "coding-model", "type": "model", "display_name": "Coding Model"},
+                            {"id": "reasoning-model", "type": "model", "display_name": "Reasoning Model"}
+                        ],
+                        "has_more": true
+                    }),
+                )
+            }
+            ("GET", "/api/anthropic/models?after_id=reasoning-model") => {
+                assert_eq!(req.authorization, "Bearer sk-live");
+                Resp::json(
+                    200,
+                    json!({
+                        "data": [{"id": "new-model", "type": "model", "display_name": "New Model"}],
+                        "has_more": false
+                    }),
+                )
+            }
             ("GET", "/") => Resp::json(200, json!({})),
             ("GET", "/api/v1/services") => Resp::redirect("/apply"),
             _ => Resp::json(404, json!({ "error": {"message": "not found"} })),
@@ -154,8 +179,10 @@ async fn ai_models_sync_contract() {
     let synced = super::sync::sync(&svc, &[]).await.map_err(|e| e.msg()).unwrap();
     assert_eq!(synced.get("key_created").and_then(Value::as_bool), Some(true));
     let models = synced.get("models").and_then(Value::as_array).unwrap();
-    assert_eq!(models.len(), 1, "非 LLM 不应导入");
+    assert_eq!(models.len(), 3, "应合并推理接口的所有分页");
     assert_eq!(models[0].get("name").and_then(Value::as_str), Some("coding-model"));
+    assert_eq!(models[1].get("name").and_then(Value::as_str), Some("reasoning-model"));
+    assert_eq!(models[2].get("name").and_then(Value::as_str), Some("new-model"));
     assert_eq!(models[0].get("provider").and_then(Value::as_str), Some("anthropic"));
     let expected_base_url = format!("{url}/api/anthropic");
     assert_eq!(models[0].get("base_url").and_then(Value::as_str), Some(expected_base_url.as_str()));
