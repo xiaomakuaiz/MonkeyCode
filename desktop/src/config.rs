@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 static TEMP_FILE_SEQ: AtomicU64 = AtomicU64::new(0);
+const DEFAULT_MODEL_CONTEXT_WINDOW: i64 = 200_000;
 
 /// 权威配置的进程内事务锁。引擎重启有自己更粗的 EngineApply 锁；这里的锁
 /// 只覆盖短暂的磁盘事务，桌宠偏好保存不会因 Agent 优雅退出而卡住 UI 线程。
@@ -406,13 +407,14 @@ fn write_ohmyagent_config(
             "type": route_of(&provider), "model": model,
             "base_url": base_url, "api_key": api_key,
         });
-        if let Some(cw) = m
+        let context_window = m
             .get("context_window")
             .and_then(|v| v.as_i64())
             .filter(|&c| c > 0)
-        {
-            entry["context_window"] = serde_json::json!(cw);
-        }
+            .unwrap_or(DEFAULT_MODEL_CONTEXT_WINDOW);
+        // Desktop 的产品默认值是 200k。必须显式写给引擎，否则自定义/未知
+        // model id 会落入引擎自己的 128k 通用兜底，composer 显示与设置页不符。
+        entry["context_window"] = serde_json::json!(context_window);
         // 视觉标记透传:缺失时 ohmyagent 按不支持处理,读图降级为文本占位
         if m.get("vision").and_then(|v| v.as_bool()).unwrap_or(false) {
             entry["supports_images"] = serde_json::json!(true);
@@ -635,6 +637,46 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
         assert_eq!(settings["permission_mode"], "auto");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ohmyagent_config_materializes_desktop_context_window_default() {
+        let dir = test_dir("model-context-window");
+        let _ = fs::remove_dir_all(&dir);
+        let cfg = DesktopConfig {
+            models: serde_json::json!([
+                {
+                    "name": "default-context",
+                    "provider": "openai_responses",
+                    "base_url": "https://example.invalid",
+                    "api_key": "test-key",
+                    "model": "custom-model"
+                },
+                {
+                    "name": "explicit-context",
+                    "provider": "openai_responses",
+                    "base_url": "https://example.invalid",
+                    "api_key": "test-key",
+                    "model": "another-model",
+                    "context_window": 300000
+                }
+            ]),
+            ..Default::default()
+        };
+
+        write_ohmyagent_config(&dir, &cfg, None).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(
+            settings["models"]["default-context"]["context_window"],
+            DEFAULT_MODEL_CONTEXT_WINDOW
+        );
+        assert_eq!(
+            settings["models"]["explicit-context"]["context_window"],
+            300000
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
