@@ -161,17 +161,13 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
   box-shadow: var(--cardSh);
 }
 .tool-duration {
-  opacity: 0;
-  visibility: hidden;
+  display: none;
   font-variant-numeric: tabular-nums;
   user-select: none;
-  transition: opacity 0.12s ease, visibility 0s linear 0.12s;
 }
 .tool-card:hover .tool-duration,
 .tool-card:focus-within .tool-duration {
-  opacity: 1;
-  visibility: visible;
-  transition-delay: 0s;
+  display: inline;
 }
 .card-lg { border-radius: 11px; padding: 16px; }
 /* 骨架屏占位块(加载态;宽高由使用处内联) */
