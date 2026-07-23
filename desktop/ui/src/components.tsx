@@ -1409,6 +1409,8 @@ export function DiffPanel({ text }: { text: string }) {
         ) : (
           <div
             key={i}
+            className="mc-preview-line mc-diff-line"
+            data-line-number={r.no}
             style={{
               display: "flex",
               padding: "0 24px",
@@ -1416,7 +1418,6 @@ export function DiffPanel({ text }: { text: string }) {
               color: r.kind === "add" ? "var(--addT)" : r.kind === "del" ? "var(--delT)" : "var(--t3)",
             }}
           >
-            <span style={{ width: 36, color: "var(--t5)", flex: "none", opacity: 0.6 }}>{r.no}</span>
             <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", minWidth: 0 }}>{r.text || " "}</span>
           </div>
         ),
@@ -1474,7 +1475,7 @@ const codeLine: CSSProperties = {
 };
 
 /** 文件内容预览:行号 + 按扩展名语法高亮(hljs 输出自带转义);
- * 未知语言/高亮失败退回纯文本行,行号仍在。 */
+ * 未知语言/高亮失败退回纯文本行。行号由 CSS 伪元素绘制，不进入复制文本。 */
 export function CodeView({ path, text }: { path: string; text: string }) {
   const lines = useMemo(() => {
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -1491,8 +1492,7 @@ export function CodeView({ path, text }: { path: string; text: string }) {
   return (
     <div style={{ font: "12px/1.9 " + MONO }}>
       {lines.rows.map((l, i) => (
-        <div key={i} style={{ display: "flex", padding: "0 24px" }}>
-          <span style={{ width: 42, color: "var(--t5)", flex: "none", opacity: 0.6, userSelect: "none" }}>{i + 1}</span>
+        <div key={i} className="mc-preview-line mc-code-line" data-line-number={i + 1} style={{ display: "flex", padding: "0 24px" }}>
           {lines.html ? (
             <span className="hl" style={codeLine} dangerouslySetInnerHTML={{ __html: l || " " }} />
           ) : (

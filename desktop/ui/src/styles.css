@@ -249,6 +249,16 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .mc-ask-input:focus { border-color: var(--acc) !important; }
 
 /* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */
+.mc-preview-line::before {
+  content: attr(data-line-number);
+  width: 42px;
+  color: var(--t5);
+  flex: none;
+  opacity: 0.6;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mc-preview-line.mc-diff-line::before { width: 36px; }
 .hl .hljs-comment, .hl .hljs-quote { color: var(--t5); font-style: italic; }
 .hl .hljs-keyword, .hl .hljs-selector-tag, .hl .hljs-meta, .hl .hljs-doctag { color: var(--hlKw); }
 .hl .hljs-string, .hl .hljs-regexp, .hl .hljs-addition { color: var(--hlStr); }
