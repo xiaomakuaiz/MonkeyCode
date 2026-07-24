@@ -135,19 +135,23 @@ function SessionRow({
         title={`${title}\n${meta.kind === "chat" ? "独立对话" : meta.workdir}`}
         onClick={onClick}
         style={{
-          minHeight: 50,
+          minHeight: 52,
+          position: "relative",
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
           gap: 4,
-          padding: nested ? "6px 7px 6px 24px" : "6px 8px 6px 10px",
-          borderRadius: 8,
+          padding: nested ? "7px 8px 7px 24px" : "7px 9px 7px 11px",
+          borderRadius: 9,
           cursor: "pointer",
           background: active ? (archived ? "var(--hov2)" : "var(--accSel)") : "transparent",
-          color: selected ? "var(--accSelT)" : "var(--t2)",
+          color: "var(--t2)",
           minWidth: 0,
         }}
       >
+        {selected && (
+          <span aria-hidden="true" style={{ position: "absolute", left: 2, top: 11, bottom: 11, width: 2, borderRadius: 2, background: "var(--acc)" }} />
+        )}
         <div style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
           {editing ? (
             <input
@@ -176,7 +180,7 @@ function SessionRow({
               }}
             />
           ) : (
-            <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.25, fontWeight: active ? 650 : 500 }}>
+            <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.25, fontWeight: active ? 650 : 520, color: active ? "var(--t1)" : "var(--t2)" }}>
               {title}
             </span>
           )}
@@ -204,16 +208,16 @@ function SessionRow({
               className="hv3 icon-btn"
               style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent" }}
             >
-              <IconDots color={selected ? "var(--accSelDim)" : "var(--t3)"} />
+              <IconDots color="var(--t3)" />
             </button>
           )}
         </div>
-        <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 5, minWidth: 0, fontSize: 10.5, lineHeight: 1.2 }}>
-          <span style={{ width: 5, height: 5, borderRadius: "50%", background: st.color, flex: "none" }} />
-          <span className="ellipsis" style={{ color: selected ? "var(--accSelDim)" : st.color, minWidth: 0 }}>
+        <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, minWidth: 0, fontSize: 10.5, lineHeight: 1.2 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color, flex: "none" }} />
+          <span className="ellipsis" style={{ color: st.color, minWidth: 0 }}>
             {st.text}
           </span>
-          <span style={{ color: selected ? "var(--accSelDim)" : "var(--t6)", marginLeft: "auto", flex: "none" }}>
+          <span style={{ color: "var(--t5)", marginLeft: "auto", flex: "none", fontVariantNumeric: "tabular-nums" }}>
             {relativeTime(meta.updated_at)}
           </span>
         </div>
@@ -277,12 +281,12 @@ function ProjectGroup({
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
-          minHeight: 32,
+          minHeight: 34,
           display: "flex",
           alignItems: "center",
           gap: 6,
           padding: "0 5px 0 7px",
-          borderRadius: 7,
+          borderRadius: 8,
           cursor: "pointer",
           userSelect: "none",
           fontWeight: 650,
@@ -319,24 +323,24 @@ function CloudTaskRow({ task, active, onClick }: { task: CloudTask; active: bool
       title={label}
       onClick={onClick}
       style={{
-        minHeight: 50,
+        minHeight: 52,
         display: "flex",
         flexDirection: "column",
         justifyContent: "center",
         gap: 4,
-        padding: "6px 9px 6px 10px",
-        borderRadius: 8,
+        padding: "7px 9px 7px 11px",
+        borderRadius: 9,
         cursor: "pointer",
         background: active ? "var(--accSel)" : "transparent",
-        color: active ? "var(--accSelT)" : "var(--t2)",
+        color: "var(--t2)",
         minWidth: 0,
       }}
     >
-      <span className="ellipsis" style={{ width: "100%", fontSize: 12.5, lineHeight: 1.25, fontWeight: active ? 650 : 500 }}>{label}</span>
-      <span style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, lineHeight: 1.2 }}>
-        <span style={{ width: 5, height: 5, borderRadius: "50%", background: st.color, flex: "none" }} />
-        <span style={{ color: active ? "var(--accSelDim)" : st.color }}>{st.text}</span>
-        <span style={{ marginLeft: "auto", color: active ? "var(--accSelDim)" : "var(--t6)" }}>{relativeTime(task.created_at)}</span>
+      <span className="ellipsis" style={{ width: "100%", fontSize: 13, lineHeight: 1.25, fontWeight: active ? 650 : 520, color: active ? "var(--t1)" : "var(--t2)" }}>{label}</span>
+      <span style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, lineHeight: 1.2 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color, flex: "none" }} />
+        <span style={{ color: st.color }}>{st.text}</span>
+        <span style={{ marginLeft: "auto", color: "var(--t5)", fontVariantNumeric: "tabular-nums" }}>{relativeTime(task.created_at)}</span>
       </span>
     </div>
   );
@@ -344,17 +348,17 @@ function CloudTaskRow({ task, active, onClick }: { task: CloudTask; active: bool
 
 function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
   return (
-    <div style={{ margin: "14px 4px", padding: "20px 14px", border: "1px dashed var(--dashBd)", borderRadius: 11, display: "flex", flexDirection: "column", alignItems: "center", gap: 7, textAlign: "center" }}>
-      {icon}
+    <div style={{ margin: "20px 4px", padding: "18px 14px", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, textAlign: "center" }}>
+      <span style={{ width: 36, height: 36, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--card)", border: "1px solid var(--line2)", boxShadow: "var(--cardSh)" }}>{icon}</span>
       <span style={{ fontSize: 12.5, fontWeight: 650, color: "var(--t3)" }}>{title}</span>
-      <span style={{ maxWidth: 170, fontSize: 11, lineHeight: 1.55, color: "var(--t5)" }}>{detail}</span>
+      <span style={{ maxWidth: 175, fontSize: 11, lineHeight: 1.6, color: "var(--t5)" }}>{detail}</span>
     </div>
   );
 }
 
 function SearchBox({ value, placeholder, onChange }: { value: string; placeholder: string; onChange: (value: string) => void }) {
   return (
-    <label style={{ height: 30, margin: "0 10px 8px", padding: "0 9px", display: "flex", alignItems: "center", gap: 7, border: "1px solid var(--line2)", borderRadius: 8, background: "var(--sidebarInput)", color: "var(--t5)" }}>
+    <label style={{ height: 32, margin: "0 10px 9px", padding: "0 9px", display: "flex", alignItems: "center", gap: 7, border: "1px solid var(--line2)", borderRadius: 9, background: "var(--sidebarInput)", color: "var(--t5)" }}>
       <IconSearch size={12} />
       <input
         value={value}
@@ -421,9 +425,9 @@ function RailButton({
 
 function PanelHeader({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
   return (
-    <div style={{ height: 48, flex: "none", padding: "0 11px 0 13px", display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ height: 52, flex: "none", padding: "0 11px 0 13px", display: "flex", alignItems: "center", gap: 8 }}>
       <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 750, color: "var(--t1)" }}>{title}</span>
+        <span style={{ fontSize: 14, fontWeight: 720, color: "var(--t1)" }}>{title}</span>
         <span className="ellipsis" style={{ fontSize: 10.5, color: "var(--t5)" }}>{detail}</span>
       </span>
       <span style={{ flex: 1 }} />
@@ -713,7 +717,7 @@ export function Sidebar({
 
   return (
     <div className="mc-sidebar-shell" style={{ flex: "none", display: "flex", minHeight: 0 }}>
-      <div className="mc-nav-rail" style={{ width: 64, flex: "none", display: "flex", flexDirection: "column", alignItems: "center", background: "var(--rail)", borderRight: "1px solid var(--line2)" }}>
+      <div className="mc-nav-rail" style={{ width: 62, flex: "none", display: "flex", flexDirection: "column", alignItems: "center", background: "var(--rail)", borderRight: "1px solid var(--line2)" }}>
         <MacDragSpacer />
         <img src={logoUrl} alt="MonkeyCode" draggable={false} style={{ width: 31, height: 31, borderRadius: 9, margin: "2px 0 15px" }} />
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
@@ -731,7 +735,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <aside className="mc-sidebar-panel" style={{ width: 224, flex: "none", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--side)", borderRight: "1px solid var(--line)" }}>
+      <aside className="mc-sidebar-panel" style={{ width: 232, flex: "none", display: "flex", flexDirection: "column", minHeight: 0, background: "var(--side)", borderRight: "1px solid var(--line)" }}>
         <MacDragSpacer />
         <PanelHeader title={panel.title} detail={panel.detail}>{panel.actions}</PanelHeader>
         <SearchBox value={query} placeholder={panel.placeholder} onChange={setQuery} />

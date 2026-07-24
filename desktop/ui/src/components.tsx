@@ -287,7 +287,7 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
   // 有任何依赖关系时全员编号,"等 #N" 才有落点
   const numbered = entries.some((e) => e.depends_on?.length);
   return (
-    <div className="card" style={{ padding: 0, overflow: "hidden", boxShadow: "none", animation: "mcin .18s ease" }}>
+    <div className="card" style={{ padding: 0, overflow: "hidden", borderRadius: 11, boxShadow: "none", animation: "mcin .18s ease" }}>
       <button
         className="hv2"
         onClick={() => setOpen(!open)}
@@ -815,11 +815,11 @@ function UserBubble({
         className="mc-message-row"
         style={{
           position: "relative",
-          maxWidth: "70%",
+          maxWidth: "72%",
           background: "var(--userBg)",
           border: "1px solid var(--accBd)",
-          borderRadius: "12px 12px 3px 12px",
-          padding: "9px 15px",
+          borderRadius: "14px 14px 4px 14px",
+          padding: "10px 15px",
           fontSize: 13.5,
           lineHeight: 1.6,
           color: "var(--t1)",
@@ -1560,9 +1560,9 @@ export function ViewHeader({
   children?: ReactNode;
 }) {
   return (
-    <div data-tauri-drag-region="" style={{ height: 56, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 24px", borderBottom: "1px solid var(--line2)" }}>
+    <div data-tauri-drag-region="" style={{ height: 58, flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "0 26px", borderBottom: "1px solid var(--line2)", background: "rgba(255,255,255,.42)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-        <span className="ellipsis" title={titleTip} style={{ fontWeight: 700, fontSize: 13.5 }}>
+        <span className="ellipsis" title={titleTip} style={{ fontWeight: 700, fontSize: 14 }}>
           {title}
         </span>
         {subtitle}

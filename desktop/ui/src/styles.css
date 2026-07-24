@@ -6,13 +6,13 @@
  * var() 引用,禁止 color-mix()/相对颜色语法/CSS 嵌套/light-dark()(均 >109);
  * 透明变体各开独立令牌,不做运行时颜色计算。主题切换 = 根节点换 data-theme。 */
 :root {
-  --bg: #fbfcfb;            /* 主区底色 */
-  --rail: #e8edea;          /* 一级空间导航 */
-  --side: #f3f6f4;          /* 二级内容侧栏 */
-  --railSel: rgba(255, 255, 255, 0.82);
-  --sidebarInput: rgba(255, 255, 255, 0.68);
-  --line: rgba(30, 40, 35, 0.12);
-  --line2: rgba(30, 40, 35, 0.08);
+  --bg: #fcfdfc;            /* 主区底色 */
+  --rail: #edf1ee;          /* 一级空间导航 */
+  --side: #f6f8f6;          /* 二级内容侧栏 */
+  --railSel: rgba(255, 255, 255, 0.9);
+  --sidebarInput: rgba(255, 255, 255, 0.88);
+  --line: rgba(30, 40, 35, 0.1);
+  --line2: rgba(30, 40, 35, 0.065);
   --t1: #1d221f;            /* 标题/正文强调 */
   --t2: #2a302b;            /* 正文 */
   --t3: #59605a;            /* 次级文字/图标 */
@@ -36,10 +36,10 @@
   --warnBd: rgba(161, 98, 7, 0.35);
   --card: #ffffff;
   --cardBd: rgba(30, 40, 35, 0.1);
-  --cardSh: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --hov: rgba(120, 130, 125, 0.12);
-  --hov2: rgba(120, 130, 125, 0.18);
-  --hov3: rgba(120, 130, 125, 0.25);
+  --cardSh: 0 1px 2px rgba(20, 35, 27, 0.04);
+  --hov: rgba(80, 95, 87, 0.065);
+  --hov2: rgba(80, 95, 87, 0.1);
+  --hov3: rgba(80, 95, 87, 0.15);
   --pop: #fcfdfd;
   --shadow: 0 8px 28px rgba(30, 45, 38, 0.2);
   --codeBg: rgba(30, 40, 35, 0.05);
@@ -54,8 +54,8 @@
   --scrim3: rgba(20, 30, 25, 0.55);       /* 图片查看遮罩 */
   --panel: rgba(255, 255, 255, 0.92);     /* 浮起面板(composer/新任务卡) */
   --panel2: rgba(255, 255, 255, 0.7);     /* 次级浮面(排队 chip) */
-  --panelSh: 0 4px 20px rgba(30, 45, 38, 0.08);
-  --panelShLg: 0 10px 36px rgba(30, 45, 38, 0.12);
+  --panelSh: 0 6px 24px rgba(30, 45, 38, 0.075), 0 1px 2px rgba(30, 45, 38, 0.035);
+  --panelShLg: 0 12px 40px rgba(30, 45, 38, 0.1), 0 2px 4px rgba(30, 45, 38, 0.035);
   --shadowLg: 0 24px 70px rgba(30, 45, 38, 0.3);   /* 模态弹窗/大图查看 */
   --inputBg: #fdfdfc;
   --inputBd: rgba(30, 40, 35, 0.13);
@@ -64,9 +64,9 @@
   --errBd: rgba(194, 80, 62, 0.3);        /* 危险动作描边 */
   --accBd2: rgba(31, 138, 91, 0.3);       /* 强调描边(加号按钮) */
   --accBgSoft: rgba(31, 138, 91, 0.07);   /* 极浅强调底(拖放区/hover) */
-  --accSel: rgba(31, 138, 91, 0.14);      /* 侧栏/设置导航选中行浅色底 */
-  --accSelT: #176b47;                     /* 浅选中底上的主文字/图标 */
-  --accSelDim: #5d7868;                   /* 浅选中底上的次级文字/图标 */
+  --accSel: rgba(31, 138, 91, 0.085);     /* 侧栏/设置导航选中行浅色底 */
+  --accSelT: #24523d;                     /* 浅选中底上的主文字/图标 */
+  --accSelDim: #66786e;                   /* 浅选中底上的次级文字/图标 */
   --accSh: 0 2px 8px rgba(31, 138, 91, 0.25); /* 主按钮投影 */
   --warnBd2: rgba(161, 98, 7, 0.18);      /* 软警示描边(云端提示条) */
   --warnT: #7c5210;                       /* 警示正文 */
@@ -269,7 +269,7 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 
 @media (max-width: 1080px) {
   .mc-nav-rail { width: 58px !important; }
-  .mc-sidebar-panel { width: 212px !important; }
+  .mc-sidebar-panel { width: 220px !important; }
 }
 
 /* 代码预览高亮(highlight.js 输出;注释复用文字灰阶令牌) */

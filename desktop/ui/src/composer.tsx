@@ -126,13 +126,13 @@ export function Composer({
       style={{
         background: "var(--panel)",
         border: "1px solid var(--inputBd)",
-        borderRadius: 12,
+        borderRadius: 14,
         boxShadow: "var(--panelSh)",
         display: "flex",
         flexDirection: "column",
         // 光学对齐:硬边卡片向两侧出血 12px,卡内文字(textarea 左内距 15px)
         // 与对话文字左缘几乎重合,消除"输入框显窄"的错觉
-        margin: "0 -12px",
+        margin: "0 -10px",
       }}
     >
       {above}
@@ -157,21 +157,21 @@ export function Composer({
           resize: "none",
           background: "transparent",
           color: "var(--t1)",
-          padding: "12px 15px 2px",
-          fontSize: 13,
+          padding: "13px 15px 3px",
+          fontSize: 13.5,
           lineHeight: 1.5,
           maxHeight: 160,
           display: "block",
           width: "100%",
         }}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px 10px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 10px" }}>
         {controls}
         <button
           className="hv-acc icon-btn"
           title="发送 ↩ · 换行 ⇧↩"
           onClick={onSend}
-          style={{ width: 27, height: 27, borderRadius: 8, background: "var(--acc)", opacity: sendActive ? 1 : 0.45 }}
+          style={{ width: 29, height: 29, borderRadius: 9, background: "var(--acc)", opacity: sendActive ? 1 : 0.45 }}
         >
           <IconSend />
         </button>

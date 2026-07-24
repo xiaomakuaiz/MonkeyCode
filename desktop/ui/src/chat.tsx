@@ -43,7 +43,7 @@ const fmtK = (n: number) =>
   n >= 1_000_000 ? Math.round(n / 100_000) / 10 + "M" : n >= 1000 ? Math.round(n / 100) / 10 + "k" : String(n);
 
 /** 对话与操作区共用稳定内容轨；正文自身再由消息 maxWidth 保持可读行长。 */
-export const COL_MAX = "min(840px, calc(100% - 24px))";
+export const COL_MAX = "min(880px, calc(100% - 24px))";
 
 export const basename = (p: string) => p.replace(/[\/\\]+$/, "").split(/[\/\\]/).pop() || p;
 
@@ -715,7 +715,7 @@ export function ChatView({
           onMouseDown={onLogMouseDown}
           style={{ flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, scrollbarGutter: "stable both-edges" }}
         >
-          <div style={{ width: "100%", maxWidth: COL_MAX, margin: "0 auto", padding: "26px 28px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ width: "100%", maxWidth: COL_MAX, margin: "0 auto", padding: "28px 30px 18px", display: "flex", flexDirection: "column", gap: 18 }}>
             <LogList
               items={chat.items}
               onPermAnswer={session.answerPerm}
@@ -732,7 +732,7 @@ export function ChatView({
       {/* ==== 运行条 + 排队 + composer(680 列,钉在底部)====
           width 扣掉 16px:对话列在滚动容器内被 scrollbar-gutter 双侧各让 8px,
           composer 在容器外,同步扣减后两列在任意窗口宽度下公式一致、像素对齐 */}
-      <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 28px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ flex: "none", maxWidth: COL_MAX, width: "calc(100% - 16px)", margin: "0 auto", padding: "0 30px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
         {/* 实时任务面板(todo_update 驱动;钉住,不进对话流) */}
         {chat.plan.length > 0 && <TaskPanel entries={chat.plan} />}
         {/* 短暂提示:操作错误 + 可跳转的后台会话状态；独立于连接状态行。 */}
@@ -758,7 +758,7 @@ export function ChatView({
             (chat.running || atts.length > 0) && (
               <>
                 {chat.running && (
-                  <div style={{ padding: "7px 11px", borderBottom: "1px solid var(--line2)", borderRadius: "11px 11px 0 0", background: "var(--accBgSoft)" }}>
+                  <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--line2)", borderRadius: "13px 13px 0 0", background: "var(--accBgSoft)" }}>
                     <RunningBar
                       label={runningLabel}
                       detail={`第 ${roundNo} 轮${usage ? ` · ${fmtK(usage.used)} tokens` : ""}`}
