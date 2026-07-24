@@ -91,6 +91,14 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("无法定位配置目录: {e}"))
 }
 
+/// 应用私有的本地数据目录。与 config_dir 分开：设置适合漫游/备份，
+/// 对话工作区及附件体积可能较大，应留在当前设备。
+pub fn local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录: {e}"))
+}
+
 /// 用户主目录。语义严格对齐引擎(Go)的 os.UserHomeDir——壳在这里算出的
 /// ~ 展开结果会作为 cwd 交给引擎,两侧对"家在哪"的认定必须一致:
 /// - Windows:USERPROFILE 优先(Go 在 Windows 上只认 USERPROFILE,忽略 HOME)。

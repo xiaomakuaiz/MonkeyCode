@@ -33,6 +33,7 @@ use super::transport::TransportState;
 pub trait ShellCtx: Send + Sync + 'static {
     fn emit_json(&self, event: &str, payload: Value);
     fn config_dir(&self) -> Result<PathBuf, String>;
+    fn local_data_dir(&self) -> Result<PathBuf, String>;
 
     /// 引擎进程的 home/cwd 与额外环境。生产默认跟随当前用户；测试替身可
     /// 逐子进程注入隔离目录，禁止通过 set_var 污染并行测试进程。
@@ -48,6 +49,9 @@ impl ShellCtx for AppHandle {
     }
     fn config_dir(&self) -> Result<PathBuf, String> {
         crate::config::config_dir(self)
+    }
+    fn local_data_dir(&self) -> Result<PathBuf, String> {
+        crate::config::local_data_dir(self)
     }
 }
 
@@ -79,6 +83,8 @@ pub(super) struct Inner {
     pub(super) data_dir: PathBuf,
     /// 引擎私有配置目录(<app_config>/ohmyagent;messages.jsonl 存在性检查用)
     pub(super) engine_dir: PathBuf,
+    /// 普通对话的独立工作区根(<app_local_data>/chat-workspaces)
+    pub(super) chat_workspaces_dir: PathBuf,
     /// 壳侧审批记忆持久化路径(兼容尾巴,配对 SessionsState::perm_remember)
     pub(super) perm_persist_path: PathBuf,
 }

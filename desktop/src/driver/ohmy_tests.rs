@@ -133,6 +133,9 @@ impl ShellCtx for TestCtx {
     fn config_dir(&self) -> Result<PathBuf, String> {
         Ok(self.0.clone())
     }
+    fn local_data_dir(&self) -> Result<PathBuf, String> {
+        Ok(self.0.join("local-data"))
+    }
     fn process_home(&self) -> Option<PathBuf> {
         self.0.parent().map(PathBuf::from)
     }
@@ -456,6 +459,7 @@ fn bare_inner(tag: &str) -> Arc<Inner> {
         models: vec![],
         data_dir,
         engine_dir: home.join("ohmyagent"),
+        chat_workspaces_dir: home.join("local-data/chat-workspaces"),
         perm_persist_path: home.join("perm.json"),
     })
 }

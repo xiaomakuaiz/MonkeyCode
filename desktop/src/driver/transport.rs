@@ -148,6 +148,7 @@ impl OhmyDriver {
         })?;
 
         let cfg_dir = app.config_dir()?;
+        let chat_workspaces_dir = app.local_data_dir()?.join("chat-workspaces");
         let log_path = cfg_dir.join("ohmyagent.log");
         // 崩溃日志轮转:File::create 会截断,崩溃后一键重启就把现场抹掉,
         // 只剩 engine-crashed 事件里的 15 行 tail——先把旧日志挪成 .prev
@@ -237,6 +238,7 @@ impl OhmyDriver {
             models,
             data_dir,
             engine_dir,
+            chat_workspaces_dir,
             perm_persist_path,
         });
 

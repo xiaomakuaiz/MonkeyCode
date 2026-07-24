@@ -36,8 +36,6 @@ import type { ModelInfo, SessionMeta } from "./types";
 
 /** 首启默认工作目录(内核解析 ~,不存在时自动创建);老用户默认沿用最近会话的目录 */
 export const DEFAULT_DIR = "~/MonkeyCode";
-/** 普通对话仍需给引擎一个 cwd；放到独立隐藏目录，不混入用户项目。 */
-export const CHAT_DIR = "~/.monkeycode/chat-workspace";
 
 export type NewTaskMode = "local" | "cloud" | "chat";
 
@@ -235,18 +233,18 @@ export function NewTaskView({
     }
   };
 
-  // 本地任务/普通对话创建:对话使用独立隐藏 cwd，并用持久化 kind 与项目会话区分。
+  // 本地任务/普通对话创建:对话的独立隐藏 cwd 由桌面壳生成，并用持久化 kind 与项目会话区分。
   // 成功后交给 App 编排(刷新列表 + 进入会话);项目目录不存在时给确认入口。
   const createTask = async (createDir = false, files?: File[]) => {
     const chatMode = mode === "chat";
-    const d = chatMode ? CHAT_DIR : dir.trim();
-    if (!d || busy) return;
+    const d = chatMode ? "" : dir.trim();
+    if ((!chatMode && !d) || busy) return;
     setBusy(true);
     setErr("");
     setOfferCreate(false);
     try {
-      // 自有目录静默创建;用户自填的项目目录不存在仍走确认流程
-      const meta = await createSession(d, model, createDir || d === DEFAULT_DIR || chatMode, chatMode ? "chat" : "local");
+      // 默认项目目录可静默创建；对话目录完全由壳管理，UI 不传内部路径。
+      const meta = await createSession(d, model, !chatMode && (createDir || d === DEFAULT_DIR), chatMode ? "chat" : "local");
       const first = text.trim();
       setText("");
       await onCreated(meta, first || undefined, files);

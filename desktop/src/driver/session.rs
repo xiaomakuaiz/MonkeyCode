@@ -7,7 +7,7 @@
 // (reconcile_*)。共享状态定义见 ohmy.rs::Inner。
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use base64::Engine as _;
@@ -16,6 +16,120 @@ use serde_json::{json, Value};
 use super::frame::{self, PermOutcome, SessionStatus};
 use super::ohmy::{Inner, OhmyDriver};
 use super::transport::JournalMsg;
+
+const CHAT_WORKSPACE_PREFIX: &str = "chat-";
+
+/// 普通对话不绑定用户项目，但引擎仍要求 cwd。每个新对话创建一个独立的
+/// 受管工作目录，根目录由 Tauri 按平台解析为本应用的 local data 目录。
+fn create_chat_workdir_in(root: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(root).map_err(|e| format!("创建对话工作区根目录失败: {e}"))?;
+    // 保留系统返回的原生路径格式；Windows 的 canonicalize 会附加 \\?\ 前缀，
+    // 部分命令行工具不能正确处理。删除时再解析真实父目录做边界校验。
+    for _ in 0..8 {
+        let mut random = [0u8; 10];
+        getrandom::getrandom(&mut random).map_err(|e| format!("生成对话工作区标识失败: {e}"))?;
+        let suffix = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let path = root.join(format!("{CHAT_WORKSPACE_PREFIX}{suffix}"));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("创建对话工作区失败: {e}")),
+        }
+    }
+    Err("创建对话工作区失败: 随机标识连续冲突".into())
+}
+
+fn valid_chat_workspace_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(CHAT_WORKSPACE_PREFIX))
+        .is_some_and(|suffix| {
+            suffix.len() == 20
+                && suffix.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+}
+
+/// 只返回指定应用数据根下、由本应用创建的单层 chat-<随机标识> 目录。
+/// 旧版 ~/.monkeycode/chat-workspace 不匹配，删除旧对话不会误删共享历史。
+fn managed_chat_workdir(root: &Path, path: &str) -> Option<PathBuf> {
+    let candidate = PathBuf::from(path);
+    if !valid_chat_workspace_name(&candidate) {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    if candidate.parent()?.canonicalize().ok()? != root {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&candidate).ok()?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    Some(candidate)
+}
+
+#[cfg(test)]
+mod chat_workdir_tests {
+    use super::*;
+
+    fn test_root(label: &str) -> PathBuf {
+        let mut random = [0u8; 8];
+        getrandom::getrandom(&mut random).unwrap();
+        let suffix = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        std::env::temp_dir()
+            .join(format!("monkeycode-chat-workdir-{label}-{suffix}"))
+            .join("chat-workspaces")
+    }
+
+    #[test]
+    fn creates_an_isolated_managed_directory_for_each_chat() {
+        let root = test_root("create");
+        let first = create_chat_workdir_in(&root).unwrap();
+        let second = create_chat_workdir_in(&root).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(root.as_path()));
+        assert!(first.is_dir());
+        assert!(second.is_dir());
+        assert_eq!(managed_chat_workdir(&root, &first.to_string_lossy()), Some(first));
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn cleanup_guard_rejects_paths_outside_the_app_data_root() {
+        let root = test_root("guard");
+        let managed = create_chat_workdir_in(&root).unwrap();
+        let base = root.parent().unwrap();
+        let outside = base.join("chat-00000000000000000000");
+        std::fs::create_dir(&outside).unwrap();
+        let legacy = base.join("chat-workspace");
+        std::fs::create_dir(&legacy).unwrap();
+
+        assert!(managed_chat_workdir(&root, &managed.to_string_lossy()).is_some());
+        assert!(managed_chat_workdir(&root, &outside.to_string_lossy()).is_none());
+        assert!(managed_chat_workdir(&root, &legacy.to_string_lossy()).is_none());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_guard_rejects_a_symlink_even_inside_the_managed_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_root("symlink");
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.parent().unwrap();
+        let target = base.join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = root.join("chat-00000000000000000000");
+        symlink(&target, &link).unwrap();
+
+        assert!(managed_chat_workdir(&root, &link.to_string_lossy()).is_none());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+}
 
 pub(super) struct SessionState {
     /// 帧序号(回放续接:打开时取日志行数)
@@ -185,10 +299,18 @@ impl OhmyDriver {
         kind: &str,
     ) -> Result<Value, String> {
         let model_id = self.model_id_of(model_name)?;
-        // ohmyagent 不展开 ~ 也不校验/创建目录,壳补齐:
-        // 展开主目录、按需创建,否则前置校验——避免建出 cwd 不存在的会话
-        let workdir = crate::config::expand_tilde(workdir);
-        let workdir = workdir.as_str();
+        // 普通对话的 cwd 由壳生成，调用方传入值一律不采用；本地项目仍按
+        // 用户选择展开 ~、按需创建或前置校验。
+        let chat_workdir = if kind == "chat" {
+            Some(create_chat_workdir_in(&self.0.chat_workspaces_dir)?)
+        } else {
+            None
+        };
+        let workdir_owned = chat_workdir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| crate::config::expand_tilde(workdir));
+        let workdir = workdir_owned.as_str();
         let exists = std::path::Path::new(workdir).is_dir();
         if !exists {
             if create_dir {
@@ -197,17 +319,30 @@ impl OhmyDriver {
                 return Err(format!("工作区目录不存在: {workdir}"));
             }
         }
-        let result = self
+        let result = match self
             .rpc(
                 "session/create",
                 engine_session_create_params(workdir, None, Some(&model_id), "default"),
             )
-            .await?;
-        let sid = result
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .ok_or("session/create 未返回 session_id")?
-            .to_string();
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                if let Some(path) = &chat_workdir {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+                return Err(e);
+            }
+        };
+        let sid = match result.get("session_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                if let Some(path) = &chat_workdir {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+                return Err("session/create 未返回 session_id".into());
+            }
+        };
         self.0.sess.sessions.lock().unwrap().insert(
             sid.clone(),
             SessionState {
@@ -351,6 +486,14 @@ impl OhmyDriver {
                 return Err("会话正在执行,请先取消".into());
             }
         }
+        let meta = self.read_sidecar(id);
+        let chat_workdir = (meta.get("kind").and_then(|v| v.as_str()) == Some("chat"))
+            .then(|| {
+                meta.get("workdir")
+                    .and_then(|v| v.as_str())
+                    .and_then(|path| managed_chat_workdir(&self.0.chat_workspaces_dir, path))
+            })
+            .flatten();
         let created = self.0.sess.sessions.lock().unwrap().get(id).map(|s| s.created).unwrap_or(false);
         let eng = self.engine_id(id);
         if created {
@@ -362,7 +505,7 @@ impl OhmyDriver {
         // 会话已从 sessions 移除 → 不会再有新帧入队;journal_close 带 ack
         // 等写线程排完队列并关句柄后才删目录——Windows 上打开中的文件删不掉
         let inner = self.0.clone();
-        let (id_owned, eng) = (id.to_string(), eng);
+        let (id_owned, eng, chat_workdir) = (id.to_string(), eng, chat_workdir);
         tokio::task::spawn_blocking(move || {
             let id = id_owned.as_str();
             // 级联删子代理子会话(sidecar parent == id;壳侧实体,无引擎目录)
@@ -390,6 +533,13 @@ impl OhmyDriver {
                 let _ = std::fs::remove_dir_all(root.join(&eng));
             }
             let _ = std::fs::remove_dir_all(inner.data_dir.join(id));
+            // 仅清理由 create_chat_workdir 创建并经父目录/命名/符号链接校验的
+            // 独立工作区；旧版共享目录和用户项目永远不会走到这里。
+            if let Some(path) = chat_workdir {
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    eprintln!("[desktop] 清理对话工作区失败({}): {e}", path.display());
+                }
+            }
         })
         .await
         .map_err(|e| format!("删除任务失败: {e}"))?;
