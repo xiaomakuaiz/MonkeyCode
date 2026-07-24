@@ -475,6 +475,7 @@ export function ToolCard({
   workdir,
   perm,
   onPermAnswer,
+  grouped = false,
 }: {
   item: Extract<LogItem, { kind: "tool" }>;
   onOpenChild?: (id: string) => void;
@@ -487,6 +488,8 @@ export function ToolCard({
    * 独立审批大卡随之不渲染;已决后由调用方不再传入,卡片回归常态 */
   perm?: Extract<LogItem, { kind: "perm" }>;
   onPermAnswer?: PermAnswerFn;
+  /** 相邻工具共享外框时只渲染内部区块，由父级提供卡片底座。 */
+  grouped?: boolean;
 }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const [showAgentResult, setShowAgentResult] = useState(false);
@@ -520,7 +523,7 @@ export function ToolCard({
     minWidth: 0,
   };
   return (
-    <div className="card tool-card" style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
+    <div className={grouped ? "tool-card tool-card-grouped" : "card tool-card"} style={{ padding: "11px 14px", display: "flex", flexDirection: "column", gap: 7, fontSize: 12.5 }}>
       <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", columnGap: 9, alignItems: "center", minWidth: 0 }}>
         {/* 待审批:⏸ 顶掉运行状态图标,
             解答后回到 run/ok/fail 常规流转 */}
@@ -1291,7 +1294,7 @@ function AskCard({
   );
 }
 
-/** 对话流:相邻工具卡聚成一列(间距 8,设计稿 agents 列) */
+/** 对话流:相邻工具调用共享一个卡片外框，以细分割线保留逐项结构。 */
 export function LogList({
   items,
   onPermAnswer,
@@ -1342,8 +1345,9 @@ export function LogList({
         group.push(t);
         i++;
       }
+      const grouped = group.length > 1;
       out.push(
-        <div key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: "92%" }}>
+        <div className={grouped ? "card tool-stack" : undefined} key={"g" + start} style={{ display: "flex", flexDirection: "column", gap: grouped ? 0 : 8, maxWidth: "92%" }}>
           {group.map((t, j) => (
             <ToolCard
               key={t.tcId || j}
@@ -1354,6 +1358,7 @@ export function LogList({
               workdir={workdir}
               perm={anchors.get(t.tcId)}
               onPermAnswer={onPermAnswer}
+              grouped={grouped}
             />
           ))}
         </div>,

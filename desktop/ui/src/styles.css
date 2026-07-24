@@ -173,6 +173,7 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 .tool-card:focus-within .tool-duration {
   display: inline;
 }
+.tool-stack > .tool-card + .tool-card { border-top: 1px solid var(--line2); }
 .card-lg { border-radius: 11px; padding: 16px; }
 /* 骨架屏占位块(加载态;宽高由使用处内联) */
 .skeleton {
