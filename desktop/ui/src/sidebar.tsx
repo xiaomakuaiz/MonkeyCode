@@ -10,6 +10,7 @@ import {
   IconChevronRight,
   IconCloud,
   IconDots,
+  IconFolder,
   IconGear,
   IconMonitor,
   IconPencil,
@@ -180,18 +181,17 @@ function SessionRow({
               }}
             />
           ) : (
-            <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.25, fontWeight: active ? 650 : 520, color: active ? "var(--t1)" : "var(--t2)" }}>
+            <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.25, fontWeight: 400, color: active ? "var(--t1)" : "var(--t2)" }}>
               {title}
             </span>
           )}
-          {!showActions ? (
-            attention && (
+          <span style={{ position: "relative", width: 20, height: 20, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {attention && !showActions && (
               <span
                 title={meta.status === "error" ? "后台任务出错" : "会话有新进展"}
-                style={{ width: 7, height: 7, borderRadius: "50%", background: meta.status === "error" ? "var(--err)" : "var(--acc)", flex: "none" }}
+                style={{ position: "absolute", width: 7, height: 7, borderRadius: "50%", background: meta.status === "error" ? "var(--err)" : "var(--acc)" }}
               />
-            )
-          ) : (
+            )}
             <button
               title="更多操作"
               onClick={(e) => {
@@ -206,11 +206,11 @@ function SessionRow({
                 setMenu("open");
               }}
               className="hv3 icon-btn"
-              style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent" }}
+              style={{ width: 20, height: 20, borderRadius: 5, background: menu !== "closed" ? "var(--hov3)" : "transparent", opacity: showActions ? 1 : 0, pointerEvents: showActions ? "auto" : "none", transition: "opacity .12s ease" }}
             >
               <IconDots color="var(--t3)" />
             </button>
-          )}
+          </span>
         </div>
         <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, minWidth: 0, fontSize: 10.5, lineHeight: 1.2 }}>
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color, flex: "none" }} />
@@ -257,6 +257,7 @@ function SessionRow({
 function ProjectGroup({
   name,
   detail,
+  project = false,
   expanded,
   muted,
   onToggle,
@@ -265,6 +266,7 @@ function ProjectGroup({
 }: {
   name: string;
   detail?: string;
+  project?: boolean;
   expanded: boolean;
   muted?: boolean;
   onToggle: () => void;
@@ -294,16 +296,20 @@ function ProjectGroup({
           color: muted ? "var(--t5)" : "var(--t1)",
         }}
       >
-        <span style={{ width: 12, height: 12, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <IconChevronRight size={9} style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
+        <span style={{ width: 13, height: 13, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {project ? (
+            <IconFolder size={13} color={muted ? "var(--t5)" : "var(--t3)"} />
+          ) : (
+            <IconChevronRight size={9} style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
+          )}
         </span>
         <span className="ellipsis" style={{ flex: 1 }}>{name}</span>
-        {onNewTask && hover && (
+        {onNewTask && (
           <button
             className="hv3 icon-btn"
             title="在此项目新建任务"
             onClick={(e) => { e.stopPropagation(); onNewTask(); }}
-            style={{ width: 22, height: 22, borderRadius: 6 }}
+            style={{ width: 22, height: 22, borderRadius: 6, opacity: hover ? 1 : 0, pointerEvents: hover ? "auto" : "none", transition: "opacity .12s ease" }}
           >
             <IconPlus size={10} color="var(--t3)" />
           </button>
@@ -336,7 +342,7 @@ function CloudTaskRow({ task, active, onClick }: { task: CloudTask; active: bool
         minWidth: 0,
       }}
     >
-      <span className="ellipsis" style={{ width: "100%", fontSize: 13, lineHeight: 1.25, fontWeight: active ? 650 : 520, color: active ? "var(--t1)" : "var(--t2)" }}>{label}</span>
+      <span className="ellipsis" style={{ width: "100%", fontSize: 13, lineHeight: 1.25, fontWeight: 400, color: active ? "var(--t1)" : "var(--t2)" }}>{label}</span>
       <span style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, lineHeight: 1.2 }}>
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color, flex: "none" }} />
         <span style={{ color: st.color }}>{st.text}</span>
@@ -696,6 +702,7 @@ export function Sidebar({
               key={group.dir}
               name={group.name}
               detail={group.dir}
+              project
               expanded={!!norm || !collapsed.has(group.dir)}
               onToggle={() => toggleGroup(group.dir)}
               onNewTask={() => onNewTask(group.dir)}
