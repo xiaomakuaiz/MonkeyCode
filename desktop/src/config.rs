@@ -66,6 +66,12 @@ pub struct DesktopConfig {
     /// 内核运行环境:空 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows)。
     #[serde(default)]
     pub kernel_env: String,
+    /// MonkeyCode 服务地址(自建/私有化部署;空 = 官方云)。环境变量
+    /// MC_DESKTOP_MONKEYCODE_URL 优先于本字段(开发/联调逃生门)。修改
+    /// 保存后需**重启应用**生效:云端服务(baizhi::Service)在应用启动
+    /// 时按此构造一次,设置页保存只重启引擎、不重建它。
+    #[serde(default)]
+    pub mc_base_url: String,
     /// 已废弃(单引擎化后忽略):历史 config.json 兼容保留,不再消费。
     #[serde(default = "default_engine")]
     pub agent_engine: String,
@@ -89,6 +95,7 @@ impl Default for DesktopConfig {
             models: json_array(),
             mcp_servers: json_object(),
             kernel_env: String::new(),
+            mc_base_url: String::new(),
             agent_engine: default_engine(),
             pet_enabled: true,
             pet_pos: None,

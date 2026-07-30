@@ -44,12 +44,16 @@ fn env_or(env: &str, def: &str) -> String {
 }
 
 impl Endpoints {
-    pub fn resolve() -> Self {
+    /// mc_base_url 来自设置(config.json,自建/私有化部署地址;空 = 官方云)。
+    /// 优先级:环境变量(开发/联调逃生门)> 设置值 > 官方云默认。
+    pub fn resolve(mc_base_url: &str) -> Self {
+        let mc_default = mc_base_url.trim();
+        let mc_default = if mc_default.is_empty() { "https://monkeycode-ai.com" } else { mc_default };
         Self {
             account: env_or("MC_DESKTOP_BAIZHI_URL", "https://baizhi.cloud"),
             model_gateway: DEFAULT_MODEL_GATEWAY.to_string(),
             mcp_gateway: DEFAULT_MCP_GATEWAY.to_string(),
-            monkeycode: env_or("MC_DESKTOP_MONKEYCODE_URL", "https://monkeycode-ai.com"),
+            monkeycode: env_or("MC_DESKTOP_MONKEYCODE_URL", mc_default),
         }
     }
 }
@@ -115,7 +119,7 @@ impl Service {
         }
     }
 
-    pub fn new(config_dir: std::path::PathBuf) -> Self {
+    pub fn new(config_dir: std::path::PathBuf, mc_base_url: &str) -> Self {
         // 构建失败只发生在 TLS 后端初始化不了时。不 panic:壳在 setup 里
         // 构造本服务,GUI 子系统下 panic = 双击没反应、无任何线索。降级为
         // 云端/账号命令逐条报错,本地引擎会话不受影响。
@@ -128,7 +132,7 @@ impl Service {
                 .ok()
         };
         Self {
-            ep: Endpoints::resolve(),
+            ep: Endpoints::resolve(mc_base_url),
             http: mk(30),
             lp: mk(40),
             store: CookieStore::new(Some(config_dir.join("baizhi-cookies.json"))),
@@ -607,6 +611,9 @@ pub(crate) fn stored_ohmyagent_key(cfg_dir: &std::path::Path) -> Option<Value> {
 /// 取本机代理 Key,没有就创建并立刻落盘(明文只此一次,不落盘即丢)。
 /// 落盘时附上代理 base_url 快照(服务端同源 /v1)——物化注入的另一半;
 /// 旧文件缺 base_url 时(历史迭代产物)同步顺手回填,不留哑条目。
+/// 快照与当前地址不一致 = 用户切换了服务地址:旧 Key 属旧服务器,复用
+/// 即跨服误用,作废重建(旧服务器侧的 Key 无从删除——会话已在新地址,
+/// 记录为已知限制)。
 async fn ensure_ohmyagent_key(svc: &Service, cfg_dir: &std::path::Path) -> BzResult<Value> {
     let base_url = format!("{}/v1", svc.ep.monkeycode);
     let persist = |k: &Value| {
@@ -614,11 +621,15 @@ async fn ensure_ohmyagent_key(svc: &Service, cfg_dir: &std::path::Path) -> BzRes
             .map_err(other)
     };
     if let Some(mut k) = stored_ohmyagent_key(cfg_dir) {
-        if k.get("base_url").and_then(Value::as_str).map(|s| s.is_empty()).unwrap_or(true) {
-            k["base_url"] = json!(base_url);
-            persist(&k)?;
+        match k.get("base_url").and_then(Value::as_str).unwrap_or("") {
+            b if b == base_url => return Ok(k),
+            "" => {
+                k["base_url"] = json!(base_url);
+                persist(&k)?;
+                return Ok(k);
+            }
+            _ => {} // 地址已切换,落到下方重建
         }
-        return Ok(k);
     }
     let mut k = monkeycode::mc_ohmyagent_key_create(svc).await?;
     k["base_url"] = json!(base_url);

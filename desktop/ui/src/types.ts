@@ -69,6 +69,9 @@ export interface HostConfig {
   mcp_servers: Record<string, unknown>;
   /** 内核运行环境:空/缺省 = 本机;"wsl:<发行版>" = 在 WSL 中运行(仅 Windows) */
   kernel_env?: string;
+  /** MonkeyCode 服务地址(自建/私有化部署;空/缺省 = 官方云)。环境变量
+   * MC_DESKTOP_MONKEYCODE_URL 优先;修改保存后需重启应用生效 */
+  mc_base_url?: string;
 }
 
 // SessionStatus:见文件头——gen/SessionStatus.ts(ts-rs 生成)复用,

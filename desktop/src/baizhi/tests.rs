@@ -117,6 +117,22 @@ fn official_model_and_mcp_gateways_are_pinned() {
     assert_eq!(super::DEFAULT_MCP_GATEWAY, "https://agent-toolkit.app.baizhi.cloud");
 }
 
+/// MonkeyCode 服务地址解析:环境变量 > 设置值 > 官方云;设置值 trim +
+/// 尾斜杠归一。该环境变量只有生产路径(Service::new)消费,其余测试
+/// 不读它,本测试内设/删无交叉。
+#[test]
+fn endpoints_resolve_honors_configured_mc_base_url() {
+    std::env::remove_var("MC_DESKTOP_MONKEYCODE_URL");
+    let ep = Endpoints::resolve("https://self.example.com/");
+    assert_eq!(ep.monkeycode, "https://self.example.com", "设置值生效且尾斜杠归一");
+    let ep = Endpoints::resolve("  ");
+    assert_eq!(ep.monkeycode, "https://monkeycode-ai.com", "空白设置回落官方云");
+    std::env::set_var("MC_DESKTOP_MONKEYCODE_URL", "https://env.example.com");
+    let ep = Endpoints::resolve("https://self.example.com");
+    assert_eq!(ep.monkeycode, "https://env.example.com", "环境变量优先(开发/联调逃生门)");
+    std::env::remove_var("MC_DESKTOP_MONKEYCODE_URL");
+}
+
 /// ai-models 真机契约:控制台只管密钥;模型清单用该密钥请求
 /// /api/anthropic/models。清单按 Anthropic data/has_more 分页,条目标识为 id。
 #[tokio::test(flavor = "multi_thread")]
@@ -861,6 +877,17 @@ async fn mc_member_models_sync_and_revoke_contract() {
         "删失败后同步复用原 Key"
     );
     assert_eq!(*created.lock().unwrap(), 2);
+
+    // 服务地址切换:Key 文件的 base_url 快照与当前地址不一致 → 作废重建
+    // (旧 Key 属旧服务器,跨服复用是误用;旧服务器侧无从删除,已知限制)
+    let stale = json!({ "id": "key-2", "api_key": "omk-2", "signing_secret": "sec-1",
+                        "base_url": "https://old.example.com/v1" });
+    std::fs::write(tmp.0.join(super::OHMYAGENT_KEY_FILE), stale.to_string()).unwrap();
+    super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    let renewed = super::stored_ohmyagent_key(&tmp.0).unwrap();
+    assert_eq!(renewed.get("api_key").and_then(Value::as_str), Some("omk-3"), "地址切换应重建 Key 而非跨服复用");
+    assert_eq!(renewed.get("base_url").and_then(Value::as_str), Some(expected_base.as_str()));
+    assert_eq!(*created.lock().unwrap(), 3);
 
     let reqs = captured.lock().unwrap();
     let post = reqs.iter().find(|(m, p, _)| m == "POST" && p == "/api/v1/users/ohmyagent/api-keys").unwrap();

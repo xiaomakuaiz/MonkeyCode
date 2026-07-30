@@ -1155,18 +1155,20 @@ fn main() {
             baizhi::monkeycode::cloud_ws_close
         ])
         .setup(|app| {
-            // 百智云/云端服务(壳级单例;凭证 cookie 与配置同目录)
-            let cfg_dir = config::config_dir(app.handle()).map_err(std::io::Error::other)?;
-            app.manage(baizhi::BaizhiState(std::sync::Arc::new(
-                baizhi::Service::new(cfg_dir),
-            )));
-
             // 配置损坏且无有效备份时绝不能按默认值继续并覆写；仍创建错误页
             // 让用户看见可行动诊断。托盘/桌宠只使用内存中的安全默认值。
             let (cfg, config_error) = match load_config(app.handle()) {
                 Ok(cfg) => (cfg, None),
                 Err(e) => (DesktopConfig::default(), Some(e)),
             };
+
+            // 百智云/云端服务(壳级单例;凭证 cookie 与配置同目录)。晚于
+            // 配置加载:MonkeyCode 服务地址可由设置指定(mc_base_url,重启
+            // 应用生效);配置损坏时按默认值落官方云,错误页照常外显。
+            let cfg_dir = config::config_dir(app.handle()).map_err(std::io::Error::other)?;
+            app.manage(baizhi::BaizhiState(std::sync::Arc::new(
+                baizhi::Service::new(cfg_dir, &cfg.mc_base_url),
+            )));
             app.state::<PetEnabled>()
                 .0
                 .store(cfg.pet_enabled, Ordering::Relaxed);
