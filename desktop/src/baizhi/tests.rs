@@ -408,6 +408,109 @@ async fn monkeycode_bridge_login() {
     assert!(li, "百智登出不应牵连 MonkeyCode 会话");
 }
 
+/// 账号密码直连登录契约(对齐 mobile/backend):MC 域 PoW 验证码
+/// (challenge 201 裸结构、redeem 成功 201/失败 500,服务端按协议独立校验
+/// 解)→ password-login(email 精确、password **明文原样**含尾空格、
+/// captcha_token 必带)种 monkeycode_ai_session cookie → status 权威确认;
+/// 全程不碰百智罐(双罐隔离)。业务失败统一 200+code10606「登录失败」透传。
+#[tokio::test(flavor = "multi_thread")]
+async fn monkeycode_password_login_contract() {
+    let state = Arc::new(Mutex::new((String::new(), String::new(), String::new()))); // (challenge_token, captcha_token, session)
+    let st = state.clone();
+    let (url, _stop) = serve(Arc::new(move |req: Req| {
+        let mut s = st.lock().unwrap();
+        match (req.method.as_str(), req.path.split('?').next().unwrap()) {
+            ("POST", "/api/v1/public/captcha/challenge") => {
+                s.0 = "mc-chtok".into();
+                // 真实服务端(go-cap)回 201 + 裸结构(不套 {code,data} 包壳)
+                Resp::json(201, json!({ "challenge": {"c": 3, "s": 32, "d": 3}, "token": s.0 }))
+            }
+            ("POST", "/api/v1/public/captcha/redeem") => {
+                let b = body_json(&req.body);
+                let token = b.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                let sols: Vec<u64> = b
+                    .get("solutions")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+                    .unwrap_or_default();
+                if token != s.0 || sols.len() != 3 {
+                    // 真实失败形态:HTTP 500 + {success:false,message}
+                    return Resp::json(500, json!({ "success": false, "message": "质询不匹配" }));
+                }
+                // 服务端独立校验每个解(与 login_flow 同一套协议复刻)
+                for (i, nonce) in sols.iter().enumerate() {
+                    let idx = (i + 1).to_string();
+                    let salt = prng(&format!("{token}{idx}"), 32);
+                    let target = prng(&format!("{token}{idx}d"), 3);
+                    let mut h = Sha256::new();
+                    h.update(salt.as_bytes());
+                    h.update(nonce.to_string().as_bytes());
+                    let hex = h.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
+                    if !hex.starts_with(&target) {
+                        return Resp::json(500, json!({ "success": false, "message": "PoW 解无效" }));
+                    }
+                }
+                s.1 = "mc-captok".into();
+                // 真实成功形态:HTTP 201
+                Resp::json(201, json!({ "success": true, "token": s.1 }))
+            }
+            ("POST", "/api/v1/users/password-login") => {
+                let b = body_json(&req.body);
+                if b.get("captcha_token").and_then(Value::as_str) != Some(s.1.as_str()) {
+                    // captcha 校验失败的真实形态(errcode.ErrForbidden)
+                    return Resp::json(403, json!({ "code": 403, "message": "禁止访问" }));
+                }
+                if b.get("email").and_then(Value::as_str) != Some("dev@monkeycode.io") {
+                    // 密码错/用户不存在统一折叠为 10606(HTTP 200)
+                    return Resp::json(200, json!({ "code": 10606, "message": "登录失败" }));
+                }
+                // password 明文原样:尾空格必须保留(mobile/web 均不 trim 不哈希)
+                assert_eq!(b.get("password").and_then(Value::as_str), Some("p@ss word "));
+                s.2 = "mc-sess-1".into();
+                Resp::json(200, json!({ "code": 0, "data": {"id": "u9", "email": "dev@monkeycode.io"} }))
+                    .with_cookie("monkeycode_ai_session=mc-sess-1; Path=/; HttpOnly")
+            }
+            ("GET", "/api/v1/users/status") => {
+                let sess = s.2.clone();
+                if sess.is_empty() || !req.cookie.contains(&format!("monkeycode_ai_session={sess}")) {
+                    return Resp::json(200, json!({ "code": 0, "data": {"user": {}} }));
+                }
+                Resp::json(200, json!({ "code": 0, "data": {"user": {"id": "u9", "name": "账密用户"}} }))
+            }
+            _ => Resp::json(404, json!({ "code": 1, "message": "not found" })),
+        }
+    }));
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url.clone(),
+    });
+
+    // 业务失败:10606「登录失败」原样透传,会话不建立
+    let err = super::monkeycode::login_monkeycode_password(&svc, "wrong@x.com", "whatever")
+        .await
+        .err()
+        .map(|e| e.msg())
+        .unwrap();
+    assert_eq!(err, "登录失败");
+    let (li, _) = super::monkeycode::mc_status(&svc).await.map_err(|e| e.msg()).unwrap();
+    assert!(!li, "登录失败不应建立会话");
+
+    // 成功:PoW → 登录种 cookie → status 权威确认
+    let user = super::monkeycode::login_monkeycode_password(&svc, "dev@monkeycode.io", "p@ss word ")
+        .await
+        .map_err(|e| e.msg())
+        .unwrap();
+    assert_eq!(user.get("id").and_then(Value::as_str), Some("u9"));
+    assert_eq!(user.get("name").and_then(Value::as_str), Some("账密用户"));
+    let (li, u) = super::monkeycode::mc_status(&svc).await.map_err(|e| e.msg()).unwrap();
+    assert!(li);
+    assert_eq!(u.get("id").and_then(Value::as_str), Some("u9"));
+    // 双罐隔离:整个账密链路(含 MC 域验证码)不得污染百智罐
+    assert!(svc.store.is_empty(), "百智罐必须始终为空");
+}
+
 /// 包壳解包策略:四链路(百智云/网关/MCP 网关/MonkeyCode)的差异点钉死,
 /// 防止合一后语义漂移(code 合法值集合、3xx/401 处理、data 兜底)。
 #[test]
@@ -448,12 +551,15 @@ fn envelope_policies_pinned() {
     assert!(unwrap_envelope(br#"{"code":"err","message":"x"}"#, 200, &ENV_MCP).is_err());
     assert!(unwrap_envelope(br#"{"code":true}"#, 200, &ENV_MCP).is_err());
 
-    // MonkeyCode:401 不看响应体,固定"重新同步云端账号"(与百智云语义不同)
+    // MonkeyCode:401 不看响应体,固定"到设置中重新连接"(中性,不偏向
+    // 桥接或账密任一登录方式;与百智云的"重新登录"语义不同)
     let m = unauthorized(unwrap_envelope(r#"{"code":1,"message":"别的话"}"#.as_bytes(), 401, &ENV_MC));
-    assert_eq!(m, "MonkeyCode 会话已失效,请重新同步云端账号");
+    assert_eq!(m, "MonkeyCode 会话已失效,请在设置中重新连接");
     // 业务失败走清洗后的 message;缺 data 兜底 Null
     assert_eq!(err_msg(unwrap_envelope(r#"{"code":7,"message":"忙 [trace_id:y]"}"#.as_bytes(), 200, &ENV_MC)), "忙");
     assert!(unwrap_envelope(br#"{"code":0}"#, 200, &ENV_MC).map_err(|e| e.msg()).unwrap().is_null());
+    // 账密登录的 captcha 校验失败形态:HTTP 403 + message,非 401 → Other 透传
+    assert_eq!(err_msg(unwrap_envelope(r#"{"code":403,"message":"禁止访问"}"#.as_bytes(), 403, &ENV_MC)), "禁止访问");
 }
 
 /// rounds 归一化:event→type、纳秒→毫秒、seq/kind/data 透传(对照 Go TestTaskRounds)。

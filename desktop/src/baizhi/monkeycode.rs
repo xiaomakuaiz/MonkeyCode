@@ -143,6 +143,28 @@ async fn mc_user(svc: &Service) -> BzResult<Value> {
     Ok(user)
 }
 
+/// 账号密码直连登录(参考 mobile:POST /api/v1/users/password-login,免鉴权)。
+/// 与百智云桥接互为替代:服务端走同一个 Session.Save,cookie 同名
+/// (monkeycode_ai_session)落 mc 罐,下游任务/会员模型全部通用。
+/// 流程:MC 域 PoW 验证码 → 登录 → status 权威确认(与桥接同款收尾)。
+/// password 发**明文**(HTTPS;服务端 bcrypt 比对——domain.TeamLoginReq 注释
+/// 里的"MD5 加密后的值"已过时,mobile/web 前端都发明文,勿做前端哈希)。
+/// 服务端把密码错/用户不存在等业务失败统一折叠为「登录失败」(code 10606),
+/// 经 ENV_MC 解包原样透传。
+pub async fn login_monkeycode_password(svc: &Service, email: &str, password: &str) -> BzResult<Value> {
+    // 验证码打 MonkeyCode 域;罐传 mc——罐决定 Set-Cookie 吸收方向,
+    // 用百智罐会把 mc 域 cookie 混进百智罐,破坏双罐隔离
+    let captcha = svc.captcha_token_at(&svc.ep.monkeycode, &svc.mc, "MonkeyCode ").await?;
+    mc_call(
+        svc,
+        reqwest::Method::POST,
+        "/api/v1/users/password-login",
+        Some(&json!({ "email": email, "password": password, "captcha_token": captcha })),
+    )
+    .await?;
+    confirm_mc_login(svc).await
+}
+
 /// 云端会话状态:有会话时返回用户信息。
 pub async fn mc_status(svc: &Service) -> BzResult<(bool, Value)> {
     if svc.mc.is_empty() {
@@ -789,13 +811,14 @@ pub async fn mc_member_models_sync(svc: &Service) -> BzResult<Value> {
 }
 
 /// MonkeyCode 云端包壳 {code,message,data}。401 不看响应体直接判会话失效:
-/// 恢复动作是"重新同步云端账号"(桥接登录),与百智云的"重新登录"不同。
+/// 恢复动作是到设置中重新连接(百智云桥接或账号密码登录皆可),文案保持
+/// 中性不偏向某一种登录方式。
 pub(crate) const ENV_MC: Envelope = Envelope {
     label: "MonkeyCode ", // 尾部空格:拉丁词与中文文案之间的排版间隔
     code_ok: code_is_zero,
     check_success: false,
     redirect_msg: None,
-    fixed_401: Some("MonkeyCode 会话已失效,请重新同步云端账号"),
+    fixed_401: Some("MonkeyCode 会话已失效,请在设置中重新连接"),
     whole_body_fallback: false,
 };
 
@@ -899,7 +922,7 @@ pub async fn cloud_ws_open(
     }
     let svc = &bz.0;
     if svc.mc.is_empty() {
-        return Err("MonkeyCode 会话缺失,请先同步云端账号".into());
+        return Err("MonkeyCode 会话缺失,请先在设置中连接 MonkeyCode 账号".into());
     }
     let (https_url, ws_url) = pipe_urls(svc, &kind, &id, &params)?;
 

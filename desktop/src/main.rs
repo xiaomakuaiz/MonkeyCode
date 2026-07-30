@@ -1133,6 +1133,7 @@ fn main() {
             baizhi::baizhi_sync,
             baizhi::mc_status,
             baizhi::mc_login,
+            baizhi::mc_password_login,
             baizhi::mc_logout,
             baizhi::mc_models_sync,
             baizhi::mc_models_revoke,

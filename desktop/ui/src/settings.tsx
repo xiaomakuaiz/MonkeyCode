@@ -349,6 +349,7 @@ function MonkeyCodeAccountCard({
   connection,
   baizhiLoggedIn,
   onConnect,
+  onPasswordLogin,
   onRetry,
   onDisconnect,
   onSyncedModels,
@@ -356,6 +357,9 @@ function MonkeyCodeAccountCard({
   connection: McConnectionState;
   baizhiLoggedIn: boolean;
   onConnect: () => void;
+  /** 账号密码直连登录:null=成功,string=错误文案(表单本地展示,
+   * 不进全局 mcConnection.error——侧栏「重试连接」跑的是桥接,语义不匹配) */
+  onPasswordLogin: (email: string, password: string) => Promise<string | null>;
   onRetry: () => void;
   onDisconnect: () => void;
   /** 同步成功回填设置表单(条目已带 source="monkeycode");
@@ -388,6 +392,35 @@ function MonkeyCodeAccountCard({
       setSyncing(false);
     }
   };
+  // 账号密码表单(未关联态的第二条登录路径;不要求百智云已登录)。
+  // pwBusy 是本地提交态:全局 phase 会被窗口聚焦触发的 syncCloud 竞态改写
+  // (瞬间回 disconnected),只看 phase 会让表单在登录途中解锁二次提交。
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwEmail, setPwEmail] = useState("");
+  const [pwPassword, setPwPassword] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwErr, setPwErr] = useState("");
+  const doPasswordLogin = async () => {
+    if (!pwEmail.trim() || !pwPassword) {
+      setPwErr("请输入邮箱和密码");
+      return;
+    }
+    setPwErr("");
+    setPwBusy(true);
+    try {
+      const err = await onPasswordLogin(pwEmail, pwPassword).catch((e) => (e instanceof Error ? e.message : String(e)));
+      if (err) {
+        setPwErr(err);
+      } else {
+        // 成功收起并清空(密码不留内存态);connected 后入口整体消失
+        setPwOpen(false);
+        setPwEmail("");
+        setPwPassword("");
+      }
+    } finally {
+      setPwBusy(false);
+    }
+  };
   const busy = connection.phase === "checking" || connection.phase === "connecting" || connection.phase === "disconnecting";
   const connected = connection.phase === "connected";
   const status =
@@ -408,7 +441,7 @@ function MonkeyCodeAccountCard({
     if (connection.phase === "connecting") return "正在使用百智云账号完成授权…";
     if (connection.phase === "disconnecting") return "正在清除本机 MonkeyCode 会话…";
     if (connected) return `已关联为 ${mcIdentity(connection)}，远端任务会显示在主界面侧栏。`;
-    if (!baizhiLoggedIn) return "请先登录上方百智云账号，再连接 MonkeyCode。";
+    if (!baizhiLoggedIn) return "使用百智云账号一键连接(需先登录上方百智云账号)，或使用下方账号密码登录。";
     return "连接后可查看、创建并实时跟看 MonkeyCode 远端任务。";
   })();
   const canConnect = baizhiLoggedIn && !busy;
@@ -479,6 +512,69 @@ function MonkeyCodeAccountCard({
       </div>
       <span style={{ fontSize: 11.5, color: connection.error ? "var(--err)" : "var(--t5)", lineHeight: 1.6 }}>{message}</span>
       {syncMsg && <span style={{ fontSize: 12, color: syncMsg.color, lineHeight: 1.6 }}>{syncMsg.text}</span>}
+      {/* 第二条登录路径:MonkeyCode 账号密码(不经百智云,私有化/未绑百智账号可用) */}
+      {(connection.phase === "disconnected" || connection.phase === "error") && (
+        <>
+          <span
+            className="hv-t1"
+            onClick={() => !busy && !pwBusy && setPwOpen((v) => !v)}
+            style={{ fontSize: 12, color: "var(--t5)", cursor: busy || pwBusy ? "default" : "pointer", userSelect: "none", alignSelf: "flex-start", fontWeight: 600 }}
+          >
+            {pwOpen ? "收起账号密码登录" : "使用账号密码登录"}
+          </span>
+          {pwOpen && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Field label="邮箱">
+                  <input
+                    style={input}
+                    value={pwEmail}
+                    placeholder="dev@monkeycode.io"
+                    onChange={(e) => setPwEmail(e.target.value)}
+                    className="hv-bd"
+                  />
+                </Field>
+                <Field label="密码">
+                  <input
+                    style={input}
+                    type="password"
+                    value={pwPassword}
+                    placeholder="MonkeyCode 账号密码"
+                    onChange={(e) => setPwPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !pwBusy && !busy) void doPasswordLogin();
+                    }}
+                    className="hv-bd"
+                  />
+                </Field>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <button
+                  className="hv-acc"
+                  disabled={pwBusy || busy}
+                  onClick={() => void doPasswordLogin()}
+                  style={{
+                    height: 30,
+                    border: "none",
+                    borderRadius: 8,
+                    background: "var(--acc)",
+                    color: "var(--onAcc)",
+                    fontWeight: 700,
+                    fontSize: 12.5,
+                    padding: "0 18px",
+                    cursor: pwBusy || busy ? "default" : "pointer",
+                    opacity: pwBusy || busy ? 0.7 : 1,
+                    flex: "none",
+                  }}
+                >
+                  {pwBusy ? "登录中…" : "登录"}
+                </button>
+                {pwErr && <span className="selectable" style={{ fontSize: 12, color: "var(--err)" }}>{pwErr}</span>}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -494,6 +590,7 @@ export function SettingsView({
   onDirtyChange,
   mcConnection,
   onConnectMc,
+  onPasswordLoginMc,
   onRetryMc,
   onDisconnectMc,
 }: {
@@ -506,6 +603,8 @@ export function SettingsView({
   onDirtyChange?: (dirty: boolean) => void;
   mcConnection: McConnectionState;
   onConnectMc: () => void;
+  /** 账号密码直连登录(null=成功,string=错误文案,表单本地展示) */
+  onPasswordLoginMc: (email: string, password: string) => Promise<string | null>;
   onRetryMc: () => void;
   onDisconnectMc: () => void;
 }) {
@@ -1324,6 +1423,7 @@ export function SettingsView({
           connection={mcConnection}
           baizhiLoggedIn={loggedIn}
           onConnect={onConnectMc}
+          onPasswordLogin={onPasswordLoginMc}
           onRetry={onRetryMc}
           onDisconnect={() => void disconnectMcWithCleanup()}
           onSyncedModels={(ms) => applySyncedModels(ms, SOURCE_MONKEYCODE, true)}

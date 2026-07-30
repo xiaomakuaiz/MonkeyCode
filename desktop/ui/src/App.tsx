@@ -10,7 +10,7 @@ import {
   windowContextLabel,
   type AppMainView,
 } from "./appView";
-import { mcLogin, mcLogout, mcTaskDelete, mcTaskStop } from "./cloudapi";
+import { mcLogin, mcLogout, mcPasswordLogin, mcTaskDelete, mcTaskStop } from "./cloudapi";
 import {
   getHostConfig,
   getHostInfo,
@@ -216,6 +216,31 @@ export default function App() {
       setCloudProjects([]);
     }
   }, [syncCloud]);
+
+  /** 账号密码直连登录(壳内自动完成 PoW 验证码;凭证不出内核)。返回
+   * null=成功、string=错误文案——错误交由设置卡表单本地展示,不写
+   * mcConnection.error:全局 error 会让侧栏出现「连接失败+重试连接」,
+   * 而那个按钮跑的是百智桥接,语义错位。 */
+  const connectCloudWithPassword = useCallback(
+    async (email: string, password: string): Promise<string | null> => {
+      const op = ++cloudOp.current;
+      setCloudSyncing(false);
+      setCloudError("");
+      setMcConnection((cur) => ({ ...cur, phase: "connecting", error: undefined }));
+      try {
+        await mcPasswordLogin(email, password);
+        // invoke 成功即会话已建立;竞态被顶掉时全局状态交给下次 syncCloud 兜底
+        if (op === cloudOp.current) await syncCloud();
+        return null;
+      } catch (e) {
+        if (op === cloudOp.current) {
+          setMcConnection((cur) => ({ ...cur, phase: "disconnected", error: undefined }));
+        }
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
+    [syncCloud],
+  );
 
   const disconnectCloud = useCallback(async () => {
     const op = ++cloudOp.current;
@@ -757,6 +782,7 @@ export default function App() {
             onUpdateStatus={setUpdate}
             mcConnection={mcConnection}
             onConnectMc={() => void connectCloud()}
+            onPasswordLoginMc={connectCloudWithPassword}
             onRetryMc={() => void syncCloud()}
             onDisconnectMc={() => void disconnectCloud()}
           />

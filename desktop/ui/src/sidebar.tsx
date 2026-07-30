@@ -999,10 +999,15 @@ export function Sidebar({
       return stateCard(`状态检查失败：${mcConnection.error || "无法连接 MonkeyCode"}`, onRefreshCloud ? { label: "重试", run: onRefreshCloud } : undefined);
     }
     if (mcConnection.phase === "disconnected") {
-      return stateCard(mcConnection.error ? `连接失败：${mcConnection.error}` : "连接 MonkeyCode 后，可在这里查看和跟进云端任务。", {
-        label: mcConnection.error ? "重试连接" : "连接 MonkeyCode",
-        run: onConnectCloud,
-      });
+      return stateCard(
+        mcConnection.error
+          ? `连接失败：${mcConnection.error}`
+          : "连接 MonkeyCode 后，可在这里查看和跟进云端任务。也可到设置中使用账号密码登录。",
+        {
+          label: mcConnection.error ? "重试连接" : "连接 MonkeyCode",
+          run: onConnectCloud,
+        },
+      );
     }
     if (cloudTasks.length === 0 && cloudHistory.length === 0 && cloudProjects.length === 0 && !cloudError) {
       return <EmptyState icon={<IconCloud size={21} color="var(--t6)" />} title="还没有云端项目或任务" detail="从这里新建，或在网页和手机端派发任务。" />;

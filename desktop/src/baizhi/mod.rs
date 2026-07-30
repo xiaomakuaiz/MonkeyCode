@@ -242,24 +242,57 @@ impl Service {
 
     /// 请求裸结构端点(验证码 challenge/redeem 不套包壳;2xx 即成功)。
     pub async fn call_raw(&self, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
-        let (data, status) = self.account_do(method, path, body).await?;
+        let target = if path.starts_with("http://") || path.starts_with("https://") {
+            path.to_string()
+        } else {
+            format!("{}{}", self.ep.account, path)
+        };
+        self.raw_at(&self.store, method, &target, body, "百智云").await
+    }
+
+    /// call_raw 的自由地址版:罐与错误标签由调用方指定。罐参数决定的是
+    /// 响应 Set-Cookie 的**吸收方向**(裸结构端点本身多为免鉴权)——
+    /// MonkeyCode 域必须传 mc 罐,用百智罐会把 mc 域 cookie 混进百智罐,
+    /// 破坏双罐隔离。
+    async fn raw_at(
+        &self,
+        store: &CookieStore,
+        method: reqwest::Method,
+        target: &str,
+        body: Option<&Value>,
+        label: &str,
+    ) -> BzResult<Value> {
+        let (data, status) = self.do_store(store, method, target, body).await?;
         if !(200..300).contains(&status) {
             if let Ok(v) = serde_json::from_slice::<Value>(&data) {
                 if let Some(m) = v.get("message").and_then(|m| m.as_str()) {
                     return Err(other(clean_message(m)));
                 }
             }
-            return Err(http_error(status, &data, "百智云"));
+            return Err(http_error(status, &data, label));
         }
-        serde_json::from_slice(&data).map_err(|e| other(format!("百智云响应解析失败: {e}")))
+        serde_json::from_slice(&data).map_err(|e| other(format!("{label}响应解析失败: {e}")))
     }
 
     // ==================== 登录/状态 ====================
 
-    /// 完整跑一遍 PoW 验证码,返回登录接口所需 captcha_token。
+    /// 百智云域的 PoW 验证码(手机号发码/登录用)。
     async fn obtain_captcha_token(&self) -> BzResult<String> {
+        self.captcha_token_at(&self.ep.account, &self.store, "百智云").await
+    }
+
+    /// 完整跑一遍 PoW 验证码,返回登录接口所需 captcha_token。百智云与
+    /// MonkeyCode 服务端用同一套 go-cap 协议(challenge 201 裸结构 → 本地
+    /// 爆破 → redeem 换 token),差异只在域、cookie 罐与错误标签。
+    pub(crate) async fn captcha_token_at(&self, base: &str, store: &CookieStore, label: &str) -> BzResult<String> {
         let ch = self
-            .call_raw(reqwest::Method::POST, "/api/v1/public/captcha/challenge", None)
+            .raw_at(
+                store,
+                reqwest::Method::POST,
+                &format!("{base}/api/v1/public/captcha/challenge"),
+                None,
+                label,
+            )
             .await
             .map_err(|e| other(format!("获取验证码质询失败: {}", e.msg())))?;
         let token = ch.get("token").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -275,10 +308,12 @@ impl Service {
             .map_err(|e| other(format!("验证码求解失败: {e}")))?
             .map_err(other)?;
         let rd = self
-            .call_raw(
+            .raw_at(
+                store,
                 reqwest::Method::POST,
-                "/api/v1/public/captcha/redeem",
+                &format!("{base}/api/v1/public/captcha/redeem"),
                 Some(&json!({ "token": token, "solutions": solutions })),
+                label,
             )
             .await
             .map_err(|e| other(format!("验证码校验失败: {}", e.msg())))?;
@@ -351,7 +386,7 @@ pub(crate) struct Envelope {
     /// Some(文案):3xx 直接以该文案判失败(MCP 网关未开通时不重定向即 302)
     pub redirect_msg: Option<&'static str>,
     /// Some(文案):401 不看响应体,直接返回固定 Unauthorized
-    /// (MonkeyCode 链路的 401 恢复动作是"重新同步云端账号"而非重新登录)
+    /// (MonkeyCode 链路的 401 恢复动作是"到设置中重新连接"——桥接或账密皆可)
     pub fixed_401: Option<&'static str>,
     /// data 缺失/为 null 时:true 返回整个响应体(百智云,对齐移动端),false 返回 Null
     pub whole_body_fallback: bool,
@@ -514,6 +549,25 @@ pub async fn mc_status(bz: State<'_, BaizhiState>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn mc_login(bz: State<'_, BaizhiState>) -> Result<Value, String> {
     let user = monkeycode::login_monkeycode(&bz.0).await.map_err(BzErr::msg)?;
+    let mut resp = json!({ "ok": true });
+    if !user.is_null() {
+        resp["user"] = user;
+    }
+    Ok(resp)
+}
+
+/// MonkeyCode 账号密码直连登录(不经百智云;壳内自动完成 PoW 验证码)。
+/// 校验对齐 mobile 的弱校验:仅非空;password **不 trim**——首尾空格是
+/// 密码的一部分,trim 会与 mobile/web 行为分叉。
+#[tauri::command]
+pub async fn mc_password_login(bz: State<'_, BaizhiState>, email: String, password: String) -> Result<Value, String> {
+    let email = email.trim();
+    if email.is_empty() || password.is_empty() {
+        return Err("请输入邮箱和密码".into());
+    }
+    let user = monkeycode::login_monkeycode_password(&bz.0, email, &password)
+        .await
+        .map_err(BzErr::msg)?;
     let mut resp = json!({ "ok": true });
     if !user.is_null() {
         resp["user"] = user;
