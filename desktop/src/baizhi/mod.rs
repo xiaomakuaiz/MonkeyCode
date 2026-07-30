@@ -94,8 +94,18 @@ pub struct Service {
     lp: Option<reqwest::Client>,
     pub store: CookieStore,
     pub mc: CookieStore,
+    /// 测试环境反向代理的 Basic Auth 头值(预计算的 "Basic <b64>";None =
+    /// 未配置)。仅对 MonkeyCode 域的请求附加,见 mc_basic_header。
+    pub(crate) mc_basic: Option<String>,
     /// 进行中的扫码会话(只保留最新)
     pub wx: StdMutex<Option<wechat::WechatLogin>>,
+}
+
+/// "user:pass" → 预计算的 Basic Auth 头值(空白 = 未配置)。
+fn basic_header_value(user_pass: &str) -> Option<String> {
+    use base64::Engine as _;
+    let v = user_pass.trim();
+    (!v.is_empty()).then(|| format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(v.as_bytes())))
 }
 
 impl Service {
@@ -115,11 +125,12 @@ impl Service {
             lp: Some(mk(10)),
             store: CookieStore::new(None),
             mc: CookieStore::new(None),
+            mc_basic: None,
             wx: StdMutex::new(None),
         }
     }
 
-    pub fn new(config_dir: std::path::PathBuf, mc_base_url: &str) -> Self {
+    pub fn new(config_dir: std::path::PathBuf, mc_base_url: &str, mc_basic_auth: &str) -> Self {
         // 构建失败只发生在 TLS 后端初始化不了时。不 panic:壳在 setup 里
         // 构造本服务,GUI 子系统下 panic = 双击没反应、无任何线索。降级为
         // 云端/账号命令逐条报错,本地引擎会话不受影响。
@@ -137,8 +148,21 @@ impl Service {
             lp: mk(40),
             store: CookieStore::new(Some(config_dir.join("baizhi-cookies.json"))),
             mc: CookieStore::new(Some(config_dir.join("monkeycode-cookies.json"))),
+            mc_basic: basic_header_value(mc_basic_auth),
             wx: StdMutex::new(None),
         }
+    }
+
+    /// 测试环境反向代理的 Basic Auth 头(仅当 url 落在 MonkeyCode 域时返回;
+    /// 业务鉴权走 cookie,REST/WS 链路上 Authorization 头是空闲的,对齐
+    /// mobile 的 authHeaders)。会员模型的 LLM 调用不走这里:引擎侧由物化
+    /// 把 Basic 嵌进条目 base_url 的 userinfo(config.rs with_basic_userinfo,
+    /// anthropic 协议可用;openai 系协议因引擎占用 Authorization 仍受限)。
+    pub(crate) fn mc_basic_header(&self, url: &reqwest::Url) -> Option<&str> {
+        let basic = self.mc_basic.as_deref()?;
+        let mc = reqwest::Url::parse(&self.ep.monkeycode).ok()?;
+        (url.host_str() == mc.host_str() && url.port_or_known_default() == mc.port_or_known_default())
+            .then_some(basic)
     }
 
     /// 取 API 客户端;TLS 后端起不来时给出可行动错误而不是 panic。
@@ -174,6 +198,9 @@ impl Service {
         }
         if let Some(h) = store.header(&url) {
             req = req.header(reqwest::header::COOKIE, h);
+        }
+        if let Some(b) = self.mc_basic_header(&url) {
+            req = req.header(reqwest::header::AUTHORIZATION, b);
         }
         let resp = req.send().await.map_err(|e| other(format!("请求 {host} 失败: {e}")))?;
         let status = resp.status().as_u16();

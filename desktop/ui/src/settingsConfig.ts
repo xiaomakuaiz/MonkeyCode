@@ -155,11 +155,12 @@ export function replaceSourceGroup<T extends { name: string; source?: string }>(
 }
 
 // 归一化保存载荷:save() 与 dirty 比较共用同一形态(名称 trim、default 重算、MCP 序列化)
-export const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[], ke: string, mcUrl: string): HostConfig => ({
+export const payloadOf = (ms: HostModel[], di: number, mc: McpEntry[], ke: string, mcUrl: string, mcBasic: string): HostConfig => ({
   // 显式列出内核支持的字段，避免旧版/实验 UI 字段只写进 config.json、
   // 物化时被静默丢弃，形成“保存成功但完全不生效”的幽灵配置。
   models: modelsToConfig(ms, di),
   mcp_servers: mcpsToServers(mc),
   kernel_env: ke,
   mc_base_url: mcUrl.trim(),
+  mc_basic_auth: mcBasic.trim(),
 });

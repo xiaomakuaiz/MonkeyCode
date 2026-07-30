@@ -72,6 +72,11 @@ pub struct DesktopConfig {
     /// 时按此构造一次,设置页保存只重启引擎、不重建它。
     #[serde(default)]
     pub mc_base_url: String,
+    /// MonkeyCode 测试环境反向代理的 HTTP Basic Auth("user:pass",空 =
+    /// 无;对齐 mobile 的 mc.basicAuth)。仅对 MonkeyCode 域的请求附
+    /// Authorization 头;同样重启应用生效。
+    #[serde(default)]
+    pub mc_basic_auth: String,
     /// 已废弃(单引擎化后忽略):历史 config.json 兼容保留,不再消费。
     #[serde(default = "default_engine")]
     pub agent_engine: String,
@@ -96,6 +101,7 @@ impl Default for DesktopConfig {
             mcp_servers: json_object(),
             kernel_env: String::new(),
             mc_base_url: String::new(),
+            mc_basic_auth: String::new(),
             agent_engine: default_engine(),
             pet_enabled: true,
             pet_pos: None,
@@ -409,6 +415,28 @@ fn thinking_config(effort: &str) -> serde_json::Value {
     serde_json::json!({ "enabled": true, "effort": effort })
 }
 
+/// 反代 Basic Auth 嵌进 base_url 的 userinfo(https://user:pass@host/…)。
+/// Go 引擎的 http 客户端在 Authorization 为空时按 userinfo 自动补 Basic 头
+/// (net/http client.send);anthropic 协议用 x-api-key 携带模型密钥、
+/// Authorization 空闲,恰好接住,llmproxy 也优先读 X-Api-Key——三方咬合。
+/// openai 系协议引擎自身占用 Authorization(Bearer),Basic 无从附加,
+/// 反代环境下该类条目仍不可用(引擎侧限制)。url 库对 userinfo 自动
+/// 百分号转义;解析失败原样返回(请求时报错外显)。
+fn with_basic_userinfo(base_url: &str, user_pass: &str) -> String {
+    let Ok(mut u) = reqwest::Url::parse(base_url) else {
+        return base_url.to_string();
+    };
+    let (user, pass) = match user_pass.split_once(':') {
+        Some((user, pass)) => (user, Some(pass)),
+        None => (user_pass, None),
+    };
+    if u.set_username(user).is_err() {
+        return base_url.to_string();
+    }
+    let _ = u.set_password(pass);
+    u.to_string()
+}
+
 /// 壳清单 → <engine_config_dir>/settings.json + mcp.json。
 ///
 /// 映射:HostModel{name,provider,base_url,api_key,model,…} → 以别名为键的
@@ -458,9 +486,15 @@ fn write_ohmyagent_config(
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (name, provider, model) = (get("name"), get("provider"), get("model"));
         // 会员条目:凭据与代理地址由 Key 文件注入(条目里是空占位;Key 文件
-        // 缺失时照常物化,请求时报错外显,不静默丢条目)
+        // 缺失时照常物化,请求时报错外显,不静默丢条目)。配置了测试环境
+        // 反代 Basic Auth 时嵌进 base_url userinfo(见 with_basic_userinfo)
         let (base_url, api_key) = if is_monkeycode(m) {
-            (mc_key_field("base_url"), mc_key_field("api_key"))
+            let mut b = mc_key_field("base_url");
+            let basic = cfg.mc_basic_auth.trim();
+            if !b.is_empty() && !basic.is_empty() {
+                b = with_basic_userinfo(&b, basic);
+            }
+            (b, mc_key_field("api_key"))
         } else {
             (get("base_url"), get("api_key"))
         };
@@ -825,6 +859,16 @@ mod tests {
         assert_eq!(settings["models"]["会员模型"]["base_url"], "https://mc.example.com/v1");
         // 非会员条目不受注入影响
         assert_eq!(settings["models"]["自定义"]["api_key"], "sk-direct");
+        assert_eq!(settings["models"]["自定义"]["base_url"], "https://direct.example.com");
+
+        // 配置了反代 Basic Auth:嵌进会员条目 base_url 的 userinfo(Go 引擎
+        // 在 Authorization 空闲时自动补 Basic 头;特殊字符需百分号转义),
+        // 非会员条目不受影响
+        let basic_cfg = DesktopConfig { mc_basic_auth: "user:p@ss".into(), ..mc_cfg.clone() };
+        write_ohmyagent_config(&engine_dir, &basic_cfg, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["models"]["会员模型"]["base_url"], "https://user:p%40ss@mc.example.com/v1");
         assert_eq!(settings["models"]["自定义"]["base_url"], "https://direct.example.com");
 
         // 无会员条目:即便 Key 文件在,也不写顶层 secret

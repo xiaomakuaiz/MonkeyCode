@@ -527,6 +527,40 @@ async fn monkeycode_password_login_contract() {
     assert!(svc.store.is_empty(), "百智罐必须始终为空");
 }
 
+/// 测试环境反代 Basic Auth:仅 MonkeyCode 域的请求附 Authorization 头
+/// ("Basic <b64(user:pass)>",对齐 mobile 的 authHeaders);百智域零附加
+/// (业务鉴权走 cookie,该头在 MC 的 REST/WS 链路上是空闲的)。
+#[tokio::test(flavor = "multi_thread")]
+async fn basic_auth_header_scoped_to_mc_host() {
+    let mc_auth: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let bz_auth: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let cap_mc = mc_auth.clone();
+    let (mc_url, _s1) = serve(Arc::new(move |req: Req| {
+        cap_mc.lock().unwrap().push(req.authorization.clone());
+        Resp::json(200, json!({ "code": 0, "data": { "projects": [] } }))
+    }));
+    let cap_bz = bz_auth.clone();
+    let (bz_url, _s2) = serve(Arc::new(move |req: Req| {
+        cap_bz.lock().unwrap().push(req.authorization.clone());
+        Resp::json(200, json!({ "code": 0, "data": {} }))
+    }));
+    let mut svc = Service::test_service(Endpoints {
+        account: bz_url.clone(),
+        model_gateway: bz_url.clone(),
+        mcp_gateway: bz_url.clone(),
+        monkeycode: mc_url.clone(),
+    });
+    svc.mc_basic = super::basic_header_value("user:pass");
+    assert_eq!(svc.mc_basic.as_deref(), Some("Basic dXNlcjpwYXNz"));
+    assert!(super::basic_header_value("  ").is_none(), "空白 = 未配置");
+
+    super::monkeycode::mc_projects(&svc).await.map_err(|e| e.msg()).unwrap();
+    svc.call(reqwest::Method::GET, "/api/v1/user/profile", None).await.map_err(|e| e.msg()).unwrap();
+
+    assert_eq!(mc_auth.lock().unwrap().as_slice(), ["Basic dXNlcjpwYXNz"], "MC 域必须附 Basic 头");
+    assert_eq!(bz_auth.lock().unwrap().as_slice(), [""], "百智域不得附 Basic 头");
+}
+
 /// 包壳解包策略:四链路(百智云/网关/MCP 网关/MonkeyCode)的差异点钉死,
 /// 防止合一后语义漂移(code 合法值集合、3xx/401 处理、data 兜底)。
 #[test]

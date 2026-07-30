@@ -478,6 +478,9 @@ pub async fn mc_file_upload(svc: &Service, vm_id: &str, path: &str, data: Vec<u8
     if let Some(h) = svc.mc.header(&url) {
         req = req.header(reqwest::header::COOKIE, h);
     }
+    if let Some(b) = svc.mc_basic_header(&url) {
+        req = req.header(reqwest::header::AUTHORIZATION, b);
+    }
     let resp = req.send().await.map_err(|e| other(format!("上传失败: {e}")))?;
     let status = resp.status().as_u16();
     let body = resp.bytes().await.map_err(|e| other(format!("读取响应失败: {e}")))?;
@@ -584,6 +587,9 @@ async fn do_file_download(
     let mut req = client.get(url.clone());
     if let Some(h) = svc.mc.header(&url) {
         req = req.header(reqwest::header::COOKIE, h);
+    }
+    if let Some(b) = svc.mc_basic_header(&url) {
+        req = req.header(reqwest::header::AUTHORIZATION, b);
     }
     let resp = req.send().await.map_err(|e| other(format!("下载失败: {e}")))?;
     let status = resp.status().as_u16();
@@ -935,6 +941,14 @@ pub async fn cloud_ws_open(
             req.headers_mut().insert(
                 "Cookie",
                 h.parse().map_err(|_| "cookie 头构造失败".to_string())?,
+            );
+        }
+        // 测试环境反代的 Basic Auth 对 WS 升级请求同样生效(对齐 mobile 的
+        // 带头 WebSocket;业务鉴权走 cookie,Authorization 头空闲)
+        if let Some(b) = svc.mc_basic_header(&u) {
+            req.headers_mut().insert(
+                "Authorization",
+                b.parse().map_err(|_| "Basic Auth 头构造失败".to_string())?,
             );
         }
     }

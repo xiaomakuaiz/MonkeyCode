@@ -72,6 +72,9 @@ export interface HostConfig {
   /** MonkeyCode 服务地址(自建/私有化部署;空/缺省 = 官方云)。环境变量
    * MC_DESKTOP_MONKEYCODE_URL 优先;修改保存后需重启应用生效 */
   mc_base_url?: string;
+  /** MonkeyCode 测试环境反向代理的 HTTP Basic Auth("user:pass",空 = 无;
+   * 对齐 mobile 的 mc.basicAuth)。仅 MonkeyCode 域的请求附头;重启应用生效 */
+  mc_basic_auth?: string;
 }
 
 // SessionStatus:见文件头——gen/SessionStatus.ts(ts-rs 生成)复用,
