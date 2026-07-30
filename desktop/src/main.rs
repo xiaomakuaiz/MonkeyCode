@@ -1134,6 +1134,8 @@ fn main() {
             baizhi::mc_status,
             baizhi::mc_login,
             baizhi::mc_logout,
+            baizhi::mc_models_sync,
+            baizhi::mc_models_revoke,
             baizhi::mc_tasks,
             baizhi::mc_projects,
             baizhi::mc_task_info,

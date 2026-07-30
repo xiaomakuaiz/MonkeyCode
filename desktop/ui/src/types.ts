@@ -17,10 +17,16 @@ export type { PermOutcome, SessionStatus, WireFrame };
  * 字符串常量 ts-rs 覆盖不了,保留手写。 */
 export const SOURCE_BAIZHI = "baizhi";
 
+/** MonkeyCode 会员模型同步条目的 source 值(壳侧赋值在
+ * desktop/src/baizhi/monkeycode.rs 的 SOURCE_MONKEYCODE,两侧改动需同步)。 */
+export const SOURCE_MONKEYCODE = "monkeycode";
+
 /** source → 分组展示名(未知来源兜底显示原值)。 */
 export function modelSourceLabel(source?: string): string {
   if (!source) return "自定义";
-  return source === SOURCE_BAIZHI ? "百智云" : source;
+  if (source === SOURCE_BAIZHI) return "百智云";
+  if (source === SOURCE_MONKEYCODE) return "MonkeyCode 会员";
+  return source;
 }
 
 /** GET /api/models 返回的可选模型 */
@@ -339,8 +345,12 @@ export interface BaizhiSyncedModel {
   api_key: string;
   model: string;
   context_window?: number;
+  max_output?: number;
+  /** 思考深度档;monkeycode 同步在服务端标注不支持思考时下发 "off"
+   * (压掉产品默认「低」,免得首个请求带思考参数被上游拒) */
+  think?: string;
   vision?: boolean;
-  source: string; // "baizhi"
+  source: string; // "baizhi" | "monkeycode"
 }
 
 export interface BaizhiSyncResult {
@@ -348,6 +358,15 @@ export interface BaizhiSyncResult {
   mcp_servers: Record<string, Record<string, unknown>>;
   key_created: boolean; // 本次是否在网关新建了密钥(false=复用已有)
   key_name?: string; // 使用的密钥在网关里的名字(撞名时是 MonkeyCode-N)
+  notes?: string[];
+}
+
+/** mc_models_sync 返回:会员内置模型 → 本地条目(已带 source="monkeycode",
+ * base_url 指向服务端模型代理、api_key 为本机的 OhMyAgent 代理 Key——
+ * 模型无关,全部条目共用,条目 model 字段是服务端模型配置 ID)。 */
+export interface McModelsSyncResult {
+  models: BaizhiSyncedModel[];
+  /** 被跳过条目的原因(未知协议/重名等),同步提示里外显 */
   notes?: string[];
 }
 

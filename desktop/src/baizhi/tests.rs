@@ -624,6 +624,147 @@ async fn cloud_sidebar_and_task_actions_contract() {
     assert!(requests.iter().any(|(method, path, _)| method == "DELETE" && path == "/api/v1/users/tasks/t1"));
 }
 
+// ==================== 会员模型本地同步(OhMyAgent 代理 Key) ====================
+
+/// 会员模型同步/删除契约(对齐服务端 swagger【用户】OhMyAgent 分组):
+/// 首次同步 POST ohmyagent/api-keys 创建模型无关的代理 Key 并落盘,重同步
+/// 复用不再创建;条目来自 GET users/models(只收 public、按订阅档过滤、
+/// interface_type 改名 provider、**model 字段 = 配置 ID**、共用代理 Key、
+/// base_url = 服务端同源 /v1);断开 DELETE 按 Key ID 删,成功清本地记录、
+/// 失败保留(下次复用/重试,不积累孤儿 Key)。
+#[tokio::test(flavor = "multi_thread")]
+async fn mc_member_models_sync_and_revoke_contract() {
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let tmp = TempDir(std::env::temp_dir().join(format!("monkeycode-omk-{}-{nonce}", std::process::id())));
+    std::fs::create_dir_all(&tmp.0).unwrap();
+
+    let captured: Arc<Mutex<Vec<(String, String, String)>>> = Arc::new(Mutex::new(Vec::new())); // (method, path, cookie)
+    let created = Arc::new(Mutex::new(0u32));
+    let (cap, cnt) = (captured.clone(), created.clone());
+    let (url, _stop) = serve(Arc::new(move |req: Req| {
+        cap.lock().unwrap().push((req.method.clone(), req.path.clone(), req.cookie.clone()));
+        match (req.method.as_str(), req.path.split('?').next().unwrap()) {
+            ("POST", "/api/v1/users/ohmyagent/api-keys") => {
+                let mut n = cnt.lock().unwrap();
+                *n += 1;
+                Resp::json(
+                    200,
+                    json!({ "code": 0, "data": {
+                        "id": format!("key-{}", *n), "api_key": format!("omk-{}", *n),
+                        "signing_secret": "sec-1", "created_at": 1_753_000_000
+                    } }),
+                )
+            }
+            ("DELETE", "/api/v1/users/ohmyagent/api-keys/key-1") => Resp::json(200, json!({ "code": 0, "data": {} })),
+            // key-2 的删除持续失败(演断网/服务端错):本地记录必须保留
+            ("DELETE", "/api/v1/users/ohmyagent/api-keys/key-2") => {
+                Resp::json(500, json!({ "code": 1, "message": "boom" }))
+            }
+            ("GET", "/api/v1/users/models") => Resp::json(
+                200,
+                json!({ "code": 0, "data": { "models": [
+                    { "id": "cfg-1", "remark": "专业模型", "model": "monkeycode-pro-claude", "interface_type": "anthropic",
+                      "owner": { "type": "public" }, "context_limit": 200_000, "output_limit": 16_384,
+                      "support_image": true, "access_level": "pro", "is_free": false },
+                    { "id": "cfg-2", "remark": "", "model": "mc-gpt", "interface_type": "openai_chat",
+                      "owner": { "type": "public" } },
+                    // 订阅档(pro)未覆盖 → 静默过滤
+                    { "id": "cfg-3", "remark": "旗舰", "model": "monkeycode-ultra-x", "interface_type": "anthropic",
+                      "owner": { "type": "public" } },
+                    // 未来新协议 → 跳过 + note(不能落进 anthropic 兜底)
+                    { "id": "cfg-4", "remark": "新协议", "model": "mc-next", "interface_type": "grpc_v2",
+                      "owner": { "type": "public" } },
+                    // 私有条目(用户自配直连)→ 不进会员组
+                    { "id": "cfg-5", "remark": "我的", "model": "my-model", "interface_type": "anthropic",
+                      "owner": { "type": "private" } }
+                ] } }),
+            ),
+            ("GET", "/api/v1/users/subscription") => Resp::json(200, json!({ "code": 0, "data": { "plan": "pro" } })),
+            _ => Resp::json(404, json!({ "code": 1, "message": "not found" })),
+        }
+    }));
+    let svc = Service::test_service(Endpoints {
+        account: url.clone(),
+        model_gateway: url.clone(),
+        mcp_gateway: url.clone(),
+        monkeycode: url.clone(),
+    });
+    // 种 mc 会话 cookie:创建/删除/模型清单都走既有 MonkeyCode 会话
+    svc.mc.update(
+        &reqwest::Url::parse(&format!("{url}/")).unwrap(),
+        &["mc_session=sess-9; Path=/".to_string()],
+    );
+
+    // 首次同步:创建 Key 并落盘;条目 model=配置 ID,**凭据是空占位**——
+    // base_url/api_key 不进 UI/config.json,物化时由壳从 Key 文件注入,
+    // 设置页不给用户"一眼抄走"的入口
+    let out = super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    let models = out.get("models").and_then(Value::as_array).unwrap();
+    assert_eq!(models.len(), 2, "档位/协议/私有条目应被过滤: {models:?}");
+    let m0 = &models[0];
+    assert_eq!(m0.get("name").and_then(Value::as_str), Some("专业模型"));
+    assert_eq!(m0.get("provider").and_then(Value::as_str), Some("anthropic"));
+    assert_eq!(m0.get("model").and_then(Value::as_str), Some("cfg-1"), "model 字段必须是配置 ID");
+    assert_eq!(m0.get("api_key").and_then(Value::as_str), Some(""), "凭据不得进条目");
+    assert_eq!(m0.get("base_url").and_then(Value::as_str), Some(""), "代理地址不得进条目");
+    assert_eq!(m0.get("context_window").and_then(Value::as_i64), Some(200_000));
+    assert_eq!(m0.get("max_output").and_then(Value::as_i64), Some(16_384));
+    assert_eq!(m0.get("vision").and_then(Value::as_bool), Some(true));
+    assert_eq!(m0.get("source").and_then(Value::as_str), Some("monkeycode"));
+    assert_eq!(models[1].get("name").and_then(Value::as_str), Some("mc-gpt"), "remark 空回退模型名");
+    assert_eq!(models[1].get("model").and_then(Value::as_str), Some("cfg-2"));
+    assert_eq!(models[1].get("provider").and_then(Value::as_str), Some("openai"));
+    assert_eq!(models[1].get("api_key").and_then(Value::as_str), Some(""));
+    let notes = out.get("notes").and_then(Value::as_array).unwrap();
+    assert_eq!(notes.len(), 1, "未知协议一条 note: {notes:?}");
+    // Key 文件承载物化注入所需的全部字段:api_key、signing_secret(引擎以它
+    // HMAC 签署固定 system prompt,代理缺签名即拒)、base_url 快照(同源 /v1)
+    let stored = super::stored_ohmyagent_key(&tmp.0).unwrap();
+    assert_eq!(stored.get("api_key").and_then(Value::as_str), Some("omk-1"));
+    assert_eq!(stored.get("signing_secret").and_then(Value::as_str), Some("sec-1"));
+    let expected_base = format!("{url}/v1");
+    assert_eq!(stored.get("base_url").and_then(Value::as_str), Some(expected_base.as_str()));
+
+    // 重同步:复用落盘 Key,不再创建
+    super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    assert_eq!(*created.lock().unwrap(), 1, "重同步不应重复创建 Key");
+
+    // 断开:DELETE 按 Key ID 删,成功后本地记录清除;再删是 no-op
+    super::revoke_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    assert!(!tmp.0.join(super::OHMYAGENT_KEY_FILE).exists(), "删成功应清本地记录");
+    super::revoke_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+
+    // 再同步 → 创建 key-2;其删除失败时本地记录保留(下次复用/重试)
+    super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    assert_eq!(
+        super::stored_ohmyagent_key(&tmp.0).unwrap().get("api_key").and_then(Value::as_str),
+        Some("omk-2")
+    );
+    assert!(super::revoke_member_models(&svc, &tmp.0).await.is_err(), "服务端删失败应报错");
+    assert!(tmp.0.join(super::OHMYAGENT_KEY_FILE).exists(), "删失败必须保留本地记录,否则孤儿 Key");
+    super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    assert_eq!(
+        super::stored_ohmyagent_key(&tmp.0).unwrap().get("api_key").and_then(Value::as_str),
+        Some("omk-2"),
+        "删失败后同步复用原 Key"
+    );
+    assert_eq!(*created.lock().unwrap(), 2);
+
+    let reqs = captured.lock().unwrap();
+    let post = reqs.iter().find(|(m, p, _)| m == "POST" && p == "/api/v1/users/ohmyagent/api-keys").unwrap();
+    assert!(post.2.contains("mc_session=sess-9"), "创建必须带 mc 会话 cookie: {}", post.2);
+    let del = reqs.iter().find(|(m, p, _)| m == "DELETE" && p == "/api/v1/users/ohmyagent/api-keys/key-1").unwrap();
+    assert!(del.2.contains("mc_session=sess-9"), "删除必须带 mc 会话 cookie: {}", del.2);
+    let deletes = reqs.iter().filter(|(m, _, _)| m == "DELETE").count();
+    assert_eq!(deletes, 2, "已清记录后的 revoke 不应再发 DELETE");
+}
+
 // ==================== 微信扫码登录(wechat.rs 刮取链路) ====================
 
 /// 微信授权页(qrconnect)HTML 最小快照,结构取自

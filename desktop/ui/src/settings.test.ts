@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { mcpNameValidationError, modelsToConfig, validateMcpNames } from "./settingsConfig";
-import type { HostModel } from "./types";
+import { mcpNameValidationError, modelsToConfig, replaceSourceGroup, validateMcpNames } from "./settingsConfig";
+import { SOURCE_BAIZHI, SOURCE_MONKEYCODE, type HostModel } from "./types";
 
 describe("modelsToConfig", () => {
   it("persists only fields supported by the engine schema", () => {
@@ -35,6 +35,45 @@ describe("modelsToConfig", () => {
       source: "baizhi",
     });
     expect(saved).not.toHaveProperty("skip_tls_verify");
+  });
+});
+
+describe("replaceSourceGroup", () => {
+  const entry = (name: string, source?: string) => ({ name, source });
+
+  it("replaces only the target source group and keeps other groups intact", () => {
+    const cur = [entry("手工"), entry("bz-old", SOURCE_BAIZHI), entry("mc-old", SOURCE_MONKEYCODE)];
+    // 同步 baizhi:mc 组与手工条目不动,旧 baizhi 条目被本次集合整组替换
+    const afterBz = replaceSourceGroup(cur, [entry("bz-new", SOURCE_BAIZHI)], SOURCE_BAIZHI, false);
+    expect(afterBz.map((m) => m.name)).toEqual(["手工", "mc-old", "bz-new"]);
+    // 同步 monkeycode:baizhi 组与手工条目不动
+    const afterMc = replaceSourceGroup(cur, [entry("mc-new", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE, true);
+    expect(afterMc.map((m) => m.name)).toEqual(["手工", "bz-old", "mc-new"]);
+  });
+
+  it("honors keepManualOnCollision for entries outside the group", () => {
+    const cur = [entry("撞名"), entry("百智撞名", SOURCE_BAIZHI)];
+    // keep=true:同名非本组条目保留,同步条目被跳过(百智条目对 monkeycode 组也算"非本组")
+    const kept = replaceSourceGroup(
+      cur,
+      [entry("撞名", SOURCE_MONKEYCODE), entry("百智撞名", SOURCE_MONKEYCODE), entry("新条目", SOURCE_MONKEYCODE)],
+      SOURCE_MONKEYCODE,
+      true,
+    );
+    expect(kept.map((m) => [m.name, m.source])).toEqual([
+      ["撞名", undefined],
+      ["百智撞名", SOURCE_BAIZHI],
+      ["新条目", SOURCE_MONKEYCODE],
+    ]);
+    // keep=false:同名条目被同步值覆盖并归组
+    const overwritten = replaceSourceGroup(cur, [entry("撞名", SOURCE_BAIZHI)], SOURCE_BAIZHI, false);
+    expect(overwritten.map((m) => [m.name, m.source])).toEqual([["撞名", SOURCE_BAIZHI]]);
+  });
+
+  it("removes stale synced entries when the new batch omits them", () => {
+    const cur = [entry("a", SOURCE_MONKEYCODE), entry("b", SOURCE_MONKEYCODE)];
+    const next = replaceSourceGroup(cur, [entry("a", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE, true);
+    expect(next.map((m) => m.name)).toEqual(["a"]);
   });
 });
 

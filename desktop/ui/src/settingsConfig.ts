@@ -1,7 +1,7 @@
 // 设置页的纯配置映射:表单草稿 ⇄ 内核 config.json / mcp.json 形态。
 // 与渲染无关(不引入 React),从 settings.tsx 拆出来:视图只管交互,
 // 往返语义(字段白名单、extra 透传、整组替换、名称校验)集中在此并被单测直接盯住。
-import { SOURCE_BAIZHI, type HostConfig, type HostModel } from "./types";
+import type { HostConfig, HostModel } from "./types";
 
 // ---- MCP 编辑模型与序列化(与内核 mcp.json 的 mcpServers 同构,壳不解释) ----
 
@@ -130,22 +130,25 @@ export function modelsToConfig(models: HostModel[], defaultIdx: number): HostMod
 }
 export const emptyMcp = (): McpEntry => ({ name: "", type: "http", url: "", command: "", args: "", kv: "" });
 
-/** 百智云组整组替换(模型与 MCP 共用语义):手工条目(无 source)原样保留,
- * 百智云组替换为本次同步集合——取消勾选的旧同步条目随之移除(重同步清理)。
- * keepManualOnCollision:同名手工条目是否保留——MCP 导入是全有全无的单个勾选,
- * 用户无法逐条排除,不能静默吞掉手工配置(一旦被覆盖归组,下次重同步会连带删除);
- * 模型导入经逐条勾选确认,同名手工条目按用户选择被同步值覆盖并归组。 */
-export function replaceBaizhiGroup<T extends { name: string; source?: string }>(
+/** 同步来源组整组替换(模型与 MCP、百智云与 MonkeyCode 共用语义):
+ * 非本组条目(手工条目与其他 source 组)原样保留,本组(source 匹配)替换为
+ * 本次同步集合——取消勾选/下架的旧同步条目随之移除(重同步清理)。
+ * keepManualOnCollision:同名非本组条目是否保留——全量导入(MCP、MonkeyCode
+ * 会员模型)用户无法逐条排除,不能静默吞掉既有配置(一旦被覆盖归组,下次
+ * 重同步会连带删除);百智云模型导入经逐条勾选确认,同名条目按用户选择
+ * 被同步值覆盖并归组。 */
+export function replaceSourceGroup<T extends { name: string; source?: string }>(
   cur: T[],
   synced: T[],
+  source: string,
   keepManualOnCollision: boolean,
 ): T[] {
-  const kept = cur.filter((m) => m.name.trim() && m.source !== SOURCE_BAIZHI);
+  const kept = cur.filter((m) => m.name.trim() && m.source !== source);
   const byName = new Map(kept.map((m) => [m.name.trim(), m]));
-  const manualNames = new Set(byName.keys());
+  const keptNames = new Set(byName.keys());
   for (const e of synced) {
     const name = e.name.trim();
-    if (keepManualOnCollision && manualNames.has(name)) continue;
+    if (keepManualOnCollision && keptNames.has(name)) continue;
     byName.set(name, e);
   }
   return [...byName.values()];

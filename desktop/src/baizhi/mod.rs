@@ -527,6 +527,88 @@ pub async fn mc_logout(bz: State<'_, BaizhiState>) -> Result<Value, String> {
     Ok(json!({ "ok": true }))
 }
 
+// ==================== OhMyAgent 代理密钥(会员模型本地同步用) ====================
+
+/// 代理密钥文件。服务端契约(POST /api/v1/users/ohmyagent/api-keys):Key 是
+/// 模型无关的,LLM 请求的 model 字段传模型配置 ID;api_key 与 signing_secret
+/// 明文**仅创建响应返回**,故必须本机持久化(0600,独立小文件——config.json
+/// 是"损坏必须外显"的严格策略且表单外字段要在 merge_shell_prefs 逐个捞回,
+/// 凭证缓存不该走那条路)。消费方是引擎物化(config.rs):api_key/base_url
+/// 注入会员条目、signing_secret 注入顶层(引擎以它 HMAC 签署固定 system
+/// prompt,服务端代理缺签名即拒)。
+/// 复用/删除语义:同步复用已落盘的 Key(没有才创建),断开时按 id 删——
+/// 服务端没有 Key 列表接口,id 只有本机知道,丢文件即孤儿 Key。
+pub(crate) const OHMYAGENT_KEY_FILE: &str = "monkeycode-ohmyagent-key.json";
+
+/// 已落盘的代理 Key(要求 id 与 api_key 齐全,损坏视为无)。物化路径
+/// (config.rs)也读它:会员条目的 base_url/api_key 不进 UI/config.json,
+/// 写引擎 settings.json 时才从这里注入。
+pub(crate) fn stored_ohmyagent_key(cfg_dir: &std::path::Path) -> Option<Value> {
+    let data = std::fs::read(cfg_dir.join(OHMYAGENT_KEY_FILE)).ok()?;
+    let v: Value = serde_json::from_slice(&data).ok()?;
+    let has = |k: &str| v.get(k).and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false);
+    (has("id") && has("api_key")).then_some(v)
+}
+
+/// 取本机代理 Key,没有就创建并立刻落盘(明文只此一次,不落盘即丢)。
+/// 落盘时附上代理 base_url 快照(服务端同源 /v1)——物化注入的另一半;
+/// 旧文件缺 base_url 时(历史迭代产物)同步顺手回填,不留哑条目。
+async fn ensure_ohmyagent_key(svc: &Service, cfg_dir: &std::path::Path) -> BzResult<Value> {
+    let base_url = format!("{}/v1", svc.ep.monkeycode);
+    let persist = |k: &Value| {
+        crate::config::atomic_write_private(&cfg_dir.join(OHMYAGENT_KEY_FILE), k.to_string().as_bytes())
+            .map_err(other)
+    };
+    if let Some(mut k) = stored_ohmyagent_key(cfg_dir) {
+        if k.get("base_url").and_then(Value::as_str).map(|s| s.is_empty()).unwrap_or(true) {
+            k["base_url"] = json!(base_url);
+            persist(&k)?;
+        }
+        return Ok(k);
+    }
+    let mut k = monkeycode::mc_ohmyagent_key_create(svc).await?;
+    k["base_url"] = json!(base_url);
+    persist(&k)?;
+    Ok(k)
+}
+
+/// 同步会员内置模型(命令的可测内核:tests.rs 以 TempDir 直调)。
+pub(crate) async fn sync_member_models(svc: &Service, cfg_dir: &std::path::Path) -> BzResult<Value> {
+    ensure_ohmyagent_key(svc, cfg_dir).await?; // 条目不带凭据,但 Key 必须此刻落盘
+    monkeycode::mc_member_models_sync(svc).await
+}
+
+/// 删除本机代理 Key:删成功才移除本地记录;删失败(如断网)保留记录——
+/// 下次同步继续复用同一把 Key、下次断开重试删除,网络恢复后自然收敛,
+/// 也不会在服务端积累孤儿 Key。
+pub(crate) async fn revoke_member_models(svc: &Service, cfg_dir: &std::path::Path) -> BzResult<()> {
+    let Some(key) = stored_ohmyagent_key(cfg_dir) else {
+        return Ok(()); // 从未同步过,无可删
+    };
+    let id = key.get("id").and_then(Value::as_str).unwrap_or("");
+    monkeycode::mc_ohmyagent_key_delete(svc, id).await?;
+    let _ = std::fs::remove_file(cfg_dir.join(OHMYAGENT_KEY_FILE));
+    Ok(())
+}
+
+/// 同步 MonkeyCode 会员内置模型为本地条目(source="monkeycode";复用/创建
+/// 本机代理 Key,base_url 指向服务端模型代理)。与 baizhi_sync 同款语义:
+/// 不碰 config.json,纯返回 {models, notes},由 UI 交用户确认后保存。
+#[tauri::command]
+pub async fn mc_models_sync(app: tauri::AppHandle, bz: State<'_, BaizhiState>) -> Result<Value, String> {
+    let cfg_dir = crate::config::config_dir(&app)?;
+    sync_member_models(&bz.0, &cfg_dir).await.map_err(BzErr::msg)
+}
+
+/// 删除本机的会员模型代理 Key(断开 MonkeyCode 账号时调用;从未同步过
+/// 直接成功)。须在清除 mc 会话之前调用——删除走 mc 会话认证。
+#[tauri::command]
+pub async fn mc_models_revoke(app: tauri::AppHandle, bz: State<'_, BaizhiState>) -> Result<Value, String> {
+    let cfg_dir = crate::config::config_dir(&app)?;
+    revoke_member_models(&bz.0, &cfg_dir).await.map_err(BzErr::msg)?;
+    Ok(json!({ "ok": true }))
+}
+
 #[tauri::command]
 pub async fn mc_tasks(
     bz: State<'_, BaizhiState>,

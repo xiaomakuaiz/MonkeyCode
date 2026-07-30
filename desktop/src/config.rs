@@ -424,17 +424,39 @@ fn write_ohmyagent_config(
 
     let empty = vec![];
     let models_arr = cfg.models.as_array().unwrap_or(&empty);
+
+    // MonkeyCode 会员条目的凭据不经 UI/config.json 流转(设置页不给用户
+    // "一眼抄走"的入口),物化时才从代理 Key 文件(应用配置目录 = 引擎目录
+    // 的父目录,见 baizhi::OHMYAGENT_KEY_FILE)注入 base_url/api_key。
+    let is_monkeycode = |m: &serde_json::Value| {
+        m.get("source").and_then(|v| v.as_str()) == Some(crate::baizhi::monkeycode::SOURCE_MONKEYCODE)
+    };
+    let mc_key = models_arr
+        .iter()
+        .any(is_monkeycode)
+        .then(|| dir.parent().and_then(crate::baizhi::stored_ohmyagent_key))
+        .flatten();
+    let mc_key_field = |k: &str| {
+        mc_key
+            .as_ref()
+            .and_then(|v| v.get(k))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
     let mut models_out = serde_json::Map::new();
     let mut default_model = String::new();
     for m in models_arr {
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let (name, provider, base_url, api_key, model) = (
-            get("name"),
-            get("provider"),
-            get("base_url"),
-            get("api_key"),
-            get("model"),
-        );
+        let (name, provider, model) = (get("name"), get("provider"), get("model"));
+        // 会员条目:凭据与代理地址由 Key 文件注入(条目里是空占位;Key 文件
+        // 缺失时照常物化,请求时报错外显,不静默丢条目)
+        let (base_url, api_key) = if is_monkeycode(m) {
+            (mc_key_field("base_url"), mc_key_field("api_key"))
+        } else {
+            (get("base_url"), get("api_key"))
+        };
         if name.is_empty() || model.is_empty() {
             continue;
         }
@@ -482,11 +504,19 @@ fn write_ohmyagent_config(
         }
     }
 
-    let settings = serde_json::json!({
+    let mut settings = serde_json::json!({
         "default_model": default_model,
         "permission_mode": "auto",
         "models": models_out,
     });
+    // 引擎另需顶层 signing_secret:以 HMAC-SHA256 签署固定 system prompt
+    // (X-OhMyAgent-Signature 头),服务端代理据此校验流量来自未篡改的
+    // OhMyAgent——代理模式必填,缺签名即拒。顶层字段对全部模型生效:其他
+    // 网关忽略多余的签名头,无副作用;但无会员条目时不写,不平白外发签名。
+    let secret = mc_key_field("signing_secret");
+    if !secret.is_empty() {
+        settings["signing_secret"] = serde_json::json!(secret);
+    }
     atomic_write_private(
         &dir.join("settings.json"),
         &serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?,
@@ -747,6 +777,62 @@ mod tests {
             serde_json::from_slice(&fs::read(dir.join("settings.json")).unwrap()).unwrap();
         assert_eq!(settings["permission_mode"], "auto");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// MonkeyCode 会员条目的凭据不进 config.json(条目里 base_url/api_key 是
+    /// 空占位,设置页无从展示),物化时从应用配置目录的代理 Key 文件注入;
+    /// 引擎另需顶层 signing_secret 签署固定 system prompt(服务端代理缺签名
+    /// 即拒)。无会员条目时不写 secret,不向其他网关平白外发签名。
+    #[test]
+    fn ohmyagent_config_injects_proxy_credentials_for_monkeycode_entries() {
+        let root = test_dir("signing-secret");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(crate::baizhi::OHMYAGENT_KEY_FILE),
+            br#"{"id":"key-1","api_key":"omk-1","signing_secret":"sec-9","base_url":"https://mc.example.com/v1"}"#,
+        )
+        .unwrap();
+        let engine_dir = root.join("ohmyagent");
+        let mc_cfg = DesktopConfig {
+            models: serde_json::json!([
+                {
+                    "name": "会员模型", "provider": "anthropic",
+                    "base_url": "", "api_key": "",
+                    "model": "cfg-1", "source": "monkeycode"
+                },
+                {
+                    "name": "自定义", "provider": "anthropic",
+                    "base_url": "https://direct.example.com", "api_key": "sk-direct", "model": "m"
+                }
+            ]),
+            ..Default::default()
+        };
+
+        write_ohmyagent_config(&engine_dir, &mc_cfg, None).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["signing_secret"], "sec-9");
+        assert_eq!(settings["models"]["会员模型"]["api_key"], "omk-1");
+        assert_eq!(settings["models"]["会员模型"]["base_url"], "https://mc.example.com/v1");
+        // 非会员条目不受注入影响
+        assert_eq!(settings["models"]["自定义"]["api_key"], "sk-direct");
+        assert_eq!(settings["models"]["自定义"]["base_url"], "https://direct.example.com");
+
+        // 无会员条目:即便 Key 文件在,也不写顶层 secret
+        let plain_cfg = DesktopConfig {
+            models: serde_json::json!([{
+                "name": "自定义", "provider": "anthropic",
+                "base_url": "https://x", "api_key": "k", "model": "m"
+            }]),
+            ..Default::default()
+        };
+        write_ohmyagent_config(&engine_dir, &plain_cfg, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert!(settings.get("signing_secret").is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

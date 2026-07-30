@@ -26,11 +26,12 @@ import { IconBack, IconCloud, IconGear, IconGlobe, IconMonitor, IconPlus, IconSp
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
+import { mcModelsRevoke, mcModelsSync } from "./cloudapi";
 import {
   emptyMcp,
   emptyModel,
   payloadOf,
-  replaceBaizhiGroup,
+  replaceSourceGroup,
   serversToMcps,
   validateMcpNames,
   type McpEntry,
@@ -41,9 +42,11 @@ import { updateGate } from "./updateGate";
 import { MacWindowControls } from "./titlebar";
 import {
   SOURCE_BAIZHI,
+  SOURCE_MONKEYCODE,
   modelSourceLabel,
   type BaizhiStatus,
   type BaizhiSyncResult,
+  type BaizhiSyncedModel,
   type BrowserExtStatus,
   type EngineCaps,
   type HostModel,
@@ -339,20 +342,52 @@ function mcIdentity(s: McConnectionState): string {
 }
 
 /** MonkeyCode 云端任务关联卡。百智云只是显式连接时的授权前提,
- * 两者状态和退出操作互不代替。 */
+ * 两者状态和退出操作互不代替。已关联时可把会员内置模型同步为本地任务
+ * 可用的条目(壳持本机 OhMyAgent 代理 Key,base_url 指向服务端模型代理,
+ * 上游真实凭据不出服务端)。 */
 function MonkeyCodeAccountCard({
   connection,
   baizhiLoggedIn,
   onConnect,
   onRetry,
   onDisconnect,
+  onSyncedModels,
 }: {
   connection: McConnectionState;
   baizhiLoggedIn: boolean;
   onConnect: () => void;
   onRetry: () => void;
   onDisconnect: () => void;
+  /** 同步成功回填设置表单(条目已带 source="monkeycode");
+   * 返回与既有条目撞名被跳过的名字(提示用) */
+  onSyncedModels: (models: BaizhiSyncedModel[]) => string[];
 }) {
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ text: string; color: string } | null>(null);
+  // 会员模型少且服务端已按会员档过滤,全量导入不设挑选面板(整组替换,
+  // 不想要的条目可在模型页删除;删除的条目重同步会恢复)
+  const doSyncModels = async () => {
+    setSyncMsg(null);
+    setSyncing(true);
+    try {
+      const r = await mcModelsSync();
+      const notes = [...(r.notes ?? [])];
+      if (!r.models.length) {
+        setSyncMsg({ text: "没有可同步的会员模型" + (notes.length ? `(${notes.join(";")})` : ""), color: "var(--err)" });
+        return;
+      }
+      const skipped = onSyncedModels(r.models);
+      if (skipped.length) notes.push(`与现有条目同名已跳过: ${skipped.join("、")}`);
+      setSyncMsg({
+        text: `已填入 ${r.models.length - skipped.length} 个会员模型` + (notes.length ? `(${notes.join(";")})` : "") + ",已切到模型页,核对后保存",
+        color: "var(--ok)",
+      });
+    } catch (e) {
+      setSyncMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
+    } finally {
+      setSyncing(false);
+    }
+  };
   const busy = connection.phase === "checking" || connection.phase === "connecting" || connection.phase === "disconnecting";
   const connected = connection.phase === "connected";
   const status =
@@ -402,6 +437,19 @@ function MonkeyCodeAccountCard({
         >
           {status}
         </span>
+        {connected && (
+          <button
+            className="hv-acc"
+            onClick={() => !syncing && void doSyncModels()}
+            title="把会员内置模型同步为本地任务可用的模型(整组替换;移除的条目重同步会恢复)"
+            style={{ ...whiteBtn, flex: "none", gap: 6, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)", opacity: syncing ? 0.7 : 1, cursor: syncing ? "default" : "pointer" }}
+          >
+            {syncing && (
+              <span style={{ width: 11, height: 11, border: "1.5px solid var(--onAcc)", borderTopColor: "transparent", borderRadius: "50%", animation: "mcspin .9s linear infinite", display: "inline-block" }} />
+            )}
+            {syncing ? "同步中…" : "同步会员模型"}
+          </button>
+        )}
         {connected || connection.phase === "disconnecting" ? (
           <button className="hv" disabled={busy} onClick={onDisconnect} style={{ ...whiteBtn, flex: "none", opacity: busy ? 0.6 : 1 }}>
             {connection.phase === "disconnecting" ? "断开中…" : "断开关联"}
@@ -430,6 +478,7 @@ function MonkeyCodeAccountCard({
         )}
       </div>
       <span style={{ fontSize: 11.5, color: connection.error ? "var(--err)" : "var(--t5)", lineHeight: 1.6 }}>{message}</span>
+      {syncMsg && <span style={{ fontSize: 12, color: syncMsg.color, lineHeight: 1.6 }}>{syncMsg.text}</span>}
     </div>
   );
 }
@@ -467,6 +516,7 @@ export function SettingsView({
   const [advOpen, setAdvOpen] = useState<Record<number, boolean>>({});
   const [expanded, setExpanded] = useState<number | null>(null); // 展开编辑的模型(真实索引)
   const [baizhiOpen, setBaizhiOpen] = useState(true); // 百智云组(账号优先,默认展开)
+  const [mcModelsOpen, setMcModelsOpen] = useState(true); // MonkeyCode 会员模型组(默认展开)
   const [mcps, setMcps] = useState<McpEntry[]>([]);
   const [mcpExpanded, setMcpExpanded] = useState<number | null>(null);
   const [baizhiMcpOpen, setBaizhiMcpOpen] = useState(true); // 百智云 MCP 组(默认展开)
@@ -571,45 +621,109 @@ export function SettingsView({
   const patchMcp = (i: number, patch: Partial<McpEntry>) =>
     setMcps((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
-  // 同步导入:整组替换语义见 replaceBaizhiGroup。导入即进脏态,保存条浮现;
-  // 自动切到模型页供核对。
+  // 同步条目并入表单(百智云/MonkeyCode 共用;整组替换语义见
+  // replaceSourceGroup)。导入即进脏态,保存条浮现;自动切到模型页供核对。
+  // 返回与既有条目撞名被跳过的名字(keepManual 时提示用)。
+  const applySyncedModels = (syncedModels: BaizhiSyncedModel[], source: string, keepManual: boolean): string[] => {
+    if (!syncedModels.length) return []; // 空集合不视为"清空该组"
+    const defaultName = models[defaultIdx]?.name?.trim() ?? "";
+    const synced: HostModel[] = syncedModels.map((sm) => ({
+      name: sm.name,
+      provider: sm.provider,
+      base_url: sm.base_url,
+      api_key: sm.api_key,
+      model: sm.model,
+      context_window: sm.context_window,
+      max_output: sm.max_output,
+      think: sm.think,
+      vision: sm.vision,
+      source: sm.source,
+    }));
+    const outside = new Set(models.filter((m) => m.source !== source && m.name.trim()).map((m) => m.name.trim()));
+    const skipped = keepManual ? synced.map((m) => m.name.trim()).filter((n) => outside.has(n)) : [];
+    const next = replaceSourceGroup(models, synced, source, keepManual);
+    setModels(next);
+    // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位
+    const di = next.findIndex((m) => m.name.trim() === defaultName);
+    setDefaultIdx(di >= 0 ? di : 0);
+    setAdvOpen({});
+    setExpanded(null);
+    (source === SOURCE_MONKEYCODE ? setMcModelsOpen : setBaizhiOpen)(true);
+    setActive("models"); // 导入后直接看结果
+    return skipped;
+  };
+
   const applySynced = (r: BaizhiSyncResult) => {
-    // 只导入 MCP(勾选 0 个模型)时不触碰模型组:空选集不视为"清空百智云组"
-    if (r.models.length) {
-      const defaultName = models[defaultIdx]?.name?.trim() ?? "";
-      const synced = r.models.map((sm) => ({
-        name: sm.name,
-        provider: sm.provider,
-        base_url: sm.base_url,
-        api_key: sm.api_key,
-        model: sm.model,
-        context_window: sm.context_window,
-        vision: sm.vision,
-        source: sm.source,
-      }));
-      const next = replaceBaizhiGroup(models, synced, false);
-      setModels(next);
-      // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位
-      const di = next.findIndex((m) => m.name.trim() === defaultName);
-      setDefaultIdx(di >= 0 ? di : 0);
-      setAdvOpen({});
-      setExpanded(null);
-      setBaizhiOpen(true);
-    }
+    // 百智云模型导入经逐条勾选确认,同名条目按用户选择覆盖归组(keep=false)
+    applySyncedModels(r.models, SOURCE_BAIZHI, false);
     // MCP:本次无条目(如网关未开通)则不触碰(空集不清组,对齐模型语义);
     // 同步条目已带 source=baizhi
     const syncedMcps = serversToMcps(r.mcp_servers);
     if (syncedMcps.length) {
-      setMcps((cur) => replaceBaizhiGroup(cur, syncedMcps, true));
+      setMcps((cur) => replaceSourceGroup(cur, syncedMcps, SOURCE_BAIZHI, true));
       setMcpExpanded(null);
     }
-    setActive("models"); // 导入后直接看结果
+    setActive("models"); // 只导入 MCP 时也切过去看结果
+  };
+
+  // 断开 MonkeyCode:①尽力删除本机代理 Key(须在清会话前;断网失败不阻断
+  // ——本地必须能断开,壳保留 Key 记录待重连后再次断开收敛)②清 mc 会话
+  // ③把磁盘配置里的会员模型组移除并走保存主路径(引擎重启,与保存流程同款
+  // 收尾)。用磁盘快照而非表单草稿:不顺手提交用户未保存的半成品修改。
+  const disconnectMcWithCleanup = async () => {
+    const cfg = await getHostConfig().catch(() => null);
+    const hasSavedMc = (cfg?.models ?? []).some((m) => m.source === SOURCE_MONKEYCODE);
+    if (
+      hasSavedMc &&
+      !confirm(
+        dirty
+          ? "断开将移除已同步的会员模型并重启内核,当前未保存的设置修改将丢失。继续断开?"
+          : "断开将移除已同步的会员模型并重启内核。继续断开?",
+      )
+    )
+      return;
+    let warn = "";
+    try {
+      await mcModelsRevoke();
+    } catch (e) {
+      warn = `会员模型密钥吊销失败(重连后再次断开即可收敛): ${e instanceof Error ? e.message : String(e)}`;
+    }
+    onDisconnectMc(); // 清 mc 会话 + 云端状态复位(App 侧)
+    // 表单里可能还有"同步了但没保存"的会员条目:账号已断,留着只会被保存成
+    // 一堆无凭据的死条目,随手从表单剔除(走 reload 的路径表单反正会复位)
+    if (models.some((m) => m.source === SOURCE_MONKEYCODE)) {
+      const defaultName = models[defaultIdx]?.name?.trim() ?? "";
+      const rest = models.filter((m) => m.source !== SOURCE_MONKEYCODE);
+      const di = rest.findIndex((m) => m.name.trim() === defaultName);
+      setModels(rest);
+      setDefaultIdx(di >= 0 ? di : 0);
+      setExpanded(null);
+      setAdvOpen({});
+    }
+    if (!cfg || !hasSavedMc) {
+      if (warn) setErr(warn);
+      return; // 磁盘无会员模型条目:不触碰配置,也不重启引擎
+    }
+    let next = cfg.models.filter((m) => m.source !== SOURCE_MONKEYCODE);
+    // 被移除组含默认条目时,默认落到剩余第一项
+    if (next.length && !next.some((m) => m.default)) next = next.map((m, i) => (i === 0 ? { ...m, default: true } : m));
+    try {
+      await saveHostConfig({ ...cfg, models: next });
+      location.reload(); // 壳已重启引擎:整页刷新复位所有状态(与保存流程同款)
+    } catch (e) {
+      setErr(
+        `${warn ? warn + ";" : ""}移除会员模型配置失败: ${e instanceof Error ? e.message : String(e)}(可在模型页手动删除后保存)`,
+      );
+    }
   };
 
   const save = async () => {
-    // UX 前置校验;权威校验在内核 LoadModels(重复名/provider 白名单等)
+    // UX 前置校验;权威校验在内核 LoadModels(重复名/provider 白名单等)。
+    // MonkeyCode 会员条目不校验接口地址/API Key:凭据不经表单与 config.json
+    // 流转(条目里是空占位),物化时由壳从代理 Key 文件注入
     for (const m of models) {
-      if (!m.name.trim() || !m.base_url.trim() || !m.api_key.trim() || !m.model.trim()) {
+      const managed = m.source === SOURCE_MONKEYCODE;
+      if (!m.name.trim() || !m.model.trim() || (!managed && (!m.base_url.trim() || !m.api_key.trim()))) {
         setErr(`模型「${m.name.trim() || "未命名"}」信息不完整(需名称/接口地址/API Key/模型标识)`);
         setActive("models");
         return;
@@ -665,18 +779,29 @@ export function SettingsView({
   // ---- 模型:紧凑行 + 手风琴编辑(i 恒为 models 真实索引) ----
 
   const modelRow = (m: HostModel, i: number) => {
-    const isOpen = expanded === i;
+    // MonkeyCode 会员条目只读不可展开:凭据由壳托管、条目随同步整组更新,
+    // 表单里没有可看/可改的东西(也不给"一眼抄走"接口地址与 Key 的入口)
+    const managed = m.source === SOURCE_MONKEYCODE;
+    const isOpen = expanded === i && !managed;
     return (
       <>
         <div
-          className="hrow hv2"
-          onClick={() => setExpanded(isOpen ? null : i)}
-          style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: "pointer", userSelect: "none" }}
+          className={managed ? "hrow" : "hrow hv2"}
+          onClick={managed ? undefined : () => setExpanded(isOpen ? null : i)}
+          style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: managed ? "default" : "pointer", userSelect: "none" }}
         >
           <span className="ellipsis" style={{ fontSize: 12.5, fontFamily: MONO, color: m.name.trim() ? "var(--t1)" : "var(--t5)", minWidth: 0 }}>
             {m.name.trim() || "未命名模型"}
           </span>
           <span style={pill}>{m.provider || "anthropic"}</span>
+          {managed && (
+            <span
+              style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}
+              title="凭据由 MonkeyCode 托管,本机不展示;条目随「同步会员模型」整组更新"
+            >
+              托管
+            </span>
+          )}
           {m.vision && <span style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}>视觉</span>}
           {i === defaultIdx && (
             <span style={{ flex: "none", fontSize: 11, fontWeight: 700, color: "var(--accTx)", whiteSpace: "nowrap" }}>✓ 默认</span>
@@ -709,11 +834,13 @@ export function SettingsView({
               删除
             </span>
           </span>
-          <span
-            style={{ flex: "none", display: "inline-block", transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s ease", fontSize: 9, color: "var(--t5)" }}
-          >
-            ▸
-          </span>
+          {!managed && (
+            <span
+              style={{ flex: "none", display: "inline-block", transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s ease", fontSize: 9, color: "var(--t5)" }}
+            >
+              ▸
+            </span>
+          )}
         </div>
         {isOpen && modelForm(m, i)}
       </>
@@ -868,7 +995,8 @@ export function SettingsView({
     if (!loaded) return <div style={{ fontSize: 12.5, color: "var(--t5)" }}>读取配置中…</div>;
     const entries = models.map((m, i) => ({ m, i }));
     const baizhi = entries.filter((e) => e.m.source === SOURCE_BAIZHI);
-    const custom = entries.filter((e) => e.m.source !== SOURCE_BAIZHI);
+    const monkeycode = entries.filter((e) => e.m.source === SOURCE_MONKEYCODE);
+    const custom = entries.filter((e) => e.m.source !== SOURCE_BAIZHI && e.m.source !== SOURCE_MONKEYCODE);
     return (
       <>
         {loginHint}
@@ -895,6 +1023,15 @@ export function SettingsView({
             baizhiOpen && groupCard(baizhi, modelRow)
           )}
         </Section>
+        {/* MonkeyCode 会员组:空时不渲染(入口引导在账号页卡片,不堆空态) */}
+        {monkeycode.length > 0 && (
+          <Section
+            label={`${modelSourceLabel(SOURCE_MONKEYCODE)}(${monkeycode.length})`}
+            action={collapseToggle(mcModelsOpen, () => setMcModelsOpen((v) => !v))}
+          >
+            {mcModelsOpen && groupCard(monkeycode, modelRow)}
+          </Section>
+        )}
         {/* 自定义组(高级路径) */}
         <Section label="自定义模型" action={addBtn("添加模型", () => {
           setModels((ms) => [...ms, emptyModel()]);
@@ -1188,7 +1325,8 @@ export function SettingsView({
           baizhiLoggedIn={loggedIn}
           onConnect={onConnectMc}
           onRetry={onRetryMc}
-          onDisconnect={onDisconnectMc}
+          onDisconnect={() => void disconnectMcWithCleanup()}
+          onSyncedModels={(ms) => applySyncedModels(ms, SOURCE_MONKEYCODE, true)}
         />
       </Section>
     </>

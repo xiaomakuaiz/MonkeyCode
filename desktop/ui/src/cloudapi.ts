@@ -4,7 +4,7 @@
 import { b64encode, frameData } from "./codec";
 import type { McTaskOptions } from "./cloud";
 import { invoke, listenAsync } from "./ipc";
-import type { CloudAttachment, CloudProjectsResp, CloudTaskDetail, CloudTasksResp, Frame, McStatus, McUser, WsCloseInfo } from "./types";
+import type { CloudAttachment, CloudProjectsResp, CloudTaskDetail, CloudTasksResp, Frame, McModelsSyncResult, McStatus, McUser, WsCloseInfo } from "./types";
 
 // ==================== 云端 REST(壳命令代理) ====================
 
@@ -15,6 +15,15 @@ export const mcStatus = () => invoke<McStatus>("mc_status");
 export const mcLogin = () => invoke<{ ok: boolean; user?: McUser }>("mc_login");
 
 export const mcLogout = () => invoke<{ ok: boolean }>("mc_logout");
+
+/** 同步会员内置模型为本地条目(壳复用/创建本机的 OhMyAgent 代理 Key;
+ * 不碰配置,返回值经设置表单确认后保存)。 */
+export const mcModelsSync = () => invoke<McModelsSyncResult>("mc_models_sync");
+
+/** 删除本机的会员模型代理 Key(断开 MonkeyCode 账号时调用;从未同步过
+ * 时为 no-op,删失败时本地记录保留供下次复用/重试)。须在 mcLogout 之前
+ * 调用——删除走 mc 会话。 */
+export const mcModelsRevoke = () => invoke<{ ok: boolean }>("mc_models_revoke");
 
 export const mcTasks = (
   page = 1,

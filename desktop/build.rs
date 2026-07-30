@@ -63,6 +63,8 @@ fn main() {
                 "mc_status",
                 "mc_login",
                 "mc_logout",
+                "mc_models_sync",
+                "mc_models_revoke",
                 "mc_tasks",
                 "mc_projects",
                 "mc_task_info",
