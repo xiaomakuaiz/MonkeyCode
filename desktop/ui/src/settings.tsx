@@ -796,7 +796,7 @@ export function SettingsView({
   };
 
   const applySynced = (r: BaizhiSyncResult) => {
-    // 百智云模型导入经逐条勾选确认,同名条目按用户选择覆盖归组(keep=false)
+    // 百智云同步即全量导入(不再逐条挑选),同名条目覆盖归组(keep=false)
     applySyncedModels(r.models, SOURCE_BAIZHI, false);
     // MCP:本次无条目(如网关未开通)则不触碰(空集不清组,对齐模型语义);
     // 同步条目已带 source=baizhi
@@ -1465,7 +1465,6 @@ export function SettingsView({
           refreshStatus={refreshBz}
           onSynced={applySynced}
           knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
-          preselectNames={() => models.filter((m) => m.source === SOURCE_BAIZHI || !m.source).map((m) => m.name.trim())}
         />
       </Section>
       <Section label="MonkeyCode">
