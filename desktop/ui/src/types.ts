@@ -75,6 +75,9 @@ export interface HostConfig {
   /** MonkeyCode 测试环境反向代理的 HTTP Basic Auth("user:pass",空 = 无;
    * 对齐 mobile 的 mc.basicAuth)。仅 MonkeyCode 域的请求附头;重启应用生效 */
   mc_basic_auth?: string;
+  /** 模型请求地址(llmproxy,会员模型的 LLM 调用打这里)。空/缺省 =
+   * {服务地址}/v1;拆分部署时单独指定 */
+  mc_llm_base_url?: string;
 }
 
 // SessionStatus:见文件头——gen/SessionStatus.ts(ts-rs 生成)复用,

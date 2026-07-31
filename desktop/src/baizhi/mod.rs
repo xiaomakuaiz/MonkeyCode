@@ -21,6 +21,8 @@ use cookies::CookieStore;
 
 const DEFAULT_MODEL_GATEWAY: &str = "https://ai-models.app.baizhi.cloud";
 const DEFAULT_MCP_GATEWAY: &str = "https://agent-toolkit.app.baizhi.cloud";
+/// MonkeyCode 官方云地址(config.rs 的 Basic Auth 作用域判定也用它)。
+pub(crate) const DEFAULT_MONKEYCODE_URL: &str = "https://monkeycode-ai.com";
 
 /// 百智云服务地址。模型与 MCP 服务固定走官方云;账号和 MonkeyCode 地址可覆盖。
 pub struct Endpoints {
@@ -48,7 +50,7 @@ impl Endpoints {
     /// 优先级:环境变量(开发/联调逃生门)> 设置值 > 官方云默认。
     pub fn resolve(mc_base_url: &str) -> Self {
         let mc_default = mc_base_url.trim();
-        let mc_default = if mc_default.is_empty() { "https://monkeycode-ai.com" } else { mc_default };
+        let mc_default = if mc_default.is_empty() { DEFAULT_MONKEYCODE_URL } else { mc_default };
         Self {
             account: env_or("MC_DESKTOP_BAIZHI_URL", "https://baizhi.cloud"),
             model_gateway: DEFAULT_MODEL_GATEWAY.to_string(),
@@ -97,6 +99,9 @@ pub struct Service {
     /// 测试环境反向代理的 Basic Auth 头值(预计算的 "Basic <b64>";None =
     /// 未配置)。仅对 MonkeyCode 域的请求附加,见 mc_basic_header。
     pub(crate) mc_basic: Option<String>,
+    /// 模型请求地址(llmproxy):设置里单独指定的值,或默认 {服务地址}/v1。
+    /// 会员模型条目的 base_url 快照与物化注入都以它为准。
+    pub(crate) mc_llm: String,
     /// 进行中的扫码会话(只保留最新)
     pub wx: StdMutex<Option<wechat::WechatLogin>>,
 }
@@ -119,6 +124,7 @@ impl Service {
                 .build()
                 .expect("构建 HTTP 客户端失败")
         };
+        let mc_llm = format!("{}/v1", ep.monkeycode);
         Self {
             ep,
             http: Some(mk(10)),
@@ -126,11 +132,12 @@ impl Service {
             store: CookieStore::new(None),
             mc: CookieStore::new(None),
             mc_basic: None,
+            mc_llm,
             wx: StdMutex::new(None),
         }
     }
 
-    pub fn new(config_dir: std::path::PathBuf, mc_base_url: &str, mc_basic_auth: &str) -> Self {
+    pub fn new(config_dir: std::path::PathBuf, cfg: &crate::config::DesktopConfig) -> Self {
         // 构建失败只发生在 TLS 后端初始化不了时。不 panic:壳在 setup 里
         // 构造本服务,GUI 子系统下 panic = 双击没反应、无任何线索。降级为
         // 云端/账号命令逐条报错,本地引擎会话不受影响。
@@ -142,13 +149,18 @@ impl Service {
                 .inspect_err(|e| eprintln!("[desktop] HTTP 客户端构建失败(云端/账号功能不可用): {e}"))
                 .ok()
         };
+        let ep = Endpoints::resolve(&cfg.mc_base_url);
+        // 模型请求地址:设置值(拆分部署)优先,空则默认与服务同源 /v1
+        let llm = cfg.mc_llm_base_url.trim().trim_end_matches('/');
+        let mc_llm = if llm.is_empty() { format!("{}/v1", ep.monkeycode) } else { llm.to_string() };
         Self {
-            ep: Endpoints::resolve(mc_base_url),
+            ep,
             http: mk(30),
             lp: mk(40),
             store: CookieStore::new(Some(config_dir.join("baizhi-cookies.json"))),
             mc: CookieStore::new(Some(config_dir.join("monkeycode-cookies.json"))),
-            mc_basic: basic_header_value(mc_basic_auth),
+            mc_basic: basic_header_value(&cfg.mc_basic_auth),
+            mc_llm,
             wx: StdMutex::new(None),
         }
     }
@@ -636,30 +648,41 @@ pub(crate) fn stored_ohmyagent_key(cfg_dir: &std::path::Path) -> Option<Value> {
 }
 
 /// 取本机代理 Key,没有就创建并立刻落盘(明文只此一次,不落盘即丢)。
-/// 落盘时附上代理 base_url 快照(服务端同源 /v1)——物化注入的另一半;
-/// 旧文件缺 base_url 时(历史迭代产物)同步顺手回填,不留哑条目。
-/// 快照与当前地址不一致 = 用户切换了服务地址:旧 Key 属旧服务器,复用
-/// 即跨服误用,作废重建(旧服务器侧的 Key 无从删除——会话已在新地址,
-/// 记录为已知限制)。
+/// 文件里两个快照字段语义不同:
+/// - `server` = 签发 Key 的 MonkeyCode 服务地址(**账号归属**)。变了 =
+///   用户切换了服务器,旧 Key 属旧服务器,复用即跨服误用 → 作废重建
+///   (旧服务器侧的 Key 无从删除——会话已在新地址,已知限制)。
+/// - `base_url` = 模型请求地址(llmproxy,物化注入用)。仅它变了(拆分
+///   部署改了模型代理地址)Key 仍属同一服务器 → 原地刷新,不重建。
+/// 旧文件缺 server(历史迭代产物)时按 base_url 是否吻合宽松判定。
 async fn ensure_ohmyagent_key(svc: &Service, cfg_dir: &std::path::Path) -> BzResult<Value> {
-    let base_url = format!("{}/v1", svc.ep.monkeycode);
+    let server = svc.ep.monkeycode.as_str();
+    let llm = svc.mc_llm.as_str();
     let persist = |k: &Value| {
         crate::config::atomic_write_private(&cfg_dir.join(OHMYAGENT_KEY_FILE), k.to_string().as_bytes())
             .map_err(other)
     };
     if let Some(mut k) = stored_ohmyagent_key(cfg_dir) {
-        match k.get("base_url").and_then(Value::as_str).unwrap_or("") {
-            b if b == base_url => return Ok(k),
-            "" => {
-                k["base_url"] = json!(base_url);
+        let stored_server = k.get("server").and_then(Value::as_str).unwrap_or("").to_string();
+        let stored_llm = k.get("base_url").and_then(Value::as_str).unwrap_or("").to_string();
+        let same_server = if stored_server.is_empty() {
+            stored_llm.is_empty() || stored_llm == llm // 旧文件:凭 base_url 宽松判定
+        } else {
+            stored_server == server
+        };
+        if same_server {
+            if stored_server != server || stored_llm != llm {
+                k["server"] = json!(server);
+                k["base_url"] = json!(llm);
                 persist(&k)?;
-                return Ok(k);
             }
-            _ => {} // 地址已切换,落到下方重建
+            return Ok(k);
         }
+        // 服务器已切换,落到下方重建
     }
     let mut k = monkeycode::mc_ohmyagent_key_create(svc).await?;
-    k["base_url"] = json!(base_url);
+    k["server"] = json!(server);
+    k["base_url"] = json!(llm);
     persist(&k)?;
     Ok(k)
 }

@@ -77,6 +77,11 @@ pub struct DesktopConfig {
     /// Authorization 头;同样重启应用生效。
     #[serde(default)]
     pub mc_basic_auth: String,
+    /// 模型请求地址(llmproxy,会员模型的 LLM 调用打这里;服务端
+    /// LLMProxy.BaseURL 的客户端镜像)。空 = 默认 {服务地址}/v1;拆分
+    /// 部署(模型代理独立域名/端口,或绕开反代鉴权)时单独指定。
+    #[serde(default)]
+    pub mc_llm_base_url: String,
     /// 已废弃(单引擎化后忽略):历史 config.json 兼容保留,不再消费。
     #[serde(default = "default_engine")]
     pub agent_engine: String,
@@ -102,6 +107,7 @@ impl Default for DesktopConfig {
             kernel_env: String::new(),
             mc_base_url: String::new(),
             mc_basic_auth: String::new(),
+            mc_llm_base_url: String::new(),
             agent_engine: default_engine(),
             pet_enabled: true,
             pet_pos: None,
@@ -415,6 +421,21 @@ fn thinking_config(effort: &str) -> serde_json::Value {
     serde_json::json!({ "enabled": true, "effort": effort })
 }
 
+/// url 的主机是否就是 MonkeyCode 服务主机——Basic Auth 的作用域判定,与
+/// baizhi::Service::mc_basic_header 同语义:模型请求地址指向其他主机(拆分
+/// 部署)时,不得把 MC 的反代凭证嵌进去泄漏给第三方主机。**刻意不解析
+/// MC_DESKTOP_MONKEYCODE_URL 环境变量**:测试并行读写该变量会互相踩,且
+/// 判定从严(拿不准就不嵌)是安全的方向;纯环境变量改地址的开发场景在
+/// 设置里补同样的服务地址即可。
+fn on_mc_host(url: &str, mc_base_url: &str) -> bool {
+    let mc = mc_base_url.trim().trim_end_matches('/');
+    let mc = if mc.is_empty() { crate::baizhi::DEFAULT_MONKEYCODE_URL } else { mc };
+    let (Ok(a), Ok(b)) = (reqwest::Url::parse(url), reqwest::Url::parse(mc)) else {
+        return false;
+    };
+    a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default()
+}
+
 /// 反代 Basic Auth 嵌进 base_url 的 userinfo(https://user:pass@host/…)。
 /// Go 引擎的 http 客户端在 Authorization 为空时按 userinfo 自动补 Basic 头
 /// (net/http client.send);anthropic 协议用 x-api-key 携带模型密钥、
@@ -485,13 +506,17 @@ fn write_ohmyagent_config(
     for m in models_arr {
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (name, provider, model) = (get("name"), get("provider"), get("model"));
-        // 会员条目:凭据与代理地址由 Key 文件注入(条目里是空占位;Key 文件
-        // 缺失时照常物化,请求时报错外显,不静默丢条目)。配置了测试环境
-        // 反代 Basic Auth 时嵌进 base_url userinfo(见 with_basic_userinfo)
+        // 会员条目:凭据与代理地址由壳注入(条目里是空占位;Key 文件缺失时
+        // 照常物化,请求时报错外显,不静默丢条目)。模型请求地址:设置里
+        // 显式指定(拆分部署)优先、立即生效,否则用 Key 文件快照;配置了
+        // 测试环境反代 Basic Auth 时嵌进 userinfo(见 with_basic_userinfo)
         let (base_url, api_key) = if is_monkeycode(m) {
-            let mut b = mc_key_field("base_url");
+            let llm = cfg.mc_llm_base_url.trim().trim_end_matches('/');
+            let mut b = if llm.is_empty() { mc_key_field("base_url") } else { llm.to_string() };
             let basic = cfg.mc_basic_auth.trim();
-            if !b.is_empty() && !basic.is_empty() {
+            // Basic Auth 只嵌给 MonkeyCode 主机:模型地址指向别的主机时嵌入
+            // 等于把反代凭证泄漏给第三方(host 门与 mc_basic_header 同语义)
+            if !b.is_empty() && !basic.is_empty() && on_mc_host(&b, &cfg.mc_base_url) {
                 b = with_basic_userinfo(&b, basic);
             }
             (b, mc_key_field("api_key"))
@@ -862,14 +887,51 @@ mod tests {
         assert_eq!(settings["models"]["自定义"]["base_url"], "https://direct.example.com");
 
         // 配置了反代 Basic Auth:嵌进会员条目 base_url 的 userinfo(Go 引擎
-        // 在 Authorization 空闲时自动补 Basic 头;特殊字符需百分号转义),
+        // 在 Authorization 空闲时自动补 Basic 头;特殊字符需百分号转义)。
+        // host 门:凭证只嵌给 MonkeyCode 主机,服务地址须与之匹配;
         // 非会员条目不受影响
-        let basic_cfg = DesktopConfig { mc_basic_auth: "user:p@ss".into(), ..mc_cfg.clone() };
+        let basic_cfg = DesktopConfig {
+            mc_base_url: "https://mc.example.com".into(),
+            mc_basic_auth: "user:p@ss".into(),
+            ..mc_cfg.clone()
+        };
         write_ohmyagent_config(&engine_dir, &basic_cfg, None).unwrap();
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
         assert_eq!(settings["models"]["会员模型"]["base_url"], "https://user:p%40ss@mc.example.com/v1");
         assert_eq!(settings["models"]["自定义"]["base_url"], "https://direct.example.com");
+
+        // 显式模型请求地址(拆分部署):物化直接采用设置值(尾斜杠归一,
+        // 不等重新同步刷新 Key 快照)
+        let llm_cfg = DesktopConfig { mc_llm_base_url: "https://llm.example.com/v1/".into(), ..mc_cfg.clone() };
+        write_ohmyagent_config(&engine_dir, &llm_cfg, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["models"]["会员模型"]["base_url"], "https://llm.example.com/v1");
+
+        // 模型地址指向第三方主机 + 配了 Basic:**不得**把 MC 反代凭证嵌给
+        // 第三方(host 门,与 mc_basic_header 同语义);指回 MC 主机则照嵌
+        let split_cfg = DesktopConfig {
+            mc_base_url: "https://mc.example.com".into(),
+            mc_basic_auth: "user:p@ss".into(),
+            mc_llm_base_url: "https://llm.example.com/v1".into(),
+            ..mc_cfg.clone()
+        };
+        write_ohmyagent_config(&engine_dir, &split_cfg, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(
+            settings["models"]["会员模型"]["base_url"], "https://llm.example.com/v1",
+            "第三方主机不得携带 MC 反代凭证"
+        );
+        let same_host_cfg = DesktopConfig {
+            mc_llm_base_url: "https://mc.example.com/llm/v1".into(),
+            ..split_cfg.clone()
+        };
+        write_ohmyagent_config(&engine_dir, &same_host_cfg, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["models"]["会员模型"]["base_url"], "https://user:p%40ss@mc.example.com/llm/v1");
 
         // 无会员条目:即便 Key 文件在,也不写顶层 secret
         let plain_cfg = DesktopConfig {

@@ -622,6 +622,7 @@ export function SettingsView({
   const [kernelEnv, setKernelEnv] = useState(""); // 内核运行环境:"" 本机 / "wsl:<发行版>"
   const [mcBaseUrl, setMcBaseUrl] = useState(""); // MonkeyCode 服务地址("" = 官方云;重启应用生效)
   const [mcBasicAuth, setMcBasicAuth] = useState(""); // 测试环境反代 Basic Auth("user:pass";重启应用生效)
+  const [mcLlmBaseUrl, setMcLlmBaseUrl] = useState(""); // 模型请求地址("" = {服务地址}/v1)
   const [wslDistros, setWslDistros] = useState<string[] | null>(null); // WSL 发行版列表(null=未加载)
   const [caps, setCaps] = useState<EngineCaps | null>(null); // 当前引擎能力(浏览器 tab 按此隐藏)
   const [loaded, setLoaded] = useState(false);
@@ -661,7 +662,15 @@ export function SettingsView({
 
   // 加载快照:baseline 供 dirty 比较,snapshot 供「放弃更改」复原
   const baseline = useRef("");
-  const snapshot = useRef<{ models: HostModel[]; defaultIdx: number; mcps: McpEntry[]; kernelEnv: string; mcBaseUrl: string; mcBasicAuth: string } | null>(null);
+  const snapshot = useRef<{
+    models: HostModel[];
+    defaultIdx: number;
+    mcps: McpEntry[];
+    kernelEnv: string;
+    mcBaseUrl: string;
+    mcBasicAuth: string;
+    mcLlmBaseUrl: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!desktop) {
@@ -676,14 +685,16 @@ export function SettingsView({
         const ke = cfg?.kernel_env ?? "";
         const mu = cfg?.mc_base_url ?? "";
         const mb = cfg?.mc_basic_auth ?? "";
+        const ml = cfg?.mc_llm_base_url ?? "";
         setModels(ms);
         setDefaultIdx(di);
         setMcps(mc);
         setKernelEnv(ke);
         setMcBaseUrl(mu);
         setMcBasicAuth(mb);
-        snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke, mcBaseUrl: mu, mcBasicAuth: mb };
-        baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke, mu, mb));
+        setMcLlmBaseUrl(ml);
+        snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke, mcBaseUrl: mu, mcBasicAuth: mb, mcLlmBaseUrl: ml };
+        baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke, mu, mb, ml));
         setLoaded(true);
       })
       .catch((e) => setErr("读取配置失败: " + (e instanceof Error ? e.message : String(e))));
@@ -694,9 +705,12 @@ export function SettingsView({
   }, [desktop]);
 
   const dirty = useMemo(
-    () => desktop && loaded && JSON.stringify(payloadOf(models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth)) !== baseline.current,
+    () =>
+      desktop &&
+      loaded &&
+      JSON.stringify(payloadOf(models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl)) !== baseline.current,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [desktop, loaded, models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth],
+    [desktop, loaded, models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl],
   );
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -717,6 +731,7 @@ export function SettingsView({
     setKernelEnv(s.kernelEnv);
     setMcBaseUrl(s.mcBaseUrl);
     setMcBasicAuth(s.mcBasicAuth);
+    setMcLlmBaseUrl(s.mcLlmBaseUrl);
     setExpanded(null);
     setMcpExpanded(null);
     setAdvOpen({});
@@ -867,7 +882,7 @@ export function SettingsView({
     setErr("");
     setSaving(true);
     try {
-      await saveHostConfig(payloadOf(models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth));
+      await saveHostConfig(payloadOf(models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl));
       // 壳已重启引擎:整页刷新复位所有状态并重连(保持"保存中"直到卸载)
       location.reload();
     } catch (e) {
@@ -1462,10 +1477,22 @@ export function SettingsView({
                 />
               </Field>
             </div>
+            <Field label="模型请求地址(可选)">
+              <input
+                style={input}
+                value={mcLlmBaseUrl}
+                placeholder="留空 = 服务地址/v1(会员模型的 LLM 调用打这里)"
+                title="模型代理(llmproxy)的地址;拆分部署或模型流量绕开反代鉴权时单独指定"
+                onChange={(e) => setMcLlmBaseUrl(e.target.value)}
+                className="hv-bd"
+              />
+            </Field>
             <span style={{ fontSize: 12, color: "var(--t5)", lineHeight: 1.7 }}>
               指向自建/私有化 MonkeyCode 服务,保存后需<strong style={{ color: "var(--t3)" }}>重启应用</strong>生效。
-              环境变量 MC_DESKTOP_MONKEYCODE_URL 优先于地址设置。切换地址后需重新连接账号并重新同步会员模型;
-              Basic Auth 对会员模型同样生效(anthropic 协议;openai 协议的内置模型因引擎鉴权头占用暂不支持)。
+              环境变量 MC_DESKTOP_MONKEYCODE_URL 优先于地址设置。切换服务地址后需重新连接账号并重新同步会员模型;
+              仅改模型请求地址无需重新同步。Basic Auth 对会员模型按其协议生效:anthropic 协议可用;openai 系
+              协议因引擎以 Authorization 携带模型密钥而受限(模型请求地址绕开反代时无此限制)。
+              自定义模型如需反代鉴权,可直接在接口地址里写 https://user:pass@主机。
             </span>
           </div>
         )}

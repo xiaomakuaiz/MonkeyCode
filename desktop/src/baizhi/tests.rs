@@ -912,15 +912,28 @@ async fn mc_member_models_sync_and_revoke_contract() {
     );
     assert_eq!(*created.lock().unwrap(), 2);
 
-    // 服务地址切换:Key 文件的 base_url 快照与当前地址不一致 → 作废重建
-    // (旧 Key 属旧服务器,跨服复用是误用;旧服务器侧无从删除,已知限制)
+    // 服务器切换:旧文件无 server 快照且 base_url 与当前不符(历史形态的
+    // 宽松判定)→ 作废重建(旧 Key 属旧服务器,跨服复用是误用;旧服务器侧
+    // 无从删除,已知限制)
     let stale = json!({ "id": "key-2", "api_key": "omk-2", "signing_secret": "sec-1",
                         "base_url": "https://old.example.com/v1" });
     std::fs::write(tmp.0.join(super::OHMYAGENT_KEY_FILE), stale.to_string()).unwrap();
     super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
     let renewed = super::stored_ohmyagent_key(&tmp.0).unwrap();
-    assert_eq!(renewed.get("api_key").and_then(Value::as_str), Some("omk-3"), "地址切换应重建 Key 而非跨服复用");
+    assert_eq!(renewed.get("api_key").and_then(Value::as_str), Some("omk-3"), "服务器切换应重建 Key 而非跨服复用");
     assert_eq!(renewed.get("base_url").and_then(Value::as_str), Some(expected_base.as_str()));
+    assert_eq!(renewed.get("server").and_then(Value::as_str), Some(url.as_str()), "新文件应带服务器快照");
+    assert_eq!(*created.lock().unwrap(), 3);
+
+    // 同服务器只换模型请求地址(拆分部署):Key 仍属同一服务器 → 复用并
+    // 原地刷新 base_url,不重建
+    let moved = json!({ "id": "key-3", "api_key": "omk-3", "signing_secret": "sec-1",
+                        "server": url, "base_url": "https://old-llm.example.com/v1" });
+    std::fs::write(tmp.0.join(super::OHMYAGENT_KEY_FILE), moved.to_string()).unwrap();
+    super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
+    let refreshed = super::stored_ohmyagent_key(&tmp.0).unwrap();
+    assert_eq!(refreshed.get("api_key").and_then(Value::as_str), Some("omk-3"), "同服务器换模型地址不得重建 Key");
+    assert_eq!(refreshed.get("base_url").and_then(Value::as_str), Some(expected_base.as_str()), "模型地址应原地刷新");
     assert_eq!(*created.lock().unwrap(), 3);
 
     let reqs = captured.lock().unwrap();

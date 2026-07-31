@@ -1167,7 +1167,7 @@ fn main() {
             // 应用生效);配置损坏时按默认值落官方云,错误页照常外显。
             let cfg_dir = config::config_dir(app.handle()).map_err(std::io::Error::other)?;
             app.manage(baizhi::BaizhiState(std::sync::Arc::new(
-                baizhi::Service::new(cfg_dir, &cfg.mc_base_url, &cfg.mc_basic_auth),
+                baizhi::Service::new(cfg_dir, &cfg),
             )));
             app.state::<PetEnabled>()
                 .0
