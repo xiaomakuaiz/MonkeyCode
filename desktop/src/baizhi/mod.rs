@@ -283,17 +283,8 @@ impl Service {
         unwrap_envelope(&data, status, &ENV_BAIZHI)
     }
 
-    /// 请求裸结构端点(验证码 challenge/redeem 不套包壳;2xx 即成功)。
-    pub async fn call_raw(&self, method: reqwest::Method, path: &str, body: Option<&Value>) -> BzResult<Value> {
-        let target = if path.starts_with("http://") || path.starts_with("https://") {
-            path.to_string()
-        } else {
-            format!("{}{}", self.ep.account, path)
-        };
-        self.raw_at(&self.store, method, &target, body, "百智云").await
-    }
-
-    /// call_raw 的自由地址版:罐与错误标签由调用方指定。罐参数决定的是
+    /// 裸结构端点请求(验证码 challenge/redeem 不套 {code,data} 包壳,
+    /// 2xx 即成功):罐与错误标签由调用方指定。罐参数决定的是
     /// 响应 Set-Cookie 的**吸收方向**(裸结构端点本身多为免鉴权)——
     /// MonkeyCode 域必须传 mc 罐,用百智罐会把 mc 域 cookie 混进百智罐,
     /// 破坏双罐隔离。
