@@ -781,12 +781,10 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
         if it.get("support_image").and_then(Value::as_bool).unwrap_or(false) {
             entry["vision"] = json!(true);
         }
-        // 服务端明确标注不支持思考的模型显式写 off:产品默认档是「低」
-        // (config.rs 未配置时物化 thinking low),不压掉会让首个请求就
-        // 带思考参数被上游拒;缺省/true 不写,跟随产品默认。
-        if it.get("thinking_enabled").and_then(Value::as_bool) == Some(false) {
-            entry["think"] = json!("off");
-        }
+        // thinking_enabled 刻意忽略(用户拍板):会员模型来自服务端内部
+        // hook,该字段并不可靠(漏填即 false),照抄会把支持思考的模型
+        // 默认压成关闭。统一跟随产品默认档「低」(config.rs 未配置时物化
+        // thinking low),真不支持思考的模型由用户在设置页按模型调 off。
         models.push(entry);
     }
     (models, notes)
@@ -1090,7 +1088,8 @@ mod local_models_tests {
         let items = vec![
             json!({ "id": "cfg-1", "remark": "旗舰模型", "model": "monkeycode-ultra-x", "interface_type": "anthropic",
                     "owner": pub_owner(), "context_limit": 200_000, "output_limit": 16_384, "support_image": true }),
-            // remark 空回退模型名;openai_chat → openai;服务端标注不支持思考
+            // remark 空回退模型名;openai_chat → openai;thinking_enabled
+            // 服务端标 false(该字段不可靠,同步须忽略)
             json!({ "id": "cfg-2", "remark": "", "model": "mc-gpt", "interface_type": "openai_chat",
                     "owner": pub_owner(), "thinking_enabled": false }),
             // 未知协议 → 跳过 + note
@@ -1127,8 +1126,9 @@ mod local_models_tests {
         assert_eq!(m1.get("provider").and_then(Value::as_str), Some("openai"));
         assert!(m1.get("vision").is_none());
         assert!(m1.get("context_window").is_none());
-        // thinking_enabled=false → 显式 off 压掉产品默认「低」;缺省不写
-        assert_eq!(m1.get("think").and_then(Value::as_str), Some("off"));
+        // thinking_enabled 一律忽略(不可靠,漏填即 false):条目不写 think,
+        // 全部跟随产品默认档「低」
+        assert!(m1.get("think").is_none(), "服务端标 false 也不压 off");
         assert!(m0.get("think").is_none(), "未标注的模型跟随产品默认档");
         assert_eq!(notes.len(), 2, "未知协议/重名各一条 note: {notes:?}");
     }
