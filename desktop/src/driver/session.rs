@@ -982,6 +982,9 @@ impl OhmyDriver {
 
     // ==================== 对话 ====================
 
+    /// user-input 的返回值契约:Err ⟺ 消息未入会话(未物化任何帧,UI 回队/
+    /// 保留输入重投是安全的);Ok ⟺ 回显已落对话流(即使本轮随即失败——错误
+    /// 经 task-error 帧外显)。破坏该契约会造成消息在对话流与排队槽双持有。
     pub async fn session_send(&self, id: &str, ftype: &str, payload: Value) -> Result<(), String> {
         // 打开会话已不等引擎握手(见 session_open),上行到这里必须等它就绪:
         // 等待而不是报错——用户在恢复期间敲下的消息不该丢
@@ -1045,7 +1048,12 @@ impl OhmyDriver {
                 {
                     Ok(_) => Ok(()),
                     Err(e) => {
-                        // 引擎没接活:补终止帧关轮,状态回落,错误上抛(UI 保留输入)
+                        // 引擎没接活:补终止帧关轮,状态回落。注意这里必须回 Ok——
+                        // 回显帧已物化进对话流,契约是「Err ⟺ 消息未入会话」:上抛
+                        // Err 会让 UI 按排队语义回队,消息同时挂在对话流与队列里
+                        // (用户看到"已发出却仍在排队"),且 task-ended 帧一到又
+                        // 触发重投,再落一条重复回显。错误经 task-error 帧与
+                        // session-status(error) 事件外显,不靠命令返回值
                         if let Some(s) = self.0.sess.sessions.lock_ok().get_mut(id) {
                             s.running = false;
                         }
@@ -1063,7 +1071,7 @@ impl OhmyDriver {
                             .await;
                         }
                         self.emit_session_event(id, SessionStatus::Error.as_str());
-                        Err(e)
+                        Ok(())
                     }
                 }
             }

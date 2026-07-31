@@ -179,7 +179,10 @@ export function createSessionCore(io: SessionCoreIO, openConn: typeof connect = 
   }
 
   // 排队的输入:运行结束后自动发送。乐观出队、失败回队(内容不丢),
-  // 下一个时机(新帧到达/断线重连/用户再发送)重投。此前用「running/queued
+  // 下一个时机(新帧到达/断线重连/用户再发送)重投。失败回队之所以安全,
+  // 靠的是壳的 session_send 契约:Err ⟺ 消息未入会话(引擎接了活但本轮
+  // 随即失败回 Ok,错误走 task-error 帧)——否则回队重投会把已落对话流的
+  // 消息再发一遍。此前用「running/queued
   // 依赖快照」当闸门,快照在发送成功前就被消费——一旦投递失败(引擎未就绪
   // 等),之后每批帧都在闸门处提前返回,消息卡死在队列里直到被切会话清掉
   function flushQueued() {

@@ -399,6 +399,33 @@ describe("本地会话核心:composer(排队与附件)", () => {
     expect(userInputs()).toEqual(["排着的"]);
   });
 
+  it("投递被壳收下但本轮随即失败(引擎没接活):不回队,不重复投递", async () => {
+    // 壳的 session_send 契约:回显帧一旦物化就回 Ok(错误走 task-error 帧),
+    // Err 只留给「消息未入会话」。这里钉住 UI 侧的配合面:回执 Ok 后失败轮
+    // 的收尾帧到达,不得把已落对话流的消息回队/重投(否则用户看到
+    // 「已发出却仍在排队」,重投再落一条重复回显)
+    const { core, out } = makeCore();
+    await openAndSettle(core);
+    pushFrames("s1", [frame("task-started")]);
+    core.send("引擎会拒的");
+    expect(out.queued).toBe("引擎会拒的");
+
+    pushFrames("s1", [frame("task-ended")]); // 轮末投递:壳收下,回执 Ok
+    await vi.waitFor(() => expect(userInputs()).toEqual(["引擎会拒的"]));
+    expect(out.queued).toBe(null);
+
+    // 壳物化的失败轮(回显 + 收尾)整批到达:再触发 flushQueued 也无货可投
+    pushFrames("s1", [
+      frame("user-input", { content: b64encode("引擎会拒的") }),
+      frame("task-started"),
+      frame("task-error", { message: "引擎没接活" }),
+      frame("task-ended"),
+    ]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(userInputs()).toEqual(["引擎会拒的"]); // 只投递过一次
+    expect(out.queued).toBe(null); // 消息归对话流持有,队列不再持有
+  });
+
   it("运行中连发多条:单槽后发覆盖先发,轮末只发最新一条", async () => {
     const { core, out } = makeCore();
     await openAndSettle(core);
