@@ -372,7 +372,7 @@ export interface BaizhiSyncResult {
 
 /** mc_models_sync 返回:会员内置模型 → 本地条目(已带 source="monkeycode",
  * base_url 指向服务端模型代理、api_key 为本机的 OhMyAgent 代理 Key——
- * 模型无关,全部条目共用,条目 model 字段是服务端模型配置 ID)。 */
+ * 模型无关,全部条目共用,条目 model 字段是服务端模型名)。 */
 export interface McModelsSyncResult {
   models: BaizhiSyncedModel[];
   /** 被跳过条目的原因(未知协议/重名等),同步提示里外显 */

@@ -721,11 +721,12 @@ pub async fn mc_ohmyagent_key_delete(svc: &Service, id: &str) -> BzResult<()> {
 
 /// users/models 条目 → 本地模型条目(ui/src/types.ts HostModel 词汇)。
 /// 只收会员内置模型(owner.type=="public";私有/团队条目要么已有直连凭据,
-/// 要么不在本功能范围)。OhMyAgent 代理契约:请求的 model 字段传**模型
-/// 配置 ID**,不是模型名。**凭据不进条目**——base_url/api_key 置空占位,
-/// 不经 UI/config.json 流转,物化时由壳从代理 Key 文件注入
-/// (config.rs write_ohmyagent_config),设置页不给用户"一眼抄走"的入口。
-/// 逐条容错,不拖垮整批。
+/// 要么不在本功能范围)。请求的 model 字段传**服务端模型名**——swagger 写
+/// "传模型配置 ID"是过时文档,后端实际按模型名解析(后端同学确认);用
+/// 模型名与百智云条目同构,引擎提示词里模型自述的也是有意义的名字而非
+/// UUID。**凭据不进条目**——base_url/api_key 置空占位,不经 UI/config.json
+/// 流转,物化时由壳从代理 Key 文件注入(config.rs write_ohmyagent_config),
+/// 设置页不给用户"一眼抄走"的入口。逐条容错,不拖垮整批。
 fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>) {
     let mut models = Vec::new();
     let mut notes = Vec::new();
@@ -760,7 +761,7 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
             "provider": provider,
             "base_url": "",
             "api_key": "",
-            "model": id,
+            "model": model,
             "source": SOURCE_MONKEYCODE,
         });
         let num = |k: &str| it.get(k).and_then(Value::as_i64).filter(|&n| n > 0);
@@ -1111,9 +1112,9 @@ mod local_models_tests {
         let m0 = &models[0];
         assert_eq!(m0.get("name").and_then(Value::as_str), Some("旗舰模型"));
         assert_eq!(m0.get("provider").and_then(Value::as_str), Some("anthropic"));
-        // OhMyAgent 代理契约:model 字段 = 配置 ID;凭据不进条目(空占位,
-        // 物化时由壳从代理 Key 文件注入,设置页无从展示)
-        assert_eq!(m0.get("model").and_then(Value::as_str), Some("cfg-1"));
+        // model 字段 = 服务端模型名(代理按名解析;swagger 的"配置 ID"是
+        // 过时文档);凭据不进条目(空占位,物化时由壳注入,设置页无从展示)
+        assert_eq!(m0.get("model").and_then(Value::as_str), Some("monkeycode-ultra-x"));
         assert_eq!(m0.get("api_key").and_then(Value::as_str), Some(""));
         assert_eq!(m0.get("base_url").and_then(Value::as_str), Some(""));
         assert_eq!(m0.get("source").and_then(Value::as_str), Some("monkeycode"));
@@ -1122,7 +1123,7 @@ mod local_models_tests {
         assert_eq!(m0.get("vision").and_then(Value::as_bool), Some(true));
         let m1 = &models[1];
         assert_eq!(m1.get("name").and_then(Value::as_str), Some("mc-gpt"));
-        assert_eq!(m1.get("model").and_then(Value::as_str), Some("cfg-2"));
+        assert_eq!(m1.get("model").and_then(Value::as_str), Some("mc-gpt"), "remark 空时 name==model,与百智云同构");
         assert_eq!(m1.get("provider").and_then(Value::as_str), Some("openai"));
         assert!(m1.get("vision").is_none());
         assert!(m1.get("context_window").is_none());
@@ -1141,7 +1142,7 @@ mod local_models_tests {
         ];
         let (models, notes) = local_model_entries(&items, "pro");
         let names: Vec<_> = models.iter().filter_map(|m| m.get("model").and_then(Value::as_str)).collect();
-        assert_eq!(names, vec!["c1", "c2"], "pro 档不含 ultra 前缀模型");
+        assert_eq!(names, vec!["monkeycode-basic-a", "monkeycode-pro-a"], "pro 档不含 ultra 前缀模型");
         assert!(notes.is_empty(), "档位过滤与云端选择器一致,静默不出 note");
     }
 

@@ -627,7 +627,7 @@ pub async fn mc_logout(bz: State<'_, BaizhiState>) -> Result<Value, String> {
 // ==================== OhMyAgent 代理密钥(会员模型本地同步用) ====================
 
 /// 代理密钥文件。服务端契约(POST /api/v1/users/ohmyagent/api-keys):Key 是
-/// 模型无关的,LLM 请求的 model 字段传模型配置 ID;api_key 与 signing_secret
+/// 模型无关的,LLM 请求的 model 字段传服务端模型名;api_key 与 signing_secret
 /// 明文**仅创建响应返回**,故必须本机持久化(0600,独立小文件——config.json
 /// 是"损坏必须外显"的严格策略且表单外字段要在 merge_shell_prefs 逐个捞回,
 /// 凭证缓存不该走那条路)。消费方是引擎物化(config.rs):api_key/base_url

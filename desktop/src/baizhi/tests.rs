@@ -866,7 +866,11 @@ async fn mc_member_models_sync_and_revoke_contract() {
     let m0 = &models[0];
     assert_eq!(m0.get("name").and_then(Value::as_str), Some("专业模型"));
     assert_eq!(m0.get("provider").and_then(Value::as_str), Some("anthropic"));
-    assert_eq!(m0.get("model").and_then(Value::as_str), Some("cfg-1"), "model 字段必须是配置 ID");
+    assert_eq!(
+        m0.get("model").and_then(Value::as_str),
+        Some("monkeycode-pro-claude"),
+        "model 字段 = 服务端模型名(代理按名解析,swagger 的'配置 ID'为过时文档)"
+    );
     assert_eq!(m0.get("api_key").and_then(Value::as_str), Some(""), "凭据不得进条目");
     assert_eq!(m0.get("base_url").and_then(Value::as_str), Some(""), "代理地址不得进条目");
     assert_eq!(m0.get("context_window").and_then(Value::as_i64), Some(200_000));
@@ -874,7 +878,7 @@ async fn mc_member_models_sync_and_revoke_contract() {
     assert_eq!(m0.get("vision").and_then(Value::as_bool), Some(true));
     assert_eq!(m0.get("source").and_then(Value::as_str), Some("monkeycode"));
     assert_eq!(models[1].get("name").and_then(Value::as_str), Some("mc-gpt"), "remark 空回退模型名");
-    assert_eq!(models[1].get("model").and_then(Value::as_str), Some("cfg-2"));
+    assert_eq!(models[1].get("model").and_then(Value::as_str), Some("mc-gpt"));
     assert_eq!(models[1].get("provider").and_then(Value::as_str), Some("openai"));
     assert_eq!(models[1].get("api_key").and_then(Value::as_str), Some(""));
     let notes = out.get("notes").and_then(Value::as_array).unwrap();
