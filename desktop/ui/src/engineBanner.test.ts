@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ENGINE_MAX_RETRY, engineBannerView } from "./engineBanner";
+import { ENGINE_MAX_RETRY, engineBannerView, engineCardView, railDotView } from "./engineBanner";
 import type { EngineStatus } from "./types";
 
 const crashed = (retry_in_ms: number | null, attempt = 1): EngineStatus => ({
@@ -50,5 +50,71 @@ describe("engineBannerView", () => {
     const v = engineBannerView({ phase: "failed", error: "找不到 ohmyagent 可执行文件" });
     expect(v?.detail).toBe("找不到 ohmyagent 可执行文件");
     expect(v?.canRestart).toBe(true);
+  });
+});
+
+describe("engineCardView", () => {
+  it("ready/stopped 不占面板底部", () => {
+    expect(engineCardView(null, true)).toBeNull();
+    expect(engineCardView({ phase: "ready", version: "abc" }, true)).toBeNull();
+    expect(engineCardView({ phase: "stopped" }, true)).toBeNull();
+  });
+
+  it("冷启动过了宽限期才显示——快速启动不闪卡,慢启动不再零反馈", () => {
+    expect(engineCardView({ phase: "starting", attempt: 0 }, false)).toBeNull();
+    const v = engineCardView({ phase: "starting", attempt: 0 }, true);
+    expect(v?.text).toBe("引擎启动中…");
+    expect(v?.busy).toBe(true);
+    expect(v?.canRestart).toBe(false);
+  });
+
+  it("自动重启不受宽限期约束,直接外显进度", () => {
+    const v = engineCardView({ phase: "starting", attempt: 3 }, false);
+    expect(v?.text).toContain(`3/${ENGINE_MAX_RETRY}`);
+    expect(v?.busy).toBe(true);
+  });
+
+  it("崩溃卡文案区分退避中与熔断,诊断进 detail(title 悬浮)", () => {
+    const backoff = engineCardView(crashed(4000, 2), false);
+    expect(backoff?.text).toContain(`2/${ENGINE_MAX_RETRY}`);
+    expect(backoff?.canRestart).toBe(true);
+    const fused = engineCardView(crashed(null, ENGINE_MAX_RETRY), false);
+    expect(fused?.text).toContain("自动重启失败");
+    expect(fused?.detail).toContain("ohmyagent 进程异常退出");
+    expect(fused?.detail).toContain("goroutine 1 [running]:");
+  });
+
+  it("启动失败露具体错误", () => {
+    const v = engineCardView({ phase: "failed", error: "找不到 ohmyagent 可执行文件" }, false);
+    expect(v?.text).toBe("引擎启动失败");
+    expect(v?.detail).toBe("找不到 ohmyagent 可执行文件");
+    expect(v?.canRestart).toBe(true);
+  });
+});
+
+describe("railDotView", () => {
+  it("引擎异常时点必须变红——此前引擎崩了与'没开会话'同为灰,不可区分", () => {
+    expect(railDotView(crashed(1000), false, "").color).toBe("var(--err)");
+    expect(railDotView({ phase: "failed", error: "x" }, true, "").color).toBe("var(--err)");
+  });
+
+  it("启动中黄点脉动", () => {
+    const v = railDotView({ phase: "starting", attempt: 0 }, false, "");
+    expect(v.color).toBe("var(--notice)");
+    expect(v.pulse).toBe(true);
+  });
+
+  it("引擎 ready 后沿用会话连接语义(绿/灰 + 会话状态 title)", () => {
+    const on = railDotView({ phase: "ready", version: "abc" }, true, "已连接");
+    expect(on.color).toBe("var(--ok)");
+    expect(on.title).toBe("已连接");
+    const off = railDotView({ phase: "ready", version: "abc" }, false, "未连接");
+    expect(off.color).toBe("var(--t6)");
+    expect(off.glow).toBeNull();
+  });
+
+  it("快照未到(null)不误报,按会话连接展示", () => {
+    expect(railDotView(null, true, "").color).toBe("var(--ok)");
+    expect(railDotView(null, false, "").color).toBe("var(--t6)");
   });
 });

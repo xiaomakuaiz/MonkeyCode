@@ -113,6 +113,19 @@ export async function openExtensionDir(): Promise<string | null> {
   return invoke<string>("open_extension_dir");
 }
 
+/** 在文件管理器中定位引擎日志目录(ohmyagent.log、.prev 与崩溃留存
+ * crash-N 都在这)。返回目录路径;非壳环境返回 null。 */
+export async function openLogDir(): Promise<string | null> {
+  if (!tauri()?.core?.invoke) return null;
+  return invoke<string>("open_log_dir");
+}
+
+/** 导出引擎最新日志:系统保存对话框另存一份 ohmyagent.log(引擎 stderr
+ * 全量,报障附件用)。返回保存路径;用户取消返回 null。 */
+export async function exportEngineLog(): Promise<string | null> {
+  return invoke<string | null>("export_engine_log");
+}
+
 /** 枚举 WSL 发行版(设置页「运行环境」下拉)。非壳环境、非 Windows 或
  * 未装 WSL 均返回空数组。 */
 export async function listWslDistros(): Promise<string[]> {

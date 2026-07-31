@@ -17,6 +17,7 @@ import {
   inDesktopShell,
   isWindowsShell,
   onHostEvent,
+  openLogDir,
   sessionIdFromUiIntent,
   setWindowTitle,
   takeUiIntent,
@@ -128,6 +129,17 @@ export default function App() {
     };
   }, []);
   const engineBanner = engineBannerView(engine);
+
+  // 顶部横幅与侧栏引擎卡共用的重启动作:成功后整页刷新复位所有句柄
+  const restartEngine = useCallback(() => {
+    setEngineRestarting(true);
+    engineRestart()
+      .then(() => location.reload())
+      .catch((e) => {
+        setEngineRestarting(false);
+        setEngine({ phase: "failed", error: "重启失败: " + String(e) });
+      });
+  }, []);
   // App 级浮层;文件抽屉 = 工作区资源管理器(cwd 逐层导航 + 文件查看器)。
   // 渲染与树/预览状态整体收敛进共享 FilesDrawer(filesdrawer.tsx),App 只留
   // 开合与初始 tab(文件 / 改动)+ Esc 挂点(先关预览再关抽屉)
@@ -704,15 +716,7 @@ export default function App() {
             <button
               className="hv-acc"
               disabled={engineRestarting || engineBanner.busy}
-              onClick={() => {
-                setEngineRestarting(true);
-                engineRestart()
-                  .then(() => location.reload())
-                  .catch((e) => {
-                    setEngineRestarting(false);
-                    setEngine({ phase: "failed", error: "重启失败: " + String(e) });
-                  });
-              }}
+              onClick={restartEngine}
               style={{ height: 26, padding: "0 14px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 600, background: "var(--acc)", color: "var(--onAcc)" }}
             >
               {engineRestarting ? "重启中…" : "重启引擎"}
@@ -732,6 +736,12 @@ export default function App() {
           sessionActive={view === "session"}
           connected={session.connected}
           status={session.status}
+          engine={engine}
+          engineBusy={engineRestarting}
+          onEngineRestart={restartEngine}
+          onOpenLogDir={() => {
+            openLogDir().catch((e) => console.error("打开日志目录失败", e));
+          }}
           update={update}
           updateBusy={updateBusy}
           onUpdate={() => void installUpdate()}

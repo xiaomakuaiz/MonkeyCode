@@ -14,6 +14,7 @@ import {
   isMacShell,
   isWindowsShell,
   listWslDistros,
+  exportEngineLog,
   openExtensionDir,
   repairBrowserExt,
   saveHostConfig,
@@ -99,6 +100,18 @@ function AboutCard({
     }
   };
 
+  // 导出引擎日志:横幅/卡里的 tail 不够排查时,一键把完整 stderr 现场
+  // 另存出来当报障附件。结果复用更新流程的 msg 位。
+  const exportLog = async () => {
+    setMsg(null);
+    try {
+      const dest = await exportEngineLog();
+      if (dest) setMsg({ text: "日志已导出", color: "var(--ok)" });
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
+    }
+  };
+
   const busy = phase !== "idle";
   const label = phase === "checking" ? "检查中" : phase === "installing" ? "更新中" : found ? "下载更新" : "检查更新";
   const green = found && phase !== "checking";
@@ -110,15 +123,20 @@ function AboutCard({
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
         <span style={{ fontWeight: 700, fontSize: 13 }}>MonkeyCode</span>
-        <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>
-          应用 {found ? `${update?.current ?? version} → ${update?.latest} 可用` : version}
-        </span>
-        <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }} title={engineVersion}>
-          内核 {engineVersion}
+        <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }} title={`应用 ${version} · 内核 ${engineVersion}`}>
+          应用 {found ? `${update?.current ?? version} → ${update?.latest} 可用` : version} · 内核 {engineVersion}
         </span>
       </div>
       <span style={{ flex: 1 }} />
       {msg && <span style={{ fontSize: 12, color: msg.color, flex: "none" }}>{msg.text}</span>}
+      <button
+        className="hv"
+        title="另存一份引擎日志(ohmyagent.log),报障时附上"
+        onClick={() => void exportLog()}
+        style={{ ...whiteBtn, flex: "none" }}
+      >
+        导出日志
+      </button>
       <button
         className={green ? "hv-acc" : "hv"}
         onClick={() => !busy && void (green ? install() : check())}

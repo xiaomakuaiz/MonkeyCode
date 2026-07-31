@@ -73,3 +73,80 @@ export function engineBannerView(s: EngineStatus | null): EngineBannerView | nul
       };
   }
 }
+
+// ==================== 侧栏引擎卡(面板底部,克隆更新卡形态) ====================
+
+export interface EngineCardView {
+  /** 一行主文案(11.5px × ~214px 可用宽,必须短) */
+  text: string;
+  /** 悬浮 title 的完整诊断(错误全文 + 日志尾);空串表示没有 */
+  detail: string;
+  canRestart: boolean;
+  /** 壳正在自己拉引擎:点位闪烁,不给重启按钮 */
+  busy: boolean;
+}
+
+/**
+ * 状态 → 侧栏引擎卡。返回 null 表示不显示(ready/stopped)。
+ *
+ * 与顶部横幅(engineBannerView)的分工:横幅打断注意力,只报崩溃/熔断/
+ * 自愈进度;卡是常驻低干扰入口,额外补上横幅刻意留白的冷启动期——
+ * "窗口开了引擎还没就绪"在 WSL 预热/慢盘上长达 15-30 秒,没有它用户
+ * 只能对着灰点干等。coldStartVisible 由组件侧计时供给(starting/attempt=0
+ * 持续超过宽限期才置真),快速启动不闪卡。
+ */
+export function engineCardView(s: EngineStatus | null, coldStartVisible: boolean): EngineCardView | null {
+  if (!s) return null;
+  switch (s.phase) {
+    case "ready":
+    case "stopped":
+      return null;
+    case "starting":
+      if (s.attempt === 0 && !coldStartVisible) return null;
+      return {
+        text: s.attempt === 0 ? "引擎启动中…" : `引擎自动重启中(${s.attempt}/${ENGINE_MAX_RETRY})`,
+        detail: "",
+        canRestart: false,
+        busy: true,
+      };
+    case "crashed":
+      return {
+        text: s.retry_in_ms === null ? "引擎已崩溃,自动重启失败" : `引擎已崩溃,自动重启中(${s.attempt}/${ENGINE_MAX_RETRY})`,
+        detail: [s.detail, s.log_tail.trim()].filter(Boolean).join("\n"),
+        canRestart: true,
+        busy: false,
+      };
+    case "failed":
+      return { text: "引擎启动失败", detail: s.error, canRestart: true, busy: false };
+  }
+}
+
+// ==================== rail 状态点 ====================
+
+export interface RailDotView {
+  color: string;
+  /** boxShadow 的光晕色;null 不发光 */
+  glow: string | null;
+  pulse: boolean;
+  title: string;
+}
+
+/**
+ * rail 底部状态点:引擎相位优先,引擎 ready 后才轮到会话连接状态说话。
+ * 此前点只绑会话 WS(connected),引擎崩了/没起来它一样是"普通的灰",
+ * 与"引擎好好的、只是没开会话"不可区分——排查时最误导的就是这种。
+ */
+export function railDotView(engine: EngineStatus | null, connected: boolean, sessionStatus: string): RailDotView {
+  switch (engine?.phase) {
+    case "crashed":
+    case "failed":
+      return { color: "var(--err)", glow: "var(--errBg)", pulse: false, title: "引擎异常,详见下方状态卡" };
+    case "starting":
+      return { color: "var(--notice)", glow: null, pulse: true, title: "引擎启动中…" };
+    default:
+      // ready / stopped / 快照未到:沿用会话连接语义
+      return connected
+        ? { color: "var(--ok)", glow: "var(--okBg)", pulse: false, title: sessionStatus }
+        : { color: "var(--t6)", glow: null, pulse: false, title: sessionStatus };
+  }
+}
