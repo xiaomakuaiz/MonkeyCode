@@ -501,18 +501,28 @@ impl OhmyDriver {
             Some(path) => self.0.chat_workdir_for_engine(path),
             None => self.0.resolve_workdir(workdir)?,
         };
-        let workdir = workdir_owned.as_str();
-        // 存在性判定/创建走宿主视角(WSL 模式经 \\wsl$ UNC)
-        let fs_view = self.0.workdir_fs_view(workdir);
-        let exists = fs_view.is_dir();
-        if !exists {
-            if create_dir {
-                std::fs::create_dir_all(&fs_view)
-                    .map_err(|e| format!("创建工作区目录失败: {e}"))?;
-            } else {
-                return Err(format!("工作区目录不存在: {workdir}"));
+        // 本地项目 + WSL:存在性判定/按需创建/软链 canonical 化在 guest 内
+        // 一次完成(见 wsl::ensure_guest_dir——\\wsl$ 对 guest 符号链接不可
+        // 求值,宿主视角会把软链工作区误报为不存在)。对话工作区由壳刚在
+        // 宿主创建、恒为真实目录,与本机模式一致走宿主视角。
+        let workdir_owned = match (&chat_workdir, &self.0.wsl) {
+            (None, Some(w)) => {
+                crate::wsl::ensure_guest_dir(&w.distro, &workdir_owned, create_dir)?
             }
-        }
+            _ => {
+                let fs_view = self.0.workdir_fs_view(&workdir_owned);
+                if !fs_view.is_dir() {
+                    if create_dir {
+                        std::fs::create_dir_all(&fs_view)
+                            .map_err(|e| format!("创建工作区目录失败: {e}"))?;
+                    } else {
+                        return Err(format!("工作区目录不存在: {workdir_owned}"));
+                    }
+                }
+                workdir_owned
+            }
+        };
+        let workdir = workdir_owned.as_str();
         let result = match self
             .rpc(
                 "session/create",

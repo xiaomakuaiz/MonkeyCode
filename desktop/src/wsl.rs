@@ -388,6 +388,43 @@ fn parse_prepare_output(out: &str, expected_paths: usize) -> Result<WslPrep, Str
     })
 }
 
+/// guest 内校验(可选创建)工作区目录,返回 canonical 路径(cd + pwd -P,
+/// 符号链接就地解干净)。
+///
+/// 壳对 workdir 的存在性判定原先走 \\wsl$ UNC,但 Windows 对远程共享上
+/// 符号链接的求值默认禁用(fsutil SymlinkEvaluation 的 R2L/R2R),guest 内
+/// 软链指向的目录在宿主视角 stat 必败——用户在发行版里给项目建软链是常态,
+/// 表现为"WSL 终端里明明看得到,应用却报目录不存在"。判定挪进 guest 一次
+/// 调用完成;sidecar 落 canonical 形态,后续宿主侧文件操作(repo/uploads
+/// 的 UNC 视角)也不再穿越 symlink 组件。
+pub fn ensure_guest_dir(distro: &str, path: &str, create: bool) -> Result<String, String> {
+    let script = if create {
+        r#"mkdir -p -- "$1" && cd -- "$1" && pwd -P"#
+    } else {
+        r#"cd -- "$1" && pwd -P"#
+    };
+    let args: Vec<String> =
+        ["-d", distro, "--exec", "/bin/sh", "-c", script, "sh", path].map(String::from).to_vec();
+    match run_wsl(&args, Duration::from_secs(30)) {
+        Ok(out) => {
+            let canon = out.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+            if canon.starts_with('/') {
+                Ok(canon.to_string())
+            } else {
+                Err(format!("guest 工作区目录解析结果异常: {}", out.trim()))
+            }
+        }
+        // run_wsl 对脚本非零退出的错误恒以"wsl 命令失败"开头(见上),脚本里
+        // 只有 mkdir/cd,失败即目录不存在/不可进入;文案必须含"目录不存在"
+        // (前端 offerCreate 按此匹配给"创建"入口)。其余错误(wsl.exe 起
+        // 不来、超时)按环境错误原样上抛,不能伪装成目录问题诱导用户点创建
+        Err(e) if e.starts_with("wsl 命令失败") => {
+            Err(format!("工作区目录不存在或不可进入(发行版 {distro} 内): {path}\n{e}"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// guest 内网络模式探测(mcp.json 物化时决定浏览器 MCP 是否可用)。
 /// 失败(未装 WSL、老版无 wslinfo、发行版异常)一律视为 "nat" 降级。
 pub fn networking_mode(distro: &str) -> String {

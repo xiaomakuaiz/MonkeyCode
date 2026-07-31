@@ -464,6 +464,35 @@ async fn e2e_wsl_smoke_full_lifecycle() {
         "~ 应展开为 guest 家目录"
     );
 
+    // 软链工作区:存在性判定在 guest 内做(ensure_guest_dir),不再被宿主
+    // \\wsl$ 的符号链接求值限制误报"目录不存在";sidecar 存 canonical 形态
+    #[cfg(unix)]
+    {
+        let target = home.join("link-target");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = home.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let meta = driver
+            .session_create(&link.to_string_lossy(), "测试模型", false)
+            .await
+            .expect("软链建会话");
+        let sid3 = meta.get("id").and_then(|v| v.as_str()).unwrap();
+        let stored = driver.0.read_sidecar(sid3);
+        assert_eq!(
+            stored.get("workdir").and_then(|v| v.as_str()),
+            std::fs::canonicalize(&target).unwrap().to_str(),
+            "软链 workdir 应解为 canonical 目标"
+        );
+    }
+
+    // 目录真不存在(create=false):错误文案必须含"目录不存在"
+    // (前端 offerCreate 按此匹配给"创建"入口)
+    let err = driver
+        .session_create(&home.join("no-such-dir").to_string_lossy(), "测试模型", false)
+        .await
+        .expect_err("不存在目录应报错");
+    assert!(err.contains("目录不存在"), "文案契约(offerCreate 匹配): {err}");
+
     // 优雅停止:stdin EOF 经中继(fake 直执)透传,引擎自退,不走 pkill
     driver.stop();
     let _ = std::fs::remove_dir_all(&home);
