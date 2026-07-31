@@ -27,7 +27,9 @@ import { IconBack, IconCloud, IconGear, IconGlobe, IconMonitor, IconPlus, IconSp
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
+import { builtinTierLabel } from "./cloud";
 import { mcModelsRevoke, mcModelsSync } from "./cloudapi";
+import { stripTierPrefix } from "./modelMenu";
 import {
   emptyMcp,
   emptyModel,
@@ -930,16 +932,22 @@ export function SettingsView({
           onClick={managed ? undefined : () => setExpanded(isOpen ? null : i)}
           style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: managed ? "default" : "pointer", userSelect: "none" }}
         >
-          <span className="ellipsis" style={{ fontSize: 12.5, fontFamily: MONO, color: m.name.trim() ? "var(--t1)" : "var(--t5)", minWidth: 0 }}>
-            {m.name.trim() || "未命名模型"}
+          <span
+            className="ellipsis"
+            title={managed ? m.name : undefined}
+            style={{ fontSize: 12.5, fontFamily: MONO, color: m.name.trim() ? "var(--t1)" : "var(--t5)", minWidth: 0 }}
+          >
+            {(managed ? stripTierPrefix(m.name.trim()) : m.name.trim()) || "未命名模型"}
           </span>
           <span style={pill}>{m.provider || "anthropic"}</span>
           {managed && (
+            // 档位即托管:会员条目必有档位语境,一枚药丸承载两层信息
+            //(档位文本 + 托管说明 tooltip),判不出档位时回落「托管」字样
             <span
               style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}
               title="凭据由 MonkeyCode 托管,本机不展示;条目随「同步会员模型」整组更新"
             >
-              托管
+              {builtinTierLabel(m.model) ?? "托管"}
             </span>
           )}
           {m.vision && <span style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}>视觉</span>}

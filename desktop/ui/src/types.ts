@@ -35,6 +35,8 @@ export interface ModelInfo {
   default: boolean;
   /** 条目来源("baizhi"=百智云同步);缺省=手工添加,UI 按它分组 */
   source?: string;
+  /** 底层模型串。name 可能是 remark 别名,判会员档位(monkeycode-…)靠它 */
+  model?: string;
   /** 模型设置的思考深度默认档(low/medium/high;缺省/"" = 关闭)。
    * composer 未显式选档时按它显示生效档位 */
   think?: string;

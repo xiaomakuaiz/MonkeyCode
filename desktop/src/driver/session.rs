@@ -987,7 +987,7 @@ impl OhmyDriver {
             self.0
                 .models
                 .iter()
-                .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think }))
+                .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model }))
                 .collect(),
         ))
     }

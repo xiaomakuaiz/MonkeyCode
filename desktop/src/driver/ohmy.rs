@@ -150,6 +150,9 @@ pub(super) struct ManifestModel {
     /// 模型设置里的思考深度默认档(low/medium/high;""=关闭)。composer
     /// 未显式选档时按它显示当前生效档位。
     pub(super) think: String,
+    /// 底层模型串(条目 "model" 字段)。name 可能是 remark 别名,UI 判
+    /// 会员档位(monkeycode-{basic|pro|ultra}/…)只能靠它。
+    pub(super) model: String,
 }
 
 /// 清单模型解析(壳 models.json 词汇:name/provider/base_url/api_key/model/…)。
@@ -163,6 +166,9 @@ pub(super) fn parse_manifest_models(models: &Value) -> Vec<ManifestModel> {
                 default: m.get("default").and_then(|v| v.as_bool()).unwrap_or(false),
                 source: m.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 think: m.get("think").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                // unwrap_or 而非 ?:手编的旧条目可能没有 model 字段,缺省
+                // 不能让整条从选择器消失
+                model: m.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             })
         })
         .collect()

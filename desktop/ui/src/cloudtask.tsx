@@ -5,7 +5,7 @@
 import { useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { openExternal } from "./host";
 import type { CloudTask, CloudTaskDetail } from "./types";
-import { cloudModelLabel } from "./cloud";
+import { builtinTierLabel, cloudModelLabel, groupedCloudModelLabel } from "./cloud";
 import { CloudFilesDrawer } from "./cloudfiles";
 import { CloudTerminal } from "./cloudterm";
 import { MAX_CLOUD_ATTS } from "./cloudUpload";
@@ -486,7 +486,7 @@ export function CloudTaskView({
                   style={{ position: "relative", display: "flex", flex: "0 1 auto", minWidth: 0, maxWidth: 220 }}
                 >
                   <ModelPickerTrigger
-                    label={h.switching ? "切换中…" : cloudModelLabel(meta?.model)}
+                    label={h.switching ? "切换中…" : meta?.model ? groupedCloudModelLabel(meta.model) : ""}
                     open={modelOpen}
                     title={running ? "执行中不可切换模型" : `${cloudModelLabel(meta?.model) || "云端模型"} · 点击切换`}
                     disabled={running || h.switching}
@@ -499,7 +499,9 @@ export function CloudTaskView({
                         {(h.cloudModels ?? []).map((m) => (
                           <ModelMenuItem
                             key={m.id}
-                            label={cloudModelLabel(m)}
+                            label={groupedCloudModelLabel(m)}
+                            tag={builtinTierLabel(m.model)}
+                            title={cloudModelLabel(m)}
                             selected={m.id === meta?.model?.id}
                             onClick={() => {
                               setModelOpen(false);

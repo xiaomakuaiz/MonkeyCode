@@ -33,7 +33,14 @@ import { Composer, QueuedChip, RunningBar } from "./composer";
 import { IconArchive, IconChat, IconCheck, IconChevronDown, IconFolder, IconInfo, IconPencil, IconShield, IconTaskDone, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import { useUpwardMenuHeight } from "./menuPosition";
-import { buildModelMenu, readRecentModels, shouldShowModelExtras, touchRecentModel } from "./modelMenu";
+import {
+  buildModelMenu,
+  modelDisplay,
+  modelDisplayByName,
+  readRecentModels,
+  shouldShowModelExtras,
+  touchRecentModel,
+} from "./modelMenu";
 import { useNativeFileDrop } from "./nativeDrop";
 import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
@@ -144,23 +151,29 @@ function PermPill({ yolo, onToggle }: { yolo: boolean; onToggle: () => void }) {
   );
 }
 
-/** 模型菜单的共享选项行:本地/云端统一为整行 hover + 当前项勾选。 */
+/** 模型菜单的共享选项行:本地/云端统一为整行 hover + 当前项勾选。
+ * tag = 会员档位药丸(基础/专业/旗舰);title 缺省 = label,展示短名的
+ * 条目传完整原名做 hover 兜底。 */
 export function ModelMenuItem({
   label,
   selected,
+  tag,
   hint,
+  title,
   onClick,
 }: {
   label: string;
   selected: boolean;
+  tag?: string;
   hint?: string;
+  title?: string;
   onClick: () => void;
 }) {
   return (
     <button
       className="hv menu-item"
       aria-current={selected ? "true" : undefined}
-      title={label}
+      title={title ?? label}
       onClick={onClick}
       style={{
         width: "100%",
@@ -171,6 +184,22 @@ export function ModelMenuItem({
       }}
     >
       <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{label}</span>
+      {tag && (
+        <span
+          style={{
+            flex: "none",
+            fontSize: 10,
+            fontWeight: 600,
+            padding: "1px 6px",
+            borderRadius: 4,
+            background: "var(--hov)",
+            color: "var(--t4)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {tag}
+        </span>
+      )}
       {hint && <span style={{ flex: "none", fontSize: 11, color: "var(--t5)", fontWeight: 400 }}>{hint}</span>}
       {selected && <IconCheck size={11} color="var(--accTx)" strokeWidth={1.6} />}
     </button>
@@ -275,7 +304,7 @@ export function ModelPicker({
       style={{ position: "relative", display: "flex", flex: "0 1 auto", minWidth: 0, maxWidth: 220 }}
     >
       <ModelPickerTrigger
-        label={current}
+        label={modelDisplayByName(models, current).label}
         open={open}
         disabled={disabled}
         title={disabled ? "轮次执行中,结束后可切换" : `${current || "选择模型"} · 点击切换(下一轮生效)`}
@@ -322,15 +351,20 @@ export function ModelPicker({
                   <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
                     最近使用
                   </div>
-                  {recent.map((m) => (
-                    <ModelMenuItem
-                      key={`recent-${m.name}`}
-                      label={m.name}
-                      selected={m.name === current}
-                      hint={m.default ? "默认" : undefined}
-                      onClick={() => pick(m.name)}
-                    />
-                  ))}
+                  {recent.map((m) => {
+                    const d = modelDisplay(m);
+                    return (
+                      <ModelMenuItem
+                        key={`recent-${m.name}`}
+                        label={d.label}
+                        tag={d.tier}
+                        title={m.name}
+                        selected={m.name === current}
+                        hint={m.default ? "默认" : undefined}
+                        onClick={() => pick(m.name)}
+                      />
+                    );
+                  })}
                 </div>
               )}
               {groups.map((g) => (
@@ -342,15 +376,20 @@ export function ModelPicker({
                       {g.label}
                     </div>
                   )}
-                  {g.items.map((m) => (
-                    <ModelMenuItem
-                      key={m.name}
-                      label={m.name}
-                      selected={m.name === current}
-                      hint={m.default ? "默认" : undefined}
-                      onClick={() => pick(m.name)}
-                    />
-                  ))}
+                  {g.items.map((m) => {
+                    const d = modelDisplay(m);
+                    return (
+                      <ModelMenuItem
+                        key={m.name}
+                        label={d.label}
+                        tag={d.tier}
+                        title={m.name}
+                        selected={m.name === current}
+                        hint={m.default ? "默认" : undefined}
+                        onClick={() => pick(m.name)}
+                      />
+                    );
+                  })}
                 </div>
               ))}
             </div>
