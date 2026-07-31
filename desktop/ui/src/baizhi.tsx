@@ -100,6 +100,10 @@ export function BaizhiCard({
         }
         if (res.status === "ok") {
           await refreshStatus();
+          // 登录成功即自动同步(用户拍板,免手动点)。不能用 live() 甄别:
+          // loggedIn 翻转会触发拉码 effect 的 cleanup 使 gen 作废,而这里
+          // 恰恰是登录成功之后
+          if (mounted.current) void doSync();
           return;
         }
         setWxState(res.status); // expired / canceled → 引导重新获取
@@ -160,7 +164,10 @@ export function BaizhiCard({
     try {
       await baizhiLogin(phone.trim(), code.trim());
       await refreshStatus();
-      if (mounted.current) setCode("");
+      if (mounted.current) {
+        setCode("");
+        void doSync(); // 登录成功即自动同步(用户拍板,免手动点)
+      }
     } catch (e) {
       if (mounted.current) setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -260,7 +267,7 @@ export function BaizhiCard({
     return (
       <div className="card card-lg" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "18px 16px" }}>
         <BaizhiLogo size={36} />
-        <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,可同步账号下的模型与 MCP 配置。</span>
+        <span style={{ fontSize: 12.5, color: "var(--t3)" }}>登录百智云账号后,自动同步账号下的模型与 MCP 配置。</span>
         <div style={{ position: "relative", width: 168, height: 168, borderRadius: 10, border: "1px solid var(--inputBd)", background: "var(--qrBg)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
           {qr && <img src={qr} alt="微信扫码登录" draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain", filter: needRetry ? "blur(3px) opacity(.35)" : "none" }} />}
           {!qr && !needRetry && <span style={{ fontSize: 12, color: "var(--t5)" }}>加载中…</span>}
@@ -286,7 +293,7 @@ export function BaizhiCard({
   return (
     <div className="card card-lg" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <span style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.6 }}>
-        登录百智云账号后,可一键同步账号下的模型与 MCP 配置。
+        登录百智云账号后,自动同步账号下的模型与 MCP 配置。
       </span>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="手机号">
