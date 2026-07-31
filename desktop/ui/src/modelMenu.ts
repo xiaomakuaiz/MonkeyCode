@@ -1,45 +1,17 @@
 // 模型选择菜单的纯逻辑与偏好存取(与渲染解耦,便于单测):
-// - mc.recentModels:最近选用的模型名(有序,最新在前,上限 3);
 // - mc.lastTaskModel:上次开任务用的模型(新建页预选,配置默认让位)。
 // 约束:模块顶层不碰 localStorage,且只用 getItem/setItem——静态渲染
 // 测试(navigation.test/modelPicker.test)的存储 stub 只有这两个方法。
+//(旧的 mc.recentModels「最近使用」已整体移除;残留的存储键无害不清理。)
 import { builtinTierLabel } from "./cloud";
-import { modelSourceLabel, SOURCE_MONKEYCODE, type ModelInfo } from "./types";
+import { modelSourceLabel, SOURCE_BAIZHI, SOURCE_MONKEYCODE, type ModelInfo } from "./types";
 
-const RECENT_MODELS_KEY = "mc.recentModels";
 const LAST_TASK_MODEL_KEY = "mc.lastTaskModel";
-const RECENT_MAX = 3;
-/** 模型少时最近组/过滤框都是噪音(几乎复述整个菜单),超过该数才显示。 */
+/** 模型少时过滤框/来源 tab 都是噪音(几乎复述整个菜单),超过该数才显示。 */
 const MODEL_MENU_EXTRAS_THRESHOLD = 6;
 
 export function shouldShowModelExtras(count: number): boolean {
   return count > MODEL_MENU_EXTRAS_THRESHOLD;
-}
-
-/** 读取最近选用的模型名(容错:坏 JSON/非数组/混入非字符串 → 剔除)。 */
-export function readRecentModels(): string[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(RECENT_MODELS_KEY) || "[]");
-    if (!Array.isArray(value)) return [];
-    const names: string[] = [];
-    for (const item of value) {
-      if (typeof item === "string" && item && !names.includes(item)) names.push(item);
-    }
-    return names.slice(0, RECENT_MAX);
-  } catch {
-    return [];
-  }
-}
-
-/** 记一次选用:去重置顶,上限 3;写失败静默(只丢一次"最近"记忆)。 */
-export function touchRecentModel(name: string): void {
-  if (!name) return;
-  const next = [name, ...readRecentModels().filter((n) => n !== name)].slice(0, RECENT_MAX);
-  try {
-    localStorage.setItem(RECENT_MODELS_KEY, JSON.stringify(next));
-  } catch {
-    // WebView 存储不可写时本次选择照常生效,不值得外显。
-  }
 }
 
 /** 上次开任务用的模型(""=没记过)。是否仍可用由调用方对着当下的模型
@@ -68,7 +40,7 @@ export function stripTierPrefix(name: string): string {
 }
 
 /** 模型条目的展示投影:短名 + 档位(基础/专业/旗舰)。**纯展示层**——
- * name 是引擎键/最近记忆键,onPick/touchRecentModel 仍必须用原始 name。
+ * name 是引擎键/lastTaskModel 记忆键,onPick 仍必须用原始 name。
  * 只对会员来源生效(手工条目取名 monkeycode-pro-x 不该被误打会员档);
  * 档位与 Web 口径一致从底层 model 串判(name 可能是 remark 别名)。 */
 export function modelDisplay(m: Pick<ModelInfo, "name" | "model" | "source">): {
@@ -93,17 +65,16 @@ export interface ModelMenuGroup {
   items: ModelInfo[];
 }
 
+/** 来源固定优先级(组序与 tab 序共用,单一出处避免两者打架):
+ * 会员 → 百智云 → 未知来源(彼此按首现)→ 自定义恒尾。 */
+const sourceRank = (source?: string): number =>
+  source === SOURCE_MONKEYCODE ? 0 : source === SOURCE_BAIZHI ? 1 : source ? 2 : 3;
+
 /** 菜单内容构建:过滤(name + 底层 model 串 + 来源组名,大小写不敏感;
  * 按 model 匹配让 remark 命名的会员条目也能用 wire 名搜到,命中词可能
- * 不在显示名里——有意取舍)→ 按来源分桶(「自定义」恒前,其余按首现
- * 顺序)+ 最近组。最近组在过滤时隐藏(同一命中出现两次没有意义);与
- * 下方来源组刻意**不去重**——去重会让来源组内容随使用行为漂移,破坏
- * 组内的空间记忆。 */
-export function buildModelMenu(
-  models: ModelInfo[],
-  recentNames: readonly string[],
-  filter: string,
-): { recent: ModelInfo[]; groups: ModelMenuGroup[] } {
+ * 不在显示名里——有意取舍)→ 按来源分桶,组序走 sourceRank(稳定排序,
+ * 未知来源之间保持首现顺序)。 */
+export function buildModelMenu(models: ModelInfo[], filter: string): ModelMenuGroup[] {
   const q = filter.trim().toLowerCase();
   const shown = q
     ? models.filter(
@@ -113,21 +84,58 @@ export function buildModelMenu(
           modelSourceLabel(m.source).toLowerCase().includes(q),
       )
     : models;
-  const groups: ModelMenuGroup[] = [];
+  const groups: (ModelMenuGroup & { rank: number })[] = [];
   for (const m of shown) {
     const label = modelSourceLabel(m.source);
     let g = groups.find((x) => x.label === label);
     if (!g) {
-      g = { label, items: [] };
-      if (!m.source) groups.unshift(g);
-      else groups.push(g);
+      g = { label, items: [], rank: sourceRank(m.source) };
+      groups.push(g);
     }
     g.items.push(m);
   }
-  const recent = q
-    ? []
-    : recentNames
-        .map((name) => models.find((m) => m.name === name))
-        .filter((m): m is ModelInfo => !!m);
-  return { recent, groups };
+  groups.sort((a, b) => a.rank - b.rank);
+  return groups.map(({ label, items }) => ({ label, items }));
+}
+
+export interface ModelMenuTab {
+  key: string;
+  label: string;
+}
+
+/** 来源 tab:「全部」+ 出现过的来源(序同组序;会员缩写为「会员」,
+ * 未知来源沿用 modelSourceLabel 的透传)。key 用 source 原值(自定义 "")。 */
+export function modelMenuTabs(models: ModelInfo[]): ModelMenuTab[] {
+  const tabs: (ModelMenuTab & { rank: number })[] = [];
+  for (const m of models) {
+    const key = m.source || "";
+    if (tabs.some((t) => t.key === key)) continue;
+    const label = m.source === SOURCE_MONKEYCODE ? "会员" : modelSourceLabel(m.source);
+    tabs.push({ key, label, rank: sourceRank(m.source) });
+  }
+  tabs.sort((a, b) => a.rank - b.rank);
+  return [{ key: "all", label: "全部" }, ...tabs.map(({ key, label }) => ({ key, label }))];
+}
+
+export interface MemberTierSection {
+  label: string;
+  badge?: string;
+  items: ModelInfo[];
+}
+
+/** 会员 tab 内的档位小节(徽标词与 groupCloudModels 一致——资格说明,
+ * 本地条目同步时已按会员档过滤过);无档位的服务端自定义模型归「其他」。 */
+const MEMBER_TIER_SECTIONS: { tier?: string; label: string; badge?: string }[] = [
+  { tier: "基础", label: "基础模型", badge: "免费使用" },
+  { tier: "专业", label: "专业模型", badge: "专业会员免费" },
+  { tier: "旗舰", label: "旗舰模型", badge: "旗舰会员免费" },
+  { tier: undefined, label: "其他模型" },
+];
+
+export function groupMemberTiers(items: ModelInfo[]): MemberTierSection[] {
+  return MEMBER_TIER_SECTIONS.map((s) => ({
+    label: s.label,
+    badge: s.badge,
+    items: items.filter((m) => builtinTierLabel(m.model) === s.tier),
+  })).filter((s) => s.items.length > 0);
 }

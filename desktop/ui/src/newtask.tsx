@@ -6,6 +6,7 @@
 // (onCreated/onCloudCreated)及外部预填(prefill)。
 import { useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { basename, effectiveThink, isImeEnter, markImeEnd, ModelMenuItem, ModelPicker, ThinkPicker } from "./chat";
+import { CloudModelGroups } from "./cloudModelMenu";
 import { MONO } from "./components";
 import { mcTaskCreate, mcTaskOptions } from "./cloudapi";
 import { inDesktopShell, pickDirectory, workdirPickBase } from "./host";
@@ -813,37 +814,15 @@ export function NewTaskView({
                 onToggle={() => setCloudPicker((current) => current === "model" ? null : "model")}
                 onClose={() => setCloudPicker(null)}
               >
-                {cloudModelGroups.map((group, index) => (
-                  <span
-                    key={group.key}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      paddingTop: index === 0 ? 0 : 4,
-                      marginTop: index === 0 ? 0 : 4,
-                      borderTop: index === 0 ? "none" : "1px solid var(--line2)",
-                    }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, padding: "5px 9px 3px" }}>
-                      <span className="ellipsis" style={{ flex: 1, minWidth: 0, fontSize: 10.5, fontWeight: 750, color: "var(--t4)" }}>
-                        {group.label}
-                      </span>
-                      {group.badge && <span style={{ flex: "none", fontSize: 9.5, color: "var(--t6)" }}>{group.badge}</span>}
-                    </span>
-                    {group.models.map((cloudModel) => (
-                      <ModelMenuItem
-                        key={cloudModel.id}
-                        label={groupedCloudModelLabel(cloudModel)}
-                        selected={cloudModel.id === cloudModelId}
-                        onClick={() => {
-                          setCloudModelId(cloudModel.id!);
-                          if (cloudModel.owner?.type === "public") setCloudHostId(PUBLIC_CLOUD_HOST_ID);
-                          setCloudPicker(null);
-                        }}
-                      />
-                    ))}
-                  </span>
-                ))}
+                <CloudModelGroups
+                  groups={cloudModelGroups}
+                  selectedId={cloudModelId}
+                  onPick={(cloudModel) => {
+                    setCloudModelId(cloudModel.id!);
+                    if (cloudModel.owner?.type === "public") setCloudHostId(PUBLIC_CLOUD_HOST_ID);
+                    setCloudPicker(null);
+                  }}
+                />
                 {cloudModelGroups.length === 0 && (
                   <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>{cloudOpts ? "没有可用的云端模型" : "加载中…"}</span>
                 )}

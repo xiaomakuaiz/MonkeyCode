@@ -35,16 +35,16 @@ import logoUrl from "./logo.png";
 import { useUpwardMenuHeight } from "./menuPosition";
 import {
   buildModelMenu,
+  groupMemberTiers,
   modelDisplay,
   modelDisplayByName,
-  readRecentModels,
+  modelMenuTabs,
   shouldShowModelExtras,
-  touchRecentModel,
 } from "./modelMenu";
 import { useNativeFileDrop } from "./nativeDrop";
 import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
-import type { LogItem, ModelInfo, SessionMeta, SessionNotice, Usage } from "./types";
+import { SOURCE_MONKEYCODE, type LogItem, type ModelInfo, type SessionMeta, type SessionNotice, type Usage } from "./types";
 
 // IME 守卫随 composer 收敛到 composer.tsx;从这转口保持既有引用面
 // (sidebar/newtask 均 import 自 ./chat)
@@ -267,14 +267,24 @@ export function ModelPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  // 打开时快照(而非挂载时读):避免静态渲染路径碰 localStorage,也保证
-  // 每次打开都是最新的"最近使用"
-  const [recentNames, setRecentNames] = useState<string[]>([]);
+  // 来源 tab;打开与输入过滤时都重置回「全部」——保证「tab 行隐藏 ⇔ 必为
+  // 全部」恒成立,不存在"tab 隐藏但仍在筛"的不可见状态
+  const [tab, setTab] = useState("all");
   const { anchorRef, menuMaxHeight } = useUpwardMenuHeight<HTMLDivElement>(open, 370);
 
-  // 模型少时最近组/过滤框都是复述菜单的噪音,同一阈值一起出现
+  // 模型少时过滤框/tab 行都是复述菜单的噪音,同一阈值一起出现
   const showExtras = shouldShowModelExtras(models.length);
-  const { recent, groups } = buildModelMenu(models, showExtras ? recentNames : [], filter);
+  const tabs = modelMenuTabs(models);
+  // models 是异步 props:开着菜单来源可能消失,活跃 tab 悬空时兜底回全部
+  const activeTab = tabs.some((t) => t.key === tab) ? tab : "all";
+  const filtering = filter.trim().length > 0;
+  const showTabs = showExtras && tabs.length >= 3 && !filtering;
+  // 全部/过滤视图走 buildModelMenu 分组;来源 tab 是无组头平铺,其中
+  // 会员 tab 再按档位小节(小节头表达档位,条目不再带药丸)
+  const groups = activeTab === "all" || filtering ? buildModelMenu(models, filter) : null;
+  const tabItems = groups === null ? models.filter((m) => (m.source || "") === activeTab) : [];
+  const memberSections =
+    groups === null && activeTab === SOURCE_MONKEYCODE ? groupMemberTiers(tabItems) : null;
 
   // Esc 关闭必须在 window **capture** 阶段拦截:App 的全局快捷键挂在冒泡
   // 阶段,会话视图存在待审批时 Esc 是不可逆的拒绝(appView.ts)——菜单
@@ -291,11 +301,25 @@ export function ModelPicker({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
-  // 选中收口:最近记忆在这一处更新,最近段与来源组条目共用
   const pick = (name: string) => {
-    touchRecentModel(name);
     setOpen(false);
     onPick(name);
+  };
+
+  // 条目渲染收口:全部视图带档位药丸,会员 tab 小节内省略(小节头已表达)
+  const itemOf = (m: ModelInfo, noTag = false) => {
+    const d = modelDisplay(m);
+    return (
+      <ModelMenuItem
+        key={m.name}
+        label={d.label}
+        tag={noTag ? undefined : d.tier}
+        title={m.name}
+        selected={m.name === current}
+        hint={m.default ? "默认" : undefined}
+        onClick={() => pick(m.name)}
+      />
+    );
   };
 
   return (
@@ -311,7 +335,7 @@ export function ModelPicker({
         onClick={() => {
           if (disabled) return;
           setFilter("");
-          setRecentNames(readRecentModels());
+          setTab("all");
           setOpen(!open);
         }}
       />
@@ -324,7 +348,11 @@ export function ModelPicker({
                 <input
                   autoFocus
                   value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
+                  onChange={(e) => {
+                    setFilter(e.target.value);
+                    // 过滤跨全部来源:输入即回「全部」,清空后也不跳回旧 tab
+                    if (e.target.value.trim()) setTab("all");
+                  }}
                   placeholder="过滤模型…"
                   style={{
                     width: "100%",
@@ -341,57 +369,65 @@ export function ModelPicker({
                 />
               </div>
             )}
+            {showTabs && (
+              <div style={{ display: "flex", gap: 2, padding: "2px 8px 4px" }}>
+                {tabs.map((t) => (
+                  // span 而非 button:不进 Tab 焦点序、无键盘处理,不与 Esc
+                  // 的 window capture 及过滤框 autoFocus 抢交互
+                  <span
+                    key={t.key}
+                    onClick={() => setTab(t.key)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      height: 20,
+                      padding: "0 8px",
+                      borderRadius: 10,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      userSelect: "none",
+                      background: activeTab === t.key ? "var(--hov)" : "transparent",
+                      color: activeTab === t.key ? "var(--accTx)" : "var(--t5)",
+                    }}
+                  >
+                    {t.label}
+                  </span>
+                ))}
+              </div>
+            )}
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {recent.length === 0 && groups.length === 0 && (
+              {groups !== null && groups.length === 0 && (
                 <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--t5)" }}>无匹配模型</div>
               )}
-              {/* 最近使用段(过滤时隐藏;与下方来源组不去重,保住组内空间记忆) */}
-              {recent.length > 0 && (
-                <div>
-                  <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
-                    最近使用
+              {groups !== null &&
+                groups.map((g) => (
+                  <div key={g.label}>
+                    {(groups.length > 1 || g.label !== "自定义") && (
+                      <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
+                        {g.label}
+                      </div>
+                    )}
+                    {g.items.map((m) => itemOf(m))}
                   </div>
-                  {recent.map((m) => {
-                    const d = modelDisplay(m);
-                    return (
-                      <ModelMenuItem
-                        key={`recent-${m.name}`}
-                        label={d.label}
-                        tag={d.tier}
-                        title={m.name}
-                        selected={m.name === current}
-                        hint={m.default ? "默认" : undefined}
-                        onClick={() => pick(m.name)}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-              {groups.map((g) => (
-                <div key={g.label}>
-                  {/* 有最近段时即便只剩「自定义」一组也要标题,否则出现
-                      「有标题的最近组 + 无标题裸列表」的歧义排版 */}
-                  {(recent.length > 0 || groups.length > 1 || g.label !== "自定义") && (
-                    <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
-                      {g.label}
-                    </div>
-                  )}
-                  {g.items.map((m) => {
-                    const d = modelDisplay(m);
-                    return (
-                      <ModelMenuItem
-                        key={m.name}
-                        label={d.label}
-                        tag={d.tier}
-                        title={m.name}
-                        selected={m.name === current}
-                        hint={m.default ? "默认" : undefined}
-                        onClick={() => pick(m.name)}
-                      />
-                    );
-                  })}
-                </div>
-              ))}
+                ))}
+              {/* 会员 tab:档位小节(孤「其他」组省头,同自定义组规则) */}
+              {memberSections !== null &&
+                memberSections.map((s) => (
+                  <div key={s.label}>
+                    {(memberSections.length > 1 || s.label !== "其他模型") && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px 3px" }}>
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
+                          {s.label}
+                        </span>
+                        {s.badge && <span style={{ flex: "none", fontSize: 9.5, color: "var(--t6)" }}>{s.badge}</span>}
+                      </div>
+                    )}
+                    {s.items.map((m) => itemOf(m, true))}
+                  </div>
+                ))}
+              {/* 其余来源 tab:平铺(单一来源下组头是冗余) */}
+              {groups === null && memberSections === null && tabItems.map((m) => itemOf(m))}
             </div>
           </div>
         </>

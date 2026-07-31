@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildModelMenu,
+  groupMemberTiers,
   modelDisplay,
   modelDisplayByName,
+  modelMenuTabs,
   readLastTaskModel,
-  readRecentModels,
   rememberLastTaskModel,
   shouldShowModelExtras,
   stripTierPrefix,
-  touchRecentModel,
 } from "./modelMenu";
 import { SOURCE_BAIZHI, SOURCE_MONKEYCODE, type ModelInfo } from "./types";
 
@@ -25,26 +25,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 const m = (name: string, source?: string, def = false): ModelInfo => ({ name, default: def, source });
 
-describe("最近使用与上次选择的存取", () => {
-  it("坏 JSON / 非数组 / 混入非字符串都容错为剔除或空", () => {
-    localStorage.setItem("mc.recentModels", "{broken");
-    expect(readRecentModels()).toEqual([]);
-    localStorage.setItem("mc.recentModels", '"just-a-string"');
-    expect(readRecentModels()).toEqual([]);
-    localStorage.setItem("mc.recentModels", '["a", 7, null, "b", "a", ""]');
-    expect(readRecentModels()).toEqual(["a", "b"]);
-  });
-
-  it("touchRecentModel 去重置顶且上限 3", () => {
-    for (const name of ["a", "b", "c", "d"]) touchRecentModel(name);
-    expect(readRecentModels()).toEqual(["d", "c", "b"]);
-    touchRecentModel("b"); // 重选置顶,不重复
-    expect(readRecentModels()).toEqual(["b", "d", "c"]);
-    touchRecentModel(""); // 空名不入账
-    expect(readRecentModels()).toEqual(["b", "d", "c"]);
-  });
-
-  it("lastTaskModel 缺省为空串,可往返", () => {
+describe("上次开任务模型的存取", () => {
+  it("缺省为空串,可往返,空名不覆盖", () => {
     expect(readLastTaskModel()).toBe("");
     rememberLastTaskModel("会员模型");
     expect(readLastTaskModel()).toBe("会员模型");
@@ -97,48 +79,75 @@ describe("buildModelMenu", () => {
     m("monkeycode-pro/deepseek-pro", SOURCE_MONKEYCODE),
   ];
 
+  it("组序固定:会员 → 百智云 → 自定义恒尾,与条目顺序无关", () => {
+    const expected = ["MonkeyCode 会员", "百智云", "自定义"];
+    expect(buildModelMenu(models, "").map((g) => g.label)).toEqual(expected);
+    const shuffled = [models[0], models[1], models[2]].reverse();
+    expect(buildModelMenu(shuffled, "").map((g) => g.label)).toEqual(expected);
+  });
+
+  it("过滤匹配 name 与来源组名(大小写不敏感),items 保原引用", () => {
+    expect(buildModelMenu(models, "CLAUDE")).toEqual([{ label: "百智云", items: [models[1]] }]);
+    // 组名命中 → 整组显示
+    expect(buildModelMenu(models, "百智").map((g) => g.label)).toEqual(["百智云"]);
+    expect(buildModelMenu(models, "monkeycode").map((g) => g.label)).toEqual(["MonkeyCode 会员"]);
+    expect(buildModelMenu(models, "不存在")).toEqual([]);
+  });
+
   it("过滤额外匹配底层 model 串:remark 命名的会员条目能用 wire 名搜到", () => {
     const withRemark = [
       m("手工模型"),
       { ...m("深度求索", SOURCE_MONKEYCODE), model: "monkeycode-pro/deepseek-pro" },
     ];
-    const hit = buildModelMenu(withRemark, [], "deepseek");
-    expect(hit.groups.flatMap((g) => g.items.map((x) => x.name))).toEqual(["深度求索"]);
-    expect(buildModelMenu(withRemark, [], "不存在").groups).toEqual([]);
-  });
-
-  it("过滤匹配 name 与来源组名(大小写不敏感),组结构保留", () => {
-    expect(buildModelMenu(models, [], "CLAUDE").groups).toEqual([
-      { label: "百智云", items: [models[1]] },
+    expect(buildModelMenu(withRemark, "deepseek").flatMap((g) => g.items.map((x) => x.name))).toEqual([
+      "深度求索",
     ]);
-    // 组名命中 → 整组显示
-    const byGroup = buildModelMenu(models, [], "百智");
-    expect(byGroup.groups.map((g) => g.label)).toEqual(["百智云"]);
-    const byMc = buildModelMenu(models, [], "monkeycode");
-    expect(byMc.groups.map((g) => g.label)).toEqual(["MonkeyCode 会员"]);
-    expect(buildModelMenu(models, [], "不存在").groups).toEqual([]);
   });
+});
 
-  it("自定义组恒前,其余按首现顺序", () => {
-    const shuffled = [models[2], models[1], models[0]];
-    expect(buildModelMenu(shuffled, [], "").groups.map((g) => g.label)).toEqual([
-      "自定义",
-      "MonkeyCode 会员",
-      "百智云",
+describe("modelMenuTabs", () => {
+  it("「全部」恒首,来源序同组序(会员→百智云→未知→自定义),会员缩写", () => {
+    const tabs = modelMenuTabs([
+      m("a"),
+      m("b", "mystery"),
+      m("c", SOURCE_BAIZHI),
+      m("d", SOURCE_MONKEYCODE),
+    ]);
+    expect(tabs).toEqual([
+      { key: "all", label: "全部" },
+      { key: "monkeycode", label: "会员" },
+      { key: "baizhi", label: "百智云" },
+      { key: "mystery", label: "mystery" }, // 未知来源透传,不硬编码三来源
+      { key: "", label: "自定义" },
     ]);
   });
 
-  it("最近组按记忆保序、剔除已下线,与来源组不去重;过滤时隐藏", () => {
-    const { recent, groups } = buildModelMenu(models, ["claude-x", "已下线", "手工模型"], "");
-    expect(recent.map((x) => x.name)).toEqual(["claude-x", "手工模型"]);
-    // 不去重:来源组仍完整
-    expect(groups.flatMap((g) => g.items.map((x) => x.name))).toContain("claude-x");
-    expect(buildModelMenu(models, ["claude-x"], "claude").recent).toEqual([]);
+  it("单来源只剩「全部+它」(渲染层按 length>=3 隐藏 tab 行)", () => {
+    expect(modelMenuTabs([m("a"), m("b")])).toHaveLength(2);
+  });
+});
+
+describe("groupMemberTiers", () => {
+  const ultra = { ...m("旗舰甲", SOURCE_MONKEYCODE), model: "monkeycode-ultra/a" };
+  const basic = { ...m("基础乙", SOURCE_MONKEYCODE), model: "monkeycode-basic/b" };
+  const other = { ...m("公司内部模型", SOURCE_MONKEYCODE), model: "some-model" };
+
+  it("按档位分桶保序、徽标随桶、无档位归「其他」、空桶剔除、items 保原引用", () => {
+    const sections = groupMemberTiers([ultra, other, basic]);
+    expect(sections.map((s) => s.label)).toEqual(["基础模型", "旗舰模型", "其他模型"]);
+    expect(sections.map((s) => s.badge)).toEqual(["免费使用", "旗舰会员免费", undefined]);
+    expect(sections[0].items[0]).toBe(basic);
+    expect(sections[2].items[0]).toBe(other);
+  });
+
+  it("全是档位模型时没有「其他」节;孤「其他」节由渲染层省头", () => {
+    expect(groupMemberTiers([ultra, basic]).map((s) => s.label)).toEqual(["基础模型", "旗舰模型"]);
+    expect(groupMemberTiers([other]).map((s) => s.label)).toEqual(["其他模型"]);
   });
 });
 
 describe("shouldShowModelExtras", () => {
-  it("超过 6 个模型才显示过滤框与最近组", () => {
+  it("超过 6 个模型才显示过滤框与来源 tab", () => {
     expect(shouldShowModelExtras(6)).toBe(false);
     expect(shouldShowModelExtras(7)).toBe(true);
   });

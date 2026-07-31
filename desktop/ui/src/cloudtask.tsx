@@ -5,11 +5,12 @@
 import { useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { openExternal } from "./host";
 import type { CloudTask, CloudTaskDetail } from "./types";
-import { builtinTierLabel, cloudModelLabel, groupedCloudModelLabel } from "./cloud";
+import { cloudModelLabel, groupedCloudModelLabel } from "./cloud";
 import { CloudFilesDrawer } from "./cloudfiles";
 import { CloudTerminal } from "./cloudterm";
 import { MAX_CLOUD_ATTS } from "./cloudUpload";
-import { COL_MAX, ModelMenuItem, ModelPickerTrigger } from "./chat";
+import { COL_MAX, ModelPickerTrigger } from "./chat";
+import { CloudModelGroups } from "./cloudModelMenu";
 import { HeaderFilesButton, HeaderMenu, LogList, TaskPanel, ViewHeader, type MenuState } from "./components";
 import { Composer, QueuedChip, RunningBar } from "./composer";
 import { IconCloud, IconFile, IconGlobe, IconMonitor, IconPaperclip, IconStop, IconX } from "./icons";
@@ -496,23 +497,20 @@ export function CloudTaskView({
                     <>
                       <div className="backdrop" onClick={() => setModelOpen(false)} />
                       <div className="pop model-menu" style={{ position: "absolute", bottom: 30, right: 0, maxHeight: modelMenuMaxHeight, overflowY: "auto" }}>
-                        {(h.cloudModels ?? []).map((m) => (
-                          <ModelMenuItem
-                            key={m.id}
-                            label={groupedCloudModelLabel(m)}
-                            tag={builtinTierLabel(m.model)}
-                            title={cloudModelLabel(m)}
-                            selected={m.id === meta?.model?.id}
-                            onClick={() => {
+                        {h.cloudGroups !== null && (
+                          <CloudModelGroups
+                            groups={h.cloudGroups}
+                            selectedId={meta?.model?.id}
+                            onPick={(m) => {
                               setModelOpen(false);
                               void h.switchModel(m.id!);
                             }}
                           />
-                        ))}
-                        {h.cloudModels === null && (
+                        )}
+                        {h.cloudGroups === null && (
                           <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>加载中…</span>
                         )}
-                        {h.cloudModels !== null && h.cloudModels.length === 0 && (
+                        {h.cloudGroups !== null && h.cloudGroups.length === 0 && (
                           <span style={{ fontSize: 11.5, color: "var(--t6)", padding: "6px 9px" }}>没有可用模型</span>
                         )}
                       </div>
