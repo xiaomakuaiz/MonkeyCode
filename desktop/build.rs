@@ -26,6 +26,7 @@ fn main() {
                 "update_install",
                 "open_extension_dir",
                 "open_log_dir",
+                "export_engine_log",
                 "open_devtools",
                 "list_wsl_distros",
                 "wsl_workdir_base",

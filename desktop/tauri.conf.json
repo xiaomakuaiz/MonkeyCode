@@ -41,6 +41,7 @@
             "allow-update-install",
             "allow-open-extension-dir",
             "allow-open-log-dir",
+            "allow-export-engine-log",
             "allow-open-devtools",
             "allow-list-wsl-distros",
             "allow-wsl-workdir-base",
