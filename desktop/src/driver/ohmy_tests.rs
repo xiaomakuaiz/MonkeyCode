@@ -2176,17 +2176,23 @@ fn journal_writer_drops_escaping_ids_without_stalling_the_barrier() {
     let _ = std::fs::remove_dir_all(inner.data_dir.parent().unwrap());
 }
 
-/// 清单解析对 model 字段必须容缺(unwrap_or 而非 ?):手编的旧条目没有
-/// model,用 ? 会让整条从 models_list 消失——超出展示层的功能回归。
-/// 正常条目 model 原样透传,UI 靠它判会员档位(name 可能是 remark 别名)。
+/// 清单解析对 model/locked/owner 字段必须容缺(unwrap_or 而非 ?):旧条目
+/// 没有这些字段,用 ? 会让整条从 models_list 消失;locked 缺省 false =
+/// 旧数据照常可选。正常条目原样透传,UI 靠 model 判会员档位(name 可能是
+/// remark 别名)、靠 locked/owner 做灰态与分节。
 #[test]
 fn parse_manifest_models_tolerates_missing_model_field() {
     let models = parse_manifest_models(&json!([
         { "name": "旧手编条目", "provider": "anthropic" },
-        { "name": "会员别名", "source": "monkeycode", "model": "monkeycode-pro/deepseek-pro" },
+        { "name": "会员别名", "source": "monkeycode", "model": "monkeycode-pro/deepseek-pro",
+          "locked": true, "owner": "public" },
     ]));
     assert_eq!(models.len(), 2, "缺 model 的条目不能被丢弃");
     assert_eq!(models[0].model, "");
+    assert!(!models[0].locked, "缺 locked 的旧条目必须照常可选");
+    assert_eq!(models[0].owner, "");
     assert_eq!(models[1].model, "monkeycode-pro/deepseek-pro");
     assert_eq!(models[1].source, "monkeycode");
+    assert!(models[1].locked);
+    assert_eq!(models[1].owner, "public");
 }

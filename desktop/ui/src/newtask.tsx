@@ -161,13 +161,15 @@ export function NewTaskView({
   const dirTouchedRef = useRef(!!prefill?.dir); // 用户改过工作目录后不再跟随最近会话
   const [dir, setDir] = useState(() => prefill?.dir || lastDir || DEFAULT_DIR);
   const [text, setText] = useState("");
-  // 模型:预选「上次开任务用的」(mc.lastTaskModel),没有/已下线回落默认。
-  // 校验放在派生处而非初始化:models 是异步到达的 props,挂载时常为空,
-  // 初始化时校验会让记忆永远失效
+  // 模型:预选「上次开任务用的」(mc.lastTaskModel),没有/已下线/被锁定
+  // 回落默认。校验放在派生处而非初始化:models 是异步到达的 props,挂载
+  // 时常为空,初始化时校验会让记忆永远失效。locked(超会员档展示专用)
+  // 条目全链路跳过——它不在引擎 settings 里,派生到它会话建不起来
   const [pickedModel, setPickedModel] = useState(() => readLastTaskModel());
   const model =
-    (pickedModel && models.some((m) => m.name === pickedModel) ? pickedModel : "") ||
-    models.find((m) => m.default)?.name ||
+    (pickedModel && models.some((m) => m.name === pickedModel && !m.locked) ? pickedModel : "") ||
+    models.find((m) => m.default && !m.locked)?.name ||
+    models.find((m) => !m.locked)?.name ||
     "";
   // 思考深度(本地/会话):""=未显式选,创建时跟随模型设置的默认档;
   // composer 上直接显示生效档位(模型是啥就显示啥),选了就随创建下发

@@ -987,7 +987,7 @@ impl OhmyDriver {
             self.0
                 .models
                 .iter()
-                .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model }))
+                .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model, "locked": m.locked, "owner": m.owner }))
                 .collect(),
         ))
     }
@@ -1523,24 +1523,32 @@ impl OhmyDriver {
 
     /// 模型选择键:e792858 起 settings.models 按**别名**作键,引擎双解析
     /// (别名优先,wire id 回退)——但同 wire id 多网关会撞 wireIndex,
-    /// 壳一律传别名。
+    /// 壳一律传别名。locked(超会员档展示专用)条目必须拒:它不在引擎
+    /// settings 里,放行会让 resume 带上不存在的键,会话直接打不开;
+    /// 报错后调用方按「模型已删除」同款语义降级(resume 省略参数回落
+    /// 默认模型)。default/首条回退同样滤 locked(旧 config 的 default
+    /// 可能落在降档后的锁定行)。
     fn model_id_of(&self, name: &str) -> Result<String, String> {
         if name.is_empty() {
             return self
                 .0
                 .models
                 .iter()
-                .find(|m| m.default)
-                .or(self.0.models.first())
+                .find(|m| m.default && !m.locked)
+                .or(self.0.models.iter().find(|m| !m.locked))
                 .map(|m| m.name.clone())
-                .ok_or_else(|| "尚未配置模型,请先在设置中添加".into());
+                .ok_or_else(|| "尚未配置可用模型,请先在设置中添加".into());
         }
-        self.0
+        let m = self
+            .0
             .models
             .iter()
             .find(|m| m.name == name)
-            .map(|m| m.name.clone())
-            .ok_or_else(|| format!("未知模型 {name:?}"))
+            .ok_or_else(|| format!("未知模型 {name:?}"))?;
+        if m.locked {
+            return Err(format!("模型 {name:?} 当前会员档不可用,升级后重新同步"));
+        }
+        Ok(m.name.clone())
     }
 
     /// 会话思考档位(sidecar 持久;""=跟随模型默认)。畸形值按默认处理。

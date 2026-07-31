@@ -599,7 +599,7 @@ export default function App() {
 
   // ===== 派生状态 =====
   const currentMeta = sessions.find((m) => m.id === session.id);
-  const currentModel = session.model || models.find((m) => m.default)?.name || "";
+  const currentModel = session.model || models.find((m) => m.default && !m.locked)?.name || "";
   const menuModels: ModelInfo[] = modelMenuList(models, session.model); // 下线模型兜底,无 source 归「自定义」组
   const openPerm = [...session.chat.items].reverse().find((it) => it.kind === "perm" && it.state === "open") as
     | Extract<LogItem, { kind: "perm" }>

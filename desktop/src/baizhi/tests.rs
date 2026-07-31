@@ -784,8 +784,9 @@ async fn cloud_sidebar_and_task_actions_contract() {
 
 /// 会员模型同步/删除契约(对齐服务端 swagger【用户】OhMyAgent 分组):
 /// 首次同步 POST ohmyagent/api-keys 创建模型无关的代理 Key 并落盘,重同步
-/// 复用不再创建;条目来自 GET users/models(只收 public、按订阅档过滤、
-/// interface_type 改名 provider、**model 字段 = 配置 ID**、共用代理 Key、
+/// 复用不再创建;条目来自 GET users/models(收 public/private/team,未知
+/// 归属跳过;超订阅档的内置模型**标 locked 保留**而非过滤——展示禁选;
+/// interface_type 改名 provider、model 字段 = 服务端模型名、共用代理 Key、
 /// base_url = 服务端同源 /v1);断开 DELETE 按 Key ID 删,成功清本地记录、
 /// 失败保留(下次复用/重试,不积累孤儿 Key)。
 #[tokio::test(flavor = "multi_thread")]
@@ -830,15 +831,21 @@ async fn mc_member_models_sync_and_revoke_contract() {
                       "support_image": true, "access_level": "pro", "is_free": false },
                     { "id": "cfg-2", "remark": "", "model": "mc-gpt", "interface_type": "openai_chat",
                       "owner": { "type": "public" } },
-                    // 订阅档(pro)未覆盖 → 静默过滤
+                    // 订阅档(pro)未覆盖 → 保留 + locked(展示禁选,静默无 note)
                     { "id": "cfg-3", "remark": "旗舰", "model": "monkeycode-ultra-x", "interface_type": "anthropic",
                       "owner": { "type": "public" } },
                     // 未来新协议 → 跳过 + note(不能落进 anthropic 兜底)
                     { "id": "cfg-4", "remark": "新协议", "model": "mc-next", "interface_type": "grpc_v2",
                       "owner": { "type": "public" } },
-                    // 私有条目(用户自配直连)→ 不进会员组
+                    // 私有/团队条目(用户在服务端自配)→ 同样收录,走同一代理
                     { "id": "cfg-5", "remark": "我的", "model": "my-model", "interface_type": "anthropic",
-                      "owner": { "type": "private" } }
+                      "owner": { "type": "private" } },
+                    { "id": "cfg-6", "remark": "团队的", "model": "team-model", "interface_type": "anthropic",
+                      "owner": { "type": "team", "name": "翼龙组" } },
+                    // 归属缺失/未知 → 形状不明,仍跳过(静默)
+                    { "id": "cfg-7", "remark": "无主", "model": "orphan", "interface_type": "anthropic" },
+                    { "id": "cfg-8", "remark": "未知主", "model": "alien", "interface_type": "anthropic",
+                      "owner": { "type": "galaxy" } }
                 ] } }),
             ),
             ("GET", "/api/v1/users/subscription") => Resp::json(200, json!({ "code": 0, "data": { "plan": "pro" } })),
@@ -862,7 +869,7 @@ async fn mc_member_models_sync_and_revoke_contract() {
     // 设置页不给用户"一眼抄走"的入口
     let out = super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
     let models = out.get("models").and_then(Value::as_array).unwrap();
-    assert_eq!(models.len(), 2, "档位/协议/私有条目应被过滤: {models:?}");
+    assert_eq!(models.len(), 5, "仅协议/占位/无主条目被过滤,超档转 locked、私有/团队收录: {models:?}");
     let m0 = &models[0];
     assert_eq!(m0.get("name").and_then(Value::as_str), Some("专业模型"));
     assert_eq!(m0.get("provider").and_then(Value::as_str), Some("anthropic"));
@@ -877,12 +884,34 @@ async fn mc_member_models_sync_and_revoke_contract() {
     assert_eq!(m0.get("max_output").and_then(Value::as_i64), Some(16_384));
     assert_eq!(m0.get("vision").and_then(Value::as_bool), Some(true));
     assert_eq!(m0.get("source").and_then(Value::as_str), Some("monkeycode"));
+    assert_eq!(m0.get("owner").and_then(Value::as_str), Some("public"));
+    assert!(m0.get("locked").is_none(), "档内条目不携带 locked(omit-false)");
     assert_eq!(models[1].get("name").and_then(Value::as_str), Some("mc-gpt"), "remark 空回退模型名");
     assert_eq!(models[1].get("model").and_then(Value::as_str), Some("mc-gpt"));
     assert_eq!(models[1].get("provider").and_then(Value::as_str), Some("openai"));
     assert_eq!(models[1].get("api_key").and_then(Value::as_str), Some(""));
+    // 超档条目:保留 + locked,凭据仍是空占位(物化层跳过它,连注入都不做)
+    let m2 = &models[2];
+    assert_eq!(m2.get("name").and_then(Value::as_str), Some("旗舰"));
+    assert_eq!(m2.get("locked").and_then(Value::as_bool), Some(true));
+    assert_eq!(m2.get("owner").and_then(Value::as_str), Some("public"));
+    assert_eq!(m2.get("api_key").and_then(Value::as_str), Some(""));
+    assert_eq!(m2.get("base_url").and_then(Value::as_str), Some(""));
+    // 私有/团队条目:收录、归属标注、不锁(非内置命名不受档位门限)
+    let m3 = &models[3];
+    assert_eq!(m3.get("name").and_then(Value::as_str), Some("我的"));
+    assert_eq!(m3.get("owner").and_then(Value::as_str), Some("private"));
+    assert!(m3.get("locked").is_none());
+    assert_eq!(models[4].get("name").and_then(Value::as_str), Some("团队的"));
+    assert_eq!(models[4].get("owner").and_then(Value::as_str), Some("team"));
+    // 归属缺失/未知(cfg-7/8)不得出现
+    assert!(
+        !models.iter().any(|m| m.get("name").and_then(Value::as_str) == Some("无主")
+            || m.get("name").and_then(Value::as_str) == Some("未知主")),
+        "归属缺失/未知的条目必须跳过"
+    );
     let notes = out.get("notes").and_then(Value::as_array).unwrap();
-    assert_eq!(notes.len(), 1, "未知协议一条 note: {notes:?}");
+    assert_eq!(notes.len(), 1, "仅未知协议一条 note(锁定与私有收录都静默): {notes:?}");
     // Key 文件承载物化注入所需的全部字段:api_key、signing_secret(引擎以它
     // HMAC 签署固定 system prompt,代理缺签名即拒)、base_url 快照(同源 /v1)
     let stored = super::stored_ohmyagent_key(&tmp.0).unwrap();

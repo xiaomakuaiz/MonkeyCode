@@ -36,6 +36,24 @@ describe("modelsToConfig", () => {
     });
     expect(saved).not.toHaveProperty("skip_tls_verify");
   });
+
+  it("keeps member locked/owner marks across saves", () => {
+    // 白名单漏掉这两个字段的话,任意一次保存都会把锁定条目静默变可选,
+    // 物化时被注入凭据(展示专用条目失守)
+    const lockedMember: HostModel = {
+      name: "旗舰模型",
+      provider: "anthropic",
+      base_url: "",
+      api_key: "",
+      model: "monkeycode-ultra/x",
+      source: SOURCE_MONKEYCODE,
+      locked: true,
+      owner: "public",
+    };
+    const [saved] = modelsToConfig([lockedMember], 0);
+    expect(saved.locked).toBe(true);
+    expect(saved.owner).toBe("public");
+  });
 });
 
 describe("replaceSourceGroup", () => {

@@ -487,9 +487,14 @@ fn write_ohmyagent_config(
     let is_monkeycode = |m: &serde_json::Value| {
         m.get("source").and_then(|v| v.as_str()) == Some(crate::baizhi::monkeycode::SOURCE_MONKEYCODE)
     };
+    // locked = 超出会员档的展示专用条目(同步层打标):不物化、不注入凭据、
+    // 不触发签名外发。只认会员条目上的标记,手编条目的杂散 locked 忽略。
+    let is_locked_member = |m: &serde_json::Value| {
+        is_monkeycode(m) && m.get("locked").and_then(|v| v.as_bool()).unwrap_or(false)
+    };
     let mc_key = models_arr
         .iter()
-        .any(is_monkeycode)
+        .any(|m| is_monkeycode(m) && !is_locked_member(m))
         .then(|| dir.parent().and_then(crate::baizhi::stored_ohmyagent_key))
         .flatten();
     let mc_key_field = |k: &str| {
@@ -504,6 +509,9 @@ fn write_ohmyagent_config(
     let mut models_out = serde_json::Map::new();
     let mut default_model = String::new();
     for m in models_arr {
+        if is_locked_member(m) {
+            continue; // 展示专用:引擎 settings 不该有它,default 回退自然跳过
+        }
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (name, provider, model) = (get("name"), get("provider"), get("model"));
         // 会员条目:凭据与代理地址由壳注入(条目里是空占位;Key 文件缺失时
@@ -945,6 +953,58 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
         assert!(settings.get("signing_secret").is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// locked(超会员档展示专用)会员条目:不进引擎 settings、default 回退
+    /// 到未锁条目;全锁时零条目物化,不平白外发签名;手编条目上的杂散
+    /// locked 忽略(skip 只认会员条目)。
+    #[test]
+    fn ohmyagent_config_skips_locked_member_entries() {
+        let root = test_dir("locked-members");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(crate::baizhi::OHMYAGENT_KEY_FILE),
+            br#"{"id":"key-1","api_key":"omk-1","signing_secret":"sec-9","base_url":"https://mc.example.com/v1"}"#,
+        )
+        .unwrap();
+        let engine_dir = root.join("ohmyagent");
+        let cfg = DesktopConfig {
+            models: serde_json::json!([
+                { "name": "旗舰模型", "provider": "anthropic", "base_url": "", "api_key": "",
+                  "model": "monkeycode-ultra/x", "source": "monkeycode", "locked": true, "default": true },
+                { "name": "专业模型", "provider": "anthropic", "base_url": "", "api_key": "",
+                  "model": "monkeycode-pro/y", "source": "monkeycode" },
+                // 手编条目带杂散 locked:不是会员条目,照常物化
+                { "name": "手编", "provider": "anthropic", "base_url": "https://x", "api_key": "k",
+                  "model": "m", "locked": true }
+            ]),
+            ..Default::default()
+        };
+        write_ohmyagent_config(&engine_dir, &cfg, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert!(settings["models"].get("旗舰模型").is_none(), "locked 会员条目不得物化");
+        assert_eq!(settings["models"]["专业模型"]["api_key"], "omk-1", "未锁会员条目照常注入");
+        assert_eq!(settings["models"]["手编"]["api_key"], "k", "杂散 locked 的手编条目不受影响");
+        assert_eq!(settings["default_model"], "专业模型", "default 落在被 skip 条目时回退首个物化条目");
+        assert_eq!(settings["signing_secret"], "sec-9");
+
+        // 全部会员条目均 locked:零条目物化,不写顶层 signing_secret
+        let all_locked = DesktopConfig {
+            models: serde_json::json!([
+                { "name": "旗舰模型", "provider": "anthropic", "base_url": "", "api_key": "",
+                  "model": "monkeycode-ultra/x", "source": "monkeycode", "locked": true },
+                { "name": "自定义", "provider": "anthropic", "base_url": "https://x", "api_key": "k", "model": "m" }
+            ]),
+            ..Default::default()
+        };
+        write_ohmyagent_config(&engine_dir, &all_locked, None).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
+        assert!(settings.get("signing_secret").is_none(), "全锁时不平白外发签名");
+        assert!(settings["models"].get("旗舰模型").is_none());
         let _ = fs::remove_dir_all(&root);
     }
 

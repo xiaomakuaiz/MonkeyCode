@@ -37,6 +37,10 @@ export interface ModelInfo {
   source?: string;
   /** 底层模型串。name 可能是 remark 别名,判会员档位(monkeycode-…)靠它 */
   model?: string;
+  /** 超出会员档的展示专用条目:菜单灰态禁选(引擎 settings 里没有它) */
+  locked?: boolean;
+  /** 会员条目的服务端归属(public/private/team),会员 tab 按它分节 */
+  owner?: string;
   /** 模型设置的思考深度默认档(low/medium/high;缺省/"" = 关闭)。
    * composer 未显式选档时按它显示生效档位 */
   think?: string;
@@ -62,6 +66,10 @@ export interface HostModel {
   vision?: boolean;
   /** 条目来源("baizhi"=百智云同步);缺省=手工添加。重同步时按它整组替换 */
   source?: string;
+  /** 超出会员档的展示专用条目(会员同步打标):壳物化时跳过,UI 禁选 */
+  locked?: boolean;
+  /** 会员条目的服务端归属(public/private/team) */
+  owner?: string;
 }
 
 /** 壳持有的应用配置(经 Tauri IPC get_config/save_config 读写)。 */
@@ -362,6 +370,10 @@ export interface BaizhiSyncedModel {
   think?: string;
   vision?: boolean;
   source: string; // "baizhi" | "monkeycode"
+  /** monkeycode 同步:超出会员档的条目(展示禁选,升级后重同步解锁) */
+  locked?: boolean;
+  /** monkeycode 同步:服务端归属(public/private/team) */
+  owner?: string;
 }
 
 export interface BaizhiSyncResult {

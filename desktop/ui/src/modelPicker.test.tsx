@@ -24,6 +24,17 @@ describe("ModelMenuItem", () => {
     expect(html).toContain('title="monkeycode-pro/deepseek-pro"');
     expect(html).toContain("deepseek-pro");
   });
+
+  it("locked 条目灰态禁选:disabled、降透明度、无 hover 类", () => {
+    const html = renderToStaticMarkup(
+      <ModelMenuItem label="claude-x" disabled title="超档 · 当前会员档不可用" selected={false} onClick={vi.fn()} />,
+    );
+
+    expect(html).toContain("disabled");
+    expect(html).toContain("opacity:0.55");
+    expect(html).toContain('class="menu-item"'); // 不带 hv,悬停无高亮
+    expect(html).toContain('title="超档 · 当前会员档不可用"');
+  });
 });
 
 describe("ModelPicker 关闭态(静态渲染,不触 localStorage)", () => {

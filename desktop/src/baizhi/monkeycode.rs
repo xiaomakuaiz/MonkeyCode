@@ -720,22 +720,25 @@ pub async fn mc_ohmyagent_key_delete(svc: &Service, id: &str) -> BzResult<()> {
 }
 
 /// users/models 条目 → 本地模型条目(ui/src/types.ts HostModel 词汇)。
-/// 只收会员内置模型(owner.type=="public";私有/团队条目要么已有直连凭据,
-/// 要么不在本功能范围)。请求的 model 字段传**服务端模型名**——swagger 写
-/// "传模型配置 ID"是过时文档,后端实际按模型名解析(后端同学确认);用
-/// 模型名与百智云条目同构,引擎提示词里模型自述的也是有意义的名字而非
-/// UUID。**凭据不进条目**——base_url/api_key 置空占位,不经 UI/config.json
-/// 流转,物化时由壳从代理 Key 文件注入(config.rs write_ohmyagent_config),
-/// 设置页不给用户"一眼抄走"的入口。逐条容错,不拖垮整批。
+/// 收 owner.type ∈ {public, private, team}(未知/缺失跳过——形状不明的
+/// 条目宁缺勿滥);会员档未覆盖的内置模型**不再剔除**,改打 `locked: true`
+/// (UI 灰态展示禁选,物化层跳过,升级会员重同步后解锁,对齐 Web 的
+/// canUseModelBySubscription 灰态)。请求的 model 字段传**服务端模型名**
+/// ——swagger 写"传模型配置 ID"是过时文档,后端实际按模型名解析(后端
+/// 同学确认);私有/团队模型属于该用户,同样按名解析走代理。**凭据不进
+/// 条目**——base_url/api_key 置空占位,不经 UI/config.json 流转,物化时由
+/// 壳从代理 Key 文件注入(config.rs write_ohmyagent_config),设置页不给
+/// 用户"一眼抄走"的入口。逐条容错,不拖垮整批。
 fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>) {
     let mut models = Vec::new();
     let mut notes = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for it in items {
         let s = |k: &str| it.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
-        if it.pointer("/owner/type").and_then(Value::as_str) != Some("public") {
-            continue;
-        }
+        let owner = match it.pointer("/owner/type").and_then(Value::as_str) {
+            Some(o @ ("public" | "private" | "team")) => o,
+            _ => continue,
+        };
         if it.get("is_hidden").and_then(Value::as_bool).unwrap_or(false) {
             continue;
         }
@@ -743,9 +746,8 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
         if id.is_empty() || model.is_empty() || is_builtin_placeholder(&model) {
             continue; // 占位/残缺条目不是可调用模型,静默跳过
         }
-        if !plan_allows_model(&model, plan) {
-            continue; // 会员档位未覆盖(与云端建任务选择器同一过滤,静默)
-        }
+        // 超档 ≠ 排除:展示但禁选(静默,不出 note——菜单灰态即是外显)
+        let locked = !plan_allows_model(&model, plan);
         let itype = s("interface_type");
         let Some(provider) = provider_of_interface(&itype) else {
             notes.push(format!("模型 {model} 使用了本版本不支持的协议「{itype}」,已跳过"));
@@ -763,7 +765,11 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
             "api_key": "",
             "model": model,
             "source": SOURCE_MONKEYCODE,
+            "owner": owner,
         });
+        if locked {
+            entry["locked"] = json!(true); // omit-false:解锁条目不携带该字段
+        }
         let num = |k: &str| it.get(k).and_then(Value::as_i64).filter(|&n| n > 0);
         let context_window = num("context_limit");
         if let Some(cw) = context_window {
@@ -781,17 +787,23 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
         if it.get("support_image").and_then(Value::as_bool).unwrap_or(false) {
             entry["vision"] = json!(true);
         }
-        // thinking_enabled 刻意忽略(用户拍板):会员模型来自服务端内部
-        // hook,该字段并不可靠(漏填即 false),照抄会把支持思考的模型
-        // 默认压成关闭。统一跟随产品默认档「低」(config.rs 未配置时物化
-        // thinking low),真不支持思考的模型由用户在设置页按模型调 off。
+        // thinking_enabled 对 public 条目刻意忽略(用户拍板):会员内置
+        // 模型来自服务端内部 hook,该字段并不可靠(漏填即 false),照抄会
+        // 把支持思考的模型默认压成关闭。统一跟随产品默认档「低」(config.rs
+        // 未配置时物化 thinking low),真不支持的由用户在设置页调 off。
+        // 私有/团队条目是用户自己配置的,标了不支持就该尊重——否则默认档
+        // 「低」的首个请求就会被上游拒。
+        if owner != "public" && it.get("thinking_enabled").and_then(Value::as_bool) == Some(false) {
+            entry["think"] = json!("off");
+        }
         models.push(entry);
     }
     (models, notes)
 }
 
-/// 同步会员内置模型:模型清单来自 GET /api/v1/users/models(会员档位按
-/// 订阅接口过滤,订阅读取失败可容忍,只同步基础档并出 note)。条目不携带
+/// 同步会员模型:模型清单来自 GET /api/v1/users/models(超出订阅档的
+/// 内置模型标 locked 展示禁选;订阅读取失败可容忍,进阶档全部锁定并出
+/// note,重新同步可恢复)。条目不携带
 /// 凭据(见 local_model_entries),代理 Key 与地址由壳在物化时注入,上游
 /// 真实凭据不出服务端。返回 {models, notes}(与 baizhi_sync 返回形状平行;
 /// 不碰 config.json,由 UI 交用户确认后保存)。
@@ -806,7 +818,7 @@ pub async fn mc_member_models_sync(svc: &Service) -> BzResult<Value> {
     let plan = match mc_call(svc, reqwest::Method::GET, "/api/v1/users/subscription", None).await {
         Ok(v) => v.get("plan").and_then(Value::as_str).unwrap_or("").to_string(),
         Err(e) => {
-            notes.push(format!("订阅信息读取失败({}),会员进阶档模型未同步", e.msg()));
+            notes.push(format!("订阅信息读取失败({}),进阶档模型已按不可用锁定,重新同步可恢复", e.msg()));
             String::new()
         }
     };
@@ -1096,18 +1108,24 @@ mod local_models_tests {
             json!({ "id": "cfg-3", "remark": "新协议", "model": "m-new", "interface_type": "grpc_v2", "owner": pub_owner() }),
             // 裸档位占位 → 静默跳过
             json!({ "id": "cfg-4", "remark": "专业档", "model": "monkeycode-ultra", "interface_type": "anthropic", "owner": pub_owner() }),
-            // 私有条目(用户自配,凭据直连)→ 不进会员组
+            // 私有条目(用户在服务端自配)→ 收录,标注 thinking_enabled:false
+            // 时须尊重(用户自己标的,不同于 public 的不可靠内部 hook)
             json!({ "id": "cfg-5", "remark": "私有", "model": "my-model", "interface_type": "anthropic",
-                    "owner": { "type": "private" } }),
+                    "owner": { "type": "private" }, "thinking_enabled": false }),
             // 隐藏条目 → 静默跳过
             json!({ "id": "cfg-6", "remark": "隐藏", "model": "hidden-model", "interface_type": "anthropic",
                     "owner": pub_owner(), "is_hidden": true }),
             // 与首条重名 → 跳过 + note
             json!({ "id": "cfg-7", "remark": "旗舰模型", "model": "m-dup", "interface_type": "anthropic", "owner": pub_owner() }),
-            // 档位未覆盖(plan=ultra 全放行,此条在 tier 用例里另测)
+            // 团队条目 → 收录;归属缺失/未知 → 跳过
+            json!({ "id": "cfg-8", "remark": "团队", "model": "team-model", "interface_type": "anthropic",
+                    "owner": { "type": "team", "name": "翼龙组" } }),
+            json!({ "id": "cfg-9", "remark": "无主", "model": "orphan", "interface_type": "anthropic" }),
+            json!({ "id": "cfg-10", "remark": "未知主", "model": "alien", "interface_type": "anthropic",
+                    "owner": { "type": "galaxy" } }),
         ];
         let (models, notes) = local_model_entries(&items, "ultra");
-        assert_eq!(models.len(), 2, "{models:?}");
+        assert_eq!(models.len(), 4, "{models:?}");
         let m0 = &models[0];
         assert_eq!(m0.get("name").and_then(Value::as_str), Some("旗舰模型"));
         assert_eq!(m0.get("provider").and_then(Value::as_str), Some("anthropic"));
@@ -1126,15 +1144,26 @@ mod local_models_tests {
         assert_eq!(m1.get("provider").and_then(Value::as_str), Some("openai"));
         assert!(m1.get("vision").is_none());
         assert!(m1.get("context_window").is_none());
-        // thinking_enabled 一律忽略(不可靠,漏填即 false):条目不写 think,
-        // 全部跟随产品默认档「低」
-        assert!(m1.get("think").is_none(), "服务端标 false 也不压 off");
+        // thinking_enabled 对 public 忽略(不可靠内部 hook,漏填即 false),
+        // 对 private/team(用户自配)标 false 时须写 off
+        assert!(m1.get("think").is_none(), "public 标 false 也不压 off");
         assert!(m0.get("think").is_none(), "未标注的模型跟随产品默认档");
+        let m2 = &models[2];
+        assert_eq!(m2.get("name").and_then(Value::as_str), Some("私有"));
+        assert_eq!(m2.get("owner").and_then(Value::as_str), Some("private"));
+        assert_eq!(m2.get("think").and_then(Value::as_str), Some("off"), "私有条目标 false 须尊重");
+        let m3 = &models[3];
+        assert_eq!(m3.get("owner").and_then(Value::as_str), Some("team"));
+        assert_eq!(m0.get("owner").and_then(Value::as_str), Some("public"));
+        assert!(
+            !models.iter().any(|m| matches!(m.get("name").and_then(Value::as_str), Some("无主" | "未知主"))),
+            "归属缺失/未知必须跳过: {models:?}"
+        );
         assert_eq!(notes.len(), 2, "未知协议/重名各一条 note: {notes:?}");
     }
 
     #[test]
-    fn plan_filters_out_higher_tiers() {
+    fn plan_gating_marks_higher_tiers_locked() {
         let items = vec![
             json!({ "id": "c1", "model": "monkeycode-basic-a", "interface_type": "anthropic", "owner": pub_owner() }),
             json!({ "id": "c2", "model": "monkeycode-pro-a", "interface_type": "anthropic", "owner": pub_owner() }),
@@ -1142,8 +1171,28 @@ mod local_models_tests {
         ];
         let (models, notes) = local_model_entries(&items, "pro");
         let names: Vec<_> = models.iter().filter_map(|m| m.get("model").and_then(Value::as_str)).collect();
-        assert_eq!(names, vec!["monkeycode-basic-a", "monkeycode-pro-a"], "pro 档不含 ultra 前缀模型");
-        assert!(notes.is_empty(), "档位过滤与云端选择器一致,静默不出 note");
+        assert_eq!(
+            names,
+            vec!["monkeycode-basic-a", "monkeycode-pro-a", "monkeycode-ultra-a"],
+            "超档条目保留(展示禁选),不再剔除"
+        );
+        assert!(models[0].get("locked").is_none(), "档内条目无 locked(omit-false)");
+        assert!(models[1].get("locked").is_none());
+        assert_eq!(models[2].get("locked").and_then(Value::as_bool), Some(true), "ultra 超出 pro 档 → locked");
+        assert!(notes.is_empty(), "锁定静默不出 note(菜单灰态即外显)");
+    }
+
+    #[test]
+    fn empty_plan_locks_all_tiers_but_not_custom() {
+        // 订阅读取失败(plan="")的降级路径:内置档全锁、非内置命名
+        // (私有/团队/付费自定义)不受档位门限
+        let items = vec![
+            json!({ "id": "c1", "model": "monkeycode-pro-a", "interface_type": "anthropic", "owner": pub_owner() }),
+            json!({ "id": "c2", "model": "some-model", "interface_type": "anthropic", "owner": { "type": "private" } }),
+        ];
+        let (models, _) = local_model_entries(&items, "");
+        assert_eq!(models[0].get("locked").and_then(Value::as_bool), Some(true));
+        assert!(models[1].get("locked").is_none(), "非内置命名不锁");
     }
 
     #[test]

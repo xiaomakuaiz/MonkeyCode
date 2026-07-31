@@ -126,6 +126,10 @@ export function modelsToConfig(models: HostModel[], defaultIdx: number): HostMod
     think: m.think,
     vision: m.vision,
     source: m.source,
+    // 会员同步的锁定/归属标记:白名单漏掉它们的话,任意一次保存都会把
+    // 字段剥掉——锁定条目静默变可选、物化时被注入凭据
+    locked: m.locked,
+    owner: m.owner,
   }));
 }
 export const emptyMcp = (): McpEntry => ({ name: "", type: "http", url: "", command: "", args: "", kv: "" });

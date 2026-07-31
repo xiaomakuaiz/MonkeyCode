@@ -780,13 +780,18 @@ export function SettingsView({
       think: sm.think,
       vision: sm.vision,
       source: sm.source,
+      locked: sm.locked,
+      owner: sm.owner,
     }));
     const outside = new Set(models.filter((m) => m.source !== source && m.name.trim()).map((m) => m.name.trim()));
     const skipped = keepManual ? synced.map((m) => m.name.trim()).filter((n) => outside.has(n)) : [];
     const next = replaceSourceGroup(models, synced, source, keepManual);
     setModels(next);
-    // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位
-    const di = next.findIndex((m) => m.name.trim() === defaultName);
+    // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位;
+    // 降档重同步后原默认可能变锁定 → 挪到首个未锁条目(锁定条目不物化,
+    // default 落它头上等于没有默认)
+    let di = next.findIndex((m) => m.name.trim() === defaultName);
+    if (di < 0 || next[di]?.locked) di = next.findIndex((m) => !m.locked);
     setDefaultIdx(di >= 0 ? di : 0);
     setAdvOpen({});
     setExpanded(null);
@@ -941,13 +946,21 @@ export function SettingsView({
           </span>
           <span style={pill}>{m.provider || "anthropic"}</span>
           {managed && (
-            // 档位即托管:会员条目必有档位语境,一枚药丸承载两层信息
-            //(档位文本 + 托管说明 tooltip),判不出档位时回落「托管」字样
+            // 档位即托管:会员条目必有档位/归属语境,一枚药丸承载两层信息
+            //(档位或归属文本 + 托管说明 tooltip)
             <span
               style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}
               title="凭据由 MonkeyCode 托管,本机不展示;条目随「同步会员模型」整组更新"
             >
-              {builtinTierLabel(m.model) ?? "托管"}
+              {builtinTierLabel(m.model) ?? (m.owner === "private" ? "我的" : m.owner === "team" ? "团队" : "托管")}
+            </span>
+          )}
+          {managed && m.locked && (
+            <span
+              style={{ ...pill, background: "var(--warnBg)", color: "var(--warn)" }}
+              title="当前会员档不可用,升级后重新同步解锁"
+            >
+              未解锁
             </span>
           )}
           {m.vision && <span style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}>视觉</span>}
@@ -956,7 +969,8 @@ export function SettingsView({
           )}
           <span style={{ flex: 1 }} />
           <span className="row-acts" style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, flex: "none" }}>
-            {i !== defaultIdx && (
+            {/* 锁定条目不物化进引擎,默认落它头上等于没有默认 → 不给入口 */}
+            {i !== defaultIdx && !m.locked && (
               <span
                 className="hv-t1"
                 style={{ color: "var(--t4)", fontWeight: 600 }}

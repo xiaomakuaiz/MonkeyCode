@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  buildModelMenu,
-  groupMemberTiers,
+  filterModels,
+  groupMemberSections,
   modelDisplay,
   modelDisplayByName,
   modelMenuTabs,
@@ -72,41 +72,8 @@ describe("会员长名的展示投影(对齐 Web 前缀口径,纯展示层)", ()
   });
 });
 
-describe("buildModelMenu", () => {
-  const models = [
-    m("手工模型"),
-    m("claude-x", SOURCE_BAIZHI, true),
-    m("monkeycode-pro/deepseek-pro", SOURCE_MONKEYCODE),
-  ];
-
-  it("组序固定:会员 → 百智云 → 自定义恒尾,与条目顺序无关", () => {
-    const expected = ["MonkeyCode 会员", "百智云", "自定义"];
-    expect(buildModelMenu(models, "").map((g) => g.label)).toEqual(expected);
-    const shuffled = [models[0], models[1], models[2]].reverse();
-    expect(buildModelMenu(shuffled, "").map((g) => g.label)).toEqual(expected);
-  });
-
-  it("过滤匹配 name 与来源组名(大小写不敏感),items 保原引用", () => {
-    expect(buildModelMenu(models, "CLAUDE")).toEqual([{ label: "百智云", items: [models[1]] }]);
-    // 组名命中 → 整组显示
-    expect(buildModelMenu(models, "百智").map((g) => g.label)).toEqual(["百智云"]);
-    expect(buildModelMenu(models, "monkeycode").map((g) => g.label)).toEqual(["MonkeyCode 会员"]);
-    expect(buildModelMenu(models, "不存在")).toEqual([]);
-  });
-
-  it("过滤额外匹配底层 model 串:remark 命名的会员条目能用 wire 名搜到", () => {
-    const withRemark = [
-      m("手工模型"),
-      { ...m("深度求索", SOURCE_MONKEYCODE), model: "monkeycode-pro/deepseek-pro" },
-    ];
-    expect(buildModelMenu(withRemark, "deepseek").flatMap((g) => g.items.map((x) => x.name))).toEqual([
-      "深度求索",
-    ]);
-  });
-});
-
-describe("modelMenuTabs", () => {
-  it("「全部」恒首,来源序同组序(会员→百智云→未知→自定义),会员缩写", () => {
+describe("modelMenuTabs(无「全部」,tab 即来源导航)", () => {
+  it("来源序:会员 → 百智云 → 未知透传 → 自定义恒尾,会员缩写", () => {
     const tabs = modelMenuTabs([
       m("a"),
       m("b", "mystery"),
@@ -114,7 +81,6 @@ describe("modelMenuTabs", () => {
       m("d", SOURCE_MONKEYCODE),
     ]);
     expect(tabs).toEqual([
-      { key: "all", label: "全部" },
       { key: "monkeycode", label: "会员" },
       { key: "baizhi", label: "百智云" },
       { key: "mystery", label: "mystery" }, // 未知来源透传,不硬编码三来源
@@ -122,32 +88,54 @@ describe("modelMenuTabs", () => {
     ]);
   });
 
-  it("单来源只剩「全部+它」(渲染层按 length>=3 隐藏 tab 行)", () => {
-    expect(modelMenuTabs([m("a"), m("b")])).toHaveLength(2);
+  it("单来源只剩一个 tab(渲染层按 length>=2 隐藏 tab 行)", () => {
+    expect(modelMenuTabs([m("a"), m("b")])).toEqual([{ key: "", label: "自定义" }]);
   });
 });
 
-describe("groupMemberTiers", () => {
-  const ultra = { ...m("旗舰甲", SOURCE_MONKEYCODE), model: "monkeycode-ultra/a" };
-  const basic = { ...m("基础乙", SOURCE_MONKEYCODE), model: "monkeycode-basic/b" };
-  const other = { ...m("公司内部模型", SOURCE_MONKEYCODE), model: "some-model" };
+describe("filterModels(tab 内过滤)", () => {
+  const items = [
+    m("手工模型"),
+    { ...m("深度求索", SOURCE_MONKEYCODE), model: "monkeycode-pro/deepseek-pro" },
+  ];
 
-  it("按档位分桶保序、徽标随桶、无档位归「其他」、空桶剔除、items 保原引用", () => {
-    const sections = groupMemberTiers([ultra, other, basic]);
-    expect(sections.map((s) => s.label)).toEqual(["基础模型", "旗舰模型", "其他模型"]);
-    expect(sections.map((s) => s.badge)).toEqual(["免费使用", "旗舰会员免费", undefined]);
-    expect(sections[0].items[0]).toBe(basic);
-    expect(sections[2].items[0]).toBe(other);
+  it("匹配 name 与底层 model 串(大小写不敏感);来源组名匹配随 tab 化作废", () => {
+    expect(filterModels(items, "")).toBe(items); // 空过滤原样返回
+    expect(filterModels(items, "手工")).toEqual([items[0]]);
+    // remark 命名的会员条目可用 wire 名搜到
+    expect(filterModels(items, "DEEPSEEK")).toEqual([items[1]]);
+    // 行为变化:旧版按来源组名(如「百智」)能命中整组,tab 化后来源
+    // 导航由 tab 承担,组名不再是匹配面
+    expect(filterModels(items, "会员")).toEqual([]);
+    expect(filterModels(items, "不存在")).toEqual([]);
+  });
+});
+
+describe("groupMemberSections(会员 tab 分节,对齐 Web 分类)", () => {
+  const ultra = { ...m("旗舰甲", SOURCE_MONKEYCODE), model: "monkeycode-ultra/a", owner: "public", locked: true };
+  const basic = { ...m("基础乙", SOURCE_MONKEYCODE), model: "monkeycode-basic/b", owner: "public" };
+  const paid = { ...m("付费丙", SOURCE_MONKEYCODE), model: "some-model", owner: "public" };
+  const legacy = { ...m("旧同步丁", SOURCE_MONKEYCODE), model: "another-model" }; // 改造前同步的条目无 owner
+  const mine = { ...m("私有戊", SOURCE_MONKEYCODE), model: "my-model", owner: "private" };
+  const team = { ...m("团队己", SOURCE_MONKEYCODE), model: "team-model", owner: "team" };
+
+  it("档位三节 → 付费 → 我的 → 团队;owner 缺失的旧条目归付费;空节剔除;items 保原引用", () => {
+    const sections = groupMemberSections([team, legacy, ultra, mine, paid, basic]);
+    expect(sections.map((s) => s.label)).toEqual(["基础模型", "旗舰模型", "付费模型", "我的模型", "团队模型"]);
+    expect(sections.map((s) => s.badge)).toEqual(["免费使用", "旗舰会员免费", "消耗积分", undefined, undefined]);
+    expect(sections[1].items[0]).toBe(ultra); // locked 条目原样保留在档位节内(渲染层做灰态)
+    expect(sections[2].items.map((x) => x.name)).toEqual(["旧同步丁", "付费丙"]);
+    expect(sections[3].items[0]).toBe(mine);
+    expect(sections[4].items[0]).toBe(team);
   });
 
-  it("全是档位模型时没有「其他」节;孤「其他」节由渲染层省头", () => {
-    expect(groupMemberTiers([ultra, basic]).map((s) => s.label)).toEqual(["基础模型", "旗舰模型"]);
-    expect(groupMemberTiers([other]).map((s) => s.label)).toEqual(["其他模型"]);
+  it("只有档位模型时无付费/我的/团队节", () => {
+    expect(groupMemberSections([basic]).map((s) => s.label)).toEqual(["基础模型"]);
   });
 });
 
 describe("shouldShowModelExtras", () => {
-  it("超过 6 个模型才显示过滤框与来源 tab", () => {
+  it("超过 6 个模型才显示过滤框(tab 行不受它门控)", () => {
     expect(shouldShowModelExtras(6)).toBe(false);
     expect(shouldShowModelExtras(7)).toBe(true);
   });

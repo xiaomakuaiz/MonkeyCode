@@ -34,8 +34,8 @@ import { IconArchive, IconChat, IconCheck, IconChevronDown, IconFolder, IconInfo
 import logoUrl from "./logo.png";
 import { useUpwardMenuHeight } from "./menuPosition";
 import {
-  buildModelMenu,
-  groupMemberTiers,
+  filterModels,
+  groupMemberSections,
   modelDisplay,
   modelDisplayByName,
   modelMenuTabs,
@@ -153,13 +153,14 @@ function PermPill({ yolo, onToggle }: { yolo: boolean; onToggle: () => void }) {
 
 /** 模型菜单的共享选项行:本地/云端统一为整行 hover + 当前项勾选。
  * tag = 会员档位药丸(基础/专业/旗舰);title 缺省 = label,展示短名的
- * 条目传完整原名做 hover 兜底。 */
+ * 条目传完整原名做 hover 兜底;disabled = 灰态禁选(超会员档的锁定条目)。 */
 export function ModelMenuItem({
   label,
   selected,
   tag,
   hint,
   title,
+  disabled,
   onClick,
 }: {
   label: string;
@@ -167,20 +168,24 @@ export function ModelMenuItem({
   tag?: string;
   hint?: string;
   title?: string;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
-      className="hv menu-item"
+      className={disabled ? "menu-item" : "hv menu-item"}
       aria-current={selected ? "true" : undefined}
+      disabled={disabled}
       title={title ?? label}
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
       style={{
         width: "100%",
         minWidth: 0,
         padding: "7px 10px",
         color: selected ? "var(--accTx)" : "var(--t2)",
         fontWeight: selected ? 600 : 400,
+        opacity: disabled ? 0.55 : 1,
+        cursor: disabled ? "default" : undefined,
       }}
     >
       <span className="ellipsis" style={{ flex: 1, minWidth: 0 }}>{label}</span>
@@ -267,24 +272,23 @@ export function ModelPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  // 来源 tab;打开与输入过滤时都重置回「全部」——保证「tab 行隐藏 ⇔ 必为
-  // 全部」恒成立,不存在"tab 隐藏但仍在筛"的不可见状态
-  const [tab, setTab] = useState("all");
+  // 来源 tab:null =「跟随当前模型的来源」渲染期派生,仅用户点击才落
+  // 具体值——models 异步晚到/刷新时不会停在错误来源
+  const [tab, setTab] = useState<string | null>(null);
   const { anchorRef, menuMaxHeight } = useUpwardMenuHeight<HTMLDivElement>(open, 370);
 
-  // 模型少时过滤框/tab 行都是复述菜单的噪音,同一阈值一起出现
+  // 过滤框在模型多时才有意义;tab 行只要 ≥2 来源就恒显(它是来源间唯一导航)
   const showExtras = shouldShowModelExtras(models.length);
   const tabs = modelMenuTabs(models);
-  // models 是异步 props:开着菜单来源可能消失,活跃 tab 悬空时兜底回全部
-  const activeTab = tabs.some((t) => t.key === tab) ? tab : "all";
-  const filtering = filter.trim().length > 0;
-  const showTabs = showExtras && tabs.length >= 3 && !filtering;
-  // 全部/过滤视图走 buildModelMenu 分组;来源 tab 是无组头平铺,其中
-  // 会员 tab 再按档位小节(小节头表达档位,条目不再带药丸)
-  const groups = activeTab === "all" || filtering ? buildModelMenu(models, filter) : null;
-  const tabItems = groups === null ? models.filter((m) => (m.source || "") === activeTab) : [];
-  const memberSections =
-    groups === null && activeTab === SOURCE_MONKEYCODE ? groupMemberTiers(tabItems) : null;
+  // 当前来源归一必须 `|| ""`:自定义的 tab key 是空串,`??` 会把它吞成会员
+  const currentSource = models.find((m) => m.name === current)?.source || "";
+  const wantTab = tab ?? currentSource;
+  const activeTab = tabs.some((t) => t.key === wantTab) ? wantTab : (tabs[0]?.key ?? "");
+  const showTabs = tabs.length >= 2;
+  // 过滤在 tab 内;会员 tab 按档位/付费/我的/团队分节(节头表达档位,
+  // 条目不再带药丸),其余来源平铺
+  const tabItems = filterModels(models.filter((m) => (m.source || "") === activeTab), filter);
+  const memberSections = activeTab === SOURCE_MONKEYCODE ? groupMemberSections(tabItems) : null;
 
   // Esc 关闭必须在 window **capture** 阶段拦截:App 的全局快捷键挂在冒泡
   // 阶段,会话视图存在待审批时 Esc 是不可逆的拒绝(appView.ts)——菜单
@@ -306,7 +310,8 @@ export function ModelPicker({
     onPick(name);
   };
 
-  // 条目渲染收口:全部视图带档位药丸,会员 tab 小节内省略(小节头已表达)
+  // 条目渲染收口:会员 tab 分节内省略档位药丸(节头已表达);locked
+  // 条目灰态禁选,title 说明解锁路径
   const itemOf = (m: ModelInfo, noTag = false) => {
     const d = modelDisplay(m);
     return (
@@ -314,8 +319,9 @@ export function ModelPicker({
         key={m.name}
         label={d.label}
         tag={noTag ? undefined : d.tier}
-        title={m.name}
+        title={m.locked ? `${m.name} · 当前会员档不可用,升级后重新同步` : m.name}
         selected={m.name === current}
+        disabled={m.locked}
         hint={m.default ? "默认" : undefined}
         onClick={() => pick(m.name)}
       />
@@ -335,7 +341,7 @@ export function ModelPicker({
         onClick={() => {
           if (disabled) return;
           setFilter("");
-          setTab("all");
+          setTab(null); // 打开时回到「跟随当前模型来源」
           setOpen(!open);
         }}
       />
@@ -348,11 +354,7 @@ export function ModelPicker({
                 <input
                   autoFocus
                   value={filter}
-                  onChange={(e) => {
-                    setFilter(e.target.value);
-                    // 过滤跨全部来源:输入即回「全部」,清空后也不跳回旧 tab
-                    if (e.target.value.trim()) setTab("all");
-                  }}
+                  onChange={(e) => setFilter(e.target.value)}
                   placeholder="过滤模型…"
                   style={{
                     width: "100%",
@@ -397,37 +399,26 @@ export function ModelPicker({
               </div>
             )}
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {groups !== null && groups.length === 0 && (
-                <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--t5)" }}>无匹配模型</div>
+              {tabItems.length === 0 && (
+                <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--t5)" }}>
+                  {models.length === 0 ? "尚未配置模型" : "无匹配模型"}
+                </div>
               )}
-              {groups !== null &&
-                groups.map((g) => (
-                  <div key={g.label}>
-                    {(groups.length > 1 || g.label !== "自定义") && (
-                      <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
-                        {g.label}
-                      </div>
-                    )}
-                    {g.items.map((m) => itemOf(m))}
-                  </div>
-                ))}
-              {/* 会员 tab:档位小节(孤「其他」组省头,同自定义组规则) */}
-              {memberSections !== null &&
-                memberSections.map((s) => (
-                  <div key={s.label}>
-                    {(memberSections.length > 1 || s.label !== "其他模型") && (
+              {/* 会员 tab:档位/付费/我的/团队分节,节头恒显(每节都承载语义);
+                  其余来源平铺(单一来源下组头是冗余) */}
+              {memberSections !== null
+                ? memberSections.map((s) => (
+                    <div key={s.label}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px 3px" }}>
                         <span style={{ flex: 1, minWidth: 0, fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
                           {s.label}
                         </span>
                         {s.badge && <span style={{ flex: "none", fontSize: 9.5, color: "var(--t6)" }}>{s.badge}</span>}
                       </div>
-                    )}
-                    {s.items.map((m) => itemOf(m, true))}
-                  </div>
-                ))}
-              {/* 其余来源 tab:平铺(单一来源下组头是冗余) */}
-              {groups === null && memberSections === null && tabItems.map((m) => itemOf(m))}
+                      {s.items.map((m) => itemOf(m, true))}
+                    </div>
+                  ))
+                : tabItems.map((m) => itemOf(m))}
             </div>
           </div>
         </>

@@ -60,51 +60,19 @@ export function modelDisplayByName(models: readonly ModelInfo[], name: string): 
   return m ? modelDisplay(m) : { label: name };
 }
 
-export interface ModelMenuGroup {
-  label: string;
-  items: ModelInfo[];
-}
-
-/** 来源固定优先级(组序与 tab 序共用,单一出处避免两者打架):
- * 会员 → 百智云 → 未知来源(彼此按首现)→ 自定义恒尾。 */
+/** 来源固定优先级(tab 序的单一出处):会员 → 百智云 → 未知来源
+ * (彼此按首现)→ 自定义恒尾。 */
 const sourceRank = (source?: string): number =>
   source === SOURCE_MONKEYCODE ? 0 : source === SOURCE_BAIZHI ? 1 : source ? 2 : 3;
-
-/** 菜单内容构建:过滤(name + 底层 model 串 + 来源组名,大小写不敏感;
- * 按 model 匹配让 remark 命名的会员条目也能用 wire 名搜到,命中词可能
- * 不在显示名里——有意取舍)→ 按来源分桶,组序走 sourceRank(稳定排序,
- * 未知来源之间保持首现顺序)。 */
-export function buildModelMenu(models: ModelInfo[], filter: string): ModelMenuGroup[] {
-  const q = filter.trim().toLowerCase();
-  const shown = q
-    ? models.filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          (m.model || "").toLowerCase().includes(q) ||
-          modelSourceLabel(m.source).toLowerCase().includes(q),
-      )
-    : models;
-  const groups: (ModelMenuGroup & { rank: number })[] = [];
-  for (const m of shown) {
-    const label = modelSourceLabel(m.source);
-    let g = groups.find((x) => x.label === label);
-    if (!g) {
-      g = { label, items: [], rank: sourceRank(m.source) };
-      groups.push(g);
-    }
-    g.items.push(m);
-  }
-  groups.sort((a, b) => a.rank - b.rank);
-  return groups.map(({ label, items }) => ({ label, items }));
-}
 
 export interface ModelMenuTab {
   key: string;
   label: string;
 }
 
-/** 来源 tab:「全部」+ 出现过的来源(序同组序;会员缩写为「会员」,
- * 未知来源沿用 modelSourceLabel 的透传)。key 用 source 原值(自定义 "")。 */
+/** 来源 tab(无「全部」,tab 即全部导航;会员缩写为「会员」,未知来源
+ * 沿用 modelSourceLabel 的透传)。key 用 source 原值(自定义是空串——
+ * 消费方判活跃 tab 时注意别用 `??` 把空串吞了)。 */
 export function modelMenuTabs(models: ModelInfo[]): ModelMenuTab[] {
   const tabs: (ModelMenuTab & { rank: number })[] = [];
   for (const m of models) {
@@ -114,28 +82,46 @@ export function modelMenuTabs(models: ModelInfo[]): ModelMenuTab[] {
     tabs.push({ key, label, rank: sourceRank(m.source) });
   }
   tabs.sort((a, b) => a.rank - b.rank);
-  return [{ key: "all", label: "全部" }, ...tabs.map(({ key, label }) => ({ key, label }))];
+  return tabs.map(({ key, label }) => ({ key, label }));
 }
 
-export interface MemberTierSection {
+/** tab 内过滤:name + 底层 model 串(remark 命名的会员条目可用 wire 名
+ * 搜到),大小写不敏感。来源组名匹配随 tab 化作废——来源导航由 tab 承担。 */
+export function filterModels(items: ModelInfo[], filter: string): ModelInfo[] {
+  const q = filter.trim().toLowerCase();
+  if (!q) return items;
+  return items.filter(
+    (m) => m.name.toLowerCase().includes(q) || (m.model || "").toLowerCase().includes(q),
+  );
+}
+
+export interface MemberSection {
   label: string;
   badge?: string;
   items: ModelInfo[];
 }
 
-/** 会员 tab 内的档位小节(徽标词与 groupCloudModels 一致——资格说明,
- * 本地条目同步时已按会员档过滤过);无档位的服务端自定义模型归「其他」。 */
-const MEMBER_TIER_SECTIONS: { tier?: string; label: string; badge?: string }[] = [
-  { tier: "基础", label: "基础模型", badge: "免费使用" },
-  { tier: "专业", label: "专业模型", badge: "专业会员免费" },
-  { tier: "旗舰", label: "旗舰模型", badge: "旗舰会员免费" },
-  { tier: undefined, label: "其他模型" },
+/** 会员 tab 分节(与 Web/groupCloudModels 同一分类词汇):档位三节 →
+ * 付费(公共非档位;owner 缺失的旧同步条目也归这里——旧同步只收 public,
+ * 语义正确)→ 我的(private)→ 团队(team,扁平单节)。徽标是资格说明;
+ * 超档条目在档位节内以 locked 灰态出现。 */
+const MEMBER_SECTION_DEFS: {
+  label: string;
+  badge?: string;
+  match: (tier: string | undefined, owner: string | undefined) => boolean;
+}[] = [
+  { label: "基础模型", badge: "免费使用", match: (t) => t === "基础" },
+  { label: "专业模型", badge: "专业会员免费", match: (t) => t === "专业" },
+  { label: "旗舰模型", badge: "旗舰会员免费", match: (t) => t === "旗舰" },
+  { label: "付费模型", badge: "消耗积分", match: (t, o) => !t && o !== "private" && o !== "team" },
+  { label: "我的模型", match: (t, o) => !t && o === "private" },
+  { label: "团队模型", match: (t, o) => !t && o === "team" },
 ];
 
-export function groupMemberTiers(items: ModelInfo[]): MemberTierSection[] {
-  return MEMBER_TIER_SECTIONS.map((s) => ({
-    label: s.label,
-    badge: s.badge,
-    items: items.filter((m) => builtinTierLabel(m.model) === s.tier),
+export function groupMemberSections(items: ModelInfo[]): MemberSection[] {
+  return MEMBER_SECTION_DEFS.map((d) => ({
+    label: d.label,
+    badge: d.badge,
+    items: items.filter((m) => d.match(builtinTierLabel(m.model), m.owner)),
   })).filter((s) => s.items.length > 0);
 }
