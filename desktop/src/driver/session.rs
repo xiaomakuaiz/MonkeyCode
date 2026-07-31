@@ -63,7 +63,8 @@ fn valid_chat_workspace_name(path: &Path) -> bool {
 
 /// WSL 模式的 workdir 归一化(Inner::resolve_workdir 的 WSL 臂,拆出便于
 /// 单测):~ 拼 guest 家目录;\\wsl$ UNC 回译(发行版必须匹配);/ 开头
-/// 原样;其余(盘符路径等)明确拒绝。
+/// 原样;盘符路径映射 automount(C:\proj → /mnt/c/proj——Windows 盘上的
+/// 项目直接可用,而不是硬拒);其余(相对路径等)明确拒绝。
 fn resolve_wsl_workdir(w: &super::ohmy::WslCtx, raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     if raw == "~" {
@@ -81,10 +82,13 @@ fn resolve_wsl_workdir(w: &super::ohmy::WslCtx, raw: &str) -> Result<String, Str
         }
         return Ok(guest);
     }
+    if let Some(guest) = crate::wsl::guest_path_of_drive(&w.mount_root, raw) {
+        return Ok(guest);
+    }
     if raw.starts_with('/') {
         return Ok(raw.to_string());
     }
-    Err(format!("WSL 运行环境的工作区需是发行版内目录(如 /home/…),收到: {raw}"))
+    Err(format!("WSL 运行环境无法识别的工作区路径(需为发行版内目录、\\\\wsl$ 或盘符路径),收到: {raw}"))
 }
 
 /// 只返回指定应用数据根下、由本应用创建的单层 chat-<随机标识> 目录。
@@ -194,6 +198,7 @@ mod wsl_workdir_tests {
             guest_home: "/home/u".into(),
             guest_chat_root: "/mnt/c/data/chat-workspaces".into(),
             networking: "nat".into(),
+            mount_root: "/mnt".into(),
         }
     }
 
@@ -210,9 +215,11 @@ mod wsl_workdir_tests {
             resolve_wsl_workdir(&w, r"\\wsl$\Ubuntu-22.04\home\u\proj"),
             Ok("/home/u/proj".into())
         );
-        // 发行版不匹配与盘符路径明确报错
+        // 盘符路径映射 automount(本机建的会话/最近目录在 WSL 模式下直接可用)
+        assert_eq!(resolve_wsl_workdir(&w, r"C:\Users\u\proj"), Ok("/mnt/c/Users/u/proj".into()));
+        assert_eq!(resolve_wsl_workdir(&w, "d:/dev/x"), Ok("/mnt/d/dev/x".into()));
+        // 发行版不匹配与相对路径明确报错
         assert!(resolve_wsl_workdir(&w, r"\\wsl$\Debian\home\u").is_err());
-        assert!(resolve_wsl_workdir(&w, r"C:\Users\u\proj").is_err());
         assert!(resolve_wsl_workdir(&w, "relative/path").is_err());
     }
 }
@@ -714,6 +721,11 @@ impl OhmyDriver {
             // Desktop 引擎进程 cwd，否则 resume 后会话会漂到进程目录。
             // WSL 模式回退 guest 家目录(见 default_workdir)。
             workdir = self.0.default_workdir();
+        } else {
+            // 运行环境可能已与建会话时不同(本机 ↔ WSL 切换):按当前环境
+            // 归一化(盘符 → automount 映射等)。归一不了的明确失败——错误
+            // 经 conn-status 外显,好过把另一环境的 cwd 塞给引擎后工具全空转
+            workdir = self.0.resolve_workdir(&workdir)?;
         }
         let mut params = engine_session_create_params(
             &workdir,
@@ -751,6 +763,10 @@ impl OhmyDriver {
         if let Some(s) = self.0.sess.sessions.lock_ok().get_mut(id) {
             s.created = true;
             s.engine_id = engine_id.clone();
+            // session_open 登记的是 sidecar 原值,可能属于另一运行环境;
+            // 换成引擎实际拿到的归一化形态,壳侧消费者(browser workdir 等)
+            // 与引擎口径一致
+            s.workdir = workdir.clone();
         }
         // resume 重建 loop,思考档位回落到模型默认,重放会话已选档位
         self.apply_session_think(id, &engine_id).await;
@@ -967,17 +983,25 @@ impl OhmyDriver {
     }
 
     pub async fn session_workdir(&self, id: &str) -> Result<String, String> {
-        if let Some(s) = self.0.sess.sessions.lock_ok().get(id) {
-            if !s.workdir.is_empty() {
-                return Ok(s.workdir.clone());
+        let raw = {
+            let sessions = self.0.sess.sessions.lock_ok();
+            sessions.get(id).map(|s| s.workdir.clone()).filter(|w| !w.is_empty())
+        };
+        let raw = match raw {
+            Some(w) => w,
+            None => {
+                let meta = self.read_sidecar(id);
+                meta.get("workdir")
+                    .and_then(|v| v.as_str())
+                    .filter(|w| !w.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("会话 {id} 不存在"))?
             }
-        }
-        let meta = self.read_sidecar(id);
-        meta.get("workdir")
-            .and_then(|v| v.as_str())
-            .filter(|w| !w.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| format!("会话 {id} 不存在"))
+        };
+        // sidecar 里可能是另一运行环境的形态(本机建的 C:\… 切到 WSL 后打开):
+        // 消费方(repo/uploads)拿它配 host_fs_view,只认当前环境的形态,
+        // 返回前归一化;归一不了的原样交出,由下游按目录不存在外显
+        Ok(self.0.resolve_workdir(&raw).unwrap_or(raw))
     }
 
     // ==================== 对话 ====================
@@ -1334,6 +1358,9 @@ impl OhmyDriver {
             // 空 workdir 会触发引擎的 os.Getwd 兜底(进程 cwd),显式回退
             // 主目录(WSL 模式 guest 家目录)
             workdir = self.0.default_workdir();
+        } else {
+            // 同 resume_engine:登记值可能属于另一运行环境,按当前环境归一化
+            workdir = self.0.resolve_workdir(&workdir)?;
         }
         let params = engine_session_create_params(
             &workdir,
@@ -1573,11 +1600,14 @@ impl OhmyDriver {
 }
 
 impl Inner {
-    /// 会话 workdir 归一化(kernel_env 语义的单点,session_create 入口)。
-    /// 本机:展开 ~(现状)。WSL:~ 拼 guest 家目录(宿主 expand_tilde 会
-    /// 展开成 Windows 主目录,落错环境);目录对话框选出的 \\wsl$ UNC 回译
-    /// 为 guest 路径(发行版必须与当前运行环境一致);/ 开头视为 guest
-    /// 绝对路径原样;其余(盘符路径等)明确拒绝。
+    /// 会话 workdir 归一化(kernel_env 语义的单点:session_create 入口、
+    /// resume_engine/create_resumed 的恢复重建、session_workdir 的壳侧
+    /// 消费读取都走这里——运行环境可能在会话生命周期中途切换,sidecar 里
+    /// 的形态不可直信)。本机:展开 ~(现状)。WSL:~ 拼 guest 家目录
+    /// (宿主 expand_tilde 会展开成 Windows 主目录,落错环境);目录对话框
+    /// 选出的 \\wsl$ UNC 回译为 guest 路径(发行版必须与当前运行环境一致);
+    /// 盘符路径映射 automount(C:\proj → /mnt/c/proj);/ 开头视为 guest
+    /// 绝对路径原样;其余(相对路径等)明确拒绝。
     pub(super) fn resolve_workdir(&self, raw: &str) -> Result<String, String> {
         match &self.wsl {
             Some(w) => resolve_wsl_workdir(w, raw),

@@ -45,6 +45,41 @@ pub fn guest_path_of_unc(path: &str) -> Option<(String, String)> {
     Some((distro.to_string(), tail))
 }
 
+/// Windows 盘符路径 → guest 内 automount 路径(C:\a\b → <mount_root>/c/a/b)。
+/// WSL 模式下用户项目几乎都在盘符路径上(最近目录、旧会话 sidecar、
+/// 资源管理器里拷来的路径),一律映射进 automount 而不是拒绝。盘符按
+/// wslpath 语义小写;裸 "C:foo" 是"C 盘当前目录"的相对语义,不猜,
+/// 与其余非盘符形态一起返回 None。
+pub fn guest_path_of_drive(mount_root: &str, path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return None;
+    }
+    let rest = &path[2..];
+    if !rest.is_empty() && !rest.starts_with(['\\', '/']) {
+        return None;
+    }
+    let drive = bytes[0].to_ascii_lowercase() as char;
+    let tail: Vec<&str> = rest.split(['\\', '/']).filter(|s| !s.is_empty()).collect();
+    let root = mount_root.trim_end_matches('/');
+    Some(if tail.is_empty() {
+        format!("{root}/{drive}")
+    } else {
+        format!("{root}/{drive}/{}", tail.join("/"))
+    })
+}
+
+/// guest_path_of_drive 的 automount 根从哪来:prepare 已经拿 wslpath 翻译过
+/// 一批 Windows 路径,从(宿主路径, 翻译结果)对反推——wslpath 对盘符路径的
+/// 映射形状恒为 `<root>/<盘符小写>/<其余段>`,wsl.conf [automount] root
+/// 自定义(含 root=/)也能对上。宿主路径不是盘符形态(Linux 冒烟的恒等
+/// 翻译)返回 None,调用方退默认 /mnt。
+pub fn derive_mount_root(host: &Path, guest: &str) -> Option<String> {
+    // 空根产出的就是 `/c/Users/…` 纯尾巴,正好用作后缀匹配
+    let tail = guest_path_of_drive("", &host.to_string_lossy())?;
+    guest.strip_suffix(&tail).map(|root| root.trim_end_matches('/').to_string())
+}
+
 /// guest 路径的宿主文件系统视角:Windows 经 \\wsl$ UNC;非 Windows
 /// (MC_WSL_EXE 假脚本冒烟,guest == host)原样返回。会话目录判定/创建、
 /// repo 浏览、附件落盘等所有"壳侧 std::fs 摸 guest 文件"的点统一走这里。
@@ -467,6 +502,42 @@ mod tests {
         assert_eq!(guest_path_of_unc(r"C:\Users\u"), None);
         assert_eq!(guest_path_of_unc("/home/u"), None);
         assert_eq!(guest_path_of_unc(r"\\wsl$\"), None);
+    }
+
+    #[test]
+    fn drive_path_mapping() {
+        // 盘符小写、分隔符归一、重复/尾随分隔符收敛
+        assert_eq!(
+            guest_path_of_drive("/mnt", r"C:\Users\u\proj"),
+            Some("/mnt/c/Users/u/proj".into())
+        );
+        assert_eq!(guest_path_of_drive("/mnt", "d:/dev//x/"), Some("/mnt/d/dev/x".into()));
+        // 盘根;automount root=/(空根)与自定义根
+        assert_eq!(guest_path_of_drive("/mnt", r"C:\"), Some("/mnt/c".into()));
+        assert_eq!(guest_path_of_drive("", r"C:\a"), Some("/c/a".into()));
+        assert_eq!(guest_path_of_drive("/custom/", r"E:\a"), Some("/custom/e/a".into()));
+        // 相对盘符语义、UNC、posix、相对路径都不接
+        assert_eq!(guest_path_of_drive("/mnt", "C:foo"), None);
+        assert_eq!(guest_path_of_drive("/mnt", r"\\wsl$\Ubuntu\home"), None);
+        assert_eq!(guest_path_of_drive("/mnt", "/home/u"), None);
+        assert_eq!(guest_path_of_drive("/mnt", "relative"), None);
+    }
+
+    #[test]
+    fn mount_root_derivation() {
+        // 默认根、自定义根、根挂载(root=/)
+        assert_eq!(
+            derive_mount_root(Path::new(r"C:\Users\u\AppData"), "/mnt/c/Users/u/AppData"),
+            Some("/mnt".into())
+        );
+        assert_eq!(
+            derive_mount_root(Path::new(r"D:\dev"), "/custom/d/dev"),
+            Some("/custom".into())
+        );
+        assert_eq!(derive_mount_root(Path::new(r"C:\a"), "/c/a"), Some("".into()));
+        // 反推不出:形状对不上或宿主路径不是盘符(Linux 冒烟恒等翻译)
+        assert_eq!(derive_mount_root(Path::new(r"C:\a"), "/mnt/d/a"), None);
+        assert_eq!(derive_mount_root(Path::new("/opt/x"), "/opt/x"), None);
     }
 
     #[test]

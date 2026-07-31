@@ -112,6 +112,9 @@ pub(super) struct WslCtx {
     pub(super) guest_chat_root: String,
     /// wslinfo --networking-mode("mirrored"/"nat")
     pub(super) networking: String,
+    /// guest 内 automount 根(常态 /mnt,wsl.conf [automount] root 可改;
+    /// 从 prepare 的 wslpath 翻译对反推)。盘符 workdir 映射 guest 路径用
+    pub(super) mount_root: String,
 }
 
 /// 驱动共享状态。锁字段按职责归为三个锁组(各组文档注释写明含哪些锁

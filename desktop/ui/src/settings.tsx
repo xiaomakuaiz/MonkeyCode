@@ -1432,7 +1432,8 @@ export function SettingsView({
               </span>
             )}
             <span style={{ fontSize: 12, color: "var(--t5)", lineHeight: 1.7 }}>
-              选择 WSL 后,任务在发行版内运行,项目需位于发行版文件系统(如 /home/…)。
+              选择 WSL 后,任务在发行版内运行;Windows 盘符路径的项目经 /mnt 自动映射可直接使用,
+              跨系统 IO 较慢,项目放发行版文件系统内(如 /home/…)性能最佳。
               切换后点右上角「保存」生效(会重启内核);浏览器工具在 WSL 的 NAT 网络下暂不可用
               (mirrored 网络不受影响)。
             </span>

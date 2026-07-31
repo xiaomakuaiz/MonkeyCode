@@ -72,10 +72,11 @@ export async function workdirPickBase(): Promise<string | undefined> {
   return undefined;
 }
 
-/** 目录是否属于当前内核运行环境。WSL 模式认 guest 形态(/… 或 \\wsl$ UNC);
- * 本机模式下这些形态是 WSL 会话的遗留——Windows 壳上滤掉(macOS/Linux 本机
- * 的 / 开头是正常路径,只滤 UNC)。新任务的"最近目录/默认目录"按此过滤,
- * 切换运行环境后不再预填一个必然失败的路径。 */
+/** 目录是否属于当前内核运行环境。WSL 模式下 guest 形态(/… 或 \\wsl$ UNC)、
+ * Windows 盘符(壳映射为 /mnt/<盘>/…)与 ~ 形态(展开为 guest 家目录)全都
+ * 可归一化,均放行;本机模式下 guest 形态是 WSL 会话的遗留——Windows 壳上
+ * 滤掉(macOS/Linux 本机的 / 开头是正常路径,只滤 UNC)。新任务的"最近
+ * 目录/默认目录"按此过滤,切换运行环境后不再预填一个必然失败的路径。 */
 export function workdirMatchesEnv(
   dir: string,
   kernelEnv: string,
@@ -84,7 +85,7 @@ export function workdirMatchesEnv(
   const wsl = kernelEnv.startsWith("wsl:");
   const posix = dir.startsWith("/");
   const unc = /^\\\\wsl(\$|\.localhost)\\/i.test(dir);
-  if (wsl) return posix || unc;
+  if (wsl) return posix || unc || /^[a-zA-Z]:[\\/]/.test(dir) || dir.startsWith("~");
   return windowsShell ? !posix && !unc : !unc;
 }
 
