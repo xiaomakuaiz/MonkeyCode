@@ -33,10 +33,11 @@ import { Composer, QueuedChip, RunningBar } from "./composer";
 import { IconArchive, IconChat, IconCheck, IconChevronDown, IconFolder, IconInfo, IconPencil, IconShield, IconTaskDone, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import { useUpwardMenuHeight } from "./menuPosition";
+import { buildModelMenu, readRecentModels, shouldShowModelExtras, touchRecentModel } from "./modelMenu";
 import { useNativeFileDrop } from "./nativeDrop";
 import { workspaceRelativePath } from "./markdownPaths";
 import type { SessionHandle } from "./useSession";
-import { modelSourceLabel, type LogItem, type ModelInfo, type SessionMeta, type SessionNotice, type Usage } from "./types";
+import type { LogItem, ModelInfo, SessionMeta, SessionNotice, Usage } from "./types";
 
 // IME 守卫随 composer 收敛到 composer.tsx;从这转口保持既有引用面
 // (sidebar/newtask 均 import 自 ./chat)
@@ -159,6 +160,7 @@ export function ModelMenuItem({
     <button
       className="hv menu-item"
       aria-current={selected ? "true" : undefined}
+      title={label}
       onClick={onClick}
       style={{
         width: "100%",
@@ -208,7 +210,11 @@ export function ModelPickerTrigger({
         color: disabled ? "var(--t5)" : "var(--t3)",
         cursor: disabled ? "default" : "pointer",
         fontWeight: 500,
-        maxWidth: 220,
+        // 宽度上限由各使用处的包裹层给(newtask/chat/cloudtask 语境不同);
+        // 自身可收缩到 0——composer 行寸土寸金,长模型名靠 ellipsis 截断,
+        // 不能把「开始任务/发送」按钮挤出卡片
+        maxWidth: "100%",
+        minWidth: 0,
         opacity: disabled ? 0.6 : 1,
       }}
     >
@@ -232,34 +238,51 @@ export function ModelPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  // 打开时快照(而非挂载时读):避免静态渲染路径碰 localStorage,也保证
+  // 每次打开都是最新的"最近使用"
+  const [recentNames, setRecentNames] = useState<string[]>([]);
   const { anchorRef, menuMaxHeight } = useUpwardMenuHeight<HTMLDivElement>(open, 370);
 
-  const q = filter.trim().toLowerCase();
-  const shown = q ? models.filter((m) => m.name.toLowerCase().includes(q)) : models;
-  // 按来源分桶:「自定义」(无 source)恒在前,其余组按首次出现顺序
-  const groups: { label: string; items: ModelInfo[] }[] = [];
-  for (const m of shown) {
-    const label = modelSourceLabel(m.source);
-    let g = groups.find((x) => x.label === label);
-    if (!g) {
-      g = { label, items: [] };
-      if (!m.source) groups.unshift(g);
-      else groups.push(g);
-    }
-    g.items.push(m);
-  }
-  const showFilter = models.length > 10;
+  // 模型少时最近组/过滤框都是复述菜单的噪音,同一阈值一起出现
+  const showExtras = shouldShowModelExtras(models.length);
+  const { recent, groups } = buildModelMenu(models, showExtras ? recentNames : [], filter);
+
+  // Esc 关闭必须在 window **capture** 阶段拦截:App 的全局快捷键挂在冒泡
+  // 阶段,会话视图存在待审批时 Esc 是不可逆的拒绝(appView.ts)——菜单
+  // 开着时这一下只能归菜单,stopImmediatePropagation 保证审批处理器不跑。
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  // 选中收口:最近记忆在这一处更新,最近段与来源组条目共用
+  const pick = (name: string) => {
+    touchRecentModel(name);
+    setOpen(false);
+    onPick(name);
+  };
 
   return (
-    <div ref={anchorRef} style={{ position: "relative", flex: "none" }}>
+    <div
+      ref={anchorRef}
+      style={{ position: "relative", display: "flex", flex: "0 1 auto", minWidth: 0, maxWidth: 220 }}
+    >
       <ModelPickerTrigger
         label={current}
         open={open}
         disabled={disabled}
-        title={disabled ? "轮次执行中,结束后可切换" : "切换模型(下一轮生效)"}
+        title={disabled ? "轮次执行中,结束后可切换" : `${current || "选择模型"} · 点击切换(下一轮生效)`}
         onClick={() => {
           if (disabled) return;
           setFilter("");
+          setRecentNames(readRecentModels());
           setOpen(!open);
         }}
       />
@@ -267,7 +290,7 @@ export function ModelPicker({
         <>
           <div className="backdrop" onClick={() => setOpen(false)} />
           <div className="pop model-menu" style={{ position: "absolute", bottom: 30, right: 0, maxHeight: menuMaxHeight, overflow: "hidden" }}>
-            {showFilter && (
+            {showExtras && (
               <div style={{ padding: "6px 8px 4px" }}>
                 <input
                   autoFocus
@@ -290,12 +313,31 @@ export function ModelPicker({
               </div>
             )}
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {groups.length === 0 && (
+              {recent.length === 0 && groups.length === 0 && (
                 <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--t5)" }}>无匹配模型</div>
+              )}
+              {/* 最近使用段(过滤时隐藏;与下方来源组不去重,保住组内空间记忆) */}
+              {recent.length > 0 && (
+                <div>
+                  <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
+                    最近使用
+                  </div>
+                  {recent.map((m) => (
+                    <ModelMenuItem
+                      key={`recent-${m.name}`}
+                      label={m.name}
+                      selected={m.name === current}
+                      hint={m.default ? "默认" : undefined}
+                      onClick={() => pick(m.name)}
+                    />
+                  ))}
+                </div>
               )}
               {groups.map((g) => (
                 <div key={g.label}>
-                  {(groups.length > 1 || g.label !== "自定义") && (
+                  {/* 有最近段时即便只剩「自定义」一组也要标题,否则出现
+                      「有标题的最近组 + 无标题裸列表」的歧义排版 */}
+                  {(recent.length > 0 || groups.length > 1 || g.label !== "自定义") && (
                     <div style={{ padding: "6px 10px 3px", fontSize: 10.5, fontWeight: 700, color: "var(--t5)", letterSpacing: 0.4 }}>
                       {g.label}
                     </div>
@@ -306,10 +348,7 @@ export function ModelPicker({
                       label={m.name}
                       selected={m.name === current}
                       hint={m.default ? "默认" : undefined}
-                      onClick={() => {
-                        setOpen(false);
-                        onPick(m.name);
-                      }}
+                      onClick={() => pick(m.name)}
                     />
                   ))}
                 </div>

@@ -165,7 +165,8 @@ export function Composer({
           width: "100%",
         }}
       />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 10px" }}>
+      {/* minWidth:0:行内选择器可收缩,长模型名不得把发送按钮挤出卡片 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px 10px", minWidth: 0 }}>
         {controls}
         <button
           className="hv-acc icon-btn"

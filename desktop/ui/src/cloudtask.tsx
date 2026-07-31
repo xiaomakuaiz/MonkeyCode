@@ -479,11 +479,16 @@ export function CloudTaskView({
                 </span>
                 <span style={{ flex: 1 }} />
                 {/* 云端模型切换(经控制流 switch_model,保留会话上下文;执行中禁用) */}
-                <span ref={modelAnchorRef} style={{ position: "relative", flex: "none" }}>
+                {/* 包裹层接住 trigger 的 maxWidth:100%(与本地 ModelPicker 同款
+                    收缩语义):长云端模型名截断而不是撑破 composer 行 */}
+                <span
+                  ref={modelAnchorRef}
+                  style={{ position: "relative", display: "flex", flex: "0 1 auto", minWidth: 0, maxWidth: 220 }}
+                >
                   <ModelPickerTrigger
                     label={h.switching ? "切换中…" : cloudModelLabel(meta?.model)}
                     open={modelOpen}
-                    title={running ? "执行中不可切换模型" : "切换云端模型"}
+                    title={running ? "执行中不可切换模型" : `${cloudModelLabel(meta?.model) || "云端模型"} · 点击切换`}
                     disabled={running || h.switching}
                     onClick={openModelPicker}
                   />

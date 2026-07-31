@@ -11,6 +11,7 @@ import { mcTaskCreate, mcTaskOptions } from "./cloudapi";
 import { inDesktopShell, pickDirectory, workdirPickBase } from "./host";
 import { useUpwardMenuHeight } from "./menuPosition";
 import { useNativeFileDrop } from "./nativeDrop";
+import { readLastTaskModel, rememberLastTaskModel } from "./modelMenu";
 import { createSession } from "./session";
 import type { CloudTask } from "./types";
 import {
@@ -159,9 +160,14 @@ export function NewTaskView({
   const dirTouchedRef = useRef(!!prefill?.dir); // 用户改过工作目录后不再跟随最近会话
   const [dir, setDir] = useState(() => prefill?.dir || lastDir || DEFAULT_DIR);
   const [text, setText] = useState("");
-  // 模型:未主动选择时跟随默认模型(models 异步到达也自动就位,无需同步 effect)
-  const [pickedModel, setPickedModel] = useState("");
-  const model = pickedModel || models.find((m) => m.default)?.name || "";
+  // 模型:预选「上次开任务用的」(mc.lastTaskModel),没有/已下线回落默认。
+  // 校验放在派生处而非初始化:models 是异步到达的 props,挂载时常为空,
+  // 初始化时校验会让记忆永远失效
+  const [pickedModel, setPickedModel] = useState(() => readLastTaskModel());
+  const model =
+    (pickedModel && models.some((m) => m.name === pickedModel) ? pickedModel : "") ||
+    models.find((m) => m.default)?.name ||
+    "";
   // 思考深度(本地/会话):""=未显式选,创建时跟随模型设置的默认档;
   // composer 上直接显示生效档位(模型是啥就显示啥),选了就随创建下发
   const [think, setThink] = useState("");
@@ -397,6 +403,7 @@ export function NewTaskView({
     try {
       // 默认项目目录可静默创建；对话目录完全由壳管理，UI 不传内部路径。
       const meta = await createSession(d, model, !chatMode && (createDir || d === DEFAULT_DIR), chatMode ? "chat" : "local", think);
+      rememberLastTaskModel(model); // 本地/对话共用记忆;云端是独立 id 体系不记
       const first = text.trim();
       setText("");
       await onCreated(meta, first || undefined, files);
@@ -896,7 +903,7 @@ export function NewTaskView({
             </div>
           )}
 
-          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 11px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 11px", minWidth: 0 }}>
             <span style={{ display: "flex", background: "var(--segBg)", borderRadius: 13, padding: 2, flex: "none" }}>
               <span onClick={() => setMode("local")} title="跑在这台电脑上,直接读写本地文件,每步权限逐一确认" style={segItem(mode === "local", "var(--accTx)")}>
                 <IconMonitor size={11} color={mode === "local" ? "var(--accTx)" : "var(--t5)"} strokeWidth={1.4} />
