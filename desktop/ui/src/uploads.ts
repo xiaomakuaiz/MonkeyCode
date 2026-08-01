@@ -21,8 +21,13 @@ function b64OfBytes(buf: ArrayBuffer): string {
 
 /** 分块上传文件内容到会话工作区 .monkeycode/uploads/,返回工作区相对路径。
  * 原始文件名尽量保留(壳清洗);剪贴板截图可为空名。任一块失败即 abort
- * 销档(壳删半成品),错误原样上抛。 */
-export async function uploadFileStream(sessionId: string, f: File): Promise<{ path: string }> {
+ * 销档(壳删半成品),错误原样上抛。onProgress 每块落地回调一次(已发/总
+ * 字节),供 UI 外显进度。 */
+export async function uploadFileStream(
+  sessionId: string,
+  f: File,
+  onProgress?: (sentBytes: number, totalBytes: number) => void,
+): Promise<{ path: string }> {
   const { handle } = await invoke<{ handle: number }>("upload_begin", {
     id: sessionId,
     name: f.name,
@@ -32,6 +37,7 @@ export async function uploadFileStream(sessionId: string, f: File): Promise<{ pa
     for (let off = 0; off < f.size; off += CHUNK_BYTES) {
       const buf = await f.slice(off, off + CHUNK_BYTES).arrayBuffer();
       await invoke("upload_chunk", { handle, data: b64OfBytes(buf) });
+      onProgress?.(Math.min(off + CHUNK_BYTES, f.size), f.size);
     }
     return await invoke<{ path: string }>("upload_finish", { handle });
   } catch (e) {

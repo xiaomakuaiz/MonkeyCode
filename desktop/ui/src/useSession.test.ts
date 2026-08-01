@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { b64decode, b64encode } from "./codec";
 import { initialChat, type ChatState } from "./reduce";
 import { pathBackedFile } from "./uploads";
-import { createSessionCore, type SessionCoreIO } from "./useSession";
+import { createSessionCore, type SessionCoreIO, type UploadingAtt } from "./useSession";
 import type { Attachment, FileChange, Frame, LogItem } from "./types";
 
 // ---- 假 Tauri 壳 ----
@@ -206,6 +206,9 @@ function makeCore() {
     input: "有内容",
     queued: null as string | null,
     atts: [] as Attachment[],
+    uploads: [] as UploadingAtt[],
+    /** setUploads 的全部快照(进度序列断言:在途中间态会被最终态覆盖) */
+    uploadFrames: [] as UploadingAtt[][],
     changes: null as FileChange[] | null,
     isGitRepo: null as boolean | null,
     changesErr: "",
@@ -225,6 +228,10 @@ function makeCore() {
     setInput: (v) => (out.input = v),
     setQueued: (v) => (out.queued = v),
     setAtts: (v) => (out.atts = v),
+    setUploads: (v) => {
+      out.uploads = v;
+      out.uploadFrames.push(v);
+    },
     setChanges: (v) => (out.changes = v),
     setIsGitRepo: (v) => (out.isGitRepo = v),
     setChangesErr: (v) => (out.changesErr = v),
@@ -797,6 +804,40 @@ describe("本地会话核心:composer(排队与附件)", () => {
     expect(pathUploads).toEqual(["/home/u/数据集.csv"]);
     expect(trace.filter((t) => t === "invoke:upload_begin")).toHaveLength(0);
     expect(out.atts.map((a) => a.name)).toEqual(["数据集.csv"]);
+  });
+
+  it("上传中外显进度:入列→逐块推进→完成出列(大文件不再像卡死)", async () => {
+    const { core, out } = makeCore();
+    await openAndSettle(core);
+    out.uploadFrames.length = 0; // 只看本次上传的镜像序列(open 复位不算)
+    await core.addFiles([fakeFile("big.zip", "application/zip", 12 * 1024 * 1024)]);
+
+    // 首帧入列(0%),末帧出列(空);中间是逐块推进的百分比
+    const seq = out.uploadFrames.map((f) => f.map((u) => u.pct));
+    expect(seq[0]).toEqual([0]);
+    expect(seq.at(-1)).toEqual([]);
+    // 12MB/4MB = 3 块:33 / 66 / 99(末块封顶 99,100% 由出列表达——
+    // finish 改名还在途时显示 100 会让"卡在 100%"重新变成谜)
+    expect(seq.slice(1, -1)).toEqual([[33], [66], [99]]);
+    expect(out.uploads).toEqual([]); // 收尾后不残留
+    expect(out.atts.map((a) => a.name)).toEqual(["big.zip"]);
+  });
+
+  it("路径直拷与上传失败:进度不确定态(-1)且都必须出列,不留卡死的条", async () => {
+    const { core, out } = makeCore();
+    await openAndSettle(core);
+    out.uploadFrames.length = 0;
+    await core.addFiles([pathBackedFile("/home/u/a.bin", "a.bin", "")]);
+    // 直拷没有分块回调:pct=-1(spinner 不画进度线),两帧一进一出
+    expect(out.uploadFrames.map((f) => f.map((u) => u.pct))).toEqual([[-1], []]);
+
+    // 失败路径同样出列(finally),否则失败后进度条永久挂着像卡死
+    out.uploadFrames.length = 0;
+    uploadDeny.add("no.bin");
+    await core.addFiles([fakeFile("no.bin", "", 10)]);
+    expect(out.uploads).toEqual([]);
+    expect(out.uploadFrames.at(-1)).toEqual([]);
+    expect(out.notices.some((n) => n.includes("附件上传失败"))).toBe(true);
   });
 
   it("stop 上行 user-cancel", async () => {

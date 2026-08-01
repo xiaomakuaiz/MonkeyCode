@@ -29,7 +29,7 @@ import {
   type MenuState,
   type OutlineEntry,
 } from "./components";
-import { Composer, QueuedChip, RunningBar } from "./composer";
+import { Composer, QueuedChip, RunningBar, UploadingChip } from "./composer";
 import { IconArchive, IconChat, IconCheck, IconChevronDown, IconFolder, IconInfo, IconPencil, IconShield, IconTaskDone, IconX } from "./icons";
 import logoUrl from "./logo.png";
 import { useUpwardMenuHeight } from "./menuPosition";
@@ -599,7 +599,7 @@ export function ChatView({
   onDelete: () => void;
   onRename: (title: string) => void;
 }) {
-  const { chat, input, queued, atts, yolo } = session;
+  const { chat, input, queued, atts, uploads, yolo } = session;
   const changesCount = session.changes?.length ?? 0;
   const logRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
@@ -1115,7 +1115,7 @@ export function ChatView({
           onSend={sendAndFollow}
           onPaste={onPaste}
           above={
-            (chat.running || atts.length > 0) && (
+            (chat.running || atts.length > 0 || uploads.length > 0) && (
               <>
                 {chat.running && (
                   <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--line2)", borderRadius: "13px 13px 0 0", background: "var(--accBgSoft)" }}>
@@ -1126,7 +1126,10 @@ export function ChatView({
                     />
                   </div>
                 )}
-                {atts.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
+                {(atts.length > 0 || uploads.length > 0) && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px 0" }}>
+                {uploads.map((u) => (
+                  <UploadingChip key={u.id} name={u.name} pct={u.pct} />
+                ))}
                 {atts.map((a, i) => (
                   <span key={a.path} style={{ position: "relative", display: "flex" }}>
                     {a.isImage ? (
