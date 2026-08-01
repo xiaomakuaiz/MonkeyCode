@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { b64decode, b64encode } from "./codec";
 import { initialChat, type ChatState } from "./reduce";
+import { pathBackedFile } from "./uploads";
 import { createSessionCore, type SessionCoreIO } from "./useSession";
 import type { Attachment, FileChange, Frame, LogItem } from "./types";
 
@@ -36,7 +37,10 @@ let historyCalls: { cursor: number; limit: number }[] = [];
 let outlineScript: { seq: number; offset: number; content: string; timestamp?: number }[] = [];
 /** session_call 应答脚本:kind → 结果(未登记则 reject) */
 let callScript: Record<string, unknown> = {};
-let uploaded: string[] = []; // upload_file 收到的文件名(按序)
+let uploaded: string[] = []; // 分块上传收尾(upload_finish)的文件名(按序)
+let uploadNames = new Map<number, string>(); // 在途句柄 → 文件名
+let nextUploadHandle = 1;
+let pathUploads: string[] = []; // 路径直拷(upload_file_path)收到的源路径
 /** 按文件名拒收上传(逐文件容错要可确定地只失败其中一个) */
 let uploadDeny = new Set<string>();
 let closed: string[] = []; // session_close 的会话 id
@@ -76,6 +80,9 @@ beforeEach(() => {
   outlineScript = [];
   callScript = {};
   uploaded = [];
+  uploadNames = new Map();
+  nextUploadHandle = 1;
+  pathUploads = [];
   uploadDeny = new Set();
   closed = [];
   (globalThis as Record<string, unknown>).window = {
@@ -115,14 +122,30 @@ beforeEach(() => {
             closed.push(args!.id as string);
             return Promise.resolve(null);
           }
-          if (cmd === "upload_file") {
+          // 分块上传协议:begin 发名字领句柄(门闸/拒收都在这一步,与旧
+          // upload_file 单命令语义对齐),chunk 直收,finish 记录已上传并回路径
+          if (cmd === "upload_begin") {
             const name = args!.name as string;
             const finish = () => {
               if (uploadDeny.has(name)) return Promise.reject(new Error("磁盘已满"));
-              uploaded.push(name);
-              return Promise.resolve({ path: ".monkeycode/uploads/" + name });
+              const handle = nextUploadHandle++;
+              uploadNames.set(handle, name);
+              return Promise.resolve({ handle });
             };
             return uploadGate ? uploadGate.then(finish) : finish();
+          }
+          if (cmd === "upload_chunk") return Promise.resolve(null);
+          if (cmd === "upload_finish") {
+            const name = uploadNames.get(args!.handle as number) ?? "";
+            uploaded.push(name);
+            return Promise.resolve({ path: ".monkeycode/uploads/" + name });
+          }
+          if (cmd === "upload_abort") return Promise.resolve(null);
+          if (cmd === "upload_file_path") {
+            const src = args!.src as string;
+            pathUploads.push(src);
+            const base = src.split(/[\\/]/).pop() || "file";
+            return Promise.resolve({ path: ".monkeycode/uploads/" + base });
           }
           return Promise.reject(new Error("unexpected cmd " + cmd));
         },
@@ -162,8 +185,16 @@ function stubFileReader() {
     },
   );
 }
-/** 假 File(node 环境无 File;uploadAtt 只读 size/type/name) */
-const fakeFile = (name: string, type = "image/png", size = 10) => ({ name, type, size }) as unknown as File;
+/** 假 File(node 环境无 File;uploadAtt 读 size/type/name,分块上传经 slice) */
+const fakeFile = (name: string, type = "image/png", size = 10) =>
+  ({
+    name,
+    type,
+    size,
+    slice: (a: number, b: number) => ({
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(Math.max(0, Math.min(b, size) - a))),
+    }),
+  }) as unknown as File;
 
 /** 组装核心 + 记录型 IO(所有回写落到 out,便于断言) */
 function makeCore() {
@@ -342,7 +373,7 @@ describe("本地会话核心:连接生命周期", () => {
     const { core, out } = makeCore();
     callScript.repo_file_changes = { result: [], is_git_repo: true };
     core.open("s1", { firstMessage: "首条", firstFiles: [fakeFile("slow.png")] });
-    await vi.waitFor(() => expect(trace).toContain("invoke:upload_file")); // 上传在途
+    await vi.waitFor(() => expect(trace).toContain("invoke:upload_begin")); // 上传在途
 
     core.open("s2"); // 上传完成前切走
     await settleOpen(2);
@@ -745,14 +776,27 @@ describe("本地会话核心:composer(排队与附件)", () => {
     expect(out.atts.map((a) => a.name)).toEqual(["doc.txt"]);
   });
 
-  it("附件超 20MB 直接拒收,不发上传命令", async () => {
+  it("大附件不再设上限:分块上传成功入列,大图不整读预览", async () => {
+    // 旧 20MB 上限是整包 base64 穿 IPC 的产物,分块通道下已废
     stubFileReader();
     const { core, out } = makeCore();
     await openAndSettle(core);
     await core.addFiles([fakeFile("huge.png", "image/png", 21 * 1024 * 1024)]);
-    expect(uploaded).toEqual([]);
-    expect(out.atts).toEqual([]);
-    expect(out.notices.some((n) => n.includes("上限 20MB"))).toBe(true);
+    expect(uploaded).toEqual(["huge.png"]);
+    expect(out.atts.map((a) => a.name)).toEqual(["huge.png"]);
+    // 超过预览阈值(8MB)的图不整读 dataURL(整读会撑爆 webview 内存)
+    expect(out.atts[0].preview).toBeUndefined();
+    // 21MB 按 4MB 分块:6 个 chunk 帧
+    expect(trace.filter((t) => t === "invoke:upload_chunk")).toHaveLength(6);
+  });
+
+  it("path-backed 附件(Linux 原生拖拽)走壳路径直拷,不经内容分块", async () => {
+    const { core, out } = makeCore();
+    await openAndSettle(core);
+    await core.addFiles([pathBackedFile("/home/u/数据集.csv", "数据集.csv", "text/csv")]);
+    expect(pathUploads).toEqual(["/home/u/数据集.csv"]);
+    expect(trace.filter((t) => t === "invoke:upload_begin")).toHaveLength(0);
+    expect(out.atts.map((a) => a.name)).toEqual(["数据集.csv"]);
   });
 
   it("stop 上行 user-cancel", async () => {

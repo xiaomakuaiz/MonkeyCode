@@ -12,7 +12,7 @@
 //     拼装为 SessionHandle(形状不变)。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { connect, sessionFrame, sessionHistory, sessionOutline, sessionSend, type Conn, type HistoryPage } from "./session";
-import { uploadFile, uploadFileURL } from "./uploads";
+import { nativePathOf, uploadFilePath, uploadFileStream, uploadFileURL } from "./uploads";
 import { b64decode, b64encode } from "./codec";
 import {
   answerAsk as applyAskAnswer,
@@ -40,21 +40,31 @@ export type PermAction = "allow" | "always" | "persist" | "deny";
 const LAST_SESSION_KEY = "mc.lastSession";
 export const lastSessionId = () => localStorage.getItem(LAST_SESSION_KEY);
 
-/** 单附件上传:File → base64 → 壳命令落盘工作区 uploads 目录,返回附件
- * 描述(超限/读取/上传失败抛出)。会话内 addFiles 与新建会话的首条消息
- * 附件共用。 */
+/** 预览缩略图只为小图整读 dataURL:大文件整读会撑爆 webview 内存,而
+ * 上传本身是分块的,预览缺席不该拖垮上传。 */
+const PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
+
+/** 单附件上传:落盘工作区 uploads 目录,返回附件描述(失败抛出),大小
+ * 不设限——path-backed 占位 File(Linux 原生拖拽,见 uploads.ts)由壳按
+ * 路径直拷,其余分块过 IPC。会话内 addFiles 与新建会话的首条消息附件共用。 */
 async function uploadAtt(sid: string, f: File): Promise<Attachment> {
-  if (f.size > 20 * 1024 * 1024) throw new Error(`${f.name || "文件"} 过大(上限 20MB)`);
-  const dataURL = await new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(new Error("读取文件失败"));
-    r.readAsDataURL(f);
-  });
-  const b64 = dataURL.slice(dataURL.indexOf(",") + 1);
   const isImage = f.type.startsWith("image/");
-  const { path } = await uploadFile(sid, f.name, f.type, b64);
-  return { path, isImage, name: f.name || path.split("/").pop() || "", preview: isImage ? dataURL : undefined };
+  const native = nativePathOf(f);
+  if (native) {
+    const { path } = await uploadFilePath(sid, native);
+    return { path, isImage, name: f.name || path.split("/").pop() || "" };
+  }
+  let preview: string | undefined;
+  if (isImage && f.size <= PREVIEW_MAX_BYTES) {
+    preview = await new Promise<string | undefined>((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => resolve(undefined); // 预览读不出不阻断上传
+      r.readAsDataURL(f);
+    });
+  }
+  const { path } = await uploadFileStream(sid, f);
+  return { path, isImage, name: f.name || path.split("/").pop() || "", preview };
 }
 
 /** 附件行:send() 与新建会话首条消息共用的「[图片]/[文件] 路径」约定 */

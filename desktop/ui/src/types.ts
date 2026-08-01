@@ -376,6 +376,15 @@ export interface BaizhiSyncedModel {
   owner?: string;
 }
 
+/** 同步条目并入设置表单后的结果(同步卡提示用):autoSaved=已触发自动
+ * 保存(随后内核重启+整页刷新);blocked=未自动保存的原因(dirty=表单有
+ * 未保存修改,busy=有任务在跑,不能隐式重启内核)。 */
+export interface SyncApplyResult {
+  skipped: string[];
+  autoSaved: boolean;
+  blocked?: "dirty" | "busy";
+}
+
 export interface BaizhiSyncResult {
   models: BaizhiSyncedModel[];
   mcp_servers: Record<string, Record<string, unknown>>;

@@ -795,6 +795,7 @@ export default function App() {
             onPasswordLoginMc={connectCloudWithPassword}
             onRetryMc={() => void syncCloud()}
             onDisconnectMc={() => void disconnectCloud()}
+            hasRunningTask={sessions.some((s) => s.status === "running")}
           />
         ) : view === "cloud" && cloudTask ? (
           <CloudTaskView

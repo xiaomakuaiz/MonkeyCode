@@ -23,7 +23,7 @@ import {
 } from "./host";
 import { engineCaps } from "./session";
 import { MONO } from "./components";
-import { IconBack, IconCloud, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
+import { IconBack, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
@@ -56,6 +56,7 @@ import {
   type EngineCaps,
   type HostModel,
   type McConnectionState,
+  type SyncApplyResult,
   type UpdateStatus,
 } from "./types";
 
@@ -375,6 +376,7 @@ function MonkeyCodeAccountCard({
   onRetry,
   onDisconnect,
   onSyncedModels,
+  onLogoClick,
 }: {
   connection: McConnectionState;
   baizhiLoggedIn: boolean;
@@ -385,8 +387,10 @@ function MonkeyCodeAccountCard({
   onRetry: () => void;
   onDisconnect: () => void;
   /** 同步成功回填设置表单(条目已带 source="monkeycode");
-   * 返回与既有条目撞名被跳过的名字(提示用) */
-  onSyncedModels: (models: BaizhiSyncedModel[]) => string[];
+   * 表单干净且无任务在跑时会直接自动保存(内核重启+整页刷新) */
+  onSyncedModels: (models: BaizhiSyncedModel[]) => SyncApplyResult;
+  /** 卡图标点击(自建部署配置的彩蛋解锁计数在父级,连点 6 次展示) */
+  onLogoClick?: () => void;
 }) {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<{ text: string; color: string } | null>(null);
@@ -402,10 +406,18 @@ function MonkeyCodeAccountCard({
         setSyncMsg({ text: "没有可同步的会员模型" + (notes.length ? `(${notes.join(";")})` : ""), color: "var(--err)" });
         return;
       }
-      const skipped = onSyncedModels(r.models);
-      if (skipped.length) notes.push(`与现有条目同名已跳过: ${skipped.join("、")}`);
+      const applied = onSyncedModels(r.models);
+      if (applied.skipped.length) notes.push(`与现有条目同名已跳过: ${applied.skipped.join("、")}`);
+      const count = r.models.length - applied.skipped.length;
+      const tail = applied.autoSaved
+        ? ",正在保存并重启内核…"
+        : applied.blocked === "busy"
+          ? ";有任务正在执行,空闲后请手动保存(保存会重启内核)"
+          : applied.blocked === "dirty"
+            ? ";表单有未保存的修改,请核对后手动保存"
+            : ",已切到模型页,核对后保存";
       setSyncMsg({
-        text: `已填入 ${r.models.length - skipped.length} 个会员模型` + (notes.length ? `(${notes.join(";")})` : "") + ",已切到模型页,核对后保存",
+        text: `已同步 ${count} 个会员模型` + (notes.length ? `(${notes.join(";")})` : "") + tail,
         color: "var(--ok)",
       });
     } catch (e) {
@@ -422,6 +434,21 @@ function MonkeyCodeAccountCard({
   const [pwPassword, setPwPassword] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
   const [pwErr, setPwErr] = useState("");
+  // 连接成功即自动同步会员模型(与百智云「登录即同步」对齐,免手动点)。
+  // 只认**本卡发起的连接**的升起沿:启动时恢复的既连状态、侧栏重试都不
+  // 触发——自动同步会把设置表单打脏,不能在用户没动作时凭空发生。
+  // 按钮保留:会员升级解锁/服务端上新下架/误删恢复都发生在已登录态,
+  // 没有"登录"触发点,只能手动重同步。
+  const autoSyncOnConnect = useRef(false);
+  useEffect(() => {
+    if (connection.phase === "connected" && autoSyncOnConnect.current) {
+      autoSyncOnConnect.current = false;
+      void doSyncModels();
+    }
+    if (connection.phase === "error") autoSyncOnConnect.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection.phase]);
+
   const doPasswordLogin = async () => {
     if (!pwEmail.trim() || !pwPassword) {
       setPwErr("请输入邮箱和密码");
@@ -429,9 +456,11 @@ function MonkeyCodeAccountCard({
     }
     setPwErr("");
     setPwBusy(true);
+    autoSyncOnConnect.current = true;
     try {
       const err = await onPasswordLogin(pwEmail, pwPassword).catch((e) => (e instanceof Error ? e.message : String(e)));
       if (err) {
+        autoSyncOnConnect.current = false;
         setPwErr(err);
       } else {
         // 成功收起并清空(密码不留内存态);connected 后入口整体消失
@@ -471,11 +500,11 @@ function MonkeyCodeAccountCard({
   return (
     <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--accBg)", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
-          <IconCloud size={16} color="var(--accTx)" />
+        <div onClick={onLogoClick} style={{ flex: "none", userSelect: "none", display: "flex" }}>
+          <img src={logoUrl} alt="" draggable={false} style={{ width: 30, height: 30, borderRadius: 8 }} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-          <span style={{ fontWeight: 700, fontSize: 13 }}>MonkeyCode 云端任务</span>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>MonkeyCode 账号</span>
           <span className="ellipsis" style={{ fontSize: 11.5, color: "var(--t5)", fontFamily: MONO }}>{connection.host}</span>
         </div>
         <span style={{ flex: 1 }} />
@@ -517,7 +546,10 @@ function MonkeyCodeAccountCard({
           <button
             className="hv-acc"
             disabled={!canConnect}
-            onClick={onConnect}
+            onClick={() => {
+              autoSyncOnConnect.current = true;
+              onConnect();
+            }}
             style={{
               ...whiteBtn,
               flex: "none",
@@ -615,6 +647,7 @@ export function SettingsView({
   onPasswordLoginMc,
   onRetryMc,
   onDisconnectMc,
+  hasRunningTask,
 }: {
   onClose: () => void;
   hostVersion: string | null;
@@ -629,6 +662,9 @@ export function SettingsView({
   onPasswordLoginMc: (email: string, password: string) => Promise<string | null>;
   onRetryMc: () => void;
   onDisconnectMc: () => void;
+  /** 有本地会话在跑(status==="running"):同步后不自动保存重启内核,
+   * 隐式踹掉运行中的轮次不可接受;回退保存条由用户择机保存 */
+  hasRunningTask?: boolean;
 }) {
   const desktop = inDesktopShell();
   const [active, setActive] = useState<SectionKey>("account");
@@ -643,6 +679,27 @@ export function SettingsView({
   const [baizhiMcpOpen, setBaizhiMcpOpen] = useState(true); // 百智云 MCP 组(默认展开)
   const [kernelEnv, setKernelEnv] = useState(""); // 内核运行环境:"" 本机 / "wsl:<发行版>"
   const [mcBaseUrl, setMcBaseUrl] = useState(""); // MonkeyCode 服务地址("" = 官方云;重启应用生效)
+  // 自建部署配置默认隐藏(彩蛋:连点 MonkeyCode 卡图标 6 次解锁,解锁态
+  // 持久;已配置过任一地址项的用户恒可见——否则升级后自己的配置凭空消失)
+  const [mcServerCfgUnlocked, setMcServerCfgUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem("mc.serverConfigUnlocked") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const mcLogoClicks = useRef(0);
+  const onMcLogoClick = () => {
+    mcLogoClicks.current += 1;
+    if (mcLogoClicks.current >= 6) {
+      setMcServerCfgUnlocked(true);
+      try {
+        localStorage.setItem("mc.serverConfigUnlocked", "1");
+      } catch {
+        // 存储不可写时本次会话仍解锁,不值得外显
+      }
+    }
+  };
   const [mcBasicAuth, setMcBasicAuth] = useState(""); // 测试环境反代 Basic Auth("user:pass";重启应用生效)
   const [mcLlmBaseUrl, setMcLlmBaseUrl] = useState(""); // 模型请求地址("" = {服务地址}/v1)
   const [wslDistros, setWslDistros] = useState<string[] | null>(null); // WSL 发行版列表(null=未加载)
@@ -736,7 +793,11 @@ export function SettingsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [desktop, loaded, models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl],
   );
+  // dirty 的 ref 镜像:同步回调要在**合并前**读当下值(合并后恒脏),
+  // 闭包里的 dirty 会滞后一拍
+  const dirtyRef = useRef(false);
   useEffect(() => {
+    dirtyRef.current = dirty;
     onDirtyChange?.(dirty);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty]);
@@ -768,10 +829,12 @@ export function SettingsView({
     setMcps((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
   // 同步条目并入表单(百智云/MonkeyCode 共用;整组替换 + 跨组撞名先到先得,
-  // 语义见 replaceSourceGroup)。导入即进脏态,保存条浮现;自动切到模型页
-  // 供核对。返回与既有条目撞名被跳过的名字(调用方外显提示)。
-  const applySyncedModels = (syncedModels: BaizhiSyncedModel[], source: string): string[] => {
-    if (!syncedModels.length) return []; // 空集合不视为"清空该组"
+  // 语义见 replaceSourceGroup)。返回算出的下一态(自动保存要显式传参)。
+  const mergeSyncedModels = (
+    syncedModels: BaizhiSyncedModel[],
+    source: string,
+  ): { next: HostModel[]; di: number; skipped: string[] } | null => {
+    if (!syncedModels.length) return null; // 空集合不视为"清空该组"
     const defaultName = models[defaultIdx]?.name?.trim() ?? "";
     const synced: HostModel[] = syncedModels.map((sm) => ({
       name: sm.name,
@@ -797,27 +860,53 @@ export function SettingsView({
     // default 落它头上等于没有默认)
     let di = next.findIndex((m) => m.name.trim() === defaultName);
     if (di < 0 || next[di]?.locked) di = next.findIndex((m) => !m.locked);
-    setDefaultIdx(di >= 0 ? di : 0);
+    di = di >= 0 ? di : 0;
+    setDefaultIdx(di);
     setAdvOpen({});
     setExpanded(null);
     (source === SOURCE_MONKEYCODE ? setMcModelsOpen : setBaizhiOpen)(true);
     setActive("models"); // 导入后直接看结果
-    return skipped;
+    return { next, di, skipped };
   };
 
-  const applySynced = (r: BaizhiSyncResult): string[] => {
+  // 自动保存决策:同步前表单干净且无任务在跑 → 直接走保存主路径(内核
+  // 重启+整页刷新),免手动点保存;否则回退保存条,blocked 给卡片提示原因。
+  // wasDirty 必须在合并前经 ref 读(合并后恒脏)。
+  const autoSaveDecision = (wasDirty: boolean): { auto: boolean; blocked?: "dirty" | "busy" } => {
+    if (wasDirty) return { auto: false, blocked: "dirty" };
+    if (hasRunningTask) return { auto: false, blocked: "busy" };
+    return { auto: true };
+  };
+
+  const applySyncedModels = (syncedModels: BaizhiSyncedModel[], source: string): SyncApplyResult => {
+    const wasDirty = dirtyRef.current;
+    const merged = mergeSyncedModels(syncedModels, source);
+    if (!merged) return { skipped: [], autoSaved: false };
+    const { auto, blocked } = autoSaveDecision(wasDirty);
+    if (auto) void performSave(merged.next, merged.di, mcps);
+    return { skipped: merged.skipped, autoSaved: auto, blocked };
+  };
+
+  const applySynced = (r: BaizhiSyncResult): SyncApplyResult => {
     // 百智云同步即全量导入(不再逐条挑选);跨组同名先到先得,跳过名单
     // 返回给同步卡外显(想改用百智云通道:删除原条目后重同步)
-    const skipped = applySyncedModels(r.models, SOURCE_BAIZHI);
+    const wasDirty = dirtyRef.current;
+    const merged = mergeSyncedModels(r.models, SOURCE_BAIZHI);
     // MCP:本次无条目(如网关未开通)则不触碰(空集不清组,对齐模型语义);
     // 同步条目已带 source=baizhi
     const syncedMcps = serversToMcps(r.mcp_servers);
+    let nextMcps = mcps;
     if (syncedMcps.length) {
-      setMcps((cur) => replaceSourceGroup(cur, syncedMcps, SOURCE_BAIZHI));
+      nextMcps = replaceSourceGroup(mcps, syncedMcps, SOURCE_BAIZHI);
+      setMcps(nextMcps);
       setMcpExpanded(null);
     }
     setActive("models"); // 只导入 MCP 时也切过去看结果
-    return skipped;
+    if (!merged && nextMcps === mcps) return { skipped: [], autoSaved: false };
+    const { auto, blocked } = autoSaveDecision(wasDirty);
+    // 模型与 MCP 合成一次保存,不许两连保存(两次内核重启)
+    if (auto) void performSave(merged?.next ?? models, merged?.di ?? defaultIdx, nextMcps);
+    return { skipped: merged?.skipped ?? [], autoSaved: auto, blocked };
   };
 
   // 断开 MonkeyCode:①尽力删除本机代理 Key(须在清会话前;断网失败不阻断
@@ -871,11 +960,14 @@ export function SettingsView({
     }
   };
 
-  const save = async () => {
+  // 保存例程参数化:save() 用当前表单态;同步自动保存把刚算出的下一态
+  // **显式传参**(setState 是异步批处理,set 完立刻读 state 拿到的还是旧值)
+  const performSave = async (ms: HostModel[], di: number, mcArr: McpEntry[]) => {
+    if (saving) return;
     // UX 前置校验;权威校验在内核 LoadModels(重复名/provider 白名单等)。
     // MonkeyCode 会员条目不校验接口地址/API Key:凭据不经表单与 config.json
     // 流转(条目里是空占位),物化时由壳从代理 Key 文件注入
-    for (const m of models) {
+    for (const m of ms) {
       const managed = m.source === SOURCE_MONKEYCODE;
       if (!m.name.trim() || !m.model.trim() || (!managed && (!m.base_url.trim() || !m.api_key.trim()))) {
         setErr(`模型「${m.name.trim() || "未命名"}」信息不完整(需名称/接口地址/API Key/模型标识)`);
@@ -886,8 +978,8 @@ export function SettingsView({
     // 名称是引擎寻址键(settings.models 以别名为键,会话/记忆按名引用),
     // 同名条目物化时静默互相覆盖,必须拦下。载入自愈 + 同步先到先得之后,
     // 走到这里的重复只可能来自本次手工编辑;报来源帮用户定位是哪两条
-    const byName = new Map<string, typeof models>();
-    for (const m of models) {
+    const byName = new Map<string, HostModel[]>();
+    for (const m of ms) {
       const n = m.name.trim();
       byName.set(n, [...(byName.get(n) ?? []), m]);
     }
@@ -900,7 +992,7 @@ export function SettingsView({
     }
     // 内核在上下文占用达 90% 时自动压缩,要求 max_output < context_window
     // 的 10%,否则接近阈值的请求会因输入+输出超模型上限被服务端拒绝
-    for (const m of models) {
+    for (const m of ms) {
       const cw = m.context_window ?? 200000;
       if (m.max_output && m.max_output >= cw * 0.1) {
         setErr(
@@ -910,9 +1002,10 @@ export function SettingsView({
         return;
       }
     }
-    const invalidMcp = mcpNameErrors.findIndex(Boolean);
+    const mcpErrs = validateMcpNames(mcArr);
+    const invalidMcp = mcpErrs.findIndex(Boolean);
     if (invalidMcp >= 0) {
-      setErr(mcpNameErrors[invalidMcp] ?? "MCP 名称无效");
+      setErr(mcpErrs[invalidMcp] ?? "MCP 名称无效");
       setActive("mcp");
       setMcpExpanded(invalidMcp);
       return;
@@ -920,7 +1013,7 @@ export function SettingsView({
     setErr("");
     setSaving(true);
     try {
-      await saveHostConfig(payloadOf(models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl));
+      await saveHostConfig(payloadOf(ms, di, mcArr, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl));
       // 壳已重启引擎:整页刷新复位所有状态并重连(保持"保存中"直到卸载)
       location.reload();
     } catch (e) {
@@ -928,6 +1021,7 @@ export function SettingsView({
       setSaving(false);
     }
   };
+  const save = () => performSave(models, defaultIdx, mcps);
 
   const addBtn = (label: string, onClick: () => void) => (
     <button className="hv" onClick={onClick} style={{ ...whiteBtn, height: 24, padding: "0 9px", fontSize: 11.5, gap: 4 }}>
@@ -1500,10 +1594,12 @@ export function SettingsView({
           onRetry={onRetryMc}
           onDisconnect={() => void disconnectMcWithCleanup()}
           onSyncedModels={(ms) => applySyncedModels(ms, SOURCE_MONKEYCODE)}
+          onLogoClick={onMcLogoClick}
         />
         {/* 自建/私有化部署的服务地址(桌面壳在启动时构造云端服务,故重启生效;
-            浏览器模式配置只读,与模型页同门禁) */}
-        {desktop && (
+            浏览器模式配置只读,与模型页同门禁)。默认隐藏:连点上方卡图标
+            6 次解锁;已配置过任一项恒可见 */}
+        {desktop && (mcServerCfgUnlocked || !!(mcBaseUrl.trim() || mcBasicAuth.trim() || mcLlmBaseUrl.trim())) && (
           <div className="card card-lg" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 240px", gap: 12 }}>
               <Field label="服务地址(自建部署)">

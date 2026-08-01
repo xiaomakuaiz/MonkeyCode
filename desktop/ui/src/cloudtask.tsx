@@ -108,6 +108,7 @@ export function CloudTaskView({
   };
   useNativeFileDrop({
     enabled: !ended,
+    wantContent: true, // 云端附件要上行对象存储,必须拿字节(整包 20MB 限)
     onDragging: setDragging,
     onFiles: (files) => h.addFiles(files),
     onError: (msg) => h.notify("⚠ 附件上传失败: " + msg),

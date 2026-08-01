@@ -208,11 +208,9 @@ export function NewTaskView({
   const addFiles = (files: File[]) => {
     setAttErr("");
     for (const f of files) {
-      if (f.size > 20 * 1024 * 1024) {
-        setAttErr(`${f.name || "文件"} 过大(上限 20MB)`);
-        continue;
-      }
-      if (f.type.startsWith("image/")) {
+      // 大小不设限(上传经分块/路径直拷,见 uploads.ts);预览只为小图整读,
+      // 大图整读 dataURL 会撑爆 webview 内存
+      if (f.type.startsWith("image/") && f.size > 0 && f.size <= 8 * 1024 * 1024) {
         const r = new FileReader();
         r.onload = () => setAtts((a) => [...a, { file: f, preview: r.result as string }]);
         r.readAsDataURL(f);
