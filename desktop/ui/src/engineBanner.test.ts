@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ENGINE_MAX_RETRY, engineBannerView, engineCardView, railDotView } from "./engineBanner";
+import { ENGINE_MAX_RETRY, engineBannerView, engineCardView, engineTransition, railDotView } from "./engineBanner";
 import type { EngineStatus } from "./types";
 
 const crashed = (retry_in_ms: number | null, attempt = 1): EngineStatus => ({
@@ -116,5 +116,45 @@ describe("railDotView", () => {
   it("快照未到(null)不误报,按会话连接展示", () => {
     expect(railDotView(null, true, "").color).toBe("var(--ok)");
     expect(railDotView(null, false, "").color).toBe("var(--t6)");
+  });
+});
+
+describe("engineTransition(引擎重启后的免刷新重连触发)", () => {
+  it("冷启动直接就绪不重连(没掉过就没有失效句柄要救)", () => {
+    const t = engineTransition(false, "ready");
+    expect(t.reconnect).toBe(false);
+    expect(t.wasDown).toBe(false);
+  });
+
+  it("掉过再就绪才重连,且只重连一次", () => {
+    // 保存/手动重启/崩溃自愈都先经 starting
+    const down = engineTransition(false, "starting");
+    expect(down.wasDown).toBe(true);
+    expect(down.reconnect).toBe(false);
+    const back = engineTransition(down.wasDown, "ready");
+    expect(back.reconnect).toBe(true);
+    expect(back.wasDown).toBe(false); // 记忆清零
+    // 紧接着又来一次 ready(多客户端/补拉快照)不该重复重连
+    expect(engineTransition(back.wasDown, "ready").reconnect).toBe(false);
+  });
+
+  it("崩溃/失败都算掉线,退避期间加载页面也能记住", () => {
+    expect(engineTransition(false, "crashed").wasDown).toBe(true);
+    expect(engineTransition(false, "failed").wasDown).toBe(true);
+    // 页面在退避窗口里加载:补拉的快照是 crashed,引擎回来时照样重连
+    expect(engineTransition(engineTransition(false, "crashed").wasDown, "ready").reconnect).toBe(true);
+  });
+
+  it("stopped 不记也不清:冷启动前的它不该触发重连,也不该抹掉已记的掉线", () => {
+    expect(engineTransition(false, "stopped").wasDown).toBe(false);
+    expect(engineTransition(true, "stopped").wasDown).toBe(true);
+    expect(engineTransition(false, "stopped").reconnect).toBe(false);
+  });
+
+  it("重启按钮忙态在终态解除(失败也要解,否则永远卡在重启中)", () => {
+    expect(engineTransition(true, "ready").clearRestarting).toBe(true);
+    expect(engineTransition(true, "failed").clearRestarting).toBe(true);
+    expect(engineTransition(true, "starting").clearRestarting).toBe(false);
+    expect(engineTransition(true, "crashed").clearRestarting).toBe(false);
   });
 });

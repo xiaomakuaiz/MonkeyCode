@@ -100,8 +100,9 @@ export async function getHostConfig(): Promise<HostConfig | null> {
   return invoke<HostConfig>("get_config");
 }
 
-/** 保存应用配置:壳写盘(0600)并重启引擎;resolve 后调用方整页刷新
- * (location.reload())以复位所有状态并重连。 */
+/** 保存应用配置:壳写盘(0600)并重启引擎;引擎 Ready 后 App 经
+ * engine-status 统一路径免刷新重连(重拉模型/会话 + 重开当前会话),
+ * 调用方只需把自己的表单态重建为最新盘态。 */
 export async function saveHostConfig(config: HostConfig): Promise<void> {
   if (!tauri()?.core?.invoke) throw new Error("浏览器模式下配置只读,请在桌面应用中修改");
   await invoke("save_config", { config });

@@ -150,3 +150,34 @@ export function railDotView(engine: EngineStatus | null, connected: boolean, ses
         : { color: "var(--t6)", glow: null, pulse: false, title: sessionStatus };
   }
 }
+
+/** 引擎相位变化 → UI 该做什么(重连/复位忙态)。 */
+export interface EngineTransition {
+  /** 下一轮的"引擎曾经不可用"记忆 */
+  wasDown: boolean;
+  /** 引擎重新就绪且此前掉过:重拉模型/会话并重开当前会话 */
+  reconnect: boolean;
+  /** 重启按钮的忙态可以解除了(终态:就绪或失败) */
+  clearRestarting: boolean;
+}
+
+/**
+ * 引擎重启后壳内会话表是全新的,UI 手里的句柄已失效——早期靠整页刷新复位,
+ * 现在改为"Ready 即重连",这套记忆语义就成了唯一的触发依据,单独钉住:
+ *
+ * - **不能只在收到 starting/crashed 时记 down**:页面可能恰好在退避窗口里
+ *   加载(自动重启途中切回窗口、上一次刷新落在崩溃里),快照与事件必须走
+ *   同一条判定,否则引擎回来时不重连,UI 攥着失效句柄发不出消息。
+ * - **stopped 既不记 down 也不清 down**:它只在冷启动前与重启中途出现,
+ *   记它会让每次冷启动都白跑一轮重连,清它会抹掉退避窗口里已记下的 down。
+ * - **ready 清 down**:重连已经做过,下一次 ready 不该重复跑。
+ */
+export function engineTransition(wasDown: boolean, phase: EngineStatus["phase"]): EngineTransition {
+  const ready = phase === "ready";
+  return {
+    wasDown: ready ? false : phase === "stopped" ? wasDown : true,
+    reconnect: ready && wasDown,
+    // 失败也要解除忙态:否则按钮永远停在"重启中…",反把失败横幅遮住
+    clearRestarting: ready || phase === "failed",
+  };
+}

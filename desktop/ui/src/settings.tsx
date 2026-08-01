@@ -751,34 +751,41 @@ export function SettingsView({
     mcLlmBaseUrl: string;
   } | null>(null);
 
+  // 从磁盘重载表单(挂载 / 保存后 / 断开清理后共用):归一 + baseline/
+  // snapshot 重建 + 索引态复位。免整页刷新后它就是"保存完成"的收尾——
+  // 表单回到干净态,保存条消失即保存成功的反馈
+  const loadConfigIntoForm = async () => {
+    const cfg = await getHostConfig();
+    // 载入归一:同名存量收敛(否则保存被重名校验永久拦死)+ 按来源
+    // 分组排序(与选择器 tab 序一致);defaultIdx 在归一后的数组上定位
+    const ms = sortModelsBySource(dedupeModelsByName(cfg?.models ?? []));
+    const di = Math.max(0, ms.findIndex((m) => m.default));
+    const mc = serversToMcps(cfg?.mcp_servers ?? {});
+    const ke = cfg?.kernel_env ?? "";
+    const mu = cfg?.mc_base_url ?? "";
+    const mb = cfg?.mc_basic_auth ?? "";
+    const ml = cfg?.mc_llm_base_url ?? "";
+    setModels(ms);
+    setDefaultIdx(di);
+    setMcps(mc);
+    setKernelEnv(ke);
+    setMcBaseUrl(mu);
+    setMcBasicAuth(mb);
+    setMcLlmBaseUrl(ml);
+    setExpanded(null);
+    setMcpExpanded(null);
+    setAdvOpen({}); // 索引记忆随条目重排作废,一并复位
+    snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke, mcBaseUrl: mu, mcBasicAuth: mb, mcLlmBaseUrl: ml };
+    baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke, mu, mb, ml));
+    setLoaded(true);
+  };
+
   useEffect(() => {
     if (!desktop) {
       setLoaded(true);
       return;
     }
-    getHostConfig()
-      .then((cfg) => {
-        // 载入归一:同名存量收敛(否则保存被重名校验永久拦死)+ 按来源
-        // 分组排序(与选择器 tab 序一致);defaultIdx 在归一后的数组上定位
-        const ms = sortModelsBySource(dedupeModelsByName(cfg?.models ?? []));
-        const di = Math.max(0, ms.findIndex((m) => m.default));
-        const mc = serversToMcps(cfg?.mcp_servers ?? {});
-        const ke = cfg?.kernel_env ?? "";
-        const mu = cfg?.mc_base_url ?? "";
-        const mb = cfg?.mc_basic_auth ?? "";
-        const ml = cfg?.mc_llm_base_url ?? "";
-        setModels(ms);
-        setDefaultIdx(di);
-        setMcps(mc);
-        setKernelEnv(ke);
-        setMcBaseUrl(mu);
-        setMcBasicAuth(mb);
-        setMcLlmBaseUrl(ml);
-        snapshot.current = { models: ms, defaultIdx: di, mcps: mc, kernelEnv: ke, mcBaseUrl: mu, mcBasicAuth: mb, mcLlmBaseUrl: ml };
-        baseline.current = JSON.stringify(payloadOf(ms, di, mc, ke, mu, mb, ml));
-        setLoaded(true);
-      })
-      .catch((e) => setErr("读取配置失败: " + (e instanceof Error ? e.message : String(e))));
+    loadConfigIntoForm().catch((e) => setErr("读取配置失败: " + (e instanceof Error ? e.message : String(e))));
     void engineCaps().then(setCaps).catch(() => {});
     // 运行环境下拉的发行版列表(读注册表,失败/非 Windows 返回空)
     if (isWindowsShell()) void listWslDistros().then(setWslDistros);
@@ -952,7 +959,10 @@ export function SettingsView({
     if (next.length && !next.some((m) => m.default)) next = next.map((m, i) => (i === 0 ? { ...m, default: true } : m));
     try {
       await saveHostConfig({ ...cfg, models: next });
-      location.reload(); // 壳已重启引擎:整页刷新复位所有状态(与保存流程同款)
+      // 壳已重启引擎,App 侧经 engine-status Ready 统一重连(免整页刷新);
+      // 表单从盘态重载,会员条目消失即断开完成的反馈
+      await loadConfigIntoForm();
+      if (warn) setErr(warn);
     } catch (e) {
       setErr(
         `${warn ? warn + ";" : ""}移除会员模型配置失败: ${e instanceof Error ? e.message : String(e)}(可在模型页手动删除后保存)`,
@@ -1014,8 +1024,11 @@ export function SettingsView({
     setSaving(true);
     try {
       await saveHostConfig(payloadOf(ms, di, mcArr, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl));
-      // 壳已重启引擎:整页刷新复位所有状态并重连(保持"保存中"直到卸载)
-      location.reload();
+      // 壳已重启引擎,App 收到 engine-status Ready 会自动重拉模型/会话并
+      // 重开当前会话(免整页刷新);这里只需把表单重建为最新盘态,保存条
+      // 随 dirty 归零消失即"保存成功"的反馈
+      await loadConfigIntoForm();
+      setSaving(false);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setSaving(false);
