@@ -69,35 +69,43 @@ describe("replaceSourceGroup", () => {
   it("replaces only the target source group and keeps other groups intact", () => {
     const cur = [entry("手工"), entry("bz-old", SOURCE_BAIZHI), entry("mc-old", SOURCE_MONKEYCODE)];
     // 同步 baizhi:mc 组与手工条目不动,旧 baizhi 条目被本次集合整组替换
-    const afterBz = replaceSourceGroup(cur, [entry("bz-new", SOURCE_BAIZHI)], SOURCE_BAIZHI, false);
+    const afterBz = replaceSourceGroup(cur, [entry("bz-new", SOURCE_BAIZHI)], SOURCE_BAIZHI);
     expect(afterBz.map((m) => m.name)).toEqual(["手工", "mc-old", "bz-new"]);
     // 同步 monkeycode:baizhi 组与手工条目不动
-    const afterMc = replaceSourceGroup(cur, [entry("mc-new", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE, true);
+    const afterMc = replaceSourceGroup(cur, [entry("mc-new", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE);
     expect(afterMc.map((m) => m.name)).toEqual(["手工", "bz-old", "mc-new"]);
   });
 
-  it("honors keepManualOnCollision for entries outside the group", () => {
+  it("跨组撞名先到先得:同名非本组条目保留,同步条目跳过(不静默换通道)", () => {
     const cur = [entry("撞名"), entry("百智撞名", SOURCE_BAIZHI)];
-    // keep=true:同名非本组条目保留,同步条目被跳过(百智条目对 monkeycode 组也算"非本组")
+    // 会员同步:手工条目与百智条目对 monkeycode 组都算"非本组",同名让位
     const kept = replaceSourceGroup(
       cur,
       [entry("撞名", SOURCE_MONKEYCODE), entry("百智撞名", SOURCE_MONKEYCODE), entry("新条目", SOURCE_MONKEYCODE)],
       SOURCE_MONKEYCODE,
-      true,
     );
     expect(kept.map((m) => [m.name, m.source])).toEqual([
       ["撞名", undefined],
       ["百智撞名", SOURCE_BAIZHI],
       ["新条目", SOURCE_MONKEYCODE],
     ]);
-    // keep=false:同名条目被同步值覆盖并归组
-    const overwritten = replaceSourceGroup(cur, [entry("撞名", SOURCE_BAIZHI)], SOURCE_BAIZHI, false);
-    expect(overwritten.map((m) => [m.name, m.source])).toEqual([["撞名", SOURCE_BAIZHI]]);
+    // 百智云同步同规则:同名会员条目不被吸收归组——此前 keep=false 的吸收
+    // 语义依据是"经逐条勾选确认",挑选面板删除、登录即自动同步后,吸收
+    // 等于静默把会员代理通道换成网关直连(计费主体都变了),必须让位
+    const bz = replaceSourceGroup(
+      [entry("deepseek", SOURCE_MONKEYCODE)],
+      [entry("deepseek", SOURCE_BAIZHI), entry("claude", SOURCE_BAIZHI)],
+      SOURCE_BAIZHI,
+    );
+    expect(bz.map((m) => [m.name, m.source])).toEqual([
+      ["deepseek", SOURCE_MONKEYCODE],
+      ["claude", SOURCE_BAIZHI],
+    ]);
   });
 
   it("removes stale synced entries when the new batch omits them", () => {
     const cur = [entry("a", SOURCE_MONKEYCODE), entry("b", SOURCE_MONKEYCODE)];
-    const next = replaceSourceGroup(cur, [entry("a", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE, true);
+    const next = replaceSourceGroup(cur, [entry("a", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE);
     expect(next.map((m) => m.name)).toEqual(["a"]);
   });
 });

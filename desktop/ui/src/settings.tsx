@@ -767,10 +767,10 @@ export function SettingsView({
   const patchMcp = (i: number, patch: Partial<McpEntry>) =>
     setMcps((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
-  // 同步条目并入表单(百智云/MonkeyCode 共用;整组替换语义见
-  // replaceSourceGroup)。导入即进脏态,保存条浮现;自动切到模型页供核对。
-  // 返回与既有条目撞名被跳过的名字(keepManual 时提示用)。
-  const applySyncedModels = (syncedModels: BaizhiSyncedModel[], source: string, keepManual: boolean): string[] => {
+  // 同步条目并入表单(百智云/MonkeyCode 共用;整组替换 + 跨组撞名先到先得,
+  // 语义见 replaceSourceGroup)。导入即进脏态,保存条浮现;自动切到模型页
+  // 供核对。返回与既有条目撞名被跳过的名字(调用方外显提示)。
+  const applySyncedModels = (syncedModels: BaizhiSyncedModel[], source: string): string[] => {
     if (!syncedModels.length) return []; // 空集合不视为"清空该组"
     const defaultName = models[defaultIdx]?.name?.trim() ?? "";
     const synced: HostModel[] = syncedModels.map((sm) => ({
@@ -788,9 +788,9 @@ export function SettingsView({
       owner: sm.owner,
     }));
     const outside = new Set(models.filter((m) => m.source !== source && m.name.trim()).map((m) => m.name.trim()));
-    const skipped = keepManual ? synced.map((m) => m.name.trim()).filter((n) => outside.has(n)) : [];
+    const skipped = synced.map((m) => m.name.trim()).filter((n) => outside.has(n));
     // 整组替换后同样按来源排序:会员组不落在列表尾部,与载入/选择器一致
-    const next = sortModelsBySource(replaceSourceGroup(models, synced, source, keepManual));
+    const next = sortModelsBySource(replaceSourceGroup(models, synced, source));
     setModels(next);
     // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位;
     // 降档重同步后原默认可能变锁定 → 挪到首个未锁条目(锁定条目不物化,
@@ -805,17 +805,19 @@ export function SettingsView({
     return skipped;
   };
 
-  const applySynced = (r: BaizhiSyncResult) => {
-    // 百智云同步即全量导入(不再逐条挑选),同名条目覆盖归组(keep=false)
-    applySyncedModels(r.models, SOURCE_BAIZHI, false);
+  const applySynced = (r: BaizhiSyncResult): string[] => {
+    // 百智云同步即全量导入(不再逐条挑选);跨组同名先到先得,跳过名单
+    // 返回给同步卡外显(想改用百智云通道:删除原条目后重同步)
+    const skipped = applySyncedModels(r.models, SOURCE_BAIZHI);
     // MCP:本次无条目(如网关未开通)则不触碰(空集不清组,对齐模型语义);
     // 同步条目已带 source=baizhi
     const syncedMcps = serversToMcps(r.mcp_servers);
     if (syncedMcps.length) {
-      setMcps((cur) => replaceSourceGroup(cur, syncedMcps, SOURCE_BAIZHI, true));
+      setMcps((cur) => replaceSourceGroup(cur, syncedMcps, SOURCE_BAIZHI));
       setMcpExpanded(null);
     }
     setActive("models"); // 只导入 MCP 时也切过去看结果
+    return skipped;
   };
 
   // 断开 MonkeyCode:①尽力删除本机代理 Key(须在清会话前;断网失败不阻断
@@ -881,14 +883,20 @@ export function SettingsView({
         return;
       }
     }
-    const names = new Set<string>();
+    // 名称是引擎寻址键(settings.models 以别名为键,会话/记忆按名引用),
+    // 同名条目物化时静默互相覆盖,必须拦下。载入自愈 + 同步先到先得之后,
+    // 走到这里的重复只可能来自本次手工编辑;报来源帮用户定位是哪两条
+    const byName = new Map<string, typeof models>();
     for (const m of models) {
-      if (names.has(m.name.trim())) {
-        setErr(`模型名称重复: ${m.name.trim()}`);
+      const n = m.name.trim();
+      byName.set(n, [...(byName.get(n) ?? []), m]);
+    }
+    for (const [n, list] of byName) {
+      if (list.length > 1) {
+        setErr(`模型名称重复: ${n}(${list.map((m) => modelSourceLabel(m.source)).join("、")}各一条;名称是模型的唯一标识,请删除或改名其一)`);
         setActive("models");
         return;
       }
-      names.add(m.name.trim());
     }
     // 内核在上下文占用达 90% 时自动压缩,要求 max_output < context_window
     // 的 10%,否则接近阈值的请求会因输入+输出超模型上限被服务端拒绝
@@ -1491,7 +1499,7 @@ export function SettingsView({
           onPasswordLogin={onPasswordLoginMc}
           onRetry={onRetryMc}
           onDisconnect={() => void disconnectMcWithCleanup()}
-          onSyncedModels={(ms) => applySyncedModels(ms, SOURCE_MONKEYCODE, true)}
+          onSyncedModels={(ms) => applySyncedModels(ms, SOURCE_MONKEYCODE)}
         />
         {/* 自建/私有化部署的服务地址(桌面壳在启动时构造云端服务,故重启生效;
             浏览器模式配置只读,与模型页同门禁) */}

@@ -137,23 +137,22 @@ export const emptyMcp = (): McpEntry => ({ name: "", type: "http", url: "", comm
 
 /** 同步来源组整组替换(模型与 MCP、百智云与 MonkeyCode 共用语义):
  * 非本组条目(手工条目与其他 source 组)原样保留,本组(source 匹配)替换为
- * 本次同步集合——取消勾选/下架的旧同步条目随之移除(重同步清理)。
- * keepManualOnCollision:同名非本组条目是否保留——全量导入(MCP、MonkeyCode
- * 会员模型)用户无法逐条排除,不能静默吞掉既有配置(一旦被覆盖归组,下次
- * 重同步会连带删除);百智云模型导入经逐条勾选确认,同名条目按用户选择
- * 被同步值覆盖并归组。 */
+ * 本次同步集合——下架的旧同步条目随之移除(重同步清理)。
+ * 跨组撞名一律先到先得:名称是引擎寻址键(会话/记忆按名引用),不同来源的
+ * 同名条目是不同通道甚至不同计费主体,同步是登录后自动发生的,绝不静默
+ * 换通道;后来者跳过,由调用方外显跳过名单(想换通道:删除原条目再重同步)。
+ * 先到先得也保证名字跨多次同步稳定,不随对面通道上下架漂移。 */
 export function replaceSourceGroup<T extends { name: string; source?: string }>(
   cur: T[],
   synced: T[],
   source: string,
-  keepManualOnCollision: boolean,
 ): T[] {
   const kept = cur.filter((m) => m.name.trim() && m.source !== source);
   const byName = new Map(kept.map((m) => [m.name.trim(), m]));
   const keptNames = new Set(byName.keys());
   for (const e of synced) {
     const name = e.name.trim();
-    if (keepManualOnCollision && keptNames.has(name)) continue;
+    if (keptNames.has(name)) continue;
     byName.set(name, e);
   }
   return [...byName.values()];

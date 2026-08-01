@@ -54,7 +54,8 @@ export function BaizhiCard({
   statusErr: string;
   /** 让宿主重新查询登录态(登录/登出/扫码成功后调用) */
   refreshStatus: () => Promise<void>;
-  onSynced: (r: BaizhiSyncResult) => void;
+  /** 同步结果并入设置表单;返回跨组撞名被跳过的名字(外显提示用) */
+  onSynced: (r: BaizhiSyncResult) => string[];
   knownKeys: () => string[];
 }) {
   const [mode, setMode] = useState<"wechat" | "phone">("wechat");
@@ -197,11 +198,13 @@ export function BaizhiCard({
         setSyncMsg({ text: "没有拉取到可用的模型" + (r.notes?.length ? `(${r.notes.join(";")})` : ""), color: "var(--err)" });
         return;
       }
-      onSynced(r);
-      const parts = [`已填入 ${r.models.length} 个模型`];
+      const skipped = onSynced(r);
+      const parts = [`已填入 ${r.models.length - skipped.length} 个模型`];
       if (Object.keys(r.mcp_servers ?? {}).length) parts.push("MCP 条目");
       if (r.key_created) parts.push(`已在网关新建密钥「${r.key_name || "MonkeyCode"}」`);
       parts.push("已切到模型页,核对后保存");
+      // 跨组撞名先到先得:跳过必须外显,否则"少了几个模型"查无对证
+      if (skipped.length) parts.push(`与现有条目同名已跳过: ${skipped.join("、")}(想改用百智云通道请删除原条目后重新同步)`);
       setSyncMsg({ text: parts.join("、"), color: "var(--ok)" });
     } catch (e) {
       if (mounted.current) setSyncMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
