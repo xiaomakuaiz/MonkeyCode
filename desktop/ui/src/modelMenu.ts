@@ -60,9 +60,9 @@ export function modelDisplayByName(models: readonly ModelInfo[], name: string): 
   return m ? modelDisplay(m) : { label: name };
 }
 
-/** 来源固定优先级(tab 序的单一出处):会员 → 百智云 → 未知来源
- * (彼此按首现)→ 自定义恒尾。 */
-const sourceRank = (source?: string): number =>
+/** 来源固定优先级(tab 序与设置页分组排序的单一出处):会员 → 百智云 →
+ * 未知来源(彼此按首现)→ 自定义恒尾。 */
+export const modelSourceRank = (source?: string): number =>
   source === SOURCE_MONKEYCODE ? 0 : source === SOURCE_BAIZHI ? 1 : source ? 2 : 3;
 
 export interface ModelMenuTab {
@@ -79,7 +79,7 @@ export function modelMenuTabs(models: ModelInfo[]): ModelMenuTab[] {
     const key = m.source || "";
     if (tabs.some((t) => t.key === key)) continue;
     const label = m.source === SOURCE_MONKEYCODE ? "会员" : modelSourceLabel(m.source);
-    tabs.push({ key, label, rank: sourceRank(m.source) });
+    tabs.push({ key, label, rank: modelSourceRank(m.source) });
   }
   tabs.sort((a, b) => a.rank - b.rank);
   return tabs.map(({ key, label }) => ({ key, label }));

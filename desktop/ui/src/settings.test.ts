@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { mcpNameValidationError, modelsToConfig, replaceSourceGroup, validateMcpNames } from "./settingsConfig";
+import {
+  dedupeModelsByName,
+  mcpNameValidationError,
+  modelsToConfig,
+  replaceSourceGroup,
+  sortModelsBySource,
+  validateMcpNames,
+} from "./settingsConfig";
 import { SOURCE_BAIZHI, SOURCE_MONKEYCODE, type HostModel } from "./types";
 
 describe("modelsToConfig", () => {
@@ -92,6 +99,58 @@ describe("replaceSourceGroup", () => {
     const cur = [entry("a", SOURCE_MONKEYCODE), entry("b", SOURCE_MONKEYCODE)];
     const next = replaceSourceGroup(cur, [entry("a", SOURCE_MONKEYCODE)], SOURCE_MONKEYCODE, true);
     expect(next.map((m) => m.name)).toEqual(["a"]);
+  });
+});
+
+describe("dedupeModelsByName(载入自愈)", () => {
+  const entry = (name: string, source?: string) => ({ name, source });
+
+  it("同名条目收敛为一条:内容后者覆盖前者,落在首现位置(与引擎物化 Map 一致)", () => {
+    const out = dedupeModelsByName([
+      entry("deepseek-v4-flash", SOURCE_MONKEYCODE),
+      entry("其他"),
+      entry("deepseek-v4-flash", SOURCE_BAIZHI),
+    ]);
+    expect(out.map((m) => [m.name, m.source])).toEqual([
+      ["deepseek-v4-flash", SOURCE_BAIZHI], // 后者内容,首现位置
+      ["其他", undefined],
+    ]);
+  });
+
+  it("名称按 trim 归一;空名草稿全部保留不参与去重", () => {
+    const out = dedupeModelsByName([entry(" a "), entry("a", SOURCE_BAIZHI), entry(""), entry("  ")]);
+    expect(out.map((m) => [m.name, m.source])).toEqual([
+      ["a", SOURCE_BAIZHI],
+      ["", undefined],
+      ["  ", undefined],
+    ]);
+  });
+
+  it("无重复时原样返回(顺序与内容不动)", () => {
+    const cur = [entry("a"), entry("b", SOURCE_BAIZHI)];
+    expect(dedupeModelsByName(cur)).toEqual(cur);
+  });
+});
+
+describe("sortModelsBySource(载入/同步后的分组排序)", () => {
+  const entry = (name: string, source?: string) => ({ name, source });
+
+  it("组间按 会员→百智云→未知→自定义,组内保持原相对顺序(稳定)", () => {
+    const out = sortModelsBySource([
+      entry("手工乙"),
+      entry("bz-2", SOURCE_BAIZHI),
+      entry("mc-2", SOURCE_MONKEYCODE),
+      entry("神秘", "mystery"),
+      entry("手工甲"),
+      entry("bz-1", SOURCE_BAIZHI),
+      entry("mc-1", SOURCE_MONKEYCODE),
+    ]);
+    expect(out.map((m) => m.name)).toEqual(["mc-2", "mc-1", "bz-2", "bz-1", "神秘", "手工乙", "手工甲"]);
+  });
+
+  it("空名草稿 source 缺省 → 随自定义组留在尾部,不丢", () => {
+    const out = sortModelsBySource([entry(""), entry("mc", SOURCE_MONKEYCODE)]);
+    expect(out.map((m) => m.name)).toEqual(["mc", ""]);
   });
 });
 

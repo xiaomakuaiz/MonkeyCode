@@ -679,6 +679,26 @@ fn is_builtin_placeholder(model: &str) -> bool {
     )
 }
 
+/// 会员条目的节序(与 ui groupMemberSections / Web 分组同序,两侧改动需
+/// 同步):基础 0 → 专业 1 → 旗舰 2 → 付费(public 非档位)3 → 我的 4 →
+/// 团队 5。同步输出按它排序,配置顺序即设置页/选择器的展示顺序。
+fn member_section_rank(model: &str, owner: &str) -> u8 {
+    let n = model.to_ascii_lowercase();
+    if n.starts_with("monkeycode-basic") {
+        0
+    } else if n.starts_with("monkeycode-pro") {
+        1
+    } else if n.starts_with("monkeycode-ultra") {
+        2
+    } else if owner == "private" {
+        4
+    } else if owner == "team" {
+        5
+    } else {
+        3
+    }
+}
+
 /// 会员档位是否覆盖该模型(按内置命名前缀,与 ui/src/cloud.ts 的
 /// planAllowsModel 同一规则,两侧改动需同步):basic 档与非内置命名恒可用,
 /// pro 前缀要 pro/flagship/ultra 档,ultra 前缀要 flagship/ultra 档。
@@ -730,7 +750,9 @@ pub async fn mc_ohmyagent_key_delete(svc: &Service, id: &str) -> BzResult<()> {
 /// 壳从代理 Key 文件注入(config.rs write_ohmyagent_config),设置页不给
 /// 用户"一眼抄走"的入口。逐条容错,不拖垮整批。
 fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>) {
-    let mut models = Vec::new();
+    // (节序, weight, name, entry):映射后统一排序——节序 → weight 降序
+    // (服务端权重,容缺按 0,与 cloud.ts byWeightThenName 同款)→ name
+    let mut keyed: Vec<(u8, i64, String, Value)> = Vec::new();
     let mut notes = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for it in items {
@@ -759,7 +781,7 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
             continue;
         }
         let mut entry = json!({
-            "name": name,
+            "name": name.clone(),
             "provider": provider,
             "base_url": "",
             "api_key": "",
@@ -796,9 +818,11 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
         if owner != "public" && it.get("thinking_enabled").and_then(Value::as_bool) == Some(false) {
             entry["think"] = json!("off");
         }
-        models.push(entry);
+        let weight = it.get("weight").and_then(Value::as_i64).unwrap_or(0);
+        keyed.push((member_section_rank(&model, owner), weight, name, entry));
     }
-    (models, notes)
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+    (keyed.into_iter().map(|(_, _, _, e)| e).collect(), notes)
 }
 
 /// 同步会员模型:模型清单来自 GET /api/v1/users/models(超出订阅档的
@@ -1193,6 +1217,36 @@ mod local_models_tests {
         let (models, _) = local_model_entries(&items, "");
         assert_eq!(models[0].get("locked").and_then(Value::as_bool), Some(true));
         assert!(models[1].get("locked").is_none(), "非内置命名不锁");
+    }
+
+    #[test]
+    fn entries_sorted_by_section_then_weight_then_name() {
+        // 乱序输入 → 节序(基础→专业→旗舰→付费→我的→团队)→ 节内
+        // weight 降序(容缺按 0)→ name 升序;配置顺序即展示顺序
+        let items = vec![
+            json!({ "id": "c1", "model": "team-x", "interface_type": "anthropic", "owner": { "type": "team" } }),
+            json!({ "id": "c2", "model": "my-x", "interface_type": "anthropic", "owner": { "type": "private" } }),
+            json!({ "id": "c3", "model": "paid-low", "interface_type": "anthropic", "owner": pub_owner(), "weight": 1 }),
+            json!({ "id": "c4", "model": "paid-high", "interface_type": "anthropic", "owner": pub_owner(), "weight": 9 }),
+            json!({ "id": "c5", "model": "monkeycode-ultra/u", "interface_type": "anthropic", "owner": pub_owner() }),
+            json!({ "id": "c6", "model": "monkeycode-basic/b", "interface_type": "anthropic", "owner": pub_owner() }),
+            json!({ "id": "c7", "model": "paid-a", "interface_type": "anthropic", "owner": pub_owner(), "weight": 1 }),
+        ];
+        let (models, _) = local_model_entries(&items, "ultra");
+        let names: Vec<_> = models.iter().filter_map(|m| m.get("name").and_then(Value::as_str)).collect();
+        assert_eq!(
+            names,
+            vec![
+                "monkeycode-basic/b",
+                "monkeycode-ultra/u",
+                "paid-high",
+                "paid-a",
+                "paid-low",
+                "my-x",
+                "team-x",
+            ],
+            "同权重(paid-a/paid-low 均 1)按 name 兜底"
+        );
     }
 
     #[test]

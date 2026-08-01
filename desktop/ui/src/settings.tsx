@@ -31,11 +31,13 @@ import { builtinTierLabel } from "./cloud";
 import { mcModelsRevoke, mcModelsSync } from "./cloudapi";
 import { stripTierPrefix } from "./modelMenu";
 import {
+  dedupeModelsByName,
   emptyMcp,
   emptyModel,
   payloadOf,
   replaceSourceGroup,
   serversToMcps,
+  sortModelsBySource,
   validateMcpNames,
   type McpEntry,
 } from "./settingsConfig";
@@ -699,7 +701,9 @@ export function SettingsView({
     }
     getHostConfig()
       .then((cfg) => {
-        const ms = cfg?.models ?? [];
+        // 载入归一:同名存量收敛(否则保存被重名校验永久拦死)+ 按来源
+        // 分组排序(与选择器 tab 序一致);defaultIdx 在归一后的数组上定位
+        const ms = sortModelsBySource(dedupeModelsByName(cfg?.models ?? []));
         const di = Math.max(0, ms.findIndex((m) => m.default));
         const mc = serversToMcps(cfg?.mcp_servers ?? {});
         const ke = cfg?.kernel_env ?? "";
@@ -785,7 +789,8 @@ export function SettingsView({
     }));
     const outside = new Set(models.filter((m) => m.source !== source && m.name.trim()).map((m) => m.name.trim()));
     const skipped = keepManual ? synced.map((m) => m.name.trim()).filter((n) => outside.has(n)) : [];
-    const next = replaceSourceGroup(models, synced, source, keepManual);
+    // 整组替换后同样按来源排序:会员组不落在列表尾部,与载入/选择器一致
+    const next = sortModelsBySource(replaceSourceGroup(models, synced, source, keepManual));
     setModels(next);
     // 索引大位移:默认模型按名字重新定位(被移除则回退第一项),折叠态复位;
     // 降档重同步后原默认可能变锁定 → 挪到首个未锁条目(锁定条目不物化,
@@ -937,9 +942,11 @@ export function SettingsView({
           onClick={managed ? undefined : () => setExpanded(isOpen ? null : i)}
           style={{ display: "flex", alignItems: "center", gap: 8, height: 40, padding: "0 14px", cursor: managed ? "default" : "pointer", userSelect: "none" }}
         >
+          {/* 托管行内不放任何 title 原生 tooltip:webkit 系 WebView 弹出
+              tooltip 会吞 mouseleave,行的 :hover 粘住,「设为默认/删除」
+              移开不消失(styles.css .hrow:hover .row-acts) */}
           <span
             className="ellipsis"
-            title={managed ? m.name : undefined}
             style={{ fontSize: 12.5, fontFamily: MONO, color: m.name.trim() ? "var(--t1)" : "var(--t5)", minWidth: 0 }}
           >
             {(managed ? stripTierPrefix(m.name.trim()) : m.name.trim()) || "未命名模型"}
@@ -947,21 +954,16 @@ export function SettingsView({
           <span style={pill}>{m.provider || "anthropic"}</span>
           {managed && (
             // 档位即托管:会员条目必有档位/归属语境,一枚药丸承载两层信息
-            //(档位或归属文本 + 托管说明 tooltip)
-            <span
-              style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}
-              title="凭据由 MonkeyCode 托管,本机不展示;条目随「同步会员模型」整组更新"
-            >
-              {builtinTierLabel(m.model) ?? (m.owner === "private" ? "我的" : m.owner === "team" ? "团队" : "托管")}
+            <span style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}>
+              {(() => {
+                const tier = builtinTierLabel(m.model);
+                if (tier) return `${tier}会员`;
+                return m.owner === "private" ? "我的" : m.owner === "team" ? "团队" : "托管";
+              })()}
             </span>
           )}
           {managed && m.locked && (
-            <span
-              style={{ ...pill, background: "var(--warnBg)", color: "var(--warn)" }}
-              title="当前会员档不可用,升级后重新同步解锁"
-            >
-              未解锁
-            </span>
+            <span style={{ ...pill, background: "var(--warnBg)", color: "var(--warn)" }}>未解锁</span>
           )}
           {m.vision && <span style={{ ...pill, background: "var(--accBg)", color: "var(--accTx)" }}>视觉</span>}
           {i === defaultIdx && (

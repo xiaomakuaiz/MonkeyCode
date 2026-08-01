@@ -869,6 +869,7 @@ async fn mc_member_models_sync_and_revoke_contract() {
     // 设置页不给用户"一眼抄走"的入口
     let out = super::sync_member_models(&svc, &tmp.0).await.map_err(|e| e.msg()).unwrap();
     let models = out.get("models").and_then(Value::as_array).unwrap();
+    // 输出按节序排序:专业(档位)→ 旗舰(档位,locked)→ 付费 → 我的 → 团队
     assert_eq!(models.len(), 5, "仅协议/占位/无主条目被过滤,超档转 locked、私有/团队收录: {models:?}");
     let m0 = &models[0];
     assert_eq!(m0.get("name").and_then(Value::as_str), Some("专业模型"));
@@ -886,17 +887,18 @@ async fn mc_member_models_sync_and_revoke_contract() {
     assert_eq!(m0.get("source").and_then(Value::as_str), Some("monkeycode"));
     assert_eq!(m0.get("owner").and_then(Value::as_str), Some("public"));
     assert!(m0.get("locked").is_none(), "档内条目不携带 locked(omit-false)");
-    assert_eq!(models[1].get("name").and_then(Value::as_str), Some("mc-gpt"), "remark 空回退模型名");
-    assert_eq!(models[1].get("model").and_then(Value::as_str), Some("mc-gpt"));
-    assert_eq!(models[1].get("provider").and_then(Value::as_str), Some("openai"));
-    assert_eq!(models[1].get("api_key").and_then(Value::as_str), Some(""));
-    // 超档条目:保留 + locked,凭据仍是空占位(物化层跳过它,连注入都不做)
-    let m2 = &models[2];
-    assert_eq!(m2.get("name").and_then(Value::as_str), Some("旗舰"));
-    assert_eq!(m2.get("locked").and_then(Value::as_bool), Some(true));
-    assert_eq!(m2.get("owner").and_then(Value::as_str), Some("public"));
-    assert_eq!(m2.get("api_key").and_then(Value::as_str), Some(""));
-    assert_eq!(m2.get("base_url").and_then(Value::as_str), Some(""));
+    // 超档条目:保留 + locked,凭据仍是空占位(物化层跳过它,连注入都不做);
+    // 节序在付费条目之前(旗舰档位节 rank 2 < 付费 rank 3)
+    let m1 = &models[1];
+    assert_eq!(m1.get("name").and_then(Value::as_str), Some("旗舰"));
+    assert_eq!(m1.get("locked").and_then(Value::as_bool), Some(true));
+    assert_eq!(m1.get("owner").and_then(Value::as_str), Some("public"));
+    assert_eq!(m1.get("api_key").and_then(Value::as_str), Some(""));
+    assert_eq!(m1.get("base_url").and_then(Value::as_str), Some(""));
+    assert_eq!(models[2].get("name").and_then(Value::as_str), Some("mc-gpt"), "remark 空回退模型名");
+    assert_eq!(models[2].get("model").and_then(Value::as_str), Some("mc-gpt"));
+    assert_eq!(models[2].get("provider").and_then(Value::as_str), Some("openai"));
+    assert_eq!(models[2].get("api_key").and_then(Value::as_str), Some(""));
     // 私有/团队条目:收录、归属标注、不锁(非内置命名不受档位门限)
     let m3 = &models[3];
     assert_eq!(m3.get("name").and_then(Value::as_str), Some("我的"));

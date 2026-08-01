@@ -1,6 +1,7 @@
 // 设置页的纯配置映射:表单草稿 ⇄ 内核 config.json / mcp.json 形态。
 // 与渲染无关(不引入 React),从 settings.tsx 拆出来:视图只管交互,
 // 往返语义(字段白名单、extra 透传、整组替换、名称校验)集中在此并被单测直接盯住。
+import { modelSourceRank } from "./modelMenu";
 import type { HostConfig, HostModel } from "./types";
 
 // ---- MCP 编辑模型与序列化(与内核 mcp.json 的 mcpServers 同构,壳不解释) ----
@@ -156,6 +157,39 @@ export function replaceSourceGroup<T extends { name: string; source?: string }>(
     byName.set(name, e);
   }
   return [...byName.values()];
+}
+
+/** 载入自愈:同名(trim)条目收敛为一条——内容后者覆盖前者、落在首现位置,
+ * 与引擎物化(settings.models 以名字为键的 Map)实际生效行为完全一致。
+ * 历史版本/手工编辑落盘的同名存量若不在载入时收敛,保存会被重名校验
+ * 永久拦死,而被拦的那条在引擎侧本来就是静默失效的。空名草稿不参与。 */
+export function dedupeModelsByName<T extends { name: string }>(list: T[]): T[] {
+  const winner = new Map<string, T>();
+  for (const m of list) {
+    const n = m.name.trim();
+    if (n) winner.set(n, m);
+  }
+  const emitted = new Set<string>();
+  const out: T[] = [];
+  for (const m of list) {
+    const n = m.name.trim();
+    if (!n) {
+      out.push(m);
+      continue;
+    }
+    if (emitted.has(n)) continue;
+    emitted.add(n);
+    out.push(winner.get(n)!);
+  }
+  return out;
+}
+
+/** 展示/落盘的分组排序:组间按来源优先级(会员 → 百智云 → 未知 → 自定义,
+ * 与选择器 tab 序同源 modelSourceRank),组内保持原相对顺序(稳定排序)。
+ * 设置页载入与同步替换后都过一遍,列表顺序与选择器 tab 序一致、可预期;
+ * 空名草稿 source 缺省归自定义组,随手工条目留在尾部。 */
+export function sortModelsBySource<T extends { source?: string }>(list: T[]): T[] {
+  return [...list].sort((a, b) => modelSourceRank(a.source) - modelSourceRank(b.source));
 }
 
 // 归一化保存载荷:save() 与 dirty 比较共用同一形态(名称 trim、default 重算、MCP 序列化)
