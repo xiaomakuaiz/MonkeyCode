@@ -46,6 +46,7 @@ export function BaizhiCard({
   statusErr,
   refreshStatus,
   onSynced,
+  onLoggedIn,
   knownKeys,
 }: {
   /** 登录态(宿主查询并持有;null=读取中) */
@@ -56,6 +57,9 @@ export function BaizhiCard({
   refreshStatus: () => Promise<void>;
   /** 同步结果并入设置表单;返回跨组撞名被跳过的名字(外显提示用) */
   onSynced: (r: BaizhiSyncResult) => SyncApplyResult;
+  /** 真实登录事件(短信/扫码成功各一次)。宿主据此顺带连上 MonkeyCode
+   * ——只报边沿,不报 status 快照:后者每次打开设置都会翻转 */
+  onLoggedIn?: () => void;
   knownKeys: () => string[];
 }) {
   const [mode, setMode] = useState<"wechat" | "phone">("wechat");
@@ -104,7 +108,10 @@ export function BaizhiCard({
           // 登录成功即自动同步(用户拍板,免手动点)。不能用 live() 甄别:
           // loggedIn 翻转会触发拉码 effect 的 cleanup 使 gen 作废,而这里
           // 恰恰是登录成功之后
-          if (mounted.current) void doSync();
+          if (mounted.current) {
+            onLoggedIn?.();
+            void doSync();
+          }
           return;
         }
         setWxState(res.status); // expired / canceled → 引导重新获取
@@ -167,6 +174,7 @@ export function BaizhiCard({
       await refreshStatus();
       if (mounted.current) {
         setCode("");
+        onLoggedIn?.();
         void doSync(); // 登录成功即自动同步(用户拍板,免手动点)
       }
     } catch (e) {

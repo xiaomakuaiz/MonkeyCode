@@ -375,7 +375,9 @@ function MonkeyCodeAccountCard({
   onPasswordLogin,
   onRetry,
   onDisconnect,
-  onSyncedModels,
+  syncing,
+  syncMsg,
+  onSyncModels,
   onLogoClick,
 }: {
   connection: McConnectionState;
@@ -386,46 +388,15 @@ function MonkeyCodeAccountCard({
   onPasswordLogin: (email: string, password: string) => Promise<string | null>;
   onRetry: () => void;
   onDisconnect: () => void;
-  /** 同步成功回填设置表单(条目已带 source="monkeycode");
-   * 表单干净且无任务在跑时会直接自动保存(内核重启+整页刷新) */
-  onSyncedModels: (models: BaizhiSyncedModel[]) => SyncApplyResult;
+  /** 会员模型同步的进行态与结果文案。同步流水线(拉取→并入表单→自动
+   * 保存)整体在 SettingsView:百智云同步会把分区切到模型页,本卡随之
+   * 卸载,挂在卡里的"连上就自动同步"会在最关键的一步失效 */
+  syncing: boolean;
+  syncMsg: { text: string; color: string } | null;
+  onSyncModels: () => void;
   /** 卡图标点击(自建部署配置的彩蛋解锁计数在父级,连点 6 次展示) */
   onLogoClick?: () => void;
 }) {
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState<{ text: string; color: string } | null>(null);
-  // 会员模型少且服务端已按会员档过滤,全量导入不设挑选面板(整组替换,
-  // 不想要的条目可在模型页删除;删除的条目重同步会恢复)
-  const doSyncModels = async () => {
-    setSyncMsg(null);
-    setSyncing(true);
-    try {
-      const r = await mcModelsSync();
-      const notes = [...(r.notes ?? [])];
-      if (!r.models.length) {
-        setSyncMsg({ text: "没有可同步的会员模型" + (notes.length ? `(${notes.join(";")})` : ""), color: "var(--err)" });
-        return;
-      }
-      const applied = onSyncedModels(r.models);
-      if (applied.skipped.length) notes.push(`与现有条目同名已跳过: ${applied.skipped.join("、")}`);
-      const count = r.models.length - applied.skipped.length;
-      const tail = applied.autoSaved
-        ? ",正在保存并重启内核…"
-        : applied.blocked === "busy"
-          ? ";有任务正在执行,空闲后请手动保存(保存会重启内核)"
-          : applied.blocked === "dirty"
-            ? ";表单有未保存的修改,请核对后手动保存"
-            : ",已切到模型页,核对后保存";
-      setSyncMsg({
-        text: `已同步 ${count} 个会员模型` + (notes.length ? `(${notes.join(";")})` : "") + tail,
-        color: "var(--ok)",
-      });
-    } catch (e) {
-      setSyncMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
-    } finally {
-      setSyncing(false);
-    }
-  };
   // 账号密码表单(未关联态的第二条登录路径;不要求百智云已登录)。
   // pwBusy 是本地提交态:全局 phase 会被窗口聚焦触发的 syncCloud 竞态改写
   // (瞬间回 disconnected),只看 phase 会让表单在登录途中解锁二次提交。
@@ -434,21 +405,6 @@ function MonkeyCodeAccountCard({
   const [pwPassword, setPwPassword] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
   const [pwErr, setPwErr] = useState("");
-  // 连接成功即自动同步会员模型(与百智云「登录即同步」对齐,免手动点)。
-  // 只认**本卡发起的连接**的升起沿:启动时恢复的既连状态、侧栏重试都不
-  // 触发——自动同步会把设置表单打脏,不能在用户没动作时凭空发生。
-  // 按钮保留:会员升级解锁/服务端上新下架/误删恢复都发生在已登录态,
-  // 没有"登录"触发点,只能手动重同步。
-  const autoSyncOnConnect = useRef(false);
-  useEffect(() => {
-    if (connection.phase === "connected" && autoSyncOnConnect.current) {
-      autoSyncOnConnect.current = false;
-      void doSyncModels();
-    }
-    if (connection.phase === "error") autoSyncOnConnect.current = false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection.phase]);
-
   const doPasswordLogin = async () => {
     if (!pwEmail.trim() || !pwPassword) {
       setPwErr("请输入邮箱和密码");
@@ -456,11 +412,10 @@ function MonkeyCodeAccountCard({
     }
     setPwErr("");
     setPwBusy(true);
-    autoSyncOnConnect.current = true;
     try {
+      // 连上后的自动同步意图由父级在 onPasswordLogin/onConnect 外层标记
       const err = await onPasswordLogin(pwEmail, pwPassword).catch((e) => (e instanceof Error ? e.message : String(e)));
       if (err) {
-        autoSyncOnConnect.current = false;
         setPwErr(err);
       } else {
         // 成功收起并清空(密码不留内存态);connected 后入口整体消失
@@ -524,7 +479,7 @@ function MonkeyCodeAccountCard({
         {connected && (
           <button
             className="hv-acc"
-            onClick={() => !syncing && void doSyncModels()}
+            onClick={() => !syncing && onSyncModels()}
             title="把会员内置模型同步为本地任务可用的模型(整组替换;移除的条目重同步会恢复)"
             style={{ ...whiteBtn, flex: "none", gap: 6, background: "var(--acc)", borderColor: "var(--acc)", color: "var(--onAcc)", opacity: syncing ? 0.7 : 1, cursor: syncing ? "default" : "pointer" }}
           >
@@ -546,10 +501,7 @@ function MonkeyCodeAccountCard({
           <button
             className="hv-acc"
             disabled={!canConnect}
-            onClick={() => {
-              autoSyncOnConnect.current = true;
-              onConnect();
-            }}
+            onClick={onConnect}
             style={{
               ...whiteBtn,
               flex: "none",
@@ -800,6 +752,10 @@ export function SettingsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [desktop, loaded, models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl],
   );
+  // 表单当前态的 ref 镜像:保存是异步的(写盘 + 重启内核,数秒),收尾时
+  // 要拿"此刻"的表单跟刚提交的载荷比对,闭包里的值已经过期
+  const formRef = useRef({ models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl });
+  formRef.current = { models, defaultIdx, mcps, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl };
   // dirty 的 ref 镜像:同步回调要在**合并前**读当下值(合并后恒脏),
   // 闭包里的 dirty 会滞后一拍
   const dirtyRef = useRef(false);
@@ -837,12 +793,15 @@ export function SettingsView({
 
   // 同步条目并入表单(百智云/MonkeyCode 共用;整组替换 + 跨组撞名先到先得,
   // 语义见 replaceSourceGroup)。返回算出的下一态(自动保存要显式传参)。
+  // 基准取 formRef 而非闭包:同步是"发请求→等数秒→回来再合并",这期间
+  // 另一路同步/保存回读可能已经改过表单,拿闭包里的旧数组会把它们抹掉。
   const mergeSyncedModels = (
     syncedModels: BaizhiSyncedModel[],
     source: string,
   ): { next: HostModel[]; di: number; skipped: string[] } | null => {
     if (!syncedModels.length) return null; // 空集合不视为"清空该组"
-    const defaultName = models[defaultIdx]?.name?.trim() ?? "";
+    const models = formRef.current.models;
+    const defaultName = models[formRef.current.defaultIdx]?.name?.trim() ?? "";
     const synced: HostModel[] = syncedModels.map((sm) => ({
       name: sm.name,
       provider: sm.provider,
@@ -876,10 +835,13 @@ export function SettingsView({
     return { next, di, skipped };
   };
 
-  // 自动保存决策:同步前表单干净且无任务在跑 → 直接走保存主路径(内核
-  // 重启+整页刷新),免手动点保存;否则回退保存条,blocked 给卡片提示原因。
-  // wasDirty 必须在合并前经 ref 读(合并后恒脏)。
+  // 自动保存决策:同步前表单干净且无任务在跑 → 直接走保存主路径,免手动点
+  // 保存;否则回退保存条,blocked 给卡片提示原因。wasDirty 必须在合并前经
+  // ref 读(合并后恒脏)。
   const autoSaveDecision = (wasDirty: boolean): { auto: boolean; blocked?: "dirty" | "busy" } => {
+    // 已有保存在途(百智云那一路先落地):它的补存循环会把本次并入的条目
+    // 一起写下去,这里不必也不能再起一次(会被 in-flight 判据挡掉)
+    if (savingRef.current) return { auto: false };
     if (wasDirty) return { auto: false, blocked: "dirty" };
     if (hasRunningTask) return { auto: false, blocked: "busy" };
     return { auto: true };
@@ -890,8 +852,9 @@ export function SettingsView({
     const merged = mergeSyncedModels(syncedModels, source);
     if (!merged) return { skipped: [], autoSaved: false };
     const { auto, blocked } = autoSaveDecision(wasDirty);
-    if (auto) void performSave(merged.next, merged.di, mcps);
-    return { skipped: merged.skipped, autoSaved: auto, blocked };
+    if (auto) void performSave(merged.next, merged.di, formRef.current.mcps);
+    // blocked 为空 = 会被写下去(本次直接存,或搭上在途保存的补存循环)
+    return { skipped: merged.skipped, autoSaved: !blocked, blocked };
   };
 
   const applySynced = (r: BaizhiSyncResult): SyncApplyResult => {
@@ -902,18 +865,83 @@ export function SettingsView({
     // MCP:本次无条目(如网关未开通)则不触碰(空集不清组,对齐模型语义);
     // 同步条目已带 source=baizhi
     const syncedMcps = serversToMcps(r.mcp_servers);
-    let nextMcps = mcps;
+    const curMcps = formRef.current.mcps; // 同上,基准取此刻的表单
+    let nextMcps = curMcps;
     if (syncedMcps.length) {
-      nextMcps = replaceSourceGroup(mcps, syncedMcps, SOURCE_BAIZHI);
+      nextMcps = replaceSourceGroup(curMcps, syncedMcps, SOURCE_BAIZHI);
       setMcps(nextMcps);
       setMcpExpanded(null);
     }
     setActive("models"); // 只导入 MCP 时也切过去看结果
-    if (!merged && nextMcps === mcps) return { skipped: [], autoSaved: false };
+    if (!merged && nextMcps === curMcps) return { skipped: [], autoSaved: false };
     const { auto, blocked } = autoSaveDecision(wasDirty);
     // 模型与 MCP 合成一次保存,不许两连保存(两次内核重启)
-    if (auto) void performSave(merged?.next ?? models, merged?.di ?? defaultIdx, nextMcps);
-    return { skipped: merged?.skipped ?? [], autoSaved: auto, blocked };
+    if (auto) {
+      void performSave(merged?.next ?? formRef.current.models, merged?.di ?? formRef.current.defaultIdx, nextMcps);
+    }
+    return { skipped: merged?.skipped ?? [], autoSaved: !blocked, blocked };
+  };
+
+  // ---- MonkeyCode 会员模型同步流水线(拉取 → 并入表单 → 自动保存)----
+  // 放在 SettingsView 而非账号卡内:百智云同步成功会把分区切到模型页,
+  // 账号卡随之卸载,挂在卡里的"连上就自动同步"会在最关键的一步失效。
+  const [mcSyncing, setMcSyncing] = useState(false);
+  const [mcSyncMsg, setMcSyncMsg] = useState<{ text: string; color: string } | null>(null);
+  const syncMcModels = async () => {
+    if (mcSyncing) return;
+    setMcSyncMsg(null);
+    setMcSyncing(true);
+    try {
+      const r = await mcModelsSync();
+      const notes = [...(r.notes ?? [])];
+      if (!r.models.length) {
+        setMcSyncMsg({ text: "没有可同步的会员模型" + (notes.length ? `(${notes.join(";")})` : ""), color: "var(--err)" });
+        return;
+      }
+      const applied = applySyncedModels(r.models, SOURCE_MONKEYCODE);
+      if (applied.skipped.length) notes.push(`与现有条目同名已跳过: ${applied.skipped.join("、")}`);
+      const count = r.models.length - applied.skipped.length;
+      const tail = applied.autoSaved
+        ? ",正在保存并重启内核…"
+        : applied.blocked === "busy"
+          ? ";有任务正在执行,空闲后请手动保存(保存会重启内核)"
+          : ";表单有未保存的修改,请核对后手动保存";
+      setMcSyncMsg({
+        text: `已同步 ${count} 个会员模型` + (notes.length ? `(${notes.join(";")})` : "") + tail,
+        color: "var(--ok)",
+      });
+    } catch (e) {
+      setMcSyncMsg({ text: e instanceof Error ? e.message : String(e), color: "var(--err)" });
+    } finally {
+      setMcSyncing(false);
+    }
+  };
+
+  // 连上就自动同步会员模型:只认**本页发起的连接**(点连接、账号密码登录、
+  // 百智云登录顺带连)的升起沿——启动时恢复的既连状态、侧栏重试都不触发,
+  // 自动同步会打脏表单,不能在用户没动作时凭空发生。
+  // 手动同步按钮保留:会员升级解锁/服务端上新下架/误删恢复都发生在已登录
+  // 态,没有"登录"这个触发点。
+  const mcAutoSync = useRef(false);
+  useEffect(() => {
+    if (mcConnection.phase === "connected" && mcAutoSync.current) {
+      mcAutoSync.current = false;
+      void syncMcModels();
+    }
+    // 只在明确的错误态清意图:disconnected 会被窗口聚焦触发的 syncCloud
+    // 瞬时改写(卡内 pwBusy 的注释同源),拿它清会把待同步意图误丢
+    if (mcConnection.phase === "error") mcAutoSync.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcConnection.phase]);
+
+  // 百智云登录成功 → 顺带把 MonkeyCode 也连上(桥接授权本就用百智云账号,
+  // 登录一次两边都通)。只认**真实登录事件**,不看 loggedIn 快照:后者在
+  // 每次打开设置读到既有登录态时也会翻转,会把用户"显式断开 MonkeyCode"
+  // 的意图反复推翻。已连/连接中/读取中一律不打扰。
+  const onBaizhiLoggedIn = () => {
+    if (mcConnection.phase !== "disconnected") return;
+    mcAutoSync.current = true;
+    onConnectMc();
   };
 
   // 断开 MonkeyCode:①尽力删除本机代理 Key(须在清会话前;断网失败不阻断
@@ -970,11 +998,9 @@ export function SettingsView({
     }
   };
 
-  // 保存例程参数化:save() 用当前表单态;同步自动保存把刚算出的下一态
-  // **显式传参**(setState 是异步批处理,set 完立刻读 state 拿到的还是旧值)
-  const performSave = async (ms: HostModel[], di: number, mcArr: McpEntry[]) => {
-    if (saving) return;
-    // UX 前置校验;权威校验在内核 LoadModels(重复名/provider 白名单等)。
+  /** 保存前的 UX 校验(权威校验在内核 LoadModels:重复名/provider 白名单
+   * 等)。不通过就外显并切到对应分区,返回 false。 */
+  const validateBeforeSave = (ms: HostModel[], mcArr: McpEntry[]): boolean => {
     // MonkeyCode 会员条目不校验接口地址/API Key:凭据不经表单与 config.json
     // 流转(条目里是空占位),物化时由壳从代理 Key 文件注入
     for (const m of ms) {
@@ -982,7 +1008,7 @@ export function SettingsView({
       if (!m.name.trim() || !m.model.trim() || (!managed && (!m.base_url.trim() || !m.api_key.trim()))) {
         setErr(`模型「${m.name.trim() || "未命名"}」信息不完整(需名称/接口地址/API Key/模型标识)`);
         setActive("models");
-        return;
+        return false;
       }
     }
     // 名称是引擎寻址键(settings.models 以别名为键,会话/记忆按名引用),
@@ -997,7 +1023,7 @@ export function SettingsView({
       if (list.length > 1) {
         setErr(`模型名称重复: ${n}(${list.map((m) => modelSourceLabel(m.source)).join("、")}各一条;名称是模型的唯一标识,请删除或改名其一)`);
         setActive("models");
-        return;
+        return false;
       }
     }
     // 内核在上下文占用达 90% 时自动压缩,要求 max_output < context_window
@@ -1009,7 +1035,7 @@ export function SettingsView({
           `模型「${m.name.trim()}」的最大输出(${m.max_output.toLocaleString()})需小于上下文窗口(${cw.toLocaleString()})的 10%,建议不超过 8%(${Math.floor(cw * 0.08).toLocaleString()})`,
         );
         setActive("models");
-        return;
+        return false;
       }
     }
     const mcpErrs = validateMcpNames(mcArr);
@@ -1018,19 +1044,50 @@ export function SettingsView({
       setErr(mcpErrs[invalidMcp] ?? "MCP 名称无效");
       setActive("mcp");
       setMcpExpanded(invalidMcp);
-      return;
+      return false;
     }
+    return true;
+  };
+
+  // 保存串行化:in-flight 判据用 ref 而非 state——同步自动保存与用户点击
+  // 可能落在同一批渲染里,state 读到的是旧值
+  const savingRef = useRef(false);
+
+  // 保存例程参数化:save() 用当前表单态;同步自动保存把刚算出的下一态
+  // **显式传参**(setState 是异步批处理,set 完立刻读 state 拿到的还是旧值)
+  const performSave = async (ms: HostModel[], di: number, mcArr: McpEntry[]) => {
+    if (savingRef.current) return; // 在途保存会把后来的改动一并捎上,见下方循环
+    if (!validateBeforeSave(ms, mcArr)) return;
     setErr("");
+    savingRef.current = true;
     setSaving(true);
+    const asPayload = (f: typeof formRef.current) =>
+      payloadOf(f.models, f.defaultIdx, f.mcps, f.kernelEnv, f.mcBaseUrl, f.mcBasicAuth, f.mcLlmBaseUrl);
     try {
-      await saveHostConfig(payloadOf(ms, di, mcArr, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl));
-      // 壳已重启引擎,App 收到 engine-status Ready 会自动重拉模型/会话并
-      // 重开当前会话(免整页刷新);这里只需把表单重建为最新盘态,保存条
-      // 随 dirty 归零消失即"保存成功"的反馈
-      await loadConfigIntoForm();
-      setSaving(false);
+      let payload = payloadOf(ms, di, mcArr, kernelEnv, mcBaseUrl, mcBasicAuth, mcLlmBaseUrl);
+      // 一次保存要写盘 + 重启内核(数秒),期间表单可能又被并入新的同步结果
+      // (百智云登录会顺带连上 MonkeyCode,两路同步先后落地)。补存到表单不
+      // 再变化为止:既不让后到的条目停在未保存态,也不被随后的盘态回读抹掉。
+      // 轮数设上限兜底——不收敛就停手交给保存条,不无休止地重启内核。
+      for (let round = 0; ; round++) {
+        await saveHostConfig(payload);
+        const next = asPayload(formRef.current);
+        if (JSON.stringify(next) === JSON.stringify(payload)) {
+          // 表单与刚提交的一致:回读盘态重建 baseline(顺带拿到归一化结果),
+          // 保存条随 dirty 归零消失即"保存成功"的反馈。壳已重启引擎,App 收到
+          // engine-status Ready 会自动重拉模型/会话并重开当前会话(免整页刷新)
+          await loadConfigIntoForm();
+          break;
+        }
+        // 保存期间表单变了:校验不过或轮数用尽就保留表单(dirty→保存条),
+        // 绝不回读盘态覆盖——那会把用户的编辑或后到的同步条目一起抹掉
+        if (round >= 2 || !validateBeforeSave(formRef.current.models, formRef.current.mcps)) break;
+        payload = next;
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -1595,6 +1652,7 @@ export function SettingsView({
           statusErr={bzErr}
           refreshStatus={refreshBz}
           onSynced={applySynced}
+          onLoggedIn={onBaizhiLoggedIn}
           knownKeys={() => models.map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"))}
         />
       </Section>
@@ -1602,11 +1660,23 @@ export function SettingsView({
         <MonkeyCodeAccountCard
           connection={mcConnection}
           baizhiLoggedIn={loggedIn}
-          onConnect={onConnectMc}
-          onPasswordLogin={onPasswordLoginMc}
+          // 卡内发起的两条连接路径都标记"连上即自动同步"(卡自己不再持有
+          // 这个意图——它会被百智云同步的切分区动作卸载掉)
+          onConnect={() => {
+            mcAutoSync.current = true;
+            onConnectMc();
+          }}
+          onPasswordLogin={async (email, password) => {
+            mcAutoSync.current = true;
+            const err = await onPasswordLoginMc(email, password);
+            if (err) mcAutoSync.current = false;
+            return err;
+          }}
           onRetry={onRetryMc}
           onDisconnect={() => void disconnectMcWithCleanup()}
-          onSyncedModels={(ms) => applySyncedModels(ms, SOURCE_MONKEYCODE)}
+          syncing={mcSyncing}
+          syncMsg={mcSyncMsg}
+          onSyncModels={() => void syncMcModels()}
           onLogoClick={onMcLogoClick}
         />
         {/* 自建/私有化部署的服务地址(桌面壳在启动时构造云端服务,故重启生效;
