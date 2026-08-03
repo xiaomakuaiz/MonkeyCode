@@ -412,6 +412,11 @@ export const zh = {
   "account.usage.invite": "已邀请 {count} 人",
   "account.usage.inviteLink": "邀请链接",
 
+  "ctx.cut": "剪切",
+  "ctx.copy": "复制",
+  "ctx.paste": "粘贴",
+  "ctx.selectAll": "全选",
+
   "common.confirm": "确认",
   "common.cancel": "取消",
 } as const;

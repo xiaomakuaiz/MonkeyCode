@@ -413,6 +413,11 @@ export const en: Record<MessageKey, string> = {
   "account.usage.invite": "{count} invited",
   "account.usage.inviteLink": "Invite link",
 
+  "ctx.cut": "Cut",
+  "ctx.copy": "Copy",
+  "ctx.paste": "Paste",
+  "ctx.selectAll": "Select all",
+
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
 };
