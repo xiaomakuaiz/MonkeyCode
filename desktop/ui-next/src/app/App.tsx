@@ -6,9 +6,10 @@ import { ChatView } from "@/features/chat/ChatView";
 import { DownloadsDock } from "@/features/downloads/DownloadsDock";
 import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
+import { SettingsView } from "@/features/settings/SettingsView";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
-import { LOCALES, useI18n, setLocale, type Locale } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import {
   hostInfo,
   isMacShell,
@@ -21,7 +22,6 @@ import {
 import { listen } from "@/lib/ipc/ipc";
 import { onSessionEvent, sessionDelete, sessionPatch, sessionsList, type SessionMeta } from "@/lib/ipc/sessions";
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
-import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
 
 const SPACE_ICONS: Record<Space, string> = {
   // 简笔图形占位:P9 前统一换成正式 icon 集
@@ -34,10 +34,12 @@ function SpaceRail({
   space,
   waiting,
   onChange,
+  onOpenSettings,
 }: {
   space: Space;
   waiting: number;
   onChange: (s: Space) => void;
+  onOpenSettings: () => void;
 }) {
   const { t } = useI18n();
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat") };
@@ -65,13 +67,26 @@ function SpaceRail({
           </div>
         ))}
       </div>
+      <div className="pb-2">
+        <button
+          type="button"
+          aria-label={t("rail.settings")}
+          title={t("rail.settings")}
+          className="btn btn-square btn-ghost btn-sm text-base-content/60"
+          onClick={onOpenSettings}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+            <circle cx="12" cy="12" r="3.2" />
+            <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
+          </svg>
+        </button>
+      </div>
     </nav>
   );
 }
 
 function MainArea({ current }: { current: SessionMeta | null }) {
-  const { t, locale } = useI18n();
-  const [theme, setThemeState] = useState<Theme>(readTheme);
+  const { t } = useI18n();
   const [info, setInfo] = useState<HostInfo | null>(null);
   useEffect(() => {
     let alive = true;
@@ -88,47 +103,14 @@ function MainArea({ current }: { current: SessionMeta | null }) {
   return (
     <main className="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-6">
       <div className="card w-96 border border-base-300 bg-base-100 shadow-sm">
-        <div className="card-body gap-3">
+        <div className="card-body gap-2">
           <h1 className="card-title text-base">{t("main.welcome.title")}</h1>
           <p className="text-sm text-base-content/70">{t("main.welcome.detail")}</p>
-          <fieldset className="fieldset">
-            <legend className="fieldset-legend">{t("settings.appearance.theme")}</legend>
-            <select
-              aria-label={t("settings.appearance.theme")}
-              className="select select-sm"
-              value={theme}
-              onChange={(e) => {
-                const next = e.target.value as Theme;
-                setTheme(next);
-                setThemeState(next);
-              }}
-            >
-              {THEMES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </fieldset>
-          <fieldset className="fieldset">
-            <legend className="fieldset-legend">{t("settings.appearance.language")}</legend>
-            <select
-              aria-label={t("settings.appearance.language")}
-              className="select select-sm"
-              value={locale}
-              onChange={(e) => setLocale(e.target.value as Locale)}
-            >
-              {LOCALES.map((l) => (
-                <option key={l.value} value={l.value}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-          </fieldset>
-          <p className="text-xs text-base-content/50">
-            {t("settings.appearance.hint")}
-            {info && ` ${t("main.shellInfo", { version: info.version, engine: info.engine_version ?? t("main.engineNotReady") })}`}
-          </p>
+          {info && (
+            <p className="text-xs text-base-content/50">
+              {t("main.shellInfo", { version: info.version, engine: info.engine_version ?? t("main.engineNotReady") })}
+            </p>
+          )}
         </div>
       </div>
     </main>
@@ -141,18 +123,24 @@ export function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(readLastSession);
   const [creating, setCreating] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const refresh = () => void sessionsList().then(setSessions);
 
   useEffect(() => {
     // 壳意图:启动补取一次(窗口唤起前托盘/桌宠塞的),再听后续推送
     void takeUiIntent().then((intent) => {
+      if (intent === "open-settings") {
+        setSettingsOpen(true);
+        return;
+      }
       const id = sessionIdFromUiIntent(intent);
       if (id) {
         setCurrentId(id);
         writeLastSession(id);
       }
     });
+    const offOpenSettings = listen<void>("open-settings", () => setSettingsOpen(true));
     const offOpenSession = listen<string>("open-session", (id) => {
       if (!id) return;
       setCurrentId(id);
@@ -178,6 +166,7 @@ export function App() {
     return () => {
       off();
       offOpenSession();
+      offOpenSettings();
     };
   }, []);
 
@@ -204,7 +193,7 @@ export function App() {
       {isWindowsShell() && <TitleBar />}
       <EngineBanner />
       <div className="flex min-h-0 flex-1">
-        <SpaceRail space={space} waiting={waiting} onChange={setSpace} />
+        <SpaceRail space={space} waiting={waiting} onChange={setSpace} onOpenSettings={() => setSettingsOpen(true)} />
         <Sidebar
           space={space}
           sessions={sessions}
@@ -227,7 +216,7 @@ export function App() {
             },
           }}
         />
-        <MainArea current={current} />
+        {settingsOpen ? <SettingsView onClose={() => setSettingsOpen(false)} /> : <MainArea current={current} />}
       </div>
       <DownloadsDock />
       <NewTaskModal

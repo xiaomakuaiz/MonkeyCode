@@ -1,8 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { THEMES } from "@/lib/theme";
 import { App } from "./App";
 
 afterEach(() => {
@@ -52,19 +51,12 @@ describe("壳骨架(P1)", () => {
   });
 });
 
-describe("主题选择(暂驻主区,P5 移入设置页)", () => {
-  it("列出全部内置主题;选 dracula 同步落 data-theme 与 mc.theme", async () => {
+describe("设置入口(外观/语言/配置在 SettingsView,各有专测)", () => {
+  it("rail 齿轮打开设置页,关闭回到欢迎页", async () => {
     render(<App />);
-    const picker = screen.getByRole("combobox", { name: "外观主题" });
-    expect(within(picker).getAllByRole("option")).toHaveLength(THEMES.length);
-    await userEvent.selectOptions(picker, "dracula");
-    expect(document.documentElement.dataset.theme).toBe("dracula");
-    expect(localStorage.getItem("mc.theme")).toBe("dracula");
-  });
-
-  it("带着已存偏好启动:选择器回显该主题", () => {
-    localStorage.setItem("mc.theme", "nord");
-    render(<App />);
-    expect((screen.getByRole("combobox", { name: "外观主题" }) as HTMLSelectElement).value).toBe("nord");
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(screen.getByRole("combobox", { name: "外观主题" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(screen.getByText("开始一个任务")).toBeTruthy();
   });
 });
