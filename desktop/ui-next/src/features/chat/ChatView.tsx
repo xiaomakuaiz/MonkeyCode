@@ -23,6 +23,7 @@ import { useComposer } from "./composer/useComposer";
 import { LogList } from "./LogList";
 import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
+import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
@@ -128,6 +129,14 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
 
   // ==== 拖拽附件:HTML5 事件(dragenter/leave 计数配对)+ Linux 壳原生事件 ====
   const [dragging, setDragging] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [changesToken, setChangesToken] = useState(0);
+  const prevTurnEnded = useRef(false);
+  useEffect(() => {
+    // 轮次结束边沿:改动列表需要重拉(抽屉开着时立即,关着时下次打开取新)
+    if (state.turnEnded && !prevTurnEnded.current) setChangesToken((n) => n + 1);
+    prevTurnEnded.current = state.turnEnded;
+  }, [state.turnEnded]);
   const dragDepth = useRef(0);
   const composerRef = useRef(composer);
   composerRef.current = composer;
@@ -189,6 +198,17 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
         {conn && !conn.connected && (
           <span className="badge badge-warning badge-soft badge-sm">{conn.text}</span>
         )}
+        <button
+          type="button"
+          aria-label={t("files.label")}
+          title={t("files.label")}
+          className="btn btn-ghost btn-square btn-sm text-base-content/60"
+          onClick={() => setDrawerOpen((v) => !v)}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+            <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h9A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z" />
+          </svg>
+        </button>
         {state.usage && state.usage.size > 0 && (
           <span
             className="font-mono text-[11px] text-base-content/40 tabular-nums"
@@ -221,6 +241,9 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
           <Composer sessionId={meta.id} state={state} meta={meta} ctl={composer} onAfterSend={followBottom} />
         </div>
       </footer>
+      {drawerOpen && (
+        <FilesDrawer sessionId={meta.id} onClose={() => setDrawerOpen(false)} refreshToken={changesToken} />
+      )}
     </main>
   );
 }
