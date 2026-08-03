@@ -1,0 +1,70 @@
+// 改动列表:状态徽标 + 文件名 + 目录 + 可选 +N/-N,点击 → diff 预览。
+// 本地 repo_file_changes 只给 {path, status},additions/deletions 是云端
+// 超集字段——有则展示,无则整列缺席(不发明数据)。changes null = 加载中。
+import { useI18n } from "@/lib/i18n";
+import type { RepoChange } from "@/lib/ipc/repo";
+import { basename, statusMeta } from "./status";
+
+export interface ChangeItem extends RepoChange {
+  additions?: number;
+  deletions?: number;
+}
+
+export function Changes({
+  changes,
+  activePath,
+  onOpen,
+}: {
+  changes: ChangeItem[] | null;
+  activePath: string | null;
+  onOpen: (path: string) => void;
+}) {
+  const { t } = useI18n();
+  if (changes === null) {
+    return (
+      <div role="status" className="flex items-center gap-2 px-4 py-3 text-xs text-base-content/50">
+        <span className="loading loading-spinner loading-xs" aria-hidden />
+        {t("files.loading")}
+      </div>
+    );
+  }
+  if (changes.length === 0) {
+    return <p className="px-4 py-8 text-center text-xs text-base-content/50">{t("files.changes.empty")}</p>;
+  }
+  const sorted = [...changes].sort((a, b) => a.path.localeCompare(b.path));
+  return (
+    <div className="flex flex-col">
+      {sorted.map((c) => {
+        const meta = statusMeta(c.status);
+        const sep = c.path.lastIndexOf("/");
+        const dir = sep > 0 ? c.path.slice(0, sep) : "";
+        const deleted = c.status === "D" || c.status === "RM";
+        return (
+          <button
+            key={c.path}
+            type="button"
+            title={c.path}
+            onClick={() => onOpen(c.path)}
+            className={`flex w-full items-center gap-2 px-4 py-1 text-left text-xs ${
+              activePath === c.path ? "bg-base-200" : "hover:bg-base-200/60"
+            }`}
+          >
+            <span className={`shrink-0 ${deleted ? "line-through opacity-60" : ""}`}>{basename(c.path)}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-base-content/40">{dir}</span>
+            {(c.additions ?? 0) > 0 && (
+              <span className="shrink-0 font-mono text-[10px] text-success tabular-nums">+{c.additions}</span>
+            )}
+            {(c.deletions ?? 0) > 0 && (
+              <span className="shrink-0 font-mono text-[10px] text-error tabular-nums">-{c.deletions}</span>
+            )}
+            {meta ? (
+              <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
+            ) : (
+              <span className="badge badge-ghost badge-xs shrink-0">{c.status}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
