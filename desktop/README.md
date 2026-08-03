@@ -63,9 +63,8 @@ overlay 而非基础配置(基础配置带 sidecar 会让普通 `cargo check` �
 (`scripts/check_bundle_configs.py`,CI 同跑)强制,缺二进制打包直接失败。
 Windows 包另经 bundle.resources 附带 `ohmyagent-linux`(WSL 运行环境用,
 externalBin 装不下第二平台),nsis 配置缺它同样被守卫拦下。
-CI:desktop-{check,macos,windows,win7,linux}.yml
-(check 跑契约守卫脚本与两侧测试;win7 通道用 go-win7 补丁工具链 +
-固定版 WebView2)。
+CI:desktop-{check,macos,windows,linux}.yml
+(check 跑契约守卫脚本与两侧测试)。
 
 ## WSL 运行环境(Windows)
 

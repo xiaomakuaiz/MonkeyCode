@@ -75,7 +75,7 @@ macos-release:
 	python3 scripts/gen-latest-json.py
 
 # 发布版本只接受当前提交上的 vYYMMDDNN tag；由统一脚本同步 Tauri、Cargo
-# manifest 及主/Win7 lockfile。普通 macos 构建不修改版本文件。
+# manifest 及 lockfile。普通 macos 构建不修改版本文件。
 set-release-version:
 	@tag="$$(git describe --tags --exact-match \
 		--match 'v[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]' HEAD 2>/dev/null)"; \
@@ -125,7 +125,7 @@ windows: check-windows check-bundle-configs engine-windows browser-extension
 
 # 发布构建:在 windows 基础上叠加 createUpdaterArtifacts(需 TAURI_SIGNING_PRIVATE_KEY
 # 签名),并汇集 updater 产物(带版本文件名的 setup.exe + latest-windows.json)到
-# bundle/updater/,供人工上传 OSS。win7 通道由 CI(desktop-win7.yml)产出。
+# bundle/updater/,供人工上传 OSS。
 windows-release: EXTRA_TAURI_CONFIG := --config tauri.release.conf.json
 
 # 结构与 macos-release 一致:set-release-version 必须在 windows 打包**之前**

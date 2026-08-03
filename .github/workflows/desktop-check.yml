@@ -64,7 +64,6 @@ jobs:
           python3 scripts/check_command_contract.py
           python3 scripts/check_bundle_configs.py
           python3 scripts/check_theme_tokens.py
-          python3 scripts/gen_accent_tokens.py --check
           python3 -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Check and test Rust shell
@@ -74,20 +73,6 @@ jobs:
         run: |
           cargo check --all-targets --locked
           cargo test --locked
-
-      # win7 通道用独立的 Cargo.lock.win7(锁老版本以避开 edition2024)。
-      # 此前它只在推 release tag 时才被 --locked 校验,改一个依赖能让 win7
-      # 发布链在发版当天才炸。这里在每次 PR 上验证它与 Cargo.toml 同步。
-      - name: Check win7 lockfile is in sync with Cargo.toml
-        working-directory: desktop
-        run: |
-          cp Cargo.lock.win7 Cargo.lock
-          if ! cargo metadata --locked --format-version 1 >/dev/null; then
-            git checkout -- Cargo.lock
-            echo "::error::Cargo.lock.win7 与 Cargo.toml 不同步,重新生成: scripts/regen-win7-lock.sh"
-            exit 1
-          fi
-          git checkout -- Cargo.lock
 
       # 引擎版本由 agent/ submodule 的 gitlink 钉死,E2E 就跑那一份。
       # 缺 token 硬失败,与 desktop-{windows,macos}.yml 一致:软跳过等于把

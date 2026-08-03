@@ -367,7 +367,7 @@ interactive:true,引擎给持久 Task 工具族)、会话思考档 session/setTh
 uidist/ 是纯生成物不入库;壳静态页与 webfonts 在 ui/public/。
 引擎 sidecar 来自独立 ohmyagent 仓库:本地打包缺省用仓库根
 agent/ submodule(`export OHMYAGENT_SRC=...` 可覆盖),CI 同源。
-externalBin 只能落在打包 overlay(`bundle.{macos,windows,win7,linux}.conf.json`):
+externalBin 只能落在打包 overlay(`bundle.{macos,windows,linux}.conf.json`):
 tauri_build 在编译期就为宿主 triple 解析 sidecar,基础配置一带上,每个
 开发者的 `cargo check` 都要先编出 `binaries/ohmyagent-<host-triple>`。
 同理**不能**用 `tauri.<平台>.conf.json` 这个名字——它是 Tauri 的平台自动
