@@ -40,6 +40,7 @@ import {
 } from "@/lib/ipc/sessions";
 import { noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
+import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
 const SPACE_ICONS: Record<Space, string> = {
   // 简笔图形占位:P9 前统一换成正式 icon 集
@@ -313,6 +314,22 @@ export function App() {
 
   const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
 
+  // 新建弹窗的最近目录:非 chat、未归档(会话与项目两级),按最近活跃排,项目 key 去重
+  const recentDirs = (() => {
+    const archivedProjects = readArchivedProjects();
+    const seen = new Set<string>();
+    const dirs: string[] = [];
+    for (const m of [...sessions]
+      .filter((s) => s.kind !== "chat" && !s.archived && s.workdir)
+      .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))) {
+      const key = projectKey(m.workdir);
+      if (seen.has(key) || archivedProjects.has(key)) continue;
+      seen.add(key);
+      dirs.push(m.workdir);
+    }
+    return dirs;
+  })();
+
   return (
     <div className="flex h-full flex-col text-base-content">
       {isWindowsShell() && <TitleBar />}
@@ -377,6 +394,7 @@ export function App() {
       )}
       <DownloadsDock />
       <NewTaskModal
+        recentDirs={recentDirs}
         open={creating}
         onClose={() => setCreating(false)}
         onCreated={(meta) => {
