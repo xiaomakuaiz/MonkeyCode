@@ -102,9 +102,9 @@ export function takeUiIntent(): Promise<string | null> {
   return invoke<string | null>("take_ui_intent").catch(() => null);
 }
 
-/** 解析 "open-session:<id>" 意图;不是该前缀返回 null。 */
-export function sessionIdFromUiIntent(intent: string | null): string | null {
-  if (!intent?.startsWith("open-session:")) return null;
+/** 解析 "open-session:<id>" 意图;非字符串/非该前缀返回 null(壳返回值防御)。 */
+export function sessionIdFromUiIntent(intent: unknown): string | null {
+  if (typeof intent !== "string" || !intent.startsWith("open-session:")) return null;
   const id = intent.slice("open-session:".length);
   return id || null;
 }
