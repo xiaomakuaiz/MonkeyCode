@@ -341,7 +341,15 @@ export function App() {
           sessions={sessions}
           currentId={currentId}
           attentionIds={attentionIds}
-          cloud={{ currentId: cloudTask?.id ?? null, onSelect: setCloudTask, reloadKey: cloudReload }}
+          cloud={{
+            currentId: cloudTask?.id ?? null,
+            onSelect: setCloudTask,
+            reloadKey: cloudReload,
+            onDeleted: (id) => {
+              if (cloudTask?.id === id) setCloudTask(null);
+              setCloudReload((n) => n + 1);
+            },
+          }}
           actions={{
             onSelect: select,
             onNewTask: () => setCreating(true),

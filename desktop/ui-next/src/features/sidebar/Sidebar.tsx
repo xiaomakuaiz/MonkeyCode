@@ -212,7 +212,7 @@ export function Sidebar({
   /** 后台提醒未读的会话 id 集(D3):命中行状态点转警示色 + 行高亮 */
   attentionIds?: Set<string>;
   /** 云端空间的数据接线(App 提供;缺省时云端页为空列表) */
-  cloud?: { currentId: string | null; onSelect: (task: import("@/lib/ipc/cloudtasks").CloudTask) => void; reloadKey: number };
+  cloud?: { currentId: string | null; onSelect: (task: import("@/lib/ipc/cloudtasks").CloudTask) => void; reloadKey: number; onDeleted?: (id: string) => void };
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -247,7 +247,7 @@ export function Sidebar({
 
   const body = () => {
     if (space === "cloud") {
-      return <CloudTaskList currentId={cloud?.currentId ?? null} onSelect={(task) => cloud?.onSelect(task)} reloadKey={cloud?.reloadKey ?? 0} />;
+      return <CloudTaskList currentId={cloud?.currentId ?? null} onSelect={(task) => cloud?.onSelect(task)} reloadKey={cloud?.reloadKey ?? 0} onDeleted={cloud?.onDeleted} />;
     }
 
     const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat")).filter(matches);
