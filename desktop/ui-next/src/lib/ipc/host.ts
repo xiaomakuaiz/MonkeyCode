@@ -117,6 +117,18 @@ export function openLogDir(): Promise<void> {
     .catch(() => {});
 }
 
+/** WSL 模式下工作目录的家目录基座:guest 家目录的宿主视角
+ *  (\\wsl$\<发行版>\home\<用户>;Linux 冒烟为 posix 家目录)。
+ *  本机模式壳返回 None、浏览器模式/命令失败一律降级 null。 */
+export async function wslWorkdirBase(): Promise<string | null> {
+  if (!inDesktopShell()) return null;
+  try {
+    return (await invoke<string | null>("wsl_workdir_base")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** 系统目录选择;取消/浏览器模式返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
   if (!inDesktopShell()) return null;

@@ -2,21 +2,32 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { b64encode } from "@/lib/protocol/codec";
 import { NewTaskModal } from "./NewTaskModal";
 
 afterEach(() => {
   localStorage.clear();
+  vi.restoreAllMocks();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
 
-function stubShell(models = [{ name: "gpt-5", default: true }, { name: "locked-pro", default: false, locked: true }]) {
+const DEFAULT_MODELS = [
+  { name: "gpt-5", default: true },
+  { name: "locked-pro", default: false, locked: true },
+];
+
+/** 壳桩:按命令名分发,overrides 可逐命令改写(如注入失败)。 */
+function stubShell(overrides: Record<string, (args?: Record<string, unknown>) => Promise<unknown>> = {}, models = DEFAULT_MODELS) {
   const calls: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
       invoke: (cmd: string, args?: Record<string, unknown>) => {
         calls.push({ cmd, args });
+        const over = overrides[cmd];
+        if (over) return over(args);
         if (cmd === "models_list") return Promise.resolve(models);
-        if (cmd === "session_create") return Promise.resolve({ id: "s-new", title: "t", workdir: "/w", model: "gpt-5", turns: 0, status: "created", kind: (args?.kind as string) ?? "local" });
+        if (cmd === "session_create")
+          return Promise.resolve({ id: "s-new", title: "t", workdir: "/w", model: "gpt-5", turns: 0, status: "created", kind: (args?.kind as string) ?? "local" });
         return Promise.resolve(null);
       },
     },
@@ -28,12 +39,12 @@ describe("新建任务", () => {
   it("默认本地模式:目录预填 ~/MonkeyCode,模型取默认且锁定项禁选", async () => {
     stubShell();
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
-    expect((screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement).value).toBe("~/MonkeyCode");
     await waitFor(() => expect((screen.getByRole("combobox", { name: "模型" }) as HTMLSelectElement).value).toBe("gpt-5"));
+    expect((screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement).value).toBe("~/MonkeyCode");
     expect((screen.getByRole("option", { name: "locked-pro" }) as HTMLOptionElement).disabled).toBe(true);
   });
 
-  it("本地 + 默认目录:createDir=true;创建成功回调并记忆模型", async () => {
+  it("本地 + 默认目录:createDir=true、think 缺省空串;创建成功回调并记忆模型", async () => {
     const calls = stubShell();
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
@@ -41,7 +52,7 @@ describe("新建任务", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     const create = calls.find((c) => c.cmd === "session_create");
-    expect(create?.args).toEqual({ workdir: "~/MonkeyCode", model: "gpt-5", createDir: true, kind: "local" });
+    expect(create?.args).toEqual({ workdir: "~/MonkeyCode", model: "gpt-5", createDir: true, kind: "local", think: "" });
     expect(localStorage.getItem("mc.lastTaskModel")).toBe("gpt-5");
   });
 
@@ -54,7 +65,7 @@ describe("新建任务", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     const create = calls.find((c) => c.cmd === "session_create");
-    expect(create?.args).toEqual({ workdir: "", model: "gpt-5", createDir: false, kind: "chat" });
+    expect(create?.args).toEqual({ workdir: "", model: "gpt-5", createDir: false, kind: "chat", think: "" });
   });
 
   it("本地模式清空目录:前端拦截并提示,不发命令", async () => {
@@ -66,16 +77,147 @@ describe("新建任务", () => {
     expect(calls.some((c) => c.cmd === "session_create")).toBe(false);
   });
 
-  it("创建失败:错误文案外显(壳的 Err 是中文,直接展示)", async () => {
-    stubShell();
-    (window as unknown as { __TAURI__?: { core: { invoke: (c: string) => Promise<unknown> } } }).__TAURI__ = {
-      core: {
-        invoke: (cmd: string) =>
-          cmd === "models_list" ? Promise.resolve([{ name: "m", default: true }]) : Promise.reject(new Error("目录不存在")),
-      },
-    };
+  it("创建失败(非目录缺失):错误文案外显,无确认钮", async () => {
+    stubShell({ session_create: () => Promise.reject(new Error("模型不可用")) });
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("目录不存在"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("模型不可用"));
+    expect(screen.queryByRole("button", { name: "创建并继续" })).toBeNull();
+  });
+
+  it("目录不存在:错误条换成确认钮,确认后带 createDir=true 重试", async () => {
+    let attempts = 0;
+    const calls = stubShell({
+      session_create: (args) => {
+        attempts++;
+        if (attempts === 1) return Promise.reject(new Error("工作区目录不存在: /x/y"));
+        return Promise.resolve({ id: "s-new", title: "", workdir: "/x/y", model: "gpt-5", turns: 0, status: "created", kind: (args?.kind as string) ?? "local" });
+      },
+    });
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    const input = screen.getByRole("textbox", { name: "项目目录" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "/x/y");
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("目录不存在,创建并继续?"));
+    await userEvent.click(screen.getByRole("button", { name: "创建并继续" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    const creates = calls.filter((c) => c.cmd === "session_create");
+    expect(creates).toHaveLength(2);
+    expect(creates[0]?.args).toMatchObject({ workdir: "/x/y", createDir: false });
+    expect(creates[1]?.args).toMatchObject({ workdir: "/x/y", createDir: true });
+  });
+
+  it("首条消息随建随发:session_create 成功后经 session_send 发 user-input(b64)", async () => {
+    const calls = stubShell();
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    await userEvent.type(screen.getByRole("textbox", { name: "首条消息" }), "修个 bug");
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    const send = calls.find((c) => c.cmd === "session_send");
+    expect(send?.args).toEqual({ id: "s-new", ftype: "user-input", payload: { content: b64encode("修个 bug") } });
+    // 顺序:先建后发
+    expect(calls.findIndex((c) => c.cmd === "session_send")).toBeGreaterThan(calls.findIndex((c) => c.cmd === "session_create"));
+  });
+
+  it("首条消息留空:不发 session_send", async () => {
+    const calls = stubShell();
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(calls.some((c) => c.cmd === "session_send")).toBe(false);
+  });
+
+  it("首条消息发送失败:仅 console.warn,不阻断进入会话", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubShell({ session_send: () => Promise.reject(new Error("引擎未就绪")) });
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    render(<NewTaskModal open onClose={onClose} onCreated={onCreated} />);
+    await userEvent.type(screen.getByRole("textbox", { name: "首条消息" }), "hi");
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(onClose).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("think 档:选中后随 session_create 下发", async () => {
+    const calls = stubShell();
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "思考深度" }), "high");
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(calls.find((c) => c.cmd === "session_create")?.args).toMatchObject({ think: "high" });
+  });
+
+  it("最近目录:预填首项、下拉可选,WSL 遗留 UNC 目录在本机模式被过滤", async () => {
+    stubShell();
+    render(
+      <NewTaskModal
+        open
+        onClose={() => {}}
+        onCreated={() => {}}
+        recentDirs={["/a/proj", "/b/proj", "\\\\wsl$\\Ubuntu\\home\\u\\proj"]}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("/a/proj"));
+    await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
+    const menu = screen.getByRole("list", { name: "最近目录" });
+    expect(menu.textContent).toContain("/a/proj");
+    expect(menu.textContent).toContain("/b/proj");
+    expect(menu.textContent).not.toContain("wsl$");
+    await userEvent.click(screen.getByRole("button", { name: "/b/proj" }));
+    expect(input.value).toBe("/b/proj");
+    expect(screen.queryByRole("list", { name: "最近目录" })).toBeNull();
+  });
+
+  it("选择其他文件夹…:走系统目录选择并回填", async () => {
+    const calls = stubShell({ "plugin:dialog|open": () => Promise.resolve("/picked/dir") });
+    render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
+    await userEvent.click(screen.getByRole("button", { name: "选择其他文件夹…" }));
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement).value).toBe("/picked/dir"),
+    );
+    expect(calls.some((c) => c.cmd === "plugin:dialog|open")).toBe(true);
+  });
+
+  it("WSL 运行环境:默认目录用家目录基座,基座默认目录也享受静默创建", async () => {
+    const calls = stubShell({
+      get_config: () => Promise.resolve({ models: [], mcp_servers: {}, kernel_env: "wsl:Ubuntu" }),
+      wsl_workdir_base: () => Promise.resolve("\\\\wsl$\\Ubuntu\\home\\u"),
+    });
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    const input = screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("\\\\wsl$\\Ubuntu\\home\\u\\MonkeyCode"));
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(calls.find((c) => c.cmd === "session_create")?.args).toMatchObject({
+      workdir: "\\\\wsl$\\Ubuntu\\home\\u\\MonkeyCode",
+      createDir: true,
+    });
+  });
+
+  it("WSL 运行环境:最近目录按环境过滤(posix/盘符留、无关形态不进列表)", async () => {
+    stubShell({
+      get_config: () => Promise.resolve({ models: [], mcp_servers: {}, kernel_env: "wsl:Ubuntu" }),
+      wsl_workdir_base: () => Promise.resolve("/home/u"),
+    });
+    render(
+      <NewTaskModal open onClose={() => {}} onCreated={() => {}} recentDirs={["/home/u/proj", "C:\\dev\\proj", "relative\\x"]} />,
+    );
+    const input = screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("/home/u/proj"));
+    await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
+    const menu = screen.getByRole("list", { name: "最近目录" });
+    expect(menu.textContent).toContain("/home/u/proj");
+    expect(menu.textContent).toContain("C:\\dev\\proj");
+    expect(menu.textContent).not.toContain("relative");
   });
 });
