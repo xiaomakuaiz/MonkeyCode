@@ -16,8 +16,9 @@ import {
 import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
-import type { SessionMeta } from "@/lib/ipc/sessions";
+import { sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop } from "@/lib/ipc/uploads";
+import { createImeGuard } from "@/lib/util/slash";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
 import { LogList } from "./LogList";
@@ -30,9 +31,9 @@ const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
 const JUMP_MAX_PAGES = 80; // 大纲跳转补页上限(cursor 不前进/坏锚时不空转)
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
 
-export function ChatView({ meta }: { meta: SessionMeta }) {
+export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: number }) {
   const { t } = useI18n();
-  const { state, conn, hasMore, loadingEarlier, loadEarlier } = useSessionFeed(meta.id);
+  const { state, conn, hasMore, loadingEarlier, loadEarlier } = useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
   const composer = useComposer(meta.id, state.running);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -68,6 +69,41 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   };
+
+  // ==== 标题重命名(D4):h1 双击进输入态。提交只发 sessionPatch,不乐观
+  // 改 meta——壳广播 session-event,App 的列表 patch 回写 title 后新 meta
+  // 自然流回来。Enter 提交(IME 选字回车除外)/Esc 放弃/失焦提交。 ====
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const titleIme = useRef(createImeGuard());
+  // 提交/放弃后置位:Enter 提交会卸载输入框,随之而来的 blur 不能再提交一次
+  const renameDoneRef = useRef(false);
+  const startRename = () => {
+    setTitleDraft(meta.title);
+    renameDoneRef.current = false;
+    setEditingTitle(true);
+  };
+  const commitRename = () => {
+    if (renameDoneRef.current) return;
+    renameDoneRef.current = true;
+    setEditingTitle(false);
+    const next = titleDraft.trim();
+    if (next && next !== meta.title) void sessionPatch(meta.id, { title: next }).catch(() => {});
+  };
+  const cancelRename = () => {
+    renameDoneRef.current = true;
+    setEditingTitle(false);
+  };
+  useEffect(() => {
+    // 切会话丢弃编辑态(草稿属于上一个会话)
+    setEditingTitle(false);
+  }, [meta.id]);
+
+  // ==== 子代理会话回放浮层(D2):工具卡「查看子会话」入口打开,只读 ====
+  const [childId, setChildId] = useState<string | null>(null);
+  useEffect(() => {
+    setChildId(null); // 切会话关掉上一个会话的子回放
+  }, [meta.id]);
 
   // ==== 提问大纲:打开拉一次,轮结束(running 真→假)再拉(轮末才物化) ====
   const [outline, setOutline] = useState<OutlineItem[]>([]);
@@ -190,7 +226,38 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
 
       <header data-view-header="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm leading-tight font-semibold">{meta.title}</h1>
+          {editingTitle ? (
+            <input
+              autoFocus
+              aria-label={t("chat.rename.label")}
+              className="input input-xs w-full max-w-xs text-sm font-semibold"
+              value={titleDraft}
+              maxLength={80}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              // 进编辑态即全选(Finder 改名手感:直接打字整体覆盖)
+              onFocus={(e) => e.currentTarget.select()}
+              onCompositionEnd={(e) => titleIme.current.markEnd(e.timeStamp)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                // 输入态按键不外溢:Esc/Enter 属于改名交互,不能漏给全局
+                // 审批热键(esc=deny 不可逆)
+                e.stopPropagation();
+                if (e.key === "Enter" && !titleIme.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) {
+                  commitRename();
+                } else if (e.key === "Escape") {
+                  cancelRename();
+                }
+              }}
+            />
+          ) : (
+            <h1 className="truncate text-sm leading-tight font-semibold">
+              {/* 双击只挂在文字 span 上,且不带 data-tauri-drag-region:
+                  Windows 壳把拖拽区双击吃成最大化,标题必须留在拖拽区之外 */}
+              <span title={t("chat.rename.hint")} className="cursor-text" onDoubleClick={startRename}>
+                {meta.title}
+              </span>
+            </h1>
+          )}
           {meta.summary && (
             <p className="truncate text-[11px] leading-tight text-base-content/50">{meta.summary}</p>
           )}
@@ -227,7 +294,7 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
               {t("chat.loadEarlier")}
             </button>
           )}
-          <LogList state={state} sessionId={meta.id} flashSeq={flashSeq ?? undefined} />
+          <LogList state={state} sessionId={meta.id} flashSeq={flashSeq ?? undefined} onOpenChildSession={setChildId} />
         </div>
       </div>
 
@@ -244,6 +311,53 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
       {drawerOpen && (
         <FilesDrawer sessionId={meta.id} onClose={() => setDrawerOpen(false)} refreshToken={changesToken} />
       )}
+      {childId && <ChildSessionModal id={childId} onClose={() => setChildId(null)} />}
     </main>
+  );
+}
+
+/** 子代理会话只读回放浮层(D2):复用 useSessionFeed + LogList(readonly),
+ * 无 composer、无审批热键;卸载即 session_close(useSessionFeed 清理)。
+ * 尾部回放窗口够看完整过程,不做「加载更早」(与旧版 SessionViewer 同口径)。 */
+function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const { t } = useI18n();
+  const { state, conn } = useSessionFeed(id);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    // Esc(window capture):浮层优先——消费即截断,不许漏给全局审批热键
+    // (esc = deny 不可逆;语义与 FilesDrawer 一致)
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      onCloseRef.current();
+    };
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
+  }, []);
+  return (
+    <div className="modal modal-open" role="dialog" aria-label={t("chat.child.title")}>
+      <div className="modal-box flex max-h-[84vh] w-[min(860px,92vw)] max-w-[min(860px,92vw)] flex-col gap-3 p-5">
+        <div className="flex shrink-0 items-center gap-2">
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
+            {t("chat.child.title")} <span className="font-mono text-xs text-base-content/50">{id}</span>
+          </h2>
+          {conn && !conn.connected && <span className="badge badge-warning badge-soft badge-sm">{conn.text}</span>}
+          <button
+            type="button"
+            aria-label={t("chat.dismiss")}
+            title={t("chat.dismiss")}
+            className="btn btn-ghost btn-square btn-xs"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <LogList state={state} sessionId={id} readonly />
+        </div>
+      </div>
+      <div className="modal-backdrop cursor-pointer" onClick={onClose} aria-hidden />
+    </div>
   );
 }

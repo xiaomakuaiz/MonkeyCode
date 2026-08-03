@@ -65,6 +65,7 @@ export function ToolCard({
   perm,
   sessionId,
   sendFrame,
+  onOpenChild,
 }: {
   item: ToolItem;
   /** 锚定到本卡的待决审批(permAnchors 判定):⏸ 顶掉状态点 + 底部内嵌
@@ -73,6 +74,8 @@ export function ToolCard({
   sessionId: string;
   /** 内嵌审批行的上行管道注入(云端任务经 stream WS);缺省 = 本地 sender */
   sendFrame?: FrameSender;
+  /** 子代理卡「查看子会话」入口(item.childSessionId 存在时渲染) */
+  onOpenChild?: (id: string) => void;
 }) {
   const { t } = useI18n();
   const duration = formatDuration(item.durationMs);
@@ -94,6 +97,15 @@ export function ToolCard({
           {item.title}
         </span>
         {duration && <span className="font-mono text-base-content/40 tabular-nums">{duration}</span>}
+        {item.childSessionId && onOpenChild && (
+          <button
+            type="button"
+            className="link link-primary shrink-0 text-xs font-semibold no-underline hover:underline"
+            onClick={() => onOpenChild(item.childSessionId!)}
+          >
+            {t("chat.tool.childSession")}
+          </button>
+        )}
       </div>
       {findings && <FindingsCard report={findings} />}
       {feed.length > 0 && (
@@ -138,7 +150,9 @@ export function ToolCard({
             <span>{t("chat.perm.needConfirm")}</span>
             {perm.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{perm.tool}</span>}
           </div>
-          <PermActions perm={perm} sessionId={sessionId} sendFrame={sendFrame} />
+          {/* key=perm.id:同一张工具卡先后锚定不同审批时,内嵌行的乐观态
+              (local)随审批重置——否则二次 open 时按钮行被旧徽标顶掉 */}
+          <PermActions key={perm.id} perm={perm} sessionId={sessionId} sendFrame={sendFrame} />
         </div>
       )}
     </div>

@@ -53,6 +53,8 @@ function renderItem(
   anchors: Map<string, PermItem>,
   flashSeq?: number,
   sendFrame?: FrameSender,
+  readonly?: boolean,
+  onOpenChildSession?: (id: string) => void,
 ) {
   switch (item.kind) {
     case "user":
@@ -62,11 +64,20 @@ function renderItem(
     case "thought":
       return <ThoughtBlock item={item} />;
     case "tool":
-      return <ToolCard item={item} perm={anchors.get(item.tcId)} sessionId={sessionId} sendFrame={sendFrame} />;
+      // 只读回放不递交锚定审批:工具卡不出内嵌按钮行,按 run/ok/fail 常态渲染
+      return (
+        <ToolCard
+          item={item}
+          perm={readonly ? undefined : anchors.get(item.tcId)}
+          sessionId={sessionId}
+          sendFrame={sendFrame}
+          onOpenChild={onOpenChildSession}
+        />
+      );
     case "perm":
-      return <PermCard item={item} sessionId={sessionId} sendFrame={sendFrame} />;
+      return <PermCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
     case "ask":
-      return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} />;
+      return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
     case "sys":
       return <div className="self-center rounded-full bg-base-200 px-3 py-0.5 text-[11px] text-base-content/50">{item.text}</div>;
   }
@@ -77,6 +88,8 @@ export function LogList({
   sessionId,
   flashSeq,
   sendFrame,
+  readonly,
+  onOpenChildSession,
 }: {
   state: ChatState;
   sessionId: string;
@@ -85,6 +98,10 @@ export function LogList({
   /** 审批/提问答复的上行管道注入(云端任务经 stream WS 发帧);
    * 缺省 = sessionId 的本地 sender(壳侧 session_send)。 */
   sendFrame?: FrameSender;
+  /** 只读回放(子代理会话浮层):审批/提问卡按已决/禁用渲染,不出交互按钮。 */
+  readonly?: boolean;
+  /** 子代理工具卡「查看子会话」入口(缺省不渲染入口)。 */
+  onOpenChildSession?: (id: string) => void;
 }) {
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
@@ -97,7 +114,11 @@ export function LogList({
         item.kind === "perm" && item.toolCallId && toolIds.has(item.toolCallId) ? (
           <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />
         ) : (
-          <div key={itemKey(state, i)}>{renderItem(item, sessionId, anchors, flashSeq, sendFrame)}</div>
+          // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
+          // (包裹层是块级时 align-self 无效,居中丢失)
+          <div key={itemKey(state, i)} className="flex flex-col">
+            {renderItem(item, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession)}
+          </div>
         ),
       )}
       {state.running && state.streamKind === "" && (

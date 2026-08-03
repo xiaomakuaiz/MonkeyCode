@@ -28,7 +28,9 @@ export interface SessionFeed {
   loadEarlier: () => Promise<void>;
 }
 
-export function useSessionFeed(id: string | null): SessionFeed {
+/** epoch:引擎重启自愈信号(D1)。App 在引擎 Ready 且此前掉过时自增,
+ *  effect 依赖它整体重跑 = 幂等重开(壳对未登记 sid 懒登记并回放历史)。 */
+export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
   const [state, setState] = useState<ChatState>(createChatState);
   const [conn, setConn] = useState<ConnStatus | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -69,7 +71,7 @@ export function useSessionFeed(id: string | null): SessionFeed {
       offConn();
       void sessionClose(id);
     };
-  }, [id]);
+  }, [id, epoch]);
 
   const loadEarlier = useCallback(async () => {
     if (!id || loadingEarlier) return;

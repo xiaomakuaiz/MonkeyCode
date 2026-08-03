@@ -79,24 +79,29 @@ export function PermActions({
 }
 
 /** 独立审批卡(无锚点/找不到同 id 工具卡时渲染):警示框 + mono 原文 +
- * 按钮行;已决/过期收成一行状态(回放的审计痕迹)。 */
+ * 按钮行;已决/过期收成一行状态(回放的审计痕迹)。
+ * readonly(子会话只读回放):open 态也收成一行审计痕迹,不出按钮。 */
 export function PermCard({
   item,
   sessionId,
   sendFrame,
+  readonly,
 }: {
   item: PermItem;
   sessionId: string;
   sendFrame?: FrameSender;
+  readonly?: boolean;
 }) {
   const { t } = useI18n();
-  if (item.state !== "open") {
+  if (item.state !== "open" || readonly) {
     return (
       <div role="status" className="alert alert-soft py-1.5 text-xs" data-perm-id={item.id}>
         <span className="min-w-0 flex-1 truncate">
           {t("chat.permission")}:{item.title}
         </span>
-        <span className="badge badge-ghost badge-xs">{permStateLabel(item.state)}</span>
+        <span className="badge badge-ghost badge-xs">
+          {item.state === "open" ? t("chat.perm.needConfirm") : permStateLabel(item.state)}
+        </span>
       </div>
     );
   }
@@ -109,7 +114,9 @@ export function PermCard({
           {item.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{item.tool}</span>}
         </div>
         <div className="rounded-box bg-base-200 px-3 py-2 font-mono text-xs break-all select-text">{item.title}</div>
-        <PermActions perm={item} sessionId={sessionId} sendFrame={sendFrame} />
+        {/* key=perm.id:同一渲染位被复用于另一张审批卡时,乐观态(local)
+            必须随卡重置,否则新卡直接顶着旧卡的"已允许"徽标出场 */}
+        <PermActions key={item.id} perm={item} sessionId={sessionId} sendFrame={sendFrame} />
       </div>
     </div>
   );

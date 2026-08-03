@@ -41,6 +41,10 @@ export function resolveShortcut(ctx: ShortcutCtx): ShortcutAction {
   }
   if (ctx.key === "Escape") {
     if (typing) return { kind: "blur" };
+    // 浮层优先:开着的浮层(文件抽屉/子会话回放弹层)在 window capture 阶段
+    // 消费 Esc 并 stopImmediatePropagation,事件根本到不了这里(本 hook 挂
+    // bubble 阶段);能走到这条 deny 路径的 Esc,必然是没有浮层在场的那一下。
+    // deny 不可逆,同一下按键绝不允许"关浮层 + 拒绝审批"双消费
     if (ctx.openPermId) return { kind: "perm", id: ctx.openPermId, approved: false };
     return NONE;
   }

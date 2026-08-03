@@ -41,11 +41,14 @@ export function AskCard({
   item,
   sessionId,
   sendFrame,
+  readonly,
 }: {
   item: AskItem;
   sessionId: string;
   /** 上行管道注入(云端任务经 stream WS);缺省 = sessionId 的本地 sender */
   sendFrame?: FrameSender;
+  /** 只读回放(子会话浮层):open 态也按只读摘要渲染,不出作答表单。 */
+  readonly?: boolean;
 }) {
   const { t } = useI18n();
   const [selected, setSelected] = useState<Record<number, string[]>>({});
@@ -56,7 +59,7 @@ export function AskCard({
   if (item.state === "expired") {
     return <div className="self-center text-[11px] text-base-content/50">{t("chat.ask.expired")}</div>;
   }
-  if (item.state === "done" || sent) {
+  if (item.state === "done" || sent || readonly) {
     return <ReadonlyAsk item={item} local={sent} />;
   }
 

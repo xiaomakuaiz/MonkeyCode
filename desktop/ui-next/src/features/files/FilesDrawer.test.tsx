@@ -7,6 +7,7 @@ import { FilesDrawer } from "./FilesDrawer";
 afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 interface CallRecord {
@@ -137,6 +138,46 @@ describe("文件抽屉", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Esc 消费后截断传播(H1):window 上后续监听不再收到这一下按键", async () => {
+    const onClose = vi.fn();
+    stubShell({ list: { "": [] } });
+    render(<FilesDrawer sessionId="s1" onClose={onClose} />);
+    await flush();
+
+    // 模拟审批热键(app/shortcuts.ts 挂 window bubble):抽屉消费 Esc 后
+    // 绝不能漏到这里——esc = deny 不可逆,同一下按键不许双消费
+    const leaked = vi.fn();
+    window.addEventListener("keydown", leaked);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(leaked).not.toHaveBeenCalled();
+
+    // 非 Esc 按键不截断,照常传播
+    fireEvent.keyDown(window, { key: "a" });
+    expect(leaked).toHaveBeenCalledTimes(1);
+    window.removeEventListener("keydown", leaked);
+  });
+
+  it("Windows 壳(H3):scrim/面板从自绘标题栏下缘起(top-9),不遮三键与拖拽区", async () => {
+    vi.stubGlobal("navigator", { ...window.navigator, userAgent: "Windows NT 10.0" });
+    stubShell({ list: { "": [] } });
+    const { container } = render(<FilesDrawer sessionId="s1" onClose={() => {}} />);
+    await flush();
+    const scrim = container.querySelector(".z-30");
+    const panel = screen.getByRole("region", { name: "会话文件" });
+    expect(scrim?.className).toContain("top-9");
+    expect(scrim?.className).not.toContain("inset-0");
+    expect(panel.className).toContain("top-9");
+  });
+
+  it("非 Windows 壳:抽屉照旧贴视口顶(top-0)", async () => {
+    stubShell({ list: { "": [] } });
+    const { container } = render(<FilesDrawer sessionId="s1" onClose={() => {}} />);
+    await flush();
+    expect(container.querySelector(".z-30")?.className).toContain("top-0");
+    expect(screen.getByRole("region", { name: "会话文件" }).className).toContain("top-0");
   });
 
   it("非 git 工作区:改动 tab 不渲染,只留文件浏览", async () => {

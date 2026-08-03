@@ -96,6 +96,27 @@ describe("审批卡", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("乐观态按 perm.id 键控:同一渲染位换新审批卡,按钮行重现(H8)", async () => {
+    stubShell();
+    const { rerender } = render(<PermCard item={PERM} sessionId="s1" />);
+    await userEvent.click(screen.getByRole("button", { name: "允许" }));
+    expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+    expect(screen.getByText("已允许")).toBeTruthy();
+
+    // React 复用同一组件实例(位置/类型相同):新卡不能顶着旧卡的乐观徽标
+    rerender(<PermCard item={{ ...PERM, id: "p2", title: "curl example.com" }} sessionId="s1" />);
+    expect(screen.getByRole("button", { name: "允许" })).toBeTruthy();
+    expect(screen.queryByText("已允许")).toBeNull();
+  });
+
+  it("只读回放(readonly):open 态也收成一行审计痕迹,无按钮", () => {
+    stubShell();
+    render(<PermCard item={PERM} sessionId="c1" readonly />);
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getByText("需要确认")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("PermActions 可独立复用(工具卡内嵌形态)", async () => {
     const calls = stubShell();
     render(<PermActions perm={PERM} sessionId="s1" />);

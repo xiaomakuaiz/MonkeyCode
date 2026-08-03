@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { PermItem, ToolItem } from "@/lib/protocol/types";
@@ -7,6 +8,18 @@ import { ToolCard } from "./ToolCard";
 afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
+
+/** 最小壳桩:engine_caps 全开、session_send 应答成功(乐观态成立)。 */
+function stubShell() {
+  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+    core: {
+      invoke: (cmd: string) =>
+        cmd === "engine_caps"
+          ? Promise.resolve({ browser_ext: false, usage_update: true, perm_remember: true, attachments: true })
+          : Promise.resolve(undefined),
+    },
+  };
+}
 
 const BASE: ToolItem = { kind: "tool", tcId: "t1", title: "Bash npm test", status: "ok", out: "" };
 
@@ -74,6 +87,32 @@ describe("工具卡", () => {
     expect(screen.getByText("需要确认")).toBeTruthy();
     expect(screen.getByRole("button", { name: "允许" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();
+  });
+
+  it("内嵌审批乐观态按 perm.id 键控:同卡二次锚定新审批,按钮行重现(H8)", async () => {
+    stubShell();
+    const perm = (id: string): PermItem => ({ kind: "perm", id, title: "npm test", tool: "Bash", state: "open", toolCallId: "t1" });
+    const { rerender } = render(<ToolCard item={{ ...BASE, status: "run" }} perm={perm("p1")} sessionId="s1" />);
+    await userEvent.click(screen.getByRole("button", { name: "允许" }));
+    expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+    expect(screen.getByText("已允许")).toBeTruthy();
+
+    // 同一张工具卡(同一渲染位)锚定第二张审批:乐观态必须随 id 重置
+    rerender(<ToolCard item={{ ...BASE, status: "run" }} perm={perm("p2")} sessionId="s1" />);
+    expect(screen.getByRole("button", { name: "允许" })).toBeTruthy();
+    expect(screen.queryByText("已允许")).toBeNull();
+  });
+
+  it("childSessionId + onOpenChild:头部出「查看子会话」入口并回传 id", async () => {
+    const opened: string[] = [];
+    render(<ToolCard item={{ ...BASE, childSessionId: "c1" }} sessionId="s1" onOpenChild={(id) => opened.push(id)} />);
+    await userEvent.click(screen.getByRole("button", { name: "查看子会话" }));
+    expect(opened).toEqual(["c1"]);
+  });
+
+  it("缺 onOpenChild(如云端只读流)时不渲染子会话入口", () => {
+    render(<ToolCard item={{ ...BASE, childSessionId: "c1" }} sessionId="s1" />);
+    expect(screen.queryByRole("button", { name: "查看子会话" })).toBeNull();
   });
 
   it("report_findings:渲染结构化发现列表", () => {

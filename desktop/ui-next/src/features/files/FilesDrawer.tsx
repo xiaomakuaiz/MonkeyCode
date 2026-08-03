@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import { isWindowsShell } from "@/lib/ipc/host";
 import { repoChanges, repoFileDiff, repoListDir, repoReadFile, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
 import { Changes } from "./Changes";
 import { Preview, type PreviewModel } from "./Preview";
@@ -123,6 +124,10 @@ export function FilesDrawer({
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // 浮层优先:这一下 Esc 已被抽屉消费,立即截断——window 上还挂着
+      // 审批热键(app/shortcuts.ts,esc = deny 不可逆),同一下按键绝不能
+      // "关抽屉 + 拒绝审批"双消费;抽屉关完再按,才轮到审批
+      e.stopImmediatePropagation();
       if (previewOpenRef.current) {
         reqRef.current++;
         setPreview(null);
@@ -237,13 +242,18 @@ export function FilesDrawer({
     ? `min-h-0 shrink-0 overflow-y-auto py-1 max-h-[calc(100%-190px)] ${split > 0 ? "" : "h-[38%]"}`
     : "min-h-0 flex-1 overflow-y-auto py-1";
 
+  // Windows 壳自绘标题栏(h-9)不入 z 层竞赛:抽屉整组(scrim + 面板)从
+  // 标题栏下缘起,结构性避让——三键与拖拽区恒可点,scrim 也不压暗标题栏;
+  // 其余平台无自绘标题栏,照旧贴视口顶
+  const topClass = isWindowsShell() ? "top-9" : "top-0";
+
   return (
     <>
-      <div aria-hidden className="fixed inset-0 z-30 bg-black/30" onClick={onClose} />
+      <div aria-hidden className={`fixed ${topClass} inset-x-0 bottom-0 z-30 bg-black/30`} onClick={onClose} />
       <section
         aria-label={t("files.label")}
         style={{ width }}
-        className="fixed inset-y-0 right-0 z-40 flex max-w-[90vw] flex-col border-l border-base-300 bg-base-100 shadow-xl"
+        className={`fixed ${topClass} right-0 bottom-0 z-40 flex max-w-[90vw] flex-col border-l border-base-300 bg-base-100 shadow-xl`}
       >
         <div
           role="separator"

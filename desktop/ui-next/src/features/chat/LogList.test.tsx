@@ -68,6 +68,78 @@ describe("LogList 锚定分发", () => {
   });
 });
 
+describe("LogList 系统行居中(H7)", () => {
+  it("包裹 div 是 flex 列,sys 条目 self-center 有生效上下文", () => {
+    const state = withItems([{ kind: "sys", text: "— 本轮结束 —" }]);
+    render(<LogList state={state} sessionId="s1" />);
+    const sys = screen.getByText("— 本轮结束 —");
+    expect(sys.className).toContain("self-center");
+    // 直接包裹层必须是 flex 列(块级包裹层会让 align-self 失效,居中丢失)
+    expect(sys.parentElement?.className).toContain("flex");
+    expect(sys.parentElement?.className).toContain("flex-col");
+  });
+});
+
+describe("LogList 只读回放(readonly,子会话浮层)", () => {
+  it("独立 open 审批收成审计行:无按钮,标「需要确认」", () => {
+    const state = withItems([
+      { kind: "perm", id: "p1", title: "rm -rf x", tool: "Bash", state: "open" },
+    ]);
+    render(<LogList state={state} sessionId="c1" readonly />);
+    expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getByText("需要确认")).toBeTruthy();
+  });
+
+  it("锚定 open 审批不产生内嵌按钮行,工具卡按常态渲染", () => {
+    const state = withItems([
+      TOOL,
+      { kind: "perm", id: "p1", title: "npm test", tool: "Bash", state: "open", toolCallId: "t1" },
+    ]);
+    const { container } = render(<LogList state={state} sessionId="c1" readonly />);
+    expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+    expect(screen.queryByText("需要确认")).toBeNull();
+    // 结构契约不平移:被锚定项仍是占位 div
+    expect(container.firstElementChild?.children).toHaveLength(2);
+  });
+
+  it("open 提问卡按只读摘要渲染,不出作答表单", () => {
+    const state = withItems([
+      {
+        kind: "ask",
+        askId: "q1",
+        state: "open",
+        questions: [{ question: "选哪个?", multiSelect: false, custom: false, options: [{ label: "A" }] }],
+      },
+    ]);
+    render(<LogList state={state} sessionId="c1" readonly />);
+    expect(screen.queryByRole("button", { name: "提交回答" })).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.getByText("选哪个?")).toBeTruthy();
+    expect(screen.getAllByText("未回答").length).toBeGreaterThan(0);
+  });
+});
+
+describe("LogList 子会话入口(onOpenChildSession)", () => {
+  it("工具卡带 childSessionId 且传了回调:入口可点并回传 id", async () => {
+    const opened: string[] = [];
+    const state = withItems([{ ...TOOL, childSessionId: "c1" }]);
+    render(<LogList state={state} sessionId="s1" onOpenChildSession={(id) => opened.push(id)} />);
+    await userEvent.click(screen.getByRole("button", { name: "查看子会话" }));
+    expect(opened).toEqual(["c1"]);
+  });
+
+  it("缺 childSessionId 或缺回调:不渲染入口", () => {
+    const { rerender } = render(
+      <LogList state={withItems([TOOL])} sessionId="s1" onOpenChildSession={() => {}} />,
+    );
+    expect(screen.queryByRole("button", { name: "查看子会话" })).toBeNull();
+    rerender(<LogList state={withItems([{ ...TOOL, childSessionId: "c1" }])} sessionId="s1" />);
+    expect(screen.queryByRole("button", { name: "查看子会话" })).toBeNull();
+  });
+});
+
 describe("LogList 上行管道注入(sendFrame)", () => {
   it("审批(工具卡锚定)与提问答复都走注入的 sendFrame,不触本地 IPC", async () => {
     const sent: { ftype: string; payload: Record<string, unknown> }[] = [];
