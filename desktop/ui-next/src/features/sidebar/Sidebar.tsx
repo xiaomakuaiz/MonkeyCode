@@ -28,8 +28,10 @@ export interface SidebarActions {
   onNewTask: () => void;
 }
 
-function StatusDot({ meta }: { meta: SessionMeta }) {
+function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean }) {
   if (meta.waiting_ask) return <span aria-hidden className="status status-warning animate-pulse" />;
+  // 后台提醒未读(D3):终态也用警示色点出来,点开行即消
+  if (attention) return <span aria-hidden className="status status-warning" />;
   if (meta.status === "running") return <span aria-hidden className="status status-primary animate-pulse" />;
   if (meta.status === "error") return <span aria-hidden className="status status-error" />;
   return <span aria-hidden className="status opacity-30" />;
@@ -78,14 +80,25 @@ function RowMenu({ meta, actions }: { meta: SessionMeta; actions: SidebarActions
   );
 }
 
-function SessionRow({ meta, currentId, actions }: { meta: SessionMeta; currentId: string | null; actions: SidebarActions }) {
+function SessionRow({
+  meta,
+  currentId,
+  actions,
+  attention,
+}: {
+  meta: SessionMeta;
+  currentId: string | null;
+  actions: SidebarActions;
+  attention?: boolean;
+}) {
   return (
     <li>
       <a
-        className={`group flex items-center gap-2 ${meta.id === currentId ? "menu-active" : ""}`}
+        className={`group flex items-center gap-2 ${meta.id === currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
+        data-attention={attention ? "" : undefined}
         onClick={() => actions.onSelect(meta)}
       >
-        <StatusDot meta={meta} />
+        <StatusDot meta={meta} attention={attention} />
         <span className="min-w-0 flex-1 truncate">{meta.summary && meta.kind === "chat" ? meta.summary : meta.title}</span>
         <RowMenu meta={meta} actions={actions} />
       </a>
@@ -97,6 +110,7 @@ function ProjectDetails({
   group,
   currentId,
   actions,
+  attentionIds,
   collapsed,
   onToggleCollapsed,
   onProjectArchiveToggle,
@@ -106,6 +120,7 @@ function ProjectDetails({
   group: ProjectGroup;
   currentId: string | null;
   actions: SidebarActions;
+  attentionIds?: Set<string>;
   collapsed: boolean;
   onToggleCollapsed: (key: string, open: boolean) => void;
   onProjectArchiveToggle: (key: string) => void;
@@ -159,7 +174,7 @@ function ProjectDetails({
         </summary>
         <ul>
           {group.sessions.map((meta) => (
-            <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} />
+            <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} attention={attentionIds?.has(meta.id)} />
           ))}
           {group.archivedSessions.length > 0 && (
             <li>
@@ -170,7 +185,7 @@ function ProjectDetails({
                 </summary>
                 <ul>
                   {group.archivedSessions.map((meta) => (
-                    <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} />
+                    <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} attention={attentionIds?.has(meta.id)} />
                   ))}
                 </ul>
               </details>
@@ -187,12 +202,15 @@ export function Sidebar({
   sessions,
   currentId,
   actions,
+  attentionIds,
   cloud,
 }: {
   space: Space;
   sessions: SessionMeta[];
   currentId: string | null;
   actions: SidebarActions;
+  /** 后台提醒未读的会话 id 集(D3):命中行状态点转警示色 + 行高亮 */
+  attentionIds?: Set<string>;
   /** 云端空间的数据接线(App 提供;缺省时云端页为空列表) */
   cloud?: { currentId: string | null; onSelect: (task: import("@/lib/ipc/cloudtasks").CloudTask) => void; reloadKey: number };
 }) {
@@ -253,7 +271,7 @@ export function Sidebar({
       return (
         <ul className="menu menu-sm w-full p-0">
           {active.map((meta) => (
-            <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} />
+            <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} attention={attentionIds?.has(meta.id)} />
           ))}
           {archived.length > 0 && (
             <li>
@@ -264,7 +282,7 @@ export function Sidebar({
                 </summary>
                 <ul>
                   {archived.map((meta) => (
-                    <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} />
+                    <SessionRow key={meta.id} meta={meta} currentId={currentId} actions={actions} attention={attentionIds?.has(meta.id)} />
                   ))}
                 </ul>
               </details>
@@ -294,6 +312,7 @@ export function Sidebar({
             group={group}
             currentId={currentId}
             actions={actions}
+            attentionIds={attentionIds}
             collapsed={collapsed.has(group.key)}
             onToggleCollapsed={toggleCollapsed}
             onProjectArchiveToggle={toggleProjectArchive}
@@ -315,6 +334,7 @@ export function Sidebar({
                     group={group}
                     currentId={currentId}
                     actions={actions}
+                    attentionIds={attentionIds}
                     collapsed={collapsed.has(group.key)}
                     onToggleCollapsed={toggleCollapsed}
                     onProjectArchiveToggle={toggleProjectArchive}
@@ -355,12 +375,18 @@ export function Sidebar({
 
 function UpdateFooter() {
   const { t } = useI18n();
-  const { update, installing, install } = useUpdate();
+  const { update, installing, error, install } = useUpdate();
   if (!update?.available) return null;
+  // 安装失败:忙态已由 useUpdate 复位,这里换错误形态外显原因,按钮可重试
   return (
-    <div role="status" className="alert alert-info alert-soft flex items-center py-1.5 text-xs">
-      <span className="min-w-0 flex-1 truncate">{t("update.available", { version: update.latest ?? "" })}</span>
-      <button type="button" className="btn btn-info btn-xs" disabled={installing} onClick={install}>
+    <div
+      role={error ? "alert" : "status"}
+      className={`alert ${error ? "alert-error" : "alert-info"} alert-soft flex items-center py-1.5 text-xs`}
+    >
+      <span className="min-w-0 flex-1 truncate" title={error ?? undefined}>
+        {error ? t("update.failed", { reason: error }) : t("update.available", { version: update.latest ?? "" })}
+      </span>
+      <button type="button" className={`btn ${error ? "btn-error" : "btn-info"} btn-xs`} disabled={installing} onClick={install}>
         {installing && <span className="loading loading-spinner loading-xs" aria-hidden />}
         {t("update.install")}
       </button>

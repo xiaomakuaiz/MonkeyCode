@@ -1,6 +1,7 @@
 // 关于:宿主/内核版本对照 + 检查更新(复用 lib/ipc/update)+ 导出引擎日志 +
-// 打开扩展目录。更新安装成功后壳自行重启,installing 态不回收(与侧栏
-// useUpdate 同一语义);导出/打开的失败是壳的中文 Err,直接外显。
+// 打开扩展目录。更新安装成功后壳自行重启,installing 态不回收;安装失败
+// 复位忙态并外显失败文案(与侧栏 useUpdate 同一语义);导出/打开的失败是
+// 壳的中文 Err,直接外显。
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -44,9 +45,16 @@ export function AboutSection() {
     );
   };
 
-  const install = () => {
+  const install = async () => {
     setPhase("installing");
-    void updateInstall(); // 成功后壳自行重启,不会返回;失败静默(与 useUpdate 一致)
+    setMsg(null);
+    try {
+      await updateInstall(); // 成功后壳自行重启,promise 不会正常返回
+    } catch (e) {
+      // 失败:复位忙态,失败文案外显(与侧栏 useUpdate 同一语义)
+      setPhase("idle");
+      setMsg({ text: t("update.failed", { reason: errMsg(e) }), error: true });
+    }
   };
 
   const exportLog = async () => {

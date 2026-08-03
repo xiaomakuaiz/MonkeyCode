@@ -11,9 +11,10 @@ export function engineStatus(): Promise<EngineStatus | null> {
   return invoke<EngineStatus>("engine_status").catch(() => null);
 }
 
-/** 按当前配置重启引擎(幂等;错误页同款入口)。 */
+/** 按当前配置重启引擎(幂等;错误页同款入口)。
+ *  失败不吞:调用方(横幅)需要据此复位忙态并外显错误,吞掉就是按钮永转。 */
 export function engineRestart(): Promise<void> {
-  return invoke<void>("engine_restart").catch(() => {});
+  return invoke<void>("engine_restart");
 }
 
 export function onEngineStatus(cb: (s: EngineStatus) => void): () => void {

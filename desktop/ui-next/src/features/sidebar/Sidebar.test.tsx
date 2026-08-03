@@ -89,3 +89,29 @@ describe("侧栏(chat/cloud 空间)", () => {
     expect(acts.onNewTask).toHaveBeenCalled();
   });
 });
+
+describe("后台提醒 attention(D3)", () => {
+  it("命中会话:行进入 attention 态(高亮 + 警示点);未命中不受影响", () => {
+    render(
+      <Sidebar
+        space="local"
+        sessions={SESSIONS}
+        currentId={null}
+        actions={actions()}
+        attentionIds={new Set(["修复登录"])}
+      />,
+    );
+    const row = screen.getByText("修复登录").closest("a") as HTMLElement;
+    expect(row.dataset.attention).toBeDefined();
+    const other = screen.getByText("重构侧栏").closest("a") as HTMLElement;
+    expect(other.dataset.attention).toBeUndefined();
+  });
+
+  it("chat 空间同样生效", () => {
+    render(
+      <Sidebar space="chat" sessions={SESSIONS} currentId={null} actions={actions()} attentionIds={new Set(["闲聊"])} />,
+    );
+    const row = screen.getByText("问了个问题").closest("a") as HTMLElement;
+    expect(row.dataset.attention).toBeDefined();
+  });
+});
