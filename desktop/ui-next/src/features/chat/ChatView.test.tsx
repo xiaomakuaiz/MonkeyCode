@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -18,13 +18,14 @@ interface Op {
   args?: Record<string, unknown>;
 }
 
-function stubShell({ hasMore = false }: { hasMore?: boolean } = {}) {
+function stubShell({ hasMore = false, outline }: { hasMore?: boolean; outline?: unknown[] } = {}) {
   const ops: Op[] = [];
   const listeners = new Map<string, (e: { payload: unknown }) => void>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
       invoke: (cmd: string, args?: Record<string, unknown>) => {
         ops.push({ op: "invoke", cmd, args });
+        if (cmd === "session_outline") return Promise.resolve(outline ?? null);
         if (cmd === "session_open") {
           return Promise.resolve({
             frames: [
@@ -177,5 +178,64 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
     unmount();
     expect(ops.some((o) => o.cmd === "session_close")).toBe(true);
+  });
+
+  it("头部摘要:meta.summary 作为副标题显示;无摘要不渲染", async () => {
+    stubShell();
+    const { unmount } = render(<ChatView meta={{ ...META, summary: "正在修复登录页闪退" }} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.getByText("正在修复登录页闪退")).toBeTruthy();
+    unmount();
+    stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.queryByText("正在修复登录页闪退")).toBeNull();
+  });
+
+  it("任务面板:plan 帧非空时钉在 composer 上方,收起态一行摘要", async () => {
+    const { emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.queryByText(/任务 \d/)).toBeNull();
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [
+              { content: "读代码", status: "completed" },
+              { content: "改代码", status: "in_progress" },
+            ],
+          },
+        },
+        timestamp: 5,
+        seq: 5,
+      },
+    ]);
+    await waitFor(() => expect(screen.getByText("任务 1/2")).toBeTruthy());
+    expect(screen.getByText(/正在:改代码/)).toBeTruthy();
+  });
+
+  it("提问大纲:目标锚不在当前窗口时循环 loadEarlier 补页直到出现", async () => {
+    const { ops } = stubShell({
+      hasMore: true,
+      outline: [
+        { seq: 0, offset: 0, content: b64encode("更早的问题"), timestamp: 0 },
+        { seq: 1, offset: 10, content: b64encode("帮我修 bug"), timestamp: 1 },
+      ],
+    });
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const nav = await screen.findByRole("navigation", { name: "提问大纲" });
+    fireEvent.mouseEnter(nav.firstElementChild!);
+    // 目录条目在,正文里还没有(在更早的历史页里)
+    expect(screen.getByText("更早的问题")).toBeTruthy();
+    expect(ops.some((o) => o.cmd === "session_history")).toBe(false);
+    fireEvent.click(screen.getByText("更早的问题"));
+    // 补页循环:effect 驱动,每页提交后重查锚,直到气泡渲染出来
+    await waitFor(() => expect(screen.getByText("更早的问题")).toBeTruthy());
+    expect(ops.some((o) => o.cmd === "session_history")).toBe(true);
   });
 });

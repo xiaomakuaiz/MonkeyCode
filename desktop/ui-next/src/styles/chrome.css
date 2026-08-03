@@ -22,3 +22,14 @@
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklab, var(--color-base-content) 22%, transparent) transparent;
 }
+
+/* keyframes 配额 1/5:提问大纲跳转后目标气泡的闪光
+ * (LogList 经 Tailwind 任意值 animate-[mc-flash_1s_ease] 引用)。 */
+@keyframes mc-flash {
+  0% {
+    background-color: color-mix(in oklab, var(--color-primary) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}

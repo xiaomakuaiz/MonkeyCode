@@ -11,9 +11,12 @@ import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
 import { ToolCard } from "./cards/ToolCard";
 
-function UserBubble({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
+function UserBubble({ item, flash }: { item: Extract<ChatItem, { kind: "user" }>; flash?: boolean }) {
   return (
-    <div className="chat chat-end" data-user-seq={item.seq}>
+    <div
+      className={`chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
+      data-user-seq={item.seq}
+    >
       <div className="chat-bubble chat-bubble-primary max-w-[85%] text-sm whitespace-pre-wrap select-text">
         {item.text}
         {item.attachments?.map((a) => (
@@ -43,10 +46,10 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   );
 }
 
-function renderItem(item: ChatItem, sessionId: string, anchors: Map<string, PermItem>) {
+function renderItem(item: ChatItem, sessionId: string, anchors: Map<string, PermItem>, flashSeq?: number) {
   switch (item.kind) {
     case "user":
-      return <UserBubble item={item} />;
+      return <UserBubble item={item} flash={item.seq !== undefined && item.seq === flashSeq} />;
     case "agent":
       return <Markdown source={item.text} />;
     case "thought":
@@ -62,7 +65,16 @@ function renderItem(item: ChatItem, sessionId: string, anchors: Map<string, Perm
   }
 }
 
-export function LogList({ state, sessionId }: { state: ChatState; sessionId: string }) {
+export function LogList({
+  state,
+  sessionId,
+  flashSeq,
+}: {
+  state: ChatState;
+  sessionId: string;
+  /** 大纲跳转的目标 user seq:命中的气泡播放一次 mc-flash 闪光。 */
+  flashSeq?: number;
+}) {
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
   // 工具卡自身的 run/ok/fail 流转代言(types.ts::PermItem.toolCallId 契约)
@@ -74,7 +86,7 @@ export function LogList({ state, sessionId }: { state: ChatState; sessionId: str
         item.kind === "perm" && item.toolCallId && toolIds.has(item.toolCallId) ? (
           <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />
         ) : (
-          <div key={itemKey(state, i)}>{renderItem(item, sessionId, anchors)}</div>
+          <div key={itemKey(state, i)}>{renderItem(item, sessionId, anchors, flashSeq)}</div>
         ),
       )}
       {state.running && state.streamKind === "" && (
