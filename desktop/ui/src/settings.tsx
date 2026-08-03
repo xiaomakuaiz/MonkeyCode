@@ -27,7 +27,7 @@ import {
 import { engineCaps } from "./session";
 import { MONO } from "./components";
 import { IconBack, IconCalendar, IconCheck, IconCopy, IconCrown, IconGear, IconGlobe, IconMonitor, IconPlus, IconSpark } from "./icons";
-import { copyText } from "./markdown";
+import { copyText } from "./clipboard";
 import { BaizhiLogo } from "./baizhi";
 import logoUrl from "./logo.png";
 import { Field, Section, input, select, whiteBtn } from "./settings-ui";
