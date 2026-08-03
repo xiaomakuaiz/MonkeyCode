@@ -1,11 +1,15 @@
-// 消息流条目分发:按 ChatItem 判别渲染。P3b 覆盖 user/agent/thought/sys,
-// tool/perm/ask 先给可辨认的极简卡(P3c 换正式卡)。
+// 消息流条目分发:按 ChatItem 判别渲染(tool/perm/ask 是 cards/ 下的正式卡)。
 // 结构契约:本组件的直接子元素序列与 state.items 一一对应(不加包裹层),
 // key = itemKey(state, i)——"加载更早"前插时 keyBase 左移,已渲染项不重挂载。
+// 审批锚定:perm 带 toolCallId 且流里有同 id 工具卡时,按钮行嵌进那张卡
+// (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
 import { Markdown } from "@/components/markdown/Markdown";
 import { useI18n } from "@/lib/i18n";
-import { itemKey, permStateLabel } from "@/lib/protocol/reduce";
-import type { ChatItem, ChatState } from "@/lib/protocol/types";
+import { itemKey, permAnchors } from "@/lib/protocol/reduce";
+import type { ChatItem, ChatState, PermItem } from "@/lib/protocol/types";
+import { AskCard } from "./cards/AskCard";
+import { PermCard } from "./cards/PermCard";
+import { ToolCard } from "./cards/ToolCard";
 
 function UserBubble({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
   return (
@@ -39,44 +43,7 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   );
 }
 
-function ToolStub({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
-  const tone = item.status === "fail" ? "status-error" : item.status === "run" ? "status-primary animate-pulse" : "status-success";
-  return (
-    <div className="card card-border border-base-300 bg-base-100" data-tool-id={item.tcId}>
-      <div className="flex items-center gap-2 px-3 py-2 text-xs">
-        <span aria-hidden className={`status ${tone}`} />
-        <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
-        {item.durationMs !== undefined && (
-          <span className="font-mono text-base-content/40 tabular-nums">{(item.durationMs / 1000).toFixed(1)}s</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function PermStub({ item }: { item: Extract<ChatItem, { kind: "perm" }> }) {
-  const { t } = useI18n();
-  return (
-    <div role="status" className="alert alert-warning alert-soft py-1.5 text-xs" data-perm-id={item.id}>
-      <span className="min-w-0 flex-1 truncate">
-        {t("chat.permission")}:{item.title}
-      </span>
-      <span className="badge badge-ghost badge-xs">{permStateLabel(item.state)}</span>
-    </div>
-  );
-}
-
-function AskStub({ item }: { item: Extract<ChatItem, { kind: "ask" }> }) {
-  const { t } = useI18n();
-  return (
-    <div role="status" className="alert alert-info alert-soft py-1.5 text-xs">
-      <span className="min-w-0 flex-1 truncate">{t("chat.question")}</span>
-      <span className="badge badge-ghost badge-xs">{item.state}</span>
-    </div>
-  );
-}
-
-function renderItem(item: ChatItem) {
+function renderItem(item: ChatItem, sessionId: string, anchors: Map<string, PermItem>) {
   switch (item.kind) {
     case "user":
       return <UserBubble item={item} />;
@@ -85,22 +52,31 @@ function renderItem(item: ChatItem) {
     case "thought":
       return <ThoughtBlock item={item} />;
     case "tool":
-      return <ToolStub item={item} />;
+      return <ToolCard item={item} perm={anchors.get(item.tcId)} sessionId={sessionId} />;
     case "perm":
-      return <PermStub item={item} />;
+      return <PermCard item={item} sessionId={sessionId} />;
     case "ask":
-      return <AskStub item={item} />;
+      return <AskCard item={item} sessionId={sessionId} />;
     case "sys":
       return <div className="self-center rounded-full bg-base-200 px-3 py-0.5 text-[11px] text-base-content/50">{item.text}</div>;
   }
 }
 
-export function LogList({ state }: { state: ChatState }) {
+export function LogList({ state, sessionId }: { state: ChatState; sessionId: string }) {
+  const anchors = permAnchors(state.items);
+  // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
+  // 工具卡自身的 run/ok/fail 流转代言(types.ts::PermItem.toolCallId 契约)
+  const toolIds = new Set<string>();
+  for (const it of state.items) if (it.kind === "tool" && it.tcId) toolIds.add(it.tcId);
   return (
     <div className="flex flex-col gap-3">
-      {state.items.map((item, i) => (
-        <div key={itemKey(state, i)}>{renderItem(item)}</div>
-      ))}
+      {state.items.map((item, i) =>
+        item.kind === "perm" && item.toolCallId && toolIds.has(item.toolCallId) ? (
+          <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />
+        ) : (
+          <div key={itemKey(state, i)}>{renderItem(item, sessionId, anchors)}</div>
+        ),
+      )}
       {state.running && state.streamKind === "" && (
         <span className="loading loading-dots loading-sm text-base-content/40" aria-hidden />
       )}

@@ -4,6 +4,7 @@
 // scrollHeight 差值补偿 scrollTop,视口纹丝不动。
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
+import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import { sessionSend } from "@/lib/ipc/sessions";
@@ -16,6 +17,7 @@ const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
 export function ChatView({ meta }: { meta: SessionMeta }) {
   const { t } = useI18n();
   const { state, conn, hasMore, loadingEarlier, loadEarlier } = useSessionFeed(meta.id);
+  useApprovalHotkeys(state, meta.id);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -87,7 +89,7 @@ export function ChatView({ meta }: { meta: SessionMeta }) {
               {t("chat.loadEarlier")}
             </button>
           )}
-          <LogList state={state} />
+          <LogList state={state} sessionId={meta.id} />
         </div>
       </div>
 

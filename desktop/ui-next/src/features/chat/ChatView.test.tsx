@@ -128,6 +128,49 @@ describe("聊天视图", () => {
     expect(sent?.args?.payload).toEqual({ content: b64encode("甲\n乙") });
   });
 
+  it("全局键盘审批:待决审批时 ⏎ 允许(permission-resp 载荷对表壳侧)", async () => {
+    const { ops, emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [
+      { type: "permission-req", data: { id: "p1", title: "npm test", tool: "Bash" }, timestamp: 4, seq: 4 },
+    ]);
+    await waitFor(() => expect(screen.getByText("需要确认")).toBeTruthy());
+    await userEvent.keyboard("{Enter}");
+    const sent = ops.find((o) => o.cmd === "session_send" && (o.args?.ftype as string) === "permission-resp");
+    expect(sent?.args?.payload).toEqual({ id: "p1", approved: true, remember: false, persist: false });
+  });
+
+  it("全局键盘审批:esc 拒绝;无待决审批时 ⏎/esc 不发任何帧", async () => {
+    const { ops, emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    await userEvent.keyboard("{Enter}{Escape}");
+    expect(ops.some((o) => o.cmd === "session_send")).toBe(false);
+
+    emit("frames:s1", [
+      { type: "permission-req", data: { id: "p2", title: "curl", tool: "Bash" }, timestamp: 4, seq: 4 },
+    ]);
+    await waitFor(() => expect(screen.getByText("需要确认")).toBeTruthy());
+    await userEvent.keyboard("{Escape}");
+    const sent = ops.find((o) => o.cmd === "session_send" && (o.args?.ftype as string) === "permission-resp");
+    expect(sent?.args?.payload).toEqual({ id: "p2", approved: false, remember: false, persist: false });
+  });
+
+  it("键盘审批不抢正在写的消息:composer 有草稿时 ⏎ 走发送,不是允许", async () => {
+    const { ops, emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [
+      { type: "permission-req", data: { id: "p3", title: "npm test", tool: "Bash" }, timestamp: 4, seq: 4 },
+    ]);
+    await waitFor(() => expect(screen.getByText("需要确认")).toBeTruthy());
+    const box = screen.getByRole("textbox", { name: "消息输入" });
+    await userEvent.type(box, "先等等{Enter}");
+    expect(ops.some((o) => o.cmd === "session_send" && (o.args?.ftype as string) === "permission-resp")).toBe(false);
+    expect(ops.some((o) => o.cmd === "session_send" && (o.args?.ftype as string) === "user-input")).toBe(true);
+  });
+
   it("卸载即 session_close(会话切换不漏连接)", async () => {
     const { ops } = stubShell();
     const { unmount } = render(<ChatView meta={META} />);
