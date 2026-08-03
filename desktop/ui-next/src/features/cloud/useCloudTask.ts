@@ -18,6 +18,7 @@ import {
   type StreamStatus,
 } from "@/lib/cloud/stream";
 import { t } from "@/lib/i18n";
+import type { FrameSender } from "@/lib/ipc/approvals";
 import {
   mcTaskInfo,
   mcTaskRounds,
@@ -61,6 +62,9 @@ export interface CloudTaskHandle {
   send(): void;
   /** 中断当前执行(WS user-cancel,不终止任务;真布尔回执,失败外显) */
   cancelRun(): void;
+  /** 审批/提问答复的上行发送面(适配 stream WS 的 send,封包归 stream;
+   * 未连接或未送达 reject——卡片按失败回滚,不乐观假装已决)。 */
+  sendFrame: FrameSender;
   /** 终止任务(REST stop;确认交互在视图) */
   stopTask(): Promise<void>;
   cursor: { cursor: string; hasMore: boolean } | null;
@@ -259,6 +263,16 @@ export function useCloudTask(
     connRef.current = connectCloudStream(id, "new", makeHandlers(), { content: text });
   };
 
+  // 审批/提问答复上行:适配 stream 的 send(b64(JSON) 封包在 stream 内统一
+  // 做)成 FrameSender 契约——false/无连接一律 reject,卡片的失败回滚生效。
+  // useCallback 空依赖:只读稳定 ref,注入下游(LogList)不随渲染变引用。
+  const sendFrame: FrameSender = useCallback(async (ftype, payload) => {
+    const conn = connRef.current;
+    if (!conn) throw new Error("cloud stream not connected");
+    const ok = await conn.send(ftype, payload);
+    if (!ok) throw new Error("cloud frame not delivered");
+  }, []);
+
   const cancelRun = () => {
     const conn = connRef.current;
     if (!conn) {
@@ -318,6 +332,7 @@ export function useCloudTask(
     setInput,
     send,
     cancelRun,
+    sendFrame,
     stopTask,
     cursor,
     loadingEarlier,

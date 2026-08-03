@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { FrameSender } from "@/lib/ipc/approvals";
 import { createChatState } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState } from "@/lib/protocol/types";
 import { LogList } from "./LogList";
@@ -63,5 +65,41 @@ describe("LogList 锚定分发", () => {
     expect(screen.getByText("Bash npm test")).toBeTruthy();
     expect(screen.getByText("需要你的回答")).toBeTruthy();
     expect(screen.getByRole("button", { name: "提交回答" })).toBeTruthy();
+  });
+});
+
+describe("LogList 上行管道注入(sendFrame)", () => {
+  it("审批(工具卡锚定)与提问答复都走注入的 sendFrame,不触本地 IPC", async () => {
+    const sent: { ftype: string; payload: Record<string, unknown> }[] = [];
+    const sendFrame: FrameSender = (ftype, payload) => {
+      sent.push({ ftype, payload });
+      return Promise.resolve();
+    };
+    const state = withItems([
+      TOOL,
+      { kind: "perm", id: "p1", title: "npm test", tool: "Bash", state: "open", toolCallId: "t1" },
+      {
+        kind: "ask",
+        askId: "q1",
+        state: "open",
+        questions: [{ question: "选哪个?", multiSelect: false, custom: false, options: [{ label: "A" }] }],
+      },
+    ]);
+    render(<LogList state={state} sessionId="cloud-task-1" sendFrame={sendFrame} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "允许" }));
+    await userEvent.click(screen.getByRole("radio", { name: "A" }));
+    await userEvent.click(screen.getByRole("button", { name: "提交回答" }));
+
+    expect(sent).toEqual([
+      { ftype: "permission-resp", payload: { id: "p1", approved: true, remember: false, persist: false } },
+      {
+        ftype: "reply-question",
+        payload: { request_id: "q1", answers_json: JSON.stringify({ "选哪个?": "A" }), cancelled: false },
+      },
+    ]);
+    // 乐观置态成立 = 走的确是注入 sender:本地 IPC 在非壳环境必 reject 回滚
+    expect(screen.getByText("已允许")).toBeTruthy();
+    expect(screen.getByText("已回答")).toBeTruthy();
   });
 });

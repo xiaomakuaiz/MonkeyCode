@@ -5,13 +5,28 @@
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { engineCaps, sendPermAnswer, type PermAction } from "@/lib/ipc/approvals";
+import {
+  engineCaps,
+  localFrameSender,
+  sendPermAnswerVia,
+  type FrameSender,
+  type PermAction,
+} from "@/lib/ipc/approvals";
 import { permStateLabel } from "@/lib/protocol/reduce";
 import type { PermItem } from "@/lib/protocol/types";
 
 /** 审批按钮行:允许/本会话始终/此项目永久/拒绝 + ⏎/esc 快捷键脚注。
  * engine_caps.perm_remember 为 false 时隐藏两个"始终"档。 */
-export function PermActions({ perm, sessionId }: { perm: PermItem; sessionId: string }) {
+export function PermActions({
+  perm,
+  sessionId,
+  sendFrame,
+}: {
+  perm: PermItem;
+  sessionId: string;
+  /** 上行管道注入(云端任务经 stream WS);缺省 = sessionId 的本地 sender */
+  sendFrame?: FrameSender;
+}) {
   const { t } = useI18n();
   const [local, setLocal] = useState<"allowed" | "rejected" | null>(null);
   const [canRemember, setCanRemember] = useState(true);
@@ -31,7 +46,7 @@ export function PermActions({ perm, sessionId }: { perm: PermItem; sessionId: st
 
   const answer = (action: PermAction) => {
     setLocal(action === "deny" ? "rejected" : "allowed");
-    void sendPermAnswer(sessionId, perm.id, action).catch(() => setLocal(null)); // 未送达回滚,按钮恢复可点
+    void sendPermAnswerVia(sendFrame ?? localFrameSender(sessionId), perm.id, action).catch(() => setLocal(null)); // 未送达回滚,按钮恢复可点
   };
 
   return (
@@ -65,7 +80,15 @@ export function PermActions({ perm, sessionId }: { perm: PermItem; sessionId: st
 
 /** 独立审批卡(无锚点/找不到同 id 工具卡时渲染):警示框 + mono 原文 +
  * 按钮行;已决/过期收成一行状态(回放的审计痕迹)。 */
-export function PermCard({ item, sessionId }: { item: PermItem; sessionId: string }) {
+export function PermCard({
+  item,
+  sessionId,
+  sendFrame,
+}: {
+  item: PermItem;
+  sessionId: string;
+  sendFrame?: FrameSender;
+}) {
   const { t } = useI18n();
   if (item.state !== "open") {
     return (
@@ -86,7 +109,7 @@ export function PermCard({ item, sessionId }: { item: PermItem; sessionId: strin
           {item.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{item.tool}</span>}
         </div>
         <div className="rounded-box bg-base-200 px-3 py-2 font-mono text-xs break-all select-text">{item.title}</div>
-        <PermActions perm={item} sessionId={sessionId} />
+        <PermActions perm={item} sessionId={sessionId} sendFrame={sendFrame} />
       </div>
     </div>
   );

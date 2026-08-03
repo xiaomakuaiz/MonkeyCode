@@ -5,6 +5,7 @@
 // (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
 import { Markdown } from "@/components/markdown/Markdown";
 import { useI18n } from "@/lib/i18n";
+import type { FrameSender } from "@/lib/ipc/approvals";
 import { itemKey, permAnchors } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState, PermItem } from "@/lib/protocol/types";
 import { AskCard } from "./cards/AskCard";
@@ -46,7 +47,13 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   );
 }
 
-function renderItem(item: ChatItem, sessionId: string, anchors: Map<string, PermItem>, flashSeq?: number) {
+function renderItem(
+  item: ChatItem,
+  sessionId: string,
+  anchors: Map<string, PermItem>,
+  flashSeq?: number,
+  sendFrame?: FrameSender,
+) {
   switch (item.kind) {
     case "user":
       return <UserBubble item={item} flash={item.seq !== undefined && item.seq === flashSeq} />;
@@ -55,11 +62,11 @@ function renderItem(item: ChatItem, sessionId: string, anchors: Map<string, Perm
     case "thought":
       return <ThoughtBlock item={item} />;
     case "tool":
-      return <ToolCard item={item} perm={anchors.get(item.tcId)} sessionId={sessionId} />;
+      return <ToolCard item={item} perm={anchors.get(item.tcId)} sessionId={sessionId} sendFrame={sendFrame} />;
     case "perm":
-      return <PermCard item={item} sessionId={sessionId} />;
+      return <PermCard item={item} sessionId={sessionId} sendFrame={sendFrame} />;
     case "ask":
-      return <AskCard item={item} sessionId={sessionId} />;
+      return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} />;
     case "sys":
       return <div className="self-center rounded-full bg-base-200 px-3 py-0.5 text-[11px] text-base-content/50">{item.text}</div>;
   }
@@ -69,11 +76,15 @@ export function LogList({
   state,
   sessionId,
   flashSeq,
+  sendFrame,
 }: {
   state: ChatState;
   sessionId: string;
   /** 大纲跳转的目标 user seq:命中的气泡播放一次 mc-flash 闪光。 */
   flashSeq?: number;
+  /** 审批/提问答复的上行管道注入(云端任务经 stream WS 发帧);
+   * 缺省 = sessionId 的本地 sender(壳侧 session_send)。 */
+  sendFrame?: FrameSender;
 }) {
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
@@ -86,7 +97,7 @@ export function LogList({
         item.kind === "perm" && item.toolCallId && toolIds.has(item.toolCallId) ? (
           <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />
         ) : (
-          <div key={itemKey(state, i)}>{renderItem(item, sessionId, anchors, flashSeq)}</div>
+          <div key={itemKey(state, i)}>{renderItem(item, sessionId, anchors, flashSeq, sendFrame)}</div>
         ),
       )}
       {state.running && state.streamKind === "" && (

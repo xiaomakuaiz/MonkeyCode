@@ -164,7 +164,8 @@ export function CloudTaskView({
                 {h.ended ? t("cloud.view.noReplay") : (connText ?? t("cloud.conn.connecting"))}
               </div>
             )}
-            <LogList state={h.chat} sessionId={h.id} />
+            {/* 审批/提问答复经 stream WS 上行(h.sendFrame),不走本地 session_send */}
+            <LogList state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} />
           </div>
         </div>
       )}

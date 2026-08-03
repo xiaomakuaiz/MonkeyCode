@@ -4,7 +4,7 @@
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { sendAskAnswers, sendAskCancel } from "@/lib/ipc/approvals";
+import { localFrameSender, sendAskAnswersVia, sendAskCancelVia, type FrameSender } from "@/lib/ipc/approvals";
 import type { AskItem, AskQuestion } from "@/lib/protocol/types";
 
 /** 自定义答案在选中集合里的占位键(对齐 mobile askAnswers.ts;不上行)。 */
@@ -37,7 +37,16 @@ function ReadonlyAsk({ item, local }: { item: AskItem; local: Answers | null }) 
   );
 }
 
-export function AskCard({ item, sessionId }: { item: AskItem; sessionId: string }) {
+export function AskCard({
+  item,
+  sessionId,
+  sendFrame,
+}: {
+  item: AskItem;
+  sessionId: string;
+  /** 上行管道注入(云端任务经 stream WS);缺省 = sessionId 的本地 sender */
+  sendFrame?: FrameSender;
+}) {
   const { t } = useI18n();
   const [selected, setSelected] = useState<Record<number, string[]>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
@@ -91,15 +100,16 @@ export function AskCard({ item, sessionId }: { item: AskItem; sessionId: string 
   };
   const ready = buildAnswers() !== null;
 
+  const send = sendFrame ?? localFrameSender(sessionId);
   const submit = () => {
     const answers = buildAnswers();
     if (!answers) return;
     setSent(answers);
-    void sendAskAnswers(sessionId, item.askId, answers).catch(() => setSent(null));
+    void sendAskAnswersVia(send, item.askId, answers).catch(() => setSent(null));
   };
   const cancel = () => {
     setSent({});
-    void sendAskCancel(sessionId, item.askId).catch(() => setSent(null));
+    void sendAskCancelVia(send, item.askId).catch(() => setSent(null));
   };
 
   return (

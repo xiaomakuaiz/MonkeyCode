@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { engineCaps, sendAskAnswers, sendAskCancel, sendPermAnswer } from "./approvals";
+import {
+  engineCaps,
+  sendAskAnswers,
+  sendAskAnswersVia,
+  sendAskCancel,
+  sendAskCancelVia,
+  sendPermAnswer,
+  sendPermAnswerVia,
+  type FrameSender,
+} from "./approvals";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -68,6 +77,44 @@ describe("提问答复(reply-question)", () => {
       ftype: "reply-question",
       payload: { request_id: "req-1", answers_json: "{}", cancelled: true },
     });
+  });
+});
+
+describe("注入 sender(云端任务经 stream WS 上行的发送面)", () => {
+  it("三个答复走注入 sender:帧词汇与载荷跟本地路径一字不差,且不触 IPC", async () => {
+    const calls = stubShell(); // 即便在壳内,注入路径也绝不能落到 session_send
+    const sent: { ftype: string; payload: Record<string, unknown> }[] = [];
+    const sender: FrameSender = (ftype, payload) => {
+      sent.push({ ftype, payload });
+      return Promise.resolve();
+    };
+    await sendPermAnswerVia(sender, "p1", "persist");
+    await sendAskAnswersVia(sender, "req-1", { 用哪种方案: "A", 选依赖: ["x", "y"] });
+    await sendAskCancelVia(sender, "req-1");
+    expect(sent).toEqual([
+      {
+        ftype: "permission-resp",
+        payload: { id: "p1", approved: true, remember: true, persist: true },
+      },
+      {
+        ftype: "reply-question",
+        payload: {
+          request_id: "req-1",
+          answers_json: JSON.stringify({ 用哪种方案: "A", 选依赖: ["x", "y"] }),
+          cancelled: false,
+        },
+      },
+      {
+        ftype: "reply-question",
+        payload: { request_id: "req-1", answers_json: "{}", cancelled: true },
+      },
+    ]);
+    expect(calls).toEqual([]);
+  });
+
+  it("sender 拒绝时错误向上抛(卡片的失败回滚依赖 reject)", async () => {
+    const sender: FrameSender = () => Promise.reject(new Error("ws down"));
+    await expect(sendPermAnswerVia(sender, "p1", "allow")).rejects.toThrow("ws down");
   });
 });
 

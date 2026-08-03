@@ -8,15 +8,42 @@
 import { inDesktopShell, invoke } from "./ipc";
 import { sessionSend } from "./sessions";
 
+/** 上行发送面:一次答复 = 一帧 (ftype, payload)。本地会话走壳侧
+ * session_send,云端任务走 stream WS 上行——帧词汇与载荷两边同构,
+ * 差异只在管道,故三个答复函数只对 sender 编程(*Via 版),便捷封装
+ * 保留 sessionId 形参供本地调用点零改动。reject = 未送达(调用方回滚)。 */
+export type FrameSender = (ftype: string, payload: Record<string, unknown>) => Promise<void>;
+
+/** sessionId 的本地发送器(壳侧 session_send 命令;本地会话缺省管道)。 */
+export function localFrameSender(sessionId: string): FrameSender {
+  return (ftype, payload) => sessionSend(sessionId, ftype, payload);
+}
+
 /** 审批四动作:allow 仅本次;always 本会话始终;persist 此项目永久;deny 拒绝。 */
 export type PermAction = "allow" | "always" | "persist" | "deny";
 
-export function sendPermAnswer(sessionId: string, permId: string, action: PermAction): Promise<void> {
-  return sessionSend(sessionId, "permission-resp", {
+export function sendPermAnswerVia(send: FrameSender, permId: string, action: PermAction): Promise<void> {
+  return send("permission-resp", {
     id: permId,
     approved: action !== "deny",
     remember: action === "always" || action === "persist",
     persist: action === "persist",
+  });
+}
+
+export function sendPermAnswer(sessionId: string, permId: string, action: PermAction): Promise<void> {
+  return sendPermAnswerVia(localFrameSender(sessionId), permId, action);
+}
+
+export function sendAskAnswersVia(
+  send: FrameSender,
+  askId: string,
+  answers: Record<string, string | string[]>,
+): Promise<void> {
+  return send("reply-question", {
+    request_id: askId,
+    answers_json: JSON.stringify(answers),
+    cancelled: false,
   });
 }
 
@@ -25,20 +52,20 @@ export function sendAskAnswers(
   askId: string,
   answers: Record<string, string | string[]>,
 ): Promise<void> {
-  return sessionSend(sessionId, "reply-question", {
-    request_id: askId,
-    answers_json: JSON.stringify(answers),
-    cancelled: false,
-  });
+  return sendAskAnswersVia(localFrameSender(sessionId), askId, answers);
 }
 
 /** 跳过回答(cancelled=true):引擎收到取消,提问卡按无答案收口。 */
-export function sendAskCancel(sessionId: string, askId: string): Promise<void> {
-  return sessionSend(sessionId, "reply-question", {
+export function sendAskCancelVia(send: FrameSender, askId: string): Promise<void> {
+  return send("reply-question", {
     request_id: askId,
     answers_json: "{}",
     cancelled: true,
   });
+}
+
+export function sendAskCancel(sessionId: string, askId: string): Promise<void> {
+  return sendAskCancelVia(localFrameSender(sessionId), askId);
 }
 
 /** 引擎能力表(对表壳侧 driver/mod.rs::Caps 的 serde 形状)。 */

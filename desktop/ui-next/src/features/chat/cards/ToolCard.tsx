@@ -3,6 +3,7 @@
 // report_findings 走结构化发现列表;锚定的待决审批内嵌卡底(独立大卡不渲染)。
 import { MarkdownInline } from "@/components/markdown/Markdown";
 import { useI18n } from "@/lib/i18n";
+import type { FrameSender } from "@/lib/ipc/approvals";
 import { toolResultText } from "@/lib/protocol/codec";
 import type { PermItem, SubEntry, ToolItem } from "@/lib/protocol/types";
 import { FindingsCard, findingsReportFor } from "./FindingsCard";
@@ -63,12 +64,15 @@ export function ToolCard({
   item,
   perm,
   sessionId,
+  sendFrame,
 }: {
   item: ToolItem;
   /** 锚定到本卡的待决审批(permAnchors 判定):⏸ 顶掉状态点 + 底部内嵌
    * 按钮行,独立审批大卡随之不渲染;已决后调用方不再传入,卡片回归常态 */
   perm?: PermItem;
   sessionId: string;
+  /** 内嵌审批行的上行管道注入(云端任务经 stream WS);缺省 = 本地 sender */
+  sendFrame?: FrameSender;
 }) {
   const { t } = useI18n();
   const duration = formatDuration(item.durationMs);
@@ -134,7 +138,7 @@ export function ToolCard({
             <span>{t("chat.perm.needConfirm")}</span>
             {perm.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{perm.tool}</span>}
           </div>
-          <PermActions perm={perm} sessionId={sessionId} />
+          <PermActions perm={perm} sessionId={sessionId} sendFrame={sendFrame} />
         </div>
       )}
     </div>

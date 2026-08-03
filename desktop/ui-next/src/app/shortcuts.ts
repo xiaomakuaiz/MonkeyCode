@@ -3,7 +3,7 @@
 // useApprovalHotkeys 只是把 DOM 读取(事件目标/草稿内容)喂给判定的薄壳。
 import { useEffect, useRef } from "react";
 
-import { sendPermAnswer } from "@/lib/ipc/approvals";
+import { localFrameSender, sendPermAnswerVia, type FrameSender } from "@/lib/ipc/approvals";
 import type { ChatState } from "@/lib/protocol/types";
 
 export interface ShortcutCtx {
@@ -57,8 +57,9 @@ export function openPermIdOf(state: ChatState): string | null {
 }
 
 /** 挂 window keydown 的薄 hook:仅在有待决审批时监听;同一张卡只发一次
- * (permission-resolved 帧回来前连按不重发),发送失败解除标记可重按。 */
-export function useApprovalHotkeys(state: ChatState, sessionId: string): void {
+ * (permission-resolved 帧回来前连按不重发),发送失败解除标记可重按。
+ * sendFrame 可注入上行管道(云端任务经 stream WS);缺省 = 本地 sender。 */
+export function useApprovalHotkeys(state: ChatState, sessionId: string, sendFrame?: FrameSender): void {
   const openPermId = openPermIdOf(state);
   const answeredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -81,11 +82,11 @@ export function useApprovalHotkeys(state: ChatState, sessionId: string): void {
       if (action.kind !== "perm" || answeredRef.current.has(action.id)) return;
       e.preventDefault();
       answeredRef.current.add(action.id);
-      void sendPermAnswer(sessionId, action.id, action.approved ? "allow" : "deny").catch(() => {
+      void sendPermAnswerVia(sendFrame ?? localFrameSender(sessionId), action.id, action.approved ? "allow" : "deny").catch(() => {
         answeredRef.current.delete(action.id);
       });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openPermId, sessionId]);
+  }, [openPermId, sessionId, sendFrame]);
 }
