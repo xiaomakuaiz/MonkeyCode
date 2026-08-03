@@ -1,0 +1,63 @@
+/* 样式入口:Tailwind 4 + daisyUI 5(内置 light/dark 主题)。
+ *
+ * 样式宪法(强制优先级链,详见 tasks/todo.md 引用的计划文件):
+ *   daisyUI 组件类 → daisyUI 语义色 + Tailwind 工具类 → @theme 令牌 → 白名单自定义 CSS
+ * 自定义 CSS 白名单仅四处:本文件的 @theme 段、chrome.css(滚动条+keyframes)、
+ * md.css(markdown 渲染产物,P3b 引入)、term.css(xterm 岛,P7 引入)。
+ * 白名单外新增自定义类,PR 里必须回答"为什么 daisyUI + 工具类表达不了"。
+ *
+ * 语义色规则:面三档 base-100/200/300;文字只用 base-content 四档透明度
+ * (100%/70%/50%/35%);primary 只表品牌/主操作/选中;success/warning/error
+ * 只表状态;TSX 禁裸 hex/oklch;禁手写 dark: 双色(daisyUI 变量天生双主题)。
+ *
+ * 深浅切换:document.documentElement.dataset.theme = "light" | "dark"
+ * (src/lib/theme.ts;首帧由 index.html 内联脚本同步落)。 */
+
+@import "tailwindcss";
+/* 全量启用 daisyUI 内置 35 主题(用户可在外观设置里任选;替代旧 UI 的四色
+ * accent 体系)。清单必须与 src/lib/theme.ts::THEMES 一致——那边有测试
+ * 读本文件对表。light 为缺省,系统深色偏好未设置时落 dark。 */
+@plugin "daisyui" {
+  themes:
+    light --default, dark --prefersdark, abyss, acid, aqua, autumn, black,
+    bumblebee, business, caramellatte, cmyk, coffee, corporate, cupcake,
+    cyberpunk, dim, dracula, emerald, fantasy, forest, garden, halloween,
+    lemonade, lofi, luxury, night, nord, pastel, retro, silk, sunset,
+    synthwave, valentine, winter, wireframe;
+}
+/* 不提供 dark: 变体:主题有 35 套、深色系 14 套,按 data-theme=dark 绑定的
+ * dark: 会漏掉其余深色主题,按 prefers-color-scheme 的默认 dark: 又不跟主题走。
+ * 配色一律经 daisyUI 语义变量(天生随主题),深浅结构差异用 JS 判主题。 */
+
+@theme {
+  /* HarmonyOS Sans SC 经 /fonts/ webfont 随应用加载(public/fonts/fonts.css),
+   * 不依赖本机安装;显式列出各平台回退,泛型解析各 WebView 不一 */
+  --font-sans: "HarmonyOS Sans SC", "HarmonyOS Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "HarmonyOS Sans SC", ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
+  /* 布局列宽令牌(w-rail / w-side):Windows 自绘标题栏的分段与内容区的列
+   * 必须逐列对齐,两层只认这组令牌,不写字面值(写两份,窄窗下竖分隔线会错开) */
+  --spacing-rail: 62px;
+  --spacing-side: 232px;
+  /* 平台约定色:不跟主题走。mac 红绿灯三色 = 系统本色;caption-close =
+   * Windows 官方关闭键 hover 红 */
+  --color-mac-close: #ff5f57;
+  --color-mac-min: #febc2e;
+  --color-mac-zoom: #28c840;
+  --color-caption-close: #e81123;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    font-size: 13px;
+    overflow: hidden;
+    /* 桌面壳手感:chrome 默认不可选中;可复制内容(消息/代码/输入框)由
+     * 各 feature 按处放开(P3 起随视图落地) */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}

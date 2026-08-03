@@ -23,6 +23,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 绿地重写工程(desktop/ui-next,见 tasks/todo.md):只验可构建与测试绿,
+  # 产物即弃;打包链路整个并行期仍只出旧 desktop/ui。P9 切换时删除本 job。
+  ui-next:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/ui-next/package-lock.json
+
+      - name: Test and build ui-next
+        working-directory: desktop/ui-next
+        run: |
+          npm ci
+          npm test
+          npm run build
+
   linux:
     runs-on: ubuntu-24.04
     steps:
