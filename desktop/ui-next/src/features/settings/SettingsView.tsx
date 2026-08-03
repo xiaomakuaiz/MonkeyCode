@@ -21,6 +21,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
+import { AccountSection } from "@/features/account/AccountSection";
 import { AboutSection } from "./AboutSection";
 import { McpSection } from "./McpSection";
 import { ModelsSection } from "./ModelsSection";
@@ -33,7 +34,7 @@ import {
   type SettingsDraft,
 } from "./settingsForm";
 
-type Section = "general" | "models" | "mcp" | "env" | "about";
+type Section = "general" | "account" | "models" | "mcp" | "env" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -241,6 +242,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
 
   const items: Array<{ id: Section; label: string }> = [
     { id: "general", label: t("settings.nav.general") },
+    { id: "account", label: t("settings.nav.account") },
     { id: "models", label: t("settings.nav.models") },
     { id: "mcp", label: t("settings.nav.mcp") },
     ...(isWindowsShell() ? [{ id: "env" as const, label: t("settings.nav.env") }] : []),
@@ -262,6 +264,9 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     switch (section) {
       case "general":
         return <GeneralSection />;
+      case "account":
+        // 账号分区不吃壳配置(登录态自查、浏览器降级自带),不走 configGate
+        return <AccountSection />;
       case "models":
         return draft ? <ModelsSection draft={draft} onDraft={updateDraft} /> : configGate;
       case "mcp":

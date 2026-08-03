@@ -85,6 +85,16 @@ describe("设置视图:导航与载入", () => {
     expect(screen.getByText("默认")).toBeDefined(); // 主力行的默认徽标
   });
 
+  it("导航含「账号」,点击挂载账号分区(登录 tab 可见)", async () => {
+    stubShell(); // 未知命令(baizhi_status 等)回 null,分区按未登录形态渲染
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "账号" }));
+    expect(await screen.findByRole("tab", { name: "微信扫码" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "短信验证码" })).toBeDefined();
+    // 拉码命令回 null → 状态机按失败收束,给出重试入口(不留悬空 loading)
+    expect(await screen.findByRole("button", { name: "重新获取二维码" })).toBeDefined();
+  });
+
   it("返回按钮回调 onClose", async () => {
     stubShell();
     const onClose = vi.fn();
