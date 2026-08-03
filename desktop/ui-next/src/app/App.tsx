@@ -7,7 +7,16 @@ import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
 import { LOCALES, useI18n, setLocale, type Locale } from "@/lib/i18n";
-import { hostInfo, isMacShell, isWindowsShell, setWindowTitle, type HostInfo } from "@/lib/ipc/host";
+import {
+  hostInfo,
+  isMacShell,
+  isWindowsShell,
+  sessionIdFromUiIntent,
+  setWindowTitle,
+  takeUiIntent,
+  type HostInfo,
+} from "@/lib/ipc/host";
+import { listen } from "@/lib/ipc/ipc";
 import { onSessionEvent, sessionDelete, sessionPatch, sessionsList, type SessionMeta } from "@/lib/ipc/sessions";
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
 import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
@@ -147,6 +156,19 @@ export function App() {
   const refresh = () => void sessionsList().then(setSessions);
 
   useEffect(() => {
+    // 壳意图:启动补取一次(窗口唤起前托盘/桌宠塞的),再听后续推送
+    void takeUiIntent().then((intent) => {
+      const id = sessionIdFromUiIntent(intent);
+      if (id) {
+        setCurrentId(id);
+        writeLastSession(id);
+      }
+    });
+    const offOpenSession = listen<string>("open-session", (id) => {
+      if (!id) return;
+      setCurrentId(id);
+      writeLastSession(id);
+    });
     refresh();
     // 后台会话状态/摘要/审批等待:全局事件驱动,不轮询
     const off = onSessionEvent((e) => {
@@ -164,7 +186,10 @@ export function App() {
         ),
       );
     });
-    return off;
+    return () => {
+      off();
+      offOpenSession();
+    };
   }, []);
 
   const current = sessions.find((m) => m.id === currentId) ?? null;

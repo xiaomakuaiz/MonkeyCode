@@ -95,6 +95,20 @@ export function openExternal(url: string): void {
   });
 }
 
+/** 消费壳的待取意图("open-settings" / "open-session:<id>";无则 null)。
+ *  壳在窗口唤起前就可能收到意图(托盘/桌宠),启动时取一次。 */
+export function takeUiIntent(): Promise<string | null> {
+  if (!inDesktopShell()) return Promise.resolve(null);
+  return invoke<string | null>("take_ui_intent").catch(() => null);
+}
+
+/** 解析 "open-session:<id>" 意图;不是该前缀返回 null。 */
+export function sessionIdFromUiIntent(intent: string | null): string | null {
+  if (!intent?.startsWith("open-session:")) return null;
+  const id = intent.slice("open-session:".length);
+  return id || null;
+}
+
 /** 打开引擎日志目录(文件管理器定位);浏览器模式 no-op。 */
 export function openLogDir(): Promise<void> {
   if (!inDesktopShell()) return Promise.resolve();
