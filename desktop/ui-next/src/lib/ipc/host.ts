@@ -95,6 +95,14 @@ export function openExternal(url: string): void {
   });
 }
 
+/** 打开引擎日志目录(文件管理器定位);浏览器模式 no-op。 */
+export function openLogDir(): Promise<void> {
+  if (!inDesktopShell()) return Promise.resolve();
+  return invoke<string>("open_log_dir")
+    .then(() => {})
+    .catch(() => {});
+}
+
 /** 系统目录选择;取消/浏览器模式返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
   if (!inDesktopShell()) return null;

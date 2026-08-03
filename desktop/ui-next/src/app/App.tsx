@@ -2,6 +2,7 @@
 // 主区当前是欢迎卡/会话占位卡(P3 接聊天流);设置入口 P5 落位。
 import { useEffect, useState } from "react";
 
+import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
@@ -187,6 +188,7 @@ export function App() {
   return (
     <div className="flex h-full flex-col text-base-content">
       {isWindowsShell() && <TitleBar />}
+      <EngineBanner />
       <div className="flex min-h-0 flex-1">
         <SpaceRail space={space} waiting={waiting} onChange={setSpace} />
         <Sidebar

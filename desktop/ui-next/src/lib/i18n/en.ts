@@ -65,6 +65,12 @@ export const en: Record<MessageKey, string> = {
   "md.copy": "Copy",
   "md.copied": "Copied",
 
+  "engine.starting": "Engine starting (attempt {attempt})…",
+  "engine.crashed": "Engine crashed: {detail}",
+  "engine.failed": "Engine failed to start: {detail}",
+  "engine.restart": "Restart engine",
+  "engine.logs": "Logs",
+
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
 };

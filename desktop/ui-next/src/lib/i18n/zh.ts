@@ -64,6 +64,12 @@ export const zh = {
   "md.copy": "复制",
   "md.copied": "已复制",
 
+  "engine.starting": "引擎启动中(第 {attempt} 次尝试)…",
+  "engine.crashed": "引擎已崩溃:{detail}",
+  "engine.failed": "引擎启动失败:{detail}",
+  "engine.restart": "重启引擎",
+  "engine.logs": "日志",
+
   "common.confirm": "确认",
   "common.cancel": "取消",
 } as const;
