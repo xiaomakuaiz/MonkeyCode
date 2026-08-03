@@ -71,3 +71,27 @@ export async function windowToggleFullscreen(): Promise<void> {
     // 浏览器模式/命令失败:静默
   }
 }
+
+/** 窗口标题随视图变化;浏览器模式退回 document.title。 */
+export function setWindowTitle(title: string): void {
+  if (!inDesktopShell()) {
+    document.title = title;
+    return;
+  }
+  quiet(invoke("plugin:window|set_title", { title }));
+}
+
+/** 系统目录选择;取消/浏览器模式返回 null。 */
+export async function pickDirectory(): Promise<string | null> {
+  if (!inDesktopShell()) return null;
+  try {
+    const res = await invoke<string | string[] | null>("plugin:dialog|open", {
+      options: { directory: true },
+    });
+    if (typeof res === "string") return res;
+    if (Array.isArray(res)) return res[0] ?? null;
+    return null;
+  } catch {
+    return null;
+  }
+}

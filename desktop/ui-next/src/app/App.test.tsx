@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -56,7 +56,7 @@ describe("主题选择(暂驻主区,P5 移入设置页)", () => {
   it("列出全部内置主题;选 dracula 同步落 data-theme 与 mc.theme", async () => {
     render(<App />);
     const picker = screen.getByRole("combobox", { name: "外观主题" });
-    expect(screen.getAllByRole("option")).toHaveLength(THEMES.length);
+    expect(within(picker).getAllByRole("option")).toHaveLength(THEMES.length);
     await userEvent.selectOptions(picker, "dracula");
     expect(document.documentElement.dataset.theme).toBe("dracula");
     expect(localStorage.getItem("mc.theme")).toBe("dracula");

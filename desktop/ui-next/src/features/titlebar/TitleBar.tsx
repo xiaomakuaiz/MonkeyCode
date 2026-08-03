@@ -9,6 +9,8 @@
 //   带该属性的区域双击 = 切换最大化(Tauri 原生行为,无需自绑)。
 import { useEffect, useState } from "react";
 
+import { useI18n } from "@/lib/i18n";
+
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
 import {
   windowClose,
@@ -57,6 +59,7 @@ function useWindowBlurred(): boolean {
 const CAPTION_GLYPH = { strokeWidth: 1.1, stroke: "currentColor", fill: "none" } as const;
 
 export function TitleBar() {
+  const { t } = useI18n();
   const maximized = useMaximized();
   return (
     <header
@@ -75,7 +78,7 @@ export function TitleBar() {
       <div className="flex bg-base-100">
         <button
           type="button"
-          aria-label="最小化"
+          aria-label={t("titlebar.minimize")}
           className="flex w-12 cursor-default items-center justify-center text-base-content/70 hover:bg-base-content/10"
           onClick={windowMinimize}
         >
@@ -85,7 +88,7 @@ export function TitleBar() {
         </button>
         <button
           type="button"
-          aria-label={maximized ? "还原" : "最大化"}
+          aria-label={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
           className="flex w-12 cursor-default items-center justify-center text-base-content/70 hover:bg-base-content/10"
           onClick={windowToggleMaximize}
         >
@@ -103,7 +106,7 @@ export function TitleBar() {
         </button>
         <button
           type="button"
-          aria-label="关闭"
+          aria-label={t("titlebar.close")}
           className="flex w-12 cursor-default items-center justify-center text-base-content/70 hover:bg-caption-close hover:text-white"
           onClick={windowClose}
         >
@@ -121,25 +124,26 @@ export function TitleBar() {
 const MAC_LIGHTS = [
   {
     key: "close",
-    label: "关闭",
+    labelKey: "titlebar.close" as const,
     dot: "bg-mac-close group-data-[blurred]:bg-base-content/20 group-hover:bg-mac-close",
     glyph: <path d="M2 2l4 4M6 2L2 6" />,
   },
   {
     key: "min",
-    label: "最小化",
+    labelKey: "titlebar.minimize" as const,
     dot: "bg-mac-min group-data-[blurred]:bg-base-content/20 group-hover:bg-mac-min",
     glyph: <path d="M1.5 4h5" />,
   },
   {
     key: "zoom",
-    label: "缩放",
+    labelKey: "titlebar.zoom" as const,
     dot: "bg-mac-zoom group-data-[blurred]:bg-base-content/20 group-hover:bg-mac-zoom",
     glyph: <path d="M2 5.6V2h3.6M6 2.4V6H2.4" />,
   },
 ] as const;
 
 export function MacWindowControls() {
+  const { t } = useI18n();
   const blurred = useWindowBlurred();
   const act = (key: (typeof MAC_LIGHTS)[number]["key"], alt: boolean) => {
     if (key === "close") return windowClose();
@@ -158,7 +162,7 @@ export function MacWindowControls() {
         <button
           key={light.key}
           type="button"
-          aria-label={light.label}
+          aria-label={t(light.labelKey)}
           /* mac 惯例:窗口按钮不是手型;失焦整组退灰、悬停恢复本色并浮现字形 */
           className="flex h-3.5 w-3.5 cursor-default items-center justify-center"
           onClick={(e) => act(light.key, e.altKey)}

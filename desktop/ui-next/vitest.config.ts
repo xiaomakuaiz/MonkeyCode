@@ -27,6 +27,7 @@ export default defineConfig({
           include: ["src/**/*.test.tsx"],
           // @testing-library/react 的自动 cleanup 依赖全局 afterEach
           globals: true,
+          setupFiles: ["src/test/setup.ts"],
         },
       },
     ],
