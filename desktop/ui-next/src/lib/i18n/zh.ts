@@ -61,6 +61,13 @@ export const zh = {
   "settings.appearance.language": "语言",
   "settings.appearance.hint": "切换立即生效并记在本机。",
 
+  "downloads.cancel": "取消下载",
+  "downloads.dismiss": "关闭",
+  "downloads.progress": "下载进度",
+  "downloads.reveal": "在文件管理器中显示",
+  "downloads.failed": "下载失败:{reason}",
+  "downloads.canceled": "已取消",
+
   "md.copy": "复制",
   "md.copied": "已复制",
 

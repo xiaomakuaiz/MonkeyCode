@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
+import { DownloadsDock } from "@/features/downloads/DownloadsDock";
 import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { Sidebar } from "@/features/sidebar/Sidebar";
@@ -228,6 +229,7 @@ export function App() {
         />
         <MainArea current={current} />
       </div>
+      <DownloadsDock />
       <NewTaskModal
         open={creating}
         onClose={() => setCreating(false)}
