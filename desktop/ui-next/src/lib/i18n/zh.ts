@@ -61,6 +61,9 @@ export const zh = {
   "settings.appearance.language": "语言",
   "settings.appearance.hint": "切换立即生效并记在本机。",
 
+  "update.available": "新版本 {version} 可用",
+  "update.install": "更新",
+
   "downloads.cancel": "取消下载",
   "downloads.dismiss": "关闭",
   "downloads.progress": "下载进度",

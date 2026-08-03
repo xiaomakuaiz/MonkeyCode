@@ -62,6 +62,9 @@ export const en: Record<MessageKey, string> = {
   "settings.appearance.language": "Language",
   "settings.appearance.hint": "Applies immediately and is remembered on this machine.",
 
+  "update.available": "Version {version} available",
+  "update.install": "Update",
+
   "downloads.cancel": "Cancel download",
   "downloads.dismiss": "Dismiss",
   "downloads.progress": "Download progress",

@@ -4,6 +4,7 @@
 // lib/util/projects::reorderKeys,纯函数可测)。
 import { useState, type DragEvent } from "react";
 
+import { useUpdate } from "@/features/update/useUpdate";
 import { useI18n } from "@/lib/i18n";
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import {
@@ -347,6 +348,22 @@ export function Sidebar({
         {t("sidebar.newTask")}
       </button>
       <div className="min-h-0 flex-1">{body()}</div>
+      <UpdateFooter />
     </aside>
+  );
+}
+
+function UpdateFooter() {
+  const { t } = useI18n();
+  const { update, installing, install } = useUpdate();
+  if (!update?.available) return null;
+  return (
+    <div role="status" className="alert alert-info alert-soft flex items-center py-1.5 text-xs">
+      <span className="min-w-0 flex-1 truncate">{t("update.available", { version: update.latest ?? "" })}</span>
+      <button type="button" className="btn btn-info btn-xs" disabled={installing} onClick={install}>
+        {installing && <span className="loading loading-spinner loading-xs" aria-hidden />}
+        {t("update.install")}
+      </button>
+    </div>
   );
 }
