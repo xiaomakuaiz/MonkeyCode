@@ -24,6 +24,25 @@ export interface CloudTasksResp {
   page_info?: { total?: number; total_count?: number };
 }
 
+/** 云端项目(mc_projects 响应条目;与 Web 侧栏同一接口)。列表接口每个
+ * 项目只捎带 ≤3 条**运行中**任务(后端按 pending/processing 过滤),历史
+ * 任务一条都没有——"tasks 为空"多半只是"此刻没有在跑的"。 */
+export interface CloudProject {
+  id?: string;
+  name?: string;
+  description?: string;
+  full_name?: string;
+  repo_url?: string;
+  created_at?: number;
+  updated_at?: number;
+  tasks?: CloudTask[];
+}
+
+export interface CloudProjectsResp {
+  projects?: CloudProject[];
+  page?: { cursor?: string; has_more?: boolean };
+}
+
 /** 云端任务详情(ProjectTask 子集;VM 准备进度在 virtualmachine.conditions)。 */
 export interface CloudTaskDetail extends CloudTask {
   model?: { id?: string; model?: string; remark?: string };
@@ -119,6 +138,9 @@ export const mcTasks = (
     projectId: options.projectId ?? null,
     quickStart: options.quickStart ?? null,
   });
+
+/** 项目列表(壳侧固定 limit=50;每项目捎带 ≤3 条运行中任务,见 CloudProject)。 */
+export const mcProjects = () => invoke<CloudProjectsResp>("mc_projects");
 
 export const mcTaskInfo = (id: string) => invoke<CloudTaskDetail>("mc_task_info", { id });
 

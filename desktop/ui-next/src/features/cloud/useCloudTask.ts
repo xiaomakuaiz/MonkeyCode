@@ -69,7 +69,9 @@ export interface CloudTaskHandle {
   stopTask(): Promise<void>;
   cursor: { cursor: string; hasMore: boolean } | null;
   loadingEarlier: boolean;
-  loadEarlier(): Promise<void>;
+  /** 往更早翻 limit 轮(默认 1;壳侧上限 10)。大纲跳转补页用大步长
+   * 减少跳到很早提问时的串行往返,"加载更早"按钮维持一次一轮。 */
+  loadEarlier(limit?: number): Promise<void>;
 }
 
 export function useCloudTask(
@@ -295,13 +297,13 @@ export function useCloudTask(
     }
   };
 
-  const loadEarlier = async () => {
+  const loadEarlier = async (limit = 1) => {
     const cur = cursorRef.current;
     if (!cur || loadingRef.current) return;
     loadingRef.current = true;
     setLoadingEarlier(true);
     try {
-      const r = await mcTaskRounds(id, cur.cursor, 1);
+      const r = await mcTaskRounds(id, cur.cursor, limit);
       const frames = r.frames ?? [];
       historyRef.current = [...frames, ...historyRef.current];
       applyCursor(r.next_cursor && r.has_more !== false ? { cursor: r.next_cursor, hasMore: !!r.has_more } : null);

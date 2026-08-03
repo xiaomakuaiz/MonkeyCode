@@ -1,5 +1,6 @@
-// 云端任务列表:运行中置顶、历史折叠段、选择回调(假壳 invoke)。
-import { render, screen, waitFor } from "@testing-library/react";
+// 云端任务列表:运行中置顶、项目分组懒拉、行菜单删除、历史折叠段、
+// 选择回调(假壳 invoke)。
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -60,6 +61,80 @@ describe("CloudTaskList", () => {
     expect(screen.getByRole("alert").textContent).toContain("会话失效");
     await userEvent.click(screen.getByText("重试"));
     await screen.findByText("修复登录");
+  });
+
+  it("项目分组:mc_projects 出折叠组,展开按 project_id 懒拉;快速开始组按 quick_start 懒拉", async () => {
+    const taskCalls: Record<string, unknown>[] = [];
+    stubShell((cmd, args) => {
+      if (cmd === "mc_projects") {
+        return Promise.resolve({
+          projects: [{ id: "p1", name: "项目甲", tasks: [{ id: "a", title: "修复登录", status: "processing" }] }],
+        });
+      }
+      if (cmd !== "mc_tasks") return Promise.resolve({});
+      taskCalls.push(args ?? {});
+      if (args?.projectId === "p1") return Promise.resolve({ tasks: [{ id: "pt1", title: "项目内旧任务", status: "finished" }] });
+      if (args?.quickStart === true) return Promise.resolve({ tasks: [{ id: "q1", title: "快速旧任务", status: "finished" }] });
+      return Promise.resolve({ tasks, page_info: { total: 3 } });
+    });
+    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    await screen.findByText("项目甲");
+    expect(screen.getByText("快速开始")).toBeTruthy();
+    // 运行中仍置顶平铺(捎带任务只做徽标,不重复出行)
+    expect(screen.getByText("修复登录")).toBeTruthy();
+
+    await userEvent.click(screen.getByText("项目甲"));
+    await screen.findByText("项目内旧任务");
+    await userEvent.click(screen.getByText("快速开始"));
+    await screen.findByText("快速旧任务");
+    expect(taskCalls.some((a) => a.projectId === "p1")).toBe(true);
+    expect(taskCalls.some((a) => a.quickStart === true)).toBe(true);
+    // 再合上再展开:缓存命中,不重复拉
+    const projectLoads = taskCalls.filter((a) => a.projectId === "p1").length;
+    await userEvent.click(screen.getByText("项目甲"));
+    await userEvent.click(screen.getByText("项目甲"));
+    expect(taskCalls.filter((a) => a.projectId === "p1").length).toBe(projectLoads);
+  });
+
+  it("行菜单删除:二段确认 → mc_task_delete → 整表重拉 + onDeleted 回调", async () => {
+    let listCalls = 0;
+    const deleted: string[] = [];
+    stubShell((cmd, args) => {
+      if (cmd === "mc_tasks") {
+        listCalls += 1;
+        return Promise.resolve({ tasks, page_info: { total: 3 } });
+      }
+      if (cmd === "mc_task_delete") {
+        deleted.push(String(args?.id));
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({});
+    });
+    const onDeleted = vi.fn();
+    render(<CloudTaskList currentId="b" onSelect={() => {}} onDeleted={onDeleted} />);
+    const row = (await screen.findByText("旧任务甲")).closest("a") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "任务操作" }));
+    await userEvent.click(within(row).getByText("删除任务"));
+    expect(deleted).toEqual([]); // 第一段只变文案
+    const before = listCalls;
+    await userEvent.click(within(row).getByText("确认删除"));
+    await waitFor(() => expect(deleted).toEqual(["b"]));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("b"));
+    await waitFor(() => expect(listCalls).toBeGreaterThan(before)); // 删除后触发重拉
+  });
+
+  it("删除被服务端拒绝(任务仍在运行):原因外显,不静默", async () => {
+    stubShell((cmd) => {
+      if (cmd === "mc_tasks") return Promise.resolve({ tasks, page_info: { total: 3 } });
+      if (cmd === "mc_task_delete") return Promise.reject(new Error("任务仍在运行"));
+      return Promise.resolve({});
+    });
+    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    const row = (await screen.findByText("修复登录")).closest("a") as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "任务操作" }));
+    await userEvent.click(within(row).getByText("删除任务"));
+    await userEvent.click(within(row).getByText("确认删除"));
+    await screen.findByText(/删除任务失败.*任务仍在运行/);
   });
 
   it("总数超已载:历史段出「加载更多」并续拉合并", async () => {

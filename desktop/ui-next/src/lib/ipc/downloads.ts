@@ -83,9 +83,14 @@ export async function startDownload(args: {
   }
 }
 
-/** 在文件管理器中定位产物。 */
+/** 在文件管理器中定位产物。opener 插件的命令签名是
+ * `reveal_item_in_dir(paths: Vec<PathBuf>)`——参数名必须是 paths 数组,
+ * 传 {path} 会反序列化失败且无声(旧 UI 踩过);失败留 console 便于诊断,
+ * 路径本身就在下载卡上,用户仍可自寻。 */
 export function revealDownload(item: DownloadItem): void {
-  void invoke("plugin:opener|reveal_item_in_dir", { path: item.dest }).catch(() => {});
+  void invoke("plugin:opener|reveal_item_in_dir", { paths: [item.dest] }).catch((e: unknown) => {
+    console.warn("[downloads] 文件管理器定位失败:", e);
+  });
 }
 
 /** 仅测试用:清空 store。 */

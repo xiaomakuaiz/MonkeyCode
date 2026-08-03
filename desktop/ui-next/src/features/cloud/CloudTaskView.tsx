@@ -4,17 +4,27 @@
 // - pending:整屏启动时间线(StartupTimeline),此时必然还没有对话;
 // - processing:attach 跟看 + 简版输入 + 停止/中断;
 // - finished/error:REST rounds 只读回放,「加载更早」按 cursor 往前翻。
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+// 提问大纲:数据 = REST 提问索引(全量目录)+ 已回放窗口的用户消息按时间锚
+// 合并(lib/cloud/outline),渲染复用本地 OutlineNav;跳转目标未加载时经
+// loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { LogList } from "@/features/chat/LogList";
+import { OutlineNav, outlineEntriesOf } from "@/features/chat/OutlineNav";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { CloudTask } from "@/lib/ipc/cloudtasks";
+import type { OutlineItem } from "@/lib/ipc/controls";
+import { cloudAnchorIndex, fetchCloudOutline, withCloudAnchors } from "@/lib/cloud/outline";
 import type { StreamStatus } from "@/lib/cloud/stream";
+import { CloudFiles } from "./CloudFiles";
 import { CloudTerminal } from "./CloudTerminal";
 import { StartupTimeline } from "./StartupTimeline";
 import { useCloudTask } from "./useCloudTask";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
+const JUMP_MAX_PAGES = 80; // 大纲跳转补页上限(坏锚/游标不前进时不空转)
+const JUMP_STEP = 10; // 补页步长(轮/页;壳侧 mc_task_rounds 的 limit 上限)
+const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
 
 const STATUS_BADGE: Record<string, string> = {
   pending: "badge-warning",
@@ -56,9 +66,73 @@ export function CloudTaskView({
   const h = useCloudTask(task, { onTasksChanged });
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [termOpen, setTermOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+
+  // ==== 提问大纲:REST 全量目录(挂载拉一次;运行中新增的提问靠实时合并) ====
+  const [outline, setOutline] = useState<OutlineItem[]>([]);
+  useEffect(() => {
+    setOutline([]);
+    let alive = true;
+    fetchCloudOutline(h.id)
+      .then((items) => {
+        if (alive) setOutline(items);
+      })
+      .catch((e: unknown) => {
+        // 大纲缺席可接受(降级为只有流内条目),但失败必须留痕:命令没进
+        // ACL 白名单这类故障,静默吞掉就只剩"点了没反应"
+        console.warn("[cloud-outline] 提问索引拉取失败:", e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [h.id]);
+  const entries = useMemo(() => outlineEntriesOf(outline, withCloudAnchors(h.chat.items)), [outline, h.chat.items]);
+
+  // ==== 大纲跳转:effect 驱动的补页循环(锚 = 10ms 时间锚,见 lib/cloud/outline) ====
+  const [jumpAnchor, setJumpAnchor] = useState<number | null>(null);
+  const [flashSeq, setFlashSeq] = useState<number | null>(null);
+  const jumpTries = useRef(0);
+  const flashTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
+  useEffect(() => {
+    if (jumpAnchor === null) return;
+    const idx = cloudAnchorIndex(h.chat.items, jumpAnchor);
+    if (idx >= 0) {
+      setJumpAnchor(null);
+      // LogList 结构契约:根节点直接子元素与 items 一一对应
+      const node = listRef.current?.firstElementChild?.children.item(idx);
+      (node as HTMLElement | null)?.scrollIntoView?.({ block: "start" });
+      // 闪光走 LogList 的 flashSeq(按帧原生 seq 对表);云端旧帧可缺 seq,
+      // 那就只滚动不闪,定位本身不受影响
+      const it = h.chat.items[idx];
+      const seq = it?.kind === "user" ? it.seq : undefined;
+      if (seq !== undefined) {
+        setFlashSeq(seq);
+        window.clearTimeout(flashTimer.current);
+        flashTimer.current = window.setTimeout(() => setFlashSeq(null), FLASH_MS);
+      }
+      return;
+    }
+    if (!h.cursor || jumpTries.current >= JUMP_MAX_PAGES) {
+      setJumpAnchor(null); // 锚不存在(坏数据/已翻到头):放弃,不空转
+      return;
+    }
+    if (h.loadingEarlier) return; // 本页落地(items 变化)后 effect 重跑再查
+    jumpTries.current += 1;
+    void h.loadEarlier(JUMP_STEP);
+    // h.loadEarlier 每渲染新引用但行为稳定,刻意不进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpAnchor, h.chat.items, h.cursor, h.loadingEarlier]);
+  const onJumpOutline = (anchor: number) => {
+    // 云端流为跟看场景:先解除贴底,否则下一批帧立刻拽回底部
+    pinnedRef.current = false;
+    jumpTries.current = 0;
+    setJumpAnchor(anchor);
+  };
 
   // 贴底跟随:items 变化后,若此前贴底则滚到底(useLayoutEffect 赶在绘制前)
   useLayoutEffect(() => {
@@ -103,13 +177,22 @@ export function CloudTaskView({
   const statusLabel = STATUS_BADGE[h.taskStatus] ? t(statusKey) : h.taskStatus;
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-base-100">
+    <main className="relative flex min-w-0 flex-1 flex-col bg-base-100">
       <header data-view-header="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
         <h1 className="min-w-0 flex-1 truncate text-sm font-semibold" title={h.label}>
           {h.label}
         </h1>
         <span className={`badge badge-soft badge-sm ${STATUS_BADGE[h.taskStatus] ?? "badge-ghost"}`}>{statusLabel}</span>
         <span className="badge badge-ghost badge-sm">{t("cloud.view.badge")}</span>
+        <button
+          type="button"
+          className={`btn btn-ghost btn-xs ${filesOpen ? "btn-active" : ""}`}
+          disabled={!h.vmId}
+          title={h.vmId ? undefined : t("cloud.view.filesPending")}
+          onClick={() => setFilesOpen((o) => !o)}
+        >
+          {t("cloud.view.filesOpen")}
+        </button>
         {h.vmId && !h.ended && (
           <button
             type="button"
@@ -164,10 +247,23 @@ export function CloudTaskView({
                 {h.ended ? t("cloud.view.noReplay") : (connText ?? t("cloud.conn.connecting"))}
               </div>
             )}
-            {/* 审批/提问答复经 stream WS 上行(h.sendFrame),不走本地 session_send */}
-            <LogList state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} />
+            {/* 审批/提问答复经 stream WS 上行(h.sendFrame),不走本地 session_send;
+                包一层 div 做大纲跳转的定位根(LogList 直接子元素 ↔ items 下标) */}
+            <div ref={listRef}>
+              <LogList state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} flashSeq={flashSeq ?? undefined} />
+            </div>
           </div>
         </div>
+      )}
+
+      {/* 大纲挂在视图根(高度恒定的参照物),不挂日志视口(与 ChatView 同理) */}
+      {!pending && <OutlineNav entries={entries} onJump={onJumpOutline} />}
+
+      {/* 云端文件:右滑面板(CloudFiles 自带头部与关闭;下载走全局 downloads) */}
+      {filesOpen && (
+        <aside className="absolute inset-y-0 right-0 z-20 flex w-[26rem] max-w-[85%] flex-col border-l border-base-300 bg-base-100 shadow-xl">
+          <CloudFiles taskId={h.id} vmId={h.ended ? undefined : h.vmId || undefined} onClose={() => setFilesOpen(false)} />
+        </aside>
       )}
 
       <footer className="shrink-0 border-t border-base-300 p-3">

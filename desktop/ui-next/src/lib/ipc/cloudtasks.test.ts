@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   mcFileUpload,
+  mcProjects,
   mcTaskCreate,
+  mcTaskDelete,
   mcTaskInfo,
   mcTaskOptions,
   mcTaskRounds,
@@ -41,6 +43,8 @@ describe("mc_task_* 封装", () => {
     await mcTaskRounds("t1");
     await mcTaskUserInputs("t1");
     await mcTaskStop("t1");
+    await mcTaskDelete("t1");
+    await mcProjects();
     await mcTerminalList("vm1");
     expect(calls).toEqual([
       { cmd: "mc_tasks", args: { page: 1, size: 20, status: "", projectId: null, quickStart: null } },
@@ -50,6 +54,8 @@ describe("mc_task_* 封装", () => {
       { cmd: "mc_task_rounds", args: { id: "t1", cursor: "", limit: 1 } },
       { cmd: "mc_task_user_inputs", args: { id: "t1", cursor: "", limit: 100 } },
       { cmd: "mc_task_stop", args: { id: "t1" } },
+      { cmd: "mc_task_delete", args: { id: "t1" } },
+      { cmd: "mc_projects", args: undefined },
       { cmd: "mc_terminal_list", args: { vmId: "vm1" } },
     ]);
   });

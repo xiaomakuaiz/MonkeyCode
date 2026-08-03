@@ -1,16 +1,22 @@
-// 侧栏云端空间的任务列表:运行中(pending/processing)置顶,历史
-// (finished/error)收进「云端历史」折叠段并按页续拉。导出组件与数据 hook,
-// Sidebar 接线由 App 侧完成(本文件不触 features/sidebar)。
+// 侧栏云端空间的任务列表:运行中(pending/processing)置顶平铺,项目按
+// mc_projects 分组(daisyUI details 折叠,展开时按 project_id 懒拉任务;
+// 无项目的快速任务归「快速开始」组),历史(finished/error)收进「云端历史」
+// 折叠段并按页续拉。行菜单(dropdown)提供删除(二段确认);删除后触发
+// 列表重拉,删的是当前打开任务时经 onDeleted 让上层清空。
+// 导出组件与数据 hook,Sidebar 接线由 App 侧完成(本文件不触 features/sidebar)。
 // daisyUI 原生形态:menu + details 折叠 + status 状态点 + badge 计数。
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
-import { mcTasks, type CloudTask } from "@/lib/ipc/cloudtasks";
+import { mcProjects, mcTaskDelete, mcTasks, type CloudProject, type CloudTask } from "@/lib/ipc/cloudtasks";
 
 const PAGE_SIZE = 20;
 
 const ACTIVE = new Set(["pending", "processing"]);
+
+/** 「快速开始」组(无项目的快速任务)在懒拉缓存里的键。 */
+const QUICK_KEY = "quick";
 
 export interface CloudTasksFeed {
   /** null = 首屏加载中 */
@@ -82,6 +88,27 @@ export function useCloudTasks(reloadKey = 0): CloudTasksFeed {
   };
 }
 
+/** 项目列表(mc_projects;每项目捎带 ≤3 条运行中任务)。失败降级为空
+ * (列表退回平铺形态,任务本身不受影响),但必须留痕便于诊断。 */
+export function useCloudProjects(reloadKey = 0): CloudProject[] {
+  const [projects, setProjects] = useState<CloudProject[]>([]);
+  useEffect(() => {
+    if (!inDesktopShell()) return;
+    let alive = true;
+    mcProjects()
+      .then((r) => {
+        if (alive) setProjects((r.projects ?? []).filter((p) => !!p.id));
+      })
+      .catch((e: unknown) => {
+        console.warn("[cloud-projects] 项目列表拉取失败:", e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [reloadKey]);
+  return projects;
+}
+
 export function cloudTaskLabel(task: CloudTask, fallback: string): string {
   return task.title || task.summary || task.content || fallback;
 }
@@ -93,25 +120,125 @@ function StatusDot({ status }: { status?: string }) {
   return <span aria-hidden className="status opacity-30" />;
 }
 
+function RowMenu({ task, onDelete }: { task: CloudTask; onDelete: (task: CloudTask) => void }) {
+  const { t } = useI18n();
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="dropdown dropdown-end" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        tabIndex={0}
+        aria-label={t("cloud.list.menu")}
+        className="btn btn-ghost btn-square btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
+        onBlur={() => setConfirming(false)}
+      >
+        ⋯
+      </button>
+      <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 shadow-md">
+        <li>
+          <button
+            type="button"
+            className="text-error"
+            onClick={(e) => {
+              // 危险动作二段确认:第一次点变文案,再点才删(与本地侧栏同款)
+              if (!confirming) {
+                e.preventDefault();
+                setConfirming(true);
+                return;
+              }
+              setConfirming(false);
+              onDelete(task);
+            }}
+          >
+            {confirming ? t("cloud.list.deleteConfirm") : t("cloud.list.delete")}
+          </button>
+        </li>
+      </ul>
+    </div>
+  );
+}
+
 function TaskRow({
   task,
   currentId,
   onSelect,
+  onDelete,
 }: {
   task: CloudTask;
   currentId: string | null;
   onSelect: (task: CloudTask) => void;
+  onDelete: (task: CloudTask) => void;
 }) {
   const { t } = useI18n();
   return (
     <li>
       <a
-        className={`flex items-center gap-2 ${task.id === currentId ? "menu-active" : ""}`}
+        className={`group flex items-center gap-2 ${task.id === currentId ? "menu-active" : ""}`}
         onClick={() => onSelect(task)}
       >
         <StatusDot status={task.status} />
         <span className="min-w-0 flex-1 truncate">{cloudTaskLabel(task, t("cloud.list.untitled"))}</span>
+        <RowMenu task={task} onDelete={onDelete} />
       </a>
+    </li>
+  );
+}
+
+/** 分组懒拉三态(互斥;都缺省 = 还没拉过,展开时才拉)。 */
+interface GroupTasksState {
+  loading?: boolean;
+  tasks?: CloudTask[];
+  error?: string;
+}
+
+/** 项目/快速开始分组:details 折叠,展开时懒拉该组任务(捎带的 ≤3 条运行
+ * 中任务只做 summary 徽标——它们已置顶平铺,组内以懒拉结果为准)。 */
+function TaskGroup({
+  label,
+  running,
+  state,
+  onOpen,
+  currentId,
+  onSelect,
+  onDelete,
+}: {
+  label: string;
+  running: number;
+  state?: GroupTasksState;
+  onOpen: () => void;
+  currentId: string | null;
+  onSelect: (task: CloudTask) => void;
+  onDelete: (task: CloudTask) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <li>
+      <details
+        onToggle={(e) => {
+          if ((e.target as HTMLDetailsElement).open) onOpen();
+        }}
+      >
+        <summary title={label}>
+          <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+          {running > 0 && <span className="badge badge-primary badge-xs">{running}</span>}
+        </summary>
+        <ul>
+          {state?.loading && (
+            <li className="flex justify-center py-2">
+              <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
+            </li>
+          )}
+          {state?.error && (
+            <li className="px-2 py-1 text-[11px] text-error">{t("cloud.list.groupError", { reason: state.error })}</li>
+          )}
+          {state?.tasks && state.tasks.length === 0 && (
+            <li className="px-2 py-1 text-[11px] text-base-content/40">{t("cloud.list.groupEmpty")}</li>
+          )}
+          {state?.tasks?.map((task) => (
+            <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={onDelete} />
+          ))}
+        </ul>
+      </details>
     </li>
   );
 }
@@ -120,14 +247,54 @@ export function CloudTaskList({
   currentId,
   onSelect,
   reloadKey = 0,
+  onDeleted,
 }: {
   currentId: string | null;
   onSelect: (task: CloudTask) => void;
   /** App 在任务创建/终止后 bump,触发整表重拉 */
   reloadKey?: number;
+  /** 任务删除成功后回调(带任务 id);App 据此清空当前打开的同 id 视图 */
+  onDeleted?: (id: string) => void;
 }) {
   const { t } = useI18n();
   const feed = useCloudTasks(reloadKey);
+  const projects = useCloudProjects(reloadKey);
+
+  // 分组懒拉缓存(键 = 项目 id / QUICK_KEY);重拉键翻转即作废
+  const [groupTasks, setGroupTasks] = useState<Record<string, GroupTasksState>>({});
+  useEffect(() => setGroupTasks({}), [reloadKey]);
+  const [deleteErr, setDeleteErr] = useState("");
+
+  const loadGroup = (key: string, projectId: string | null) => {
+    if (groupTasks[key]) return; // 拉过/在途
+    setGroupTasks((prev) => ({ ...prev, [key]: { loading: true } }));
+    mcTasks(1, PAGE_SIZE, "", projectId ? { projectId } : { quickStart: true })
+      .then((r) => setGroupTasks((prev) => ({ ...prev, [key]: { tasks: r.tasks ?? [] } })))
+      .catch((e: unknown) =>
+        setGroupTasks((prev) => ({ ...prev, [key]: { error: e instanceof Error ? e.message : String(e) } })),
+      );
+  };
+
+  const handleDelete = (task: CloudTask) => {
+    setDeleteErr("");
+    void mcTaskDelete(task.id)
+      .then(() => {
+        // 分组缓存就地剔除(展开着的组不必等重拉),整表重拉刷新置顶/历史
+        setGroupTasks((prev) => {
+          const next: Record<string, GroupTasksState> = {};
+          for (const [key, state] of Object.entries(prev)) {
+            next[key] = state.tasks ? { ...state, tasks: state.tasks.filter((x) => x.id !== task.id) } : state;
+          }
+          return next;
+        });
+        feed.refresh();
+        onDeleted?.(task.id);
+      })
+      .catch((e: unknown) => {
+        // 服务端会拒绝仍在运行/虚拟机尚在线的任务:原因外显,不静默
+        setDeleteErr(e instanceof Error ? e.message : String(e));
+      });
+  };
 
   if (feed.tasks === null) {
     return feed.error ? (
@@ -144,7 +311,7 @@ export function CloudTaskList({
     );
   }
 
-  if (feed.tasks.length === 0) {
+  if (feed.tasks.length === 0 && projects.length === 0) {
     return (
       <div className="flex flex-col items-center gap-1 px-3 py-8 text-center">
         <div className="text-sm font-semibold text-base-content/55">{t("cloud.list.empty.title")}</div>
@@ -156,18 +323,41 @@ export function CloudTaskList({
   return (
     <ul className="menu menu-sm w-full p-0">
       {feed.active.map((task) => (
-        <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} />
+        <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} />
       ))}
+      {projects.map((project) => (
+        <TaskGroup
+          key={project.id}
+          label={project.name || project.full_name || t("cloud.list.untitledProject")}
+          running={(project.tasks ?? []).length}
+          state={groupTasks[project.id ?? ""]}
+          onOpen={() => loadGroup(project.id ?? "", project.id ?? null)}
+          currentId={currentId}
+          onSelect={onSelect}
+          onDelete={handleDelete}
+        />
+      ))}
+      {projects.length > 0 && (
+        <TaskGroup
+          label={t("cloud.list.quickStart")}
+          running={0}
+          state={groupTasks[QUICK_KEY]}
+          onOpen={() => loadGroup(QUICK_KEY, null)}
+          currentId={currentId}
+          onSelect={onSelect}
+          onDelete={handleDelete}
+        />
+      )}
       {feed.history.length > 0 && (
         <li>
-          <details open={feed.active.length === 0}>
+          <details open={feed.active.length === 0 && projects.length === 0}>
             <summary className="text-base-content/50">
               {t("cloud.list.history")}
               <span className="badge badge-ghost badge-xs">{feed.history.length}</span>
             </summary>
             <ul>
               {feed.history.map((task) => (
-                <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} />
+                <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} />
               ))}
               {feed.hasMore && (
                 <li>
@@ -180,6 +370,9 @@ export function CloudTaskList({
             </ul>
           </details>
         </li>
+      )}
+      {deleteErr && (
+        <li className="px-2 py-1 text-[11px] text-error">{t("cloud.list.deleteFailed", { reason: deleteErr })}</li>
       )}
       {feed.error && (
         <li className="px-2 py-1 text-[11px] text-error">{t("cloud.list.error", { reason: feed.error })}</li>
