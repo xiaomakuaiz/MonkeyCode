@@ -2,6 +2,7 @@
 // 布局与数值取自设计稿 Chat 屏;协议交互(发送/审批/切模型等)统一走 session 句柄
 // (useSession),App 只注入布局级回调(抽屉/子会话/归档/删除)。
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -674,11 +675,15 @@ export function ChatView({
     const col = el?.firstElementChild;
     if (!el || !col) return;
     const elTop = el.getBoundingClientRect().top;
+    // 只量带 seq 的用户气泡,不再遍历全部条目取 rect。
+    // 判定等价:子节点按文档序排列、top 单调递增,outlineActiveSeq 记录的是
+    // 阈值之上最后一个带 seq 的元素 —— 中间那些无 seq 的条目只影响 break 的
+    // 时机,不影响结果。省下的是每帧 O(条目数) 次强制布局(长会话里是几百次)。
     const seq = outlineActiveSeq(
-      Array.from(col.children, (kid) => {
-        const raw = (kid as HTMLElement).dataset?.mcSeq;
-        return { top: kid.getBoundingClientRect().top, seq: raw ? Number(raw) : undefined };
-      }),
+      Array.from(col.querySelectorAll<HTMLElement>("[data-mc-seq]"), (kid) => ({
+        top: kid.getBoundingClientRect().top,
+        seq: Number(kid.dataset.mcSeq),
+      })),
       elTop,
     );
     setActiveSeq((prev) => (prev === seq ? prev : seq));
@@ -738,6 +743,12 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
 
+  // 我们自己写进去的 scrollTop。浏览器发的 scroll 事件不区分来源,而流式期间
+  // 每拍都会贴底写一次 —— 不认出这是自己写的,就会在每一拍上白跑一遍
+  // saveAnchor(遍历全部条目取 rect)。比 debounce 准:不引入延迟,也不会
+  // 把用户在流式期间的真实滚动一并吞掉。
+  const selfScrollTop = useRef(-1);
+
   // 自动滚动:优先对齐记忆锚点,否则贴底跟随
   const alignLog = () => {
     const el = logRef.current;
@@ -753,6 +764,7 @@ export function ChatView({
     } else if (pinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
+    selfScrollTop.current = el.scrollTop;
   };
   useEffect(alignLog, [chat.items, chat.running]);
 
@@ -774,17 +786,27 @@ export function ChatView({
     // 恢复进行中的程序滚动不写记忆,避免中途切走时锚点被半成品覆盖
     if (!el || !session.id || restoreRef.current) return;
     const elTop = el.getBoundingClientRect().top;
+    const kids = el.firstElementChild?.children ?? [];
     let anchor = 0;
     let offset = 0;
-    const kids = el.firstElementChild?.children ?? [];
-    for (let i = 0; i < kids.length; i++) {
-      const r = kids[i].getBoundingClientRect();
-      if (r.bottom > elTop) {
-        // 视口顶部所在的条目:offset 为条目顶到视口顶的已滚过距离
-        anchor = i;
-        offset = elTop - r.top;
-        break;
+    if (kids.length) {
+      // 找"视口顶部所在的条目"= 第一个 bottom 越过视口顶的兄弟节点。
+      // 兄弟节点同一个 offsetParent、offsetTop 单调递增,故可二分:
+      // 先用第一个节点的 rect 标定基准,之后只读 offsetTop/offsetHeight,
+      // 从 O(条目数) 次强制布局降到 O(log n)。原来的线性扫描在长会话里
+      // 每次 scroll 事件都要跑几百次 getBoundingClientRect。
+      const first = kids[0] as HTMLElement;
+      const base = first.getBoundingClientRect().top - first.offsetTop;
+      let lo = 0;
+      let hi = kids.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        const k = kids[mid] as HTMLElement;
+        if (base + k.offsetTop + k.offsetHeight > elTop) hi = mid;
+        else lo = mid + 1;
       }
+      anchor = lo;
+      offset = elTop - (base + (kids[lo] as HTMLElement).offsetTop);
     }
     scrollMemo.set(session.id, { anchor, offset, pinned: pinnedRef.current });
   };
@@ -797,6 +819,9 @@ export function ChatView({
     // scroll 事件,回放中一批内容长高 >40px 就会把跟随误判成用户离底(实测
     // 卡在中途)。离底判定只认用户真实输入(onWheel/滚动条拖拽)
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) pinnedRef.current = true;
+    // 这一发是 alignLog 自己写出来的:位置记忆与大纲当前项都由 items 变化那条
+    // effect 负责更新,这里再算一遍纯属重复,而且正压在流式的每一拍上。
+    if (Math.abs(el.scrollTop - selfScrollTop.current) <= 1) return;
     saveAnchor();
     scheduleActive();
     // 滚动停止后布局仍会微调一次(实测 ~6px,不发 scroll 事件),停稳后补一次校准
@@ -874,19 +899,24 @@ export function ChatView({
   });
 
   const workdir = meta?.workdir ?? "";
-  const revealMarkdownLink = (path: string) => {
-    const rel = workspaceRelativePath(path, workdir);
-    if (rel === null) {
-      session.notify("⚠ 只能打开当前工作区内的文件");
-      return;
-    }
-    session
-      .reveal(rel)
-      .then((r) => {
-        if (r.error) session.notify("⚠ 无法定位文件: " + r.error);
-      })
-      .catch((e) => session.notify("⚠ 无法定位文件: " + (e instanceof Error ? e.message : String(e))));
-  };
+  // useCallback 不是为了省这一个闭包,而是它会传进每条消息的 Markdown:
+  // 身份一变,下游 memo 全部落空(notify / reveal 本身已是稳定引用)。
+  const { notify, reveal } = session;
+  const revealMarkdownLink = useCallback(
+    (path: string) => {
+      const rel = workspaceRelativePath(path, workdir);
+      if (rel === null) {
+        notify("⚠ 只能打开当前工作区内的文件");
+        return;
+      }
+      reveal(rel)
+        .then((r) => {
+          if (r.error) notify("⚠ 无法定位文件: " + r.error);
+        })
+        .catch((e) => notify("⚠ 无法定位文件: " + (e instanceof Error ? e.message : String(e))));
+    },
+    [workdir, notify, reveal],
+  );
   const empty = chat.items.length === 0 && !chat.running;
   const openPerm = [...chat.items].reverse().find((it) => it.kind === "perm" && it.state === "open") as
     | Extract<LogItem, { kind: "perm" }>
@@ -1071,6 +1101,7 @@ export function ChatView({
             <LogList
               items={chat.items}
               keyBase={chat.keyBase}
+              streamingIndex={chat.streamKind ? chat.items.length - 1 : -1}
               onPermAnswer={session.answerPerm}
               onAskAnswer={session.answerAsk}
               onOpenChild={onOpenChild}

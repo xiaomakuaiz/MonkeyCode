@@ -10,10 +10,11 @@
 //     排队投递、卸载断开)在这里成为显式时机,可测即可守。
 //   useSession —— React 侧:state 持有与镜像回写、notice 定时器、卸载断开,
 //     拼装为 SessionHandle(形状不变)。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connect, sessionFrame, sessionHistory, sessionOutline, sessionSend, type Conn, type HistoryPage } from "./session";
 import { nativePathOf, uploadFilePath, uploadFileStream, uploadFileURL } from "./uploads";
 import { b64decode, b64encode } from "./codec";
+import { createFrameCoalescer } from "./frameCoalescer";
 import {
   answerAsk as applyAskAnswer,
   answerPerm as applyPermAnswer,
@@ -377,22 +378,42 @@ export function createSessionCore(io: SessionCoreIO, openConn: typeof connect = 
     }
   }
 
+  /** 不能等节流的帧:等用户操作的(审批/提问)与轮次收尾的。前者多等一拍就是
+   * 白白让人多等,后者会拖慢"运行中→已完成"的状态回落。纯文本 chunk 才是
+   * 该被合并的大头,它们不在这张表里。 */
+  const URGENT_FRAMES = new Set([
+    "permission-req",
+    "permission-resolved",
+    "reply-question",
+    "task-ended",
+    "task-error",
+    "task-started",
+  ]);
+
+  /** 帧真正落进 React 的地方。经合流器调用,一帧最多一次。 */
+  function applyFrames(batch: Frame[]) {
+    sending = false; // 帧到达 = 上一条上行已被壳接收
+    setChat(reduceBatch(chat, batch));
+    // 本轮结束:刷新改动计数与会话列表
+    if (chat.turnEnded) {
+      setChat({ ...chat, turnEnded: false });
+      void refreshChanges();
+      // 轮末壳侧刚把这一轮物化,大纲多出一条提问
+      void refreshOutline();
+      io.onSessionsChanged();
+    }
+    flushQueued();
+  }
+
+  const coalescer = createFrameCoalescer<Frame>({
+    apply: applyFrames,
+    urgent: (f) => URGENT_FRAMES.has(f.type),
+  });
+
   function handlers() {
     return {
       onHistory: applyHistory,
-      onFrames: (batch: Frame[]) => {
-        sending = false; // 帧到达 = 上一条上行已被壳接收
-        setChat(reduceBatch(chat, batch));
-        // 本轮结束:刷新改动计数与会话列表
-        if (chat.turnEnded) {
-          setChat({ ...chat, turnEnded: false });
-          void refreshChanges();
-          // 轮末壳侧刚把这一轮物化,大纲多出一条提问
-          void refreshOutline();
-          io.onSessionsChanged();
-        }
-        flushQueued();
-      },
+      onFrames: (batch: Frame[]) => coalescer.push(batch),
       onStatus: (text: string, ok: boolean) => {
         io.setStatus(text);
         io.setConnected(ok);
@@ -701,6 +722,7 @@ export function createSessionCore(io: SessionCoreIO, openConn: typeof connect = 
 
     /** 卸载即断开(hook 的 unmount cleanup) */
     dispose() {
+      coalescer.dispose();
       conn?.close();
     },
   };
@@ -852,6 +874,14 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
   // 卸载即断开
   useEffect(() => () => core.dispose(), [core]);
 
+  // 会话内恒定:这个闭包会一路传到每一条消息的 Markdown / 工具卡上,
+  // 每渲染新建一个就等于把下游所有 React.memo 全部失效 —— 流式期间
+  // 每秒 30 次全列表重渲的根因之一。
+  const uploadUrl = useMemo(
+    () => (id ? (p: string) => uploadFileURL(id, p) : undefined),
+    [id],
+  );
+
   return {
     id,
     chat,
@@ -875,7 +905,7 @@ export function useSession(opts: { onSessionsChanged?: () => void } = {}): Sessi
     ensureLoaded: core.ensureLoaded,
     outline,
     loadFrame: core.loadFrame,
-    uploadUrl: id ? (p: string) => uploadFileURL(id, p) : undefined,
+    uploadUrl,
     open: core.open,
     close: core.close,
     setInput,

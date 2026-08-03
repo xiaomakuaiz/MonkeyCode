@@ -1,7 +1,7 @@
 // 桌面壳自绘右键菜单:WebView 原生菜单固定带"检查元素/重新加载"等浏览器项,
 // 三端平台 API 都裁不掉单项,壳内右键一律拦截(main.tsx),文本复制/粘贴
 // 在这里自绘。样式复用 .pop / .hv menu-item;非壳环境不会走到这里。
-import { copyText } from "./markdown";
+import { copyText } from "./clipboard";
 
 type Editable = HTMLInputElement | HTMLTextAreaElement;
 

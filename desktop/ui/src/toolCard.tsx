@@ -1,5 +1,5 @@
 // 工具卡:状态点、动作/目标、耗时、子代理进度直播、结构化详情与内嵌审批。
-import { useEffect, useState, type CSSProperties } from "react";
+import { memo, useEffect, useState, type CSSProperties } from "react";
 import { DiffPanel } from "./diffView";
 import { parseFindingsReport } from "./findings";
 import { FindingsReportView } from "./findingsCard";
@@ -97,7 +97,9 @@ function formatToolDuration(durationMs?: number): string {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
-export function ToolCard({
+/** 与 ItemView 同理:工具卡数量多、内部还挂 diff/详情子树,
+ * 流式期间不 memo 就是每拍全部重渲。 */
+export const ToolCard = memo(function ToolCard({
   item,
   onOpenChild,
   uploadUrl,
@@ -363,4 +365,4 @@ export function ToolCard({
       )}
     </div>
   );
-}
+});

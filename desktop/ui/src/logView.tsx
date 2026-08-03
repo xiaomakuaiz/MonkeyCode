@@ -1,5 +1,5 @@
 // 对话流:思考块、轮次边界、模型切换、用户气泡与逐项分发(相邻工具卡共享外框)。
-import { useState, type ReactElement } from "react";
+import { memo, useMemo, useState, type ReactElement } from "react";
 import { isImageFilename } from "./cloudUpload";
 import { openExternal } from "./host";
 import { IconChevronRight, IconSpark } from "./icons";
@@ -18,7 +18,7 @@ function thoughtMarkdown(text: string): string {
 
 /** 思考块:单行折叠(✦ 思考 + 摘要省略),点击在下方展开完整文本的缩进块。
  * 全文不放进标题 flex 行:多行文本会把居中的图标顶到段落中部,标签与内容挤作一团。 */
-function ThoughtView({ text }: { text: string }) {
+function ThoughtView({ text, streaming }: { text: string; streaming?: boolean }) {
   const [open, setOpen] = useState(false);
   const md = thoughtMarkdown(text);
   return (
@@ -58,7 +58,7 @@ function ThoughtView({ text }: { text: string }) {
             animation: "mcin .2s ease",
           }}
         >
-          <Markdown text={md} />
+          <Markdown text={md} streaming={streaming} />
         </div>
       )}
     </div>
@@ -295,18 +295,25 @@ function UserBubble({
   );
 }
 
-function ItemView({
+/** 逐条记忆化:流式期间每批帧都会重建整列元素,不 memo 的话每秒 30 次
+ * 把**全部**历史条目连同各自的 markdown 子树重新 diff 一遍。
+ * 前提是上游回调身份稳定(见 useSession 的 uploadUrl、chat.tsx 的
+ * revealMarkdownLink),否则这层 memo 形同虚设。 */
+const ItemView = memo(function ItemView({
   item,
   onPermAnswer,
   onAskAnswer,
   uploadUrl,
   onLocalLink,
+  streaming,
 }: {
   item: Exclude<LogItem, { kind: "tool" }>;
   onPermAnswer: (id: string, action: "allow" | "always" | "persist" | "deny") => void;
   onAskAnswer?: (askId: string, answers: Record<string, string | string[]>) => void;
   uploadUrl?: (path: string) => Promise<string>;
   onLocalLink?: (path: string) => void;
+  /** 本条是流式聚合的当前目标:解析器据此保留未闭合构造的 loading 中间态 */
+  streaming?: boolean;
 }) {
   switch (item.kind) {
     case "user":
@@ -329,12 +336,12 @@ function ItemView({
           className="mc-message-row"
           style={{ position: "relative", wordBreak: "break-word", animation: "mcin .25s ease" }}
         >
-          <Markdown text={item.text} localImageUrl={uploadUrl} onLocalLink={onLocalLink} />
+          <Markdown text={item.text} localImageUrl={uploadUrl} onLocalLink={onLocalLink} streaming={streaming} />
           <MessageTime timestamp={item.timestamp} align="start" />
         </div>
       );
     case "thought":
-      return <ThoughtView text={item.text} />;
+      return <ThoughtView text={item.text} streaming={streaming} />;
     case "sys":
       if (item.text === "— 本轮结束 —") return <TurnDivider />;
       return (
@@ -347,7 +354,7 @@ function ItemView({
     case "ask":
       return <AskCard item={item} onAnswer={onAskAnswer} />;
   }
-}
+});
 
 /** 对话流:相邻工具调用共享一个卡片外框，以细分割线保留逐项结构。 */
 export function LogList({
@@ -360,6 +367,7 @@ export function LogList({
   onLocalLink,
   workdir,
   loadFullTool,
+  streamingIndex = -1,
 }: {
   items: LogItem[];
   /** 渲染 key 的基准(见 ChatState.keyBase):「加载更早」前插 N 条时它减 N,
@@ -377,12 +385,16 @@ export function LogList({
   workdir?: string;
   /** 回读被截断的工具大字段原文(见 fold.rs 的大字段护栏) */
   loadFullTool?: (seq: number) => Promise<Frame>;
+  /** 正在流式聚合的条目下标(ChatState.streamKind 非空时为末条,否则 -1)。
+   * 只有它需要 loading 中间态;其余条目按 final 解析,省掉未闭合构造的兜底分支。 */
+  streamingIndex?: number;
 }) {
   // 审批锚定:待决 perm 带 toolCallId 且有同 id 工具卡时,按钮行嵌进
   // 那张卡(见 reduce.ts::permAnchors),对应的独立审批项跳过不渲染;
   // 无锚点(旧引擎/云端任务流/找不到卡)仍走独立 PermCard,行为不变
-  const anchors = permAnchors(items);
-  const anchored = new Set(anchors.values());
+  // 两次全表扫描,不该每拍都跑
+  const anchors = useMemo(() => permAnchors(items), [items]);
+  const anchored = useMemo(() => new Set(anchors.values()), [anchors]);
   const out: ReactElement[] = [];
   for (let i = 0; i < items.length; ) {
     const it = items[i];
@@ -439,6 +451,7 @@ export function LogList({
           onAskAnswer={onAskAnswer}
           uploadUrl={uploadUrl}
           onLocalLink={onLocalLink}
+          streaming={i === streamingIndex}
         />,
       );
       i++;

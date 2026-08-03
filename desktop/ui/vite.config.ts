@@ -13,6 +13,11 @@ import { defineConfig } from "vite";
 // 直接 cargo run 的调试二进制去连不存在的 dev server。
 export default defineConfig({
   plugins: [react()],
+  // KaTeX / Mermaid 的 worker 自身要动态 import 各自的重库,而 Vite 默认的
+  // iife worker 格式不支持代码分割(构建直接报错)。ES module worker 需要
+  // Chromium 80+ / Safari 15+;Win7 WebView2 停在 109,够。更老的 WKWebView
+  // 构造 worker 会抛,main.tsx 已包 try/catch,降级为主线程渲染而不是白屏。
+  worker: { format: "es" },
   server: {
     port: 1420,
     strictPort: true,

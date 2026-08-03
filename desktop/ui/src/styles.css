@@ -406,7 +406,7 @@ input, textarea, [contenteditable="true"],
   user-select: text;
   -webkit-user-select: text;
 }
-.mdcopy, .tool-detail-toggle { user-select: none; -webkit-user-select: none; }
+.tool-detail-toggle { user-select: none; -webkit-user-select: none; }
 
 a { color: var(--accTx); text-decoration: none; }
 a:hover { color: var(--linkH); text-decoration: underline; }
@@ -744,12 +744,37 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 }
 
 /* markdown 渲染产物(无法内联) */
-.md { font-size: 13.5px; line-height: 1.8; color: var(--t2); }
-.md > :first-child { margin-top: 0; }
-.md > :last-child { margin-bottom: 0; }
+.md {
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: var(--t2);
+  /* 库的代码块/表格/链接是用 CSS 变量做主题的(它自己的 index.css 里带 fallback,
+   * 不给就用它的浅色默认值)。把这些变量接到本应用的令牌上,深浅主题就自动跟随 ——
+   * 令牌本身已在 [data-theme="dark"] 里重定义,var() 在用时解析,故只需声明一次。
+   * 这是库给的接线口,比自绘一套组件去覆盖它干净得多。 */
+  --vscode-editor-background: var(--codeBg);
+  --vscode-editor-foreground: var(--t2);
+  --vscode-editor-selectionBackground: var(--hov2);
+  --table-border: var(--line);
+  --link-color: var(--accTx);
+}
+
+/* ---- markstream-react 衔接 ----
+ * 结构、软换行、代码块/表格/公式/图表的实现全部交给库自带的 index.css
+ * (在 main.tsx 里先于本文件引入)。下面这些是本应用的排版与配色令牌:
+ * `.md p` 这类「类+元素」选择器优先级高于库里的单类工具类,故最终话语权在这。
+ *
+ * 唯一的结构性衔接是首尾外边距:库给每个顶层节点套了
+ * .node-slot > .node-content 两层 div,原来的 `.md > :first-child` 打不到
+ * 真正的 <p>/<ul> 了。 */
+.md .node-slot:first-child > .node-content > :first-child { margin-top: 0; }
+.md .node-slot:last-child > .node-content > :last-child { margin-bottom: 0; }
 .md ul, .md ol { margin: 0 0 10px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .md p { margin: 0 0 10px; }
-.md pre {
+/* 库自己的代码块 <pre> 带 data-markstream-pre 标记,它的行号/内边距/字号全由
+ * 内联变量算好 —— 我们的规则必须避开,否则会把它的行号槽挤歪。这里只管
+ * 正文里其它零散的 <pre>(裸 HTML 之类)。 */
+.md pre:not([data-markstream-pre]) {
   background: var(--codeBg);
   border-radius: 9px;
   padding: 10px 14px;
@@ -769,53 +794,16 @@ textarea::placeholder, input::placeholder { color: var(--t6); }
 /* 思考展开块:markdown 按弱化规格渲染,保持比正文小一号、色阶更浅 */
 .thought-md .md { font-size: 12px; line-height: 1.7; color: var(--t4); }
 .thought-md .md p { margin: 0 0 6px; }
-.thought-md .md > :last-child { margin-bottom: 0; }
+.thought-md .md .node-slot:last-child > .node-content > :last-child { margin-bottom: 0; }
 /* 审查发现展开块:同思考块一档的弱化规格 */
 .finding-md .md { font-size: 11.5px; line-height: 1.65; color: var(--t3); }
 .finding-md .md p { margin: 0 0 6px; }
-.finding-md .md > :last-child { margin-bottom: 0; }
-/* 代码块容器:接管 pre 的默认外边距(:first/:last-child 归零规则落在容器上),复制按钮悬停浮现 */
-.mdcode { position: relative; margin: 1em 0; }
-.mdcode pre { margin: 0; }
-.mdcode .mdcopy {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  padding: 2px 9px;
-  font-size: 11px;
-  color: var(--t4);
-  background: var(--pop);
-  border: 1px solid var(--btnBd);
-  border-radius: 6px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.mdcode:hover .mdcopy, .mdcode .mdcopy.ok { opacity: 1; }
-.mdcode .mdcopy.ok { color: var(--accTx); border-color: var(--accTx); }
-.md-table-scroll {
-  max-width: 100%;
-  margin: 1em 0;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
-.md-table-scroll:focus-visible { outline: 2px solid var(--accBd); outline-offset: 2px; }
-.md-table-scroll table {
-  width: auto;
-  max-width: 100%;
-  margin: 0;
-  border-collapse: collapse;
-}
+.finding-md .md .node-slot:last-child > .node-content > :last-child { margin-bottom: 0; }
+/* 表格:库的 .table-node-wrapper 负责横向滚动结构,这里只给边框配色令牌 */
 .md th, .md td {
   padding: 4px 10px;
   border: 1px solid var(--line);
   vertical-align: top;
-}
-.md-table-cell {
-  min-width: 8ch;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: normal;
 }
 .md blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 12px; color: var(--t4); }
 .md img { max-width: 100%; height: auto; border-radius: 9px; }
