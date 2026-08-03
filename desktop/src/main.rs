@@ -1213,6 +1213,7 @@ fn main() {
             baizhi::mc_projects,
             baizhi::mc_task_info,
             baizhi::mc_task_rounds,
+            baizhi::mc_task_user_inputs,
             baizhi::mc_task_stop,
             baizhi::mc_task_delete,
             baizhi::mc_task_create,
