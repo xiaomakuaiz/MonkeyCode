@@ -61,6 +61,9 @@ export const zh = {
   "settings.appearance.language": "语言",
   "settings.appearance.hint": "切换立即生效并记在本机。",
 
+  "md.copy": "复制",
+  "md.copied": "已复制",
+
   "common.confirm": "确认",
   "common.cancel": "取消",
 } as const;

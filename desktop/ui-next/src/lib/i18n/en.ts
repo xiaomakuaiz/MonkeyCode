@@ -62,6 +62,9 @@ export const en: Record<MessageKey, string> = {
   "settings.appearance.language": "Language",
   "settings.appearance.hint": "Applies immediately and is remembered on this machine.",
 
+  "md.copy": "Copy",
+  "md.copied": "Copied",
+
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
 };

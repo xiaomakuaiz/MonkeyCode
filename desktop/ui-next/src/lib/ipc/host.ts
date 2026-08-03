@@ -81,6 +81,20 @@ export function setWindowTitle(title: string): void {
   quiet(invoke("plugin:window|set_title", { title }));
 }
 
+/** 外链一律交系统浏览器:壳内 opener 失败时退回 location 导航(壳的
+ *  on_navigation 守卫会拒绝并转系统浏览器);浏览器模式新开标签。
+ *  只放行 http(s)——工作区文件链接由聊天层专门处理,不走这里。 */
+export function openExternal(url: string): void {
+  if (!/^https?:\/\//i.test(url)) return;
+  if (!inDesktopShell()) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  void invoke("plugin:opener|open_url", { url }).catch(() => {
+    location.href = url;
+  });
+}
+
 /** 系统目录选择;取消/浏览器模式返回 null。 */
 export async function pickDirectory(): Promise<string | null> {
   if (!inDesktopShell()) return null;

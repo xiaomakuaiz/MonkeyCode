@@ -23,7 +23,9 @@ export default defineConfig({
         resolve: { alias },
         test: {
           name: "dom",
-          environment: "happy-dom",
+          // jsdom 而非 happy-dom:DOMPurify 官方只支持真 DOM/jsdom,
+          // happy-dom 的解析会丢块级元素,净化器是安全关键路径不能凑合
+          environment: "jsdom",
           include: ["src/**/*.test.tsx"],
           // @testing-library/react 的自动 cleanup 依赖全局 afterEach
           globals: true,
