@@ -2,6 +2,7 @@
 // 主区当前是欢迎卡/会话占位卡(P3 接聊天流);设置入口 P5 落位。
 import { useEffect, useState } from "react";
 
+import { ChatView } from "@/features/chat/ChatView";
 import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { Sidebar } from "@/features/sidebar/Sidebar";
@@ -81,20 +82,7 @@ function MainArea({ current }: { current: SessionMeta | null }) {
     };
   }, []);
 
-  if (current) {
-    // P3 接入聊天流;先给可辨认的占位
-    return (
-      <main className="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-6">
-        <div className="card w-md border border-base-300 bg-base-100 shadow-sm">
-          <div className="card-body gap-2">
-            <h1 className="card-title text-base">{current.title}</h1>
-            <p className="text-xs font-mono text-base-content/50">{current.workdir || current.id}</p>
-            <p className="text-sm text-base-content/70">{t("main.session.placeholder", { title: current.title })}</p>
-          </div>
-        </div>
-      </main>
-    );
-  }
+  if (current) return <ChatView meta={current} />;
 
   return (
     <main className="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-6">

@@ -65,6 +65,15 @@ export const en: Record<MessageKey, string> = {
   "md.copy": "Copy",
   "md.copied": "Copied",
 
+  "chat.thought": "Thinking",
+  "chat.permission": "Approval",
+  "chat.question": "Question",
+  "chat.loadEarlier": "Load earlier",
+  "chat.composer": "Message input",
+  "chat.composerPlaceholder": "Type a message. Enter to send, Shift+Enter for newline",
+  "chat.send": "Send",
+  "chat.contextUsage": "Context usage",
+
   "engine.starting": "Engine starting (attempt {attempt})…",
   "engine.crashed": "Engine crashed: {detail}",
   "engine.failed": "Engine failed to start: {detail}",

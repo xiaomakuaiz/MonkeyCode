@@ -64,6 +64,15 @@ export const zh = {
   "md.copy": "复制",
   "md.copied": "已复制",
 
+  "chat.thought": "思考",
+  "chat.permission": "审批",
+  "chat.question": "提问",
+  "chat.loadEarlier": "加载更早",
+  "chat.composer": "消息输入",
+  "chat.composerPlaceholder": "输入消息,Enter 发送,Shift+Enter 换行",
+  "chat.send": "发送",
+  "chat.contextUsage": "上下文用量",
+
   "engine.starting": "引擎启动中(第 {attempt} 次尝试)…",
   "engine.crashed": "引擎已崩溃:{detail}",
   "engine.failed": "引擎启动失败:{detail}",
