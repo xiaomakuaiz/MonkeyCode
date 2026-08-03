@@ -6,6 +6,7 @@ import { applyStoredTheme } from "@/lib/theme";
 import "@/styles/app.css";
 import "@/styles/chrome.css";
 import "@/styles/md.css";
+import "@/styles/term.css";
 
 // 首帧主题由 index.html 内联脚本落;这里兜底(脚本被 CSP 之类挡掉时)
 applyStoredTheme();

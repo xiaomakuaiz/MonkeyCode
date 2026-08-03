@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
+import { CloudTaskView } from "@/features/cloud/CloudTaskView";
 import { DownloadsDock } from "@/features/downloads/DownloadsDock";
 import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
@@ -20,6 +21,7 @@ import {
   type HostInfo,
 } from "@/lib/ipc/host";
 import { listen } from "@/lib/ipc/ipc";
+import type { CloudTask, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
 import { onSessionEvent, sessionDelete, sessionPatch, sessionsList, type SessionMeta } from "@/lib/ipc/sessions";
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
 
@@ -124,6 +126,8 @@ export function App() {
   const [currentId, setCurrentId] = useState<string | null>(readLastSession);
   const [creating, setCreating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);
+  const [cloudReload, setCloudReload] = useState(0);
 
   const refresh = () => void sessionsList().then(setSessions);
 
@@ -198,6 +202,7 @@ export function App() {
           space={space}
           sessions={sessions}
           currentId={currentId}
+          cloud={{ currentId: cloudTask?.id ?? null, onSelect: setCloudTask, reloadKey: cloudReload }}
           actions={{
             onSelect: select,
             onNewTask: () => setCreating(true),
@@ -216,7 +221,13 @@ export function App() {
             },
           }}
         />
-        {settingsOpen ? <SettingsView onClose={() => setSettingsOpen(false)} /> : <MainArea current={current} />}
+        {settingsOpen ? (
+          <SettingsView onClose={() => setSettingsOpen(false)} />
+        ) : space === "cloud" && cloudTask ? (
+          <CloudTaskView key={cloudTask.id} task={cloudTask} onTasksChanged={() => setCloudReload((n) => n + 1)} />
+        ) : (
+          <MainArea current={space === "cloud" ? null : current} />
+        )}
       </div>
       <DownloadsDock />
       <NewTaskModal
@@ -227,6 +238,11 @@ export function App() {
           select(meta);
           if (meta.kind === "chat") setSpace("chat");
           else setSpace("local");
+        }}
+        onCloudCreated={(task: CloudTaskDetail) => {
+          setSpace("cloud");
+          setCloudTask(task);
+          setCloudReload((n) => n + 1);
         }}
       />
     </div>

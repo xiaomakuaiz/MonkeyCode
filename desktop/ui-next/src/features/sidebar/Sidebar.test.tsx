@@ -77,9 +77,9 @@ describe("侧栏(chat/cloud 空间)", () => {
     expect(screen.queryByText("修复登录")).toBeNull();
   });
 
-  it("cloud 空间是占位说明", () => {
+  it("cloud 空间渲染云端任务列表(无数据时空态)", async () => {
     render(<Sidebar space="cloud" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    expect(screen.getByText("云端任务列表将在后续版本接入。")).toBeTruthy();
+    expect(await screen.findByText("还没有云端任务")).toBeTruthy();
   });
 
   it("新建任务按钮", async () => {

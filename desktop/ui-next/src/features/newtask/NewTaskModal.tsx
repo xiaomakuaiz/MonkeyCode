@@ -8,6 +8,8 @@ import { useI18n } from "@/lib/i18n";
 import { pickDirectory } from "@/lib/ipc/host";
 import { modelsList, sessionCreate, type ModelInfo, type SessionKind, type SessionMeta } from "@/lib/ipc/sessions";
 import { readLastTaskModel, rememberLastTaskModel } from "@/lib/util/prefs";
+import { NewCloudTask } from "@/features/cloud/NewCloudTask";
+import type { CloudTaskDetail } from "@/lib/ipc/cloudtasks";
 
 export const DEFAULT_DIR = "~/MonkeyCode";
 
@@ -15,13 +17,15 @@ export function NewTaskModal({
   open,
   onClose,
   onCreated,
+  onCloudCreated,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (meta: SessionMeta) => void;
+  onCloudCreated?: (task: CloudTaskDetail) => void;
 }) {
   const { t } = useI18n();
-  const [kind, setKind] = useState<SessionKind>("local");
+  const [kind, setKind] = useState<SessionKind | "cloud">("local");
   const [dir, setDir] = useState(DEFAULT_DIR);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
@@ -47,6 +51,7 @@ export function NewTaskModal({
   }, [open]);
 
   const submit = async () => {
+    if (kind === "cloud") return;
     const chat = kind === "chat";
     const workdir = chat ? "" : dir.trim();
     if (!chat && !workdir) {
@@ -60,7 +65,7 @@ export function NewTaskModal({
         workdir,
         model,
         createDir: !chat && workdir === DEFAULT_DIR,
-        kind,
+        kind: chat ? "chat" : "local",
       });
       if (model) rememberLastTaskModel(model);
       onCreated(meta);
@@ -79,7 +84,7 @@ export function NewTaskModal({
         <h2 className="mb-3 text-base font-bold">{t("create.title")}</h2>
         <div className="flex flex-col gap-3">
           <div role="tablist" aria-label={t("create.title")} className="tabs-box tabs tabs-sm w-fit">
-            {(["local", "chat"] as const).map((k) => (
+            {(["local", "chat", "cloud"] as const).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -88,10 +93,19 @@ export function NewTaskModal({
                 className={`tab font-semibold ${kind === k ? "tab-active" : ""}`}
                 onClick={() => setKind(k)}
               >
-                {k === "local" ? t("create.kind.local") : t("create.kind.chat")}
+                {k === "local" ? t("create.kind.local") : k === "chat" ? t("create.kind.chat") : t("create.kind.cloud")}
               </button>
             ))}
           </div>
+          {kind === "cloud" && (
+            <NewCloudTask
+              onCreated={(task) => {
+                onCloudCreated?.(task);
+                onClose();
+              }}
+              onCancel={onClose}
+            />
+          )}
           {kind === "local" && (
             <fieldset className="fieldset">
               <legend className="fieldset-legend">{t("create.workdir")}</legend>
@@ -117,6 +131,7 @@ export function NewTaskModal({
               </div>
             </fieldset>
           )}
+          {kind !== "cloud" && (
           <fieldset className="fieldset">
             <legend className="fieldset-legend">{t("create.model")}</legend>
             <select
@@ -132,12 +147,14 @@ export function NewTaskModal({
               ))}
             </select>
           </fieldset>
-          {error && (
+          )}
+          {kind !== "cloud" && error && (
             <div role="alert" className="alert alert-error alert-soft py-1.5 text-xs">
               {error}
             </div>
           )}
         </div>
+        {kind !== "cloud" && (
         <div className="modal-action">
           <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
             {t("create.cancel")}
@@ -147,6 +164,7 @@ export function NewTaskModal({
             {t("create.submit")}
           </button>
         </div>
+        )}
       </div>
       <div className="modal-backdrop" onClick={onClose} />
     </dialog>

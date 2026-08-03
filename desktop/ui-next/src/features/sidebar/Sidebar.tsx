@@ -4,6 +4,7 @@
 // lib/util/projects::reorderKeys,纯函数可测)。
 import { useState, type DragEvent } from "react";
 
+import { CloudTaskList } from "@/features/cloud/CloudTaskList";
 import { useUpdate } from "@/features/update/useUpdate";
 import { useI18n } from "@/lib/i18n";
 import type { SessionMeta } from "@/lib/ipc/sessions";
@@ -186,11 +187,14 @@ export function Sidebar({
   sessions,
   currentId,
   actions,
+  cloud,
 }: {
   space: Space;
   sessions: SessionMeta[];
   currentId: string | null;
   actions: SidebarActions;
+  /** 云端空间的数据接线(App 提供;缺省时云端页为空列表) */
+  cloud?: { currentId: string | null; onSelect: (task: import("@/lib/ipc/cloudtasks").CloudTask) => void; reloadKey: number };
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -225,11 +229,7 @@ export function Sidebar({
 
   const body = () => {
     if (space === "cloud") {
-      return (
-        <div className="rounded-box border border-dashed border-base-content/20 p-3 text-xs text-base-content/55">
-          {t("sidebar.cloud.placeholder")}
-        </div>
-      );
+      return <CloudTaskList currentId={cloud?.currentId ?? null} onSelect={(task) => cloud?.onSelect(task)} reloadKey={cloud?.reloadKey ?? 0} />;
     }
 
     const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat")).filter(matches);

@@ -47,6 +47,7 @@ export const zh = {
   "create.model": "模型",
   "create.kind.local": "本地会话",
   "create.kind.chat": "普通对话",
+  "create.kind.cloud": "云端任务",
   "create.submit": "创建",
   "create.cancel": "取消",
   "create.error.workdirRequired": "请先选择项目目录",

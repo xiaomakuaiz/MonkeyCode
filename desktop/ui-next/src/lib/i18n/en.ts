@@ -48,6 +48,7 @@ export const en: Record<MessageKey, string> = {
   "create.model": "Model",
   "create.kind.local": "Local session",
   "create.kind.chat": "Plain chat",
+  "create.kind.cloud": "Cloud task",
   "create.submit": "Create",
   "create.cancel": "Cancel",
   "create.error.workdirRequired": "Pick a project directory first",
