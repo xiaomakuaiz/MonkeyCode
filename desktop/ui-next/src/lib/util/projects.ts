@@ -90,6 +90,21 @@ export function writeCollapsedGroups(keys: ReadonlySet<string>): void {
   }
 }
 
+/** 各项目「已归档任务」小节的展开集(键 = 项目 key;JSON string[] = 旧 UI 契约)。 */
+const SESSION_ARCHIVES_KEY = "mc.sessionArchivesOpen";
+
+export function readSessionArchivesOpen(): Set<string> {
+  return new Set(readStringArray(SESSION_ARCHIVES_KEY));
+}
+
+export function writeSessionArchivesOpen(keys: ReadonlySet<string>): void {
+  try {
+    localStorage.setItem(SESSION_ARCHIVES_KEY, JSON.stringify([...keys]));
+  } catch {
+    // 只丢持久化
+  }
+}
+
 export interface ProjectGroup {
   key: string;
   name: string;

@@ -8,7 +8,7 @@
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
 import { Cloud, FolderGit2, MessagesSquare, Settings, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
 import { CloudTaskView } from "@/features/cloud/CloudTaskView";
@@ -16,6 +16,7 @@ import { DownloadsDock } from "@/features/downloads/DownloadsDock";
 import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { SettingsView } from "@/features/settings/SettingsView";
+import { useUpdate } from "@/features/update/useUpdate";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -62,67 +63,113 @@ const NOTICE_TEXT: Record<NoticeKind, MessageKey> = {
   error: "notice.error",
 };
 
+/** rail 空间钮(旧 UI RailButton):48px 图标+文字,右上角计数徽标。 */
+function RailButton({
+  active,
+  label,
+  short,
+  badge = 0,
+  icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  short: string;
+  badge?: number;
+  icon: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
+      className={`relative flex h-12 w-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] ${
+        active ? "bg-base-100/90 font-bold text-primary" : "font-medium text-base-content/55 hover:bg-base-content/5"
+      }`}
+      onClick={onClick}
+    >
+      {icon}
+      {short}
+      {badge > 0 && (
+        <span className="absolute right-1 top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-lg border-2 border-base-300 bg-primary px-1 text-[8.5px] font-extrabold text-primary-content">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function SpaceRail({
   space,
   waiting,
+  chatWaiting,
   onChange,
   settingsOpen,
   onToggleSettings,
 }: {
   space: Space;
   waiting: number;
+  chatWaiting: number;
   onChange: (s: Space) => void;
   settingsOpen: boolean;
   onToggleSettings: () => void;
 }) {
   const { t } = useI18n();
+  const { update } = useUpdate();
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat") };
+  const shorts: Record<Space, string> = { local: t("rail.short.local"), cloud: t("rail.short.cloud"), chat: t("rail.short.chat") };
+  const badges: Record<Space, number> = { local: waiting, cloud: 0, chat: chatWaiting };
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
-      {/* 头部基线:mac 红绿灯待在 chrome 角落(h-11,与各列头部同高);
-          其余环境同高空位,保证三列头部线对齐 */}
+      {/* chrome 角落:mac 红绿灯 h-11;Windows 标题栏在外层,不留空位 */}
       {isMacShell() ? (
         <div data-tauri-drag-region="" className="flex h-11 w-full shrink-0 items-center">
           <MacWindowControls compact />
         </div>
       ) : (
-        !isWindowsShell() && <div className="h-11 w-full shrink-0" />
+        !isWindowsShell() && <div data-tauri-drag-region="" className="h-2 w-full shrink-0" />
       )}
-      <div className="flex flex-1 flex-col items-center gap-1 py-1">
-        {(["local", "cloud", "chat"] as const).map((s) => (
-          <div key={s} className={s === "local" && waiting > 0 ? "indicator" : undefined}>
-            {s === "local" && waiting > 0 && (
-              <span className="indicator-item badge badge-warning badge-xs">{waiting}</span>
-            )}
-            {/* 44px 命中区;悬停 tooltip 替代原生 title */}
-            <button
-              type="button"
-              aria-label={labels[s]}
-              aria-pressed={space === s}
-              data-tip={labels[s]}
-              className={`btn btn-ghost btn-square tooltip tooltip-right size-11 ${space === s ? "btn-active" : ""}`}
+      {/* 品牌 logo(Windows 由标题栏承担) */}
+      {!isWindowsShell() && (
+        <span data-tauri-drag-region="" className="mb-3.5 mt-0.5 flex shrink-0">
+          <img src="/logo.png" alt={t("app.name")} draggable={false} className="pointer-events-none h-[31px] w-[31px] rounded-[9px]" />
+        </span>
+      )}
+      <div className="flex flex-col items-center gap-1.5">
+        {(["cloud", "local", "chat"] as const).map((s) => {
+          const Icon = SPACE_ICONS[s];
+          return (
+            <RailButton
+              key={s}
+              active={space === s}
+              label={labels[s]}
+              short={shorts[s]}
+              badge={badges[s]}
+              icon={<Icon size={16} strokeWidth={1.5} aria-hidden />}
               onClick={() => onChange(s)}
-            >
-              {(() => {
-                const Icon = SPACE_ICONS[s];
-                return <Icon size={18} strokeWidth={1.75} aria-hidden />;
-              })()}
-            </button>
-          </div>
-        ))}
+            />
+          );
+        })}
       </div>
-      <div className="pb-2">
-        <button
-          type="button"
-          aria-label={t("rail.settings")}
-          aria-pressed={settingsOpen}
-          data-tip={t("rail.settings")}
-          className={`btn btn-ghost btn-square tooltip tooltip-right size-11 ${settingsOpen ? "btn-active" : ""}`}
-          onClick={onToggleSettings}
-        >
-          <Settings size={18} strokeWidth={1.75} aria-hidden />
-        </button>
-      </div>
+      <span data-tauri-drag-region="" className="min-h-0 w-full flex-1" />
+      <button
+        type="button"
+        aria-label={t("rail.settings")}
+        aria-pressed={settingsOpen}
+        title={t("rail.settings")}
+        className={`relative mb-3 flex h-9 w-9 items-center justify-center rounded-[10px] ${
+          settingsOpen ? "bg-base-100/90 text-primary" : "text-base-content/55 hover:bg-base-content/5"
+        }`}
+        onClick={onToggleSettings}
+      >
+        <Settings size={15} strokeWidth={1.75} aria-hidden />
+        {/* 更新可用红点(设置·关于里有入口) */}
+        {update?.available && (
+          <span aria-hidden className="absolute right-1.5 top-1.5 h-[7px] w-[7px] rounded-full border-[1.5px] border-base-300 bg-warning" />
+        )}
+      </button>
     </nav>
   );
 }
@@ -332,6 +379,7 @@ export function App() {
   };
 
   const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
+  const chatWaiting = sessions.filter((m) => m.kind === "chat" && m.waiting_ask).length;
 
   // 新建弹窗的最近目录:非 chat、未归档(会话与项目两级),按最近活跃排,项目 key 去重
   const recentDirs = (() => {
@@ -354,7 +402,7 @@ export function App() {
       {isWindowsShell() && <TitleBar />}
       <EngineBanner />
       <div className="flex min-h-0 flex-1">
-        <SpaceRail space={space} waiting={waiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(null); setSettingsOpen((v) => !v); }} />
+        <SpaceRail space={space} waiting={waiting} chatWaiting={chatWaiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(null); setSettingsOpen((v) => !v); }} />
         <Sidebar
           space={space}
           sessions={sessions}
@@ -368,6 +416,7 @@ export function App() {
               if (cloudTask?.id === id) setCloudTask(null);
               setCloudReload((n) => n + 1);
             },
+            onRefresh: () => setCloudReload((n) => n + 1),
           }}
           actions={{
             onSelect: select,
