@@ -434,6 +434,16 @@ export function Composer({
             )}
           </div>
 
+          {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端 */}
+          <span className="ms-auto" aria-hidden />
+          {state.usage && state.usage.size > 0 && (
+            <span
+              className="shrink-0 font-mono text-[11px] text-base-content/40 tabular-nums"
+              title={t("chat.contextUsage")}
+            >
+              {Math.round((state.usage.used / state.usage.size) * 100)}%
+            </span>
+          )}
           <button
             type="button"
             aria-label={t("chat.attach")}

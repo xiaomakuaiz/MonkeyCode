@@ -271,9 +271,6 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
             </p>
           ) : null}
         </div>
-        {conn && !conn.connected && (
-          <span className="badge badge-warning badge-soft badge-sm">{conn.text}</span>
-        )}
         <button
           type="button"
           aria-label={t("files.label")}
@@ -283,15 +280,16 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
         >
           <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
         </button>
-        {state.usage && state.usage.size > 0 && (
-          <span
-            className="font-mono text-[11px] text-base-content/40 tabular-nums"
-            title={t("chat.contextUsage")}
-          >
-            {Math.round((state.usage.used / state.usage.size) * 100)}%
-          </span>
-        )}
       </header>
+
+      {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
+          以内嵌条挂在 header 之下,恢复即消 */}
+      {conn && !conn.connected && (
+        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs">
+          <span aria-hidden className="status status-warning status-xs animate-pulse" />
+          <span className="min-w-0 flex-1 truncate" title={conn.text}>{conn.text}</span>
+        </div>
+      )}
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
@@ -328,7 +326,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
  * 尾部回放窗口够看完整过程,不做「加载更早」(与旧版 SessionViewer 同口径)。 */
 function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void }) {
   const { t } = useI18n();
-  const { state, conn } = useSessionFeed(id);
+  const { state } = useSessionFeed(id);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => {
@@ -349,7 +347,7 @@ function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void })
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
             {t("chat.child.title")} <span className="font-mono text-xs text-base-content/50">{id}</span>
           </h2>
-          {conn && !conn.connected && <span className="badge badge-warning badge-soft badge-sm">{conn.text}</span>}
+
           <button
             type="button"
             aria-label={t("chat.dismiss")}
