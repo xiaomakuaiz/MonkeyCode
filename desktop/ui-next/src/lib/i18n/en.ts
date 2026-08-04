@@ -213,6 +213,8 @@ export const en: Record<MessageKey, string> = {
   "chat.loadEarlierFailed": "Failed to load earlier messages: {reason}",
   "chat.att.downloadTip": "{name} (click to download)",
   "chat.att.openTip": "{name} (opens in browser)",
+  "chat.running.round": "Round {round}",
+  "chat.usageTip": "Context usage {used} / {size} tokens",
   "chat.revealOutside": "Only files inside the current workspace can be opened",
   "chat.revealFailed": "Could not locate file: {reason}",
   "md.localImageFailed": "Failed to load local image: {reason}",

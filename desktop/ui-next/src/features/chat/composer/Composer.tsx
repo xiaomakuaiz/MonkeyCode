@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type CSSProperties,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -20,6 +21,7 @@ import { sessionSetMode, sessionSetModel, sessionSetThink } from "@/lib/ipc/cont
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
+import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import type { ComposerCtl } from "./useComposer";
 
@@ -229,6 +231,13 @@ export function Composer({
     : anyToolRunning
       ? t("chat.running.acting")
       : t("chat.running.thinking");
+  // 运行条 detail:「第 N 轮 · X tokens」(旧 UI RunningBar 同款;轮数 = user 项计数)
+  const roundNo = Math.max(1, state.items.filter((it) => it.kind === "user").length);
+  const runningDetail =
+    t("chat.running.round", { round: roundNo }) +
+    (state.usage && state.usage.used > 0 ? ` · ${fmtK(state.usage.used)} tokens` : "");
+  const usagePct =
+    state.usage && state.usage.size > 0 ? Math.round((state.usage.used / state.usage.size) * 100) : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -307,6 +316,7 @@ export function Composer({
           <div className="flex items-center gap-2 border-b border-base-300 px-3 py-1.5 text-xs">
             <span className="loading loading-spinner loading-xs text-primary" aria-hidden />
             <span className="font-semibold">{runningLabel}</span>
+            <span className="truncate text-base-content/40">{runningDetail}</span>
             <span className="flex-1" />
             <button
               type="button"
@@ -450,15 +460,26 @@ export function Composer({
             )}
           </div>
 
-          {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端 */}
+          {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端。
+              形态:daisyUI radial-progress + tooltip(精确 tokens);>85% 用
+              功能性状态色示警(旧 ContextRing 的设计,组件官方化) */}
           <span className="ms-auto" aria-hidden />
-          {state.usage && state.usage.size > 0 && (
-            <span
-              className="shrink-0 font-mono text-[11px] text-base-content/40 tabular-nums"
-              title={t("chat.contextUsage")}
+          {usagePct !== null && state.usage && (
+            <div
+              className="tooltip tooltip-top shrink-0"
+              data-tip={t("chat.usageTip", {
+                used: state.usage.used.toLocaleString(),
+                size: state.usage.size.toLocaleString(),
+              })}
             >
-              {Math.round((state.usage.used / state.usage.size) * 100)}%
-            </span>
+              <div
+                role="progressbar"
+                aria-label={t("chat.contextUsage")}
+                aria-valuenow={usagePct}
+                className={`radial-progress align-middle ${usagePct > 85 ? "text-error" : "text-base-content/40"}`}
+                style={{ "--value": Math.min(100, usagePct), "--size": "1rem", "--thickness": "2px" } as CSSProperties}
+              />
+            </div>
           )}
           <button
             type="button"

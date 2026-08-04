@@ -212,6 +212,8 @@ export const zh = {
   "chat.loadEarlierFailed": "加载更早的对话失败:{reason}",
   "chat.att.downloadTip": "{name}(点击下载)",
   "chat.att.openTip": "{name}(点击在浏览器打开)",
+  "chat.running.round": "第 {round} 轮",
+  "chat.usageTip": "上下文用量 {used} / {size} tokens",
   "chat.revealOutside": "只能打开当前工作区内的文件",
   "chat.revealFailed": "无法定位文件:{reason}",
   "md.localImageFailed": "本地图片加载失败:{reason}",

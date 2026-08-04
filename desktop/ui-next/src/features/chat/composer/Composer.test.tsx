@@ -327,3 +327,40 @@ describe("附件与 IME", () => {
     await waitFor(() => expect(sends(ops, "user-input")).toHaveLength(1));
   });
 });
+
+describe("运行条 detail 与上下文用量", () => {
+  it("运行中给出「第 N 轮 · tokens」摘要(轮数 = user 项计数)", async () => {
+    const { emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await ready();
+    emit("frames:s1", [
+      { type: "task-started", timestamp: 5, seq: 5 },
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: { update: { sessionUpdate: "usage_update", used: 45_678, size: 200_000 } },
+        timestamp: 6,
+        seq: 6,
+      },
+    ]);
+    await waitFor(() => expect(screen.getByText("第 1 轮 · 45.7k tokens")).toBeTruthy());
+  });
+
+  it("上下文用量:radial-progress 语义 + tooltip 精确 tokens;>85% 示警", async () => {
+    const { emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await ready();
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: { update: { sessionUpdate: "usage_update", used: 180_000, size: 200_000 } },
+        timestamp: 6,
+        seq: 6,
+      },
+    ]);
+    const bar = await screen.findByRole("progressbar", { name: "上下文用量" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("90");
+    expect(bar.closest("[data-tip]")?.getAttribute("data-tip")).toBe("上下文用量 180,000 / 200,000 tokens");
+  });
+});
