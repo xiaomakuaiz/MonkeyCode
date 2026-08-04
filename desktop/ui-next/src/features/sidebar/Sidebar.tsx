@@ -371,19 +371,22 @@ export function Sidebar({
           <Plus size={14} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto p-2">
-      <label className="input input-sm w-full">
-        <Search size={14} strokeWidth={1.75} className="shrink-0 opacity-50" aria-hidden />
-        <input
-          type="search"
-          aria-label={t("sidebar.search")}
-          placeholder={t("sidebar.search")}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-      <div className="mt-1 min-h-0 flex-1">{body()}</div>
-      <UpdateFooter />
+      {/* 四段式(LAYOUT.md):头部固定 → 搜索固定 → 列表 = 唯一滚动区 → footer 钉底 */}
+      <div className="shrink-0 p-2 pb-1">
+        <label className="input input-sm w-full">
+          <Search size={14} strokeWidth={1.75} className="shrink-0 opacity-50" aria-hidden />
+          <input
+            type="search"
+            aria-label={t("sidebar.search")}
+            placeholder={t("sidebar.search")}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 pt-1">{body()}</div>
+      <div className="shrink-0 empty:hidden">
+        <UpdateFooter />
       </div>
     </aside>
   );
@@ -397,7 +400,7 @@ function UpdateFooter() {
   return (
     <div
       role={error ? "alert" : "status"}
-      className={`alert ${error ? "alert-error" : "alert-info"} alert-soft flex items-center py-1.5 text-xs`}
+      className={`alert ${error ? "alert-error" : "alert-info"} alert-soft m-2 mt-0 flex items-center py-1.5 text-xs`}
     >
       <span className="min-w-0 flex-1 truncate" title={error ?? undefined}>
         {error ? t("update.failed", { reason: error }) : t("update.available", { version: update.latest ?? "" })}
