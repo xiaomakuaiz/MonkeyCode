@@ -18,7 +18,7 @@ import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
 import { repoReveal } from "@/lib/ipc/repo";
-import { sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
+import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
 import { createImeGuard } from "@/lib/util/slash";
@@ -326,6 +326,8 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
             onOpenChildSession={setChildId}
             uploadUrl={(p) => uploadFileURL(meta.id, p)}
             onLocalLink={revealMarkdownLink}
+            workdir={meta.workdir}
+            loadFullTool={(seq) => sessionFrame(meta.id, seq)}
           />
         </div>
       </div>
@@ -343,7 +345,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
       {drawerOpen && (
         <FilesDrawer sessionId={meta.id} onClose={() => setDrawerOpen(false)} refreshToken={changesToken} />
       )}
-      {childId && <ChildSessionModal id={childId} onClose={() => setChildId(null)} />}
+      {childId && <ChildSessionModal id={childId} workdir={meta.workdir} onClose={() => setChildId(null)} />}
     </main>
   );
 }
@@ -351,7 +353,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
 /** 子代理会话只读回放浮层(D2):复用 useSessionFeed + LogList(readonly),
  * 无 composer、无审批热键;卸载即 session_close(useSessionFeed 清理)。
  * 尾部回放窗口够看完整过程,不做「加载更早」(与旧版 SessionViewer 同口径)。 */
-function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void }) {
+function ChildSessionModal({ id, workdir, onClose }: { id: string; workdir?: string; onClose: () => void }) {
   const { t } = useI18n();
   const { state } = useSessionFeed(id);
   const onCloseRef = useRef(onClose);
@@ -386,7 +388,14 @@ function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void })
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-          <LogList state={state} sessionId={id} readonly uploadUrl={(p) => uploadFileURL(id, p)} />
+          <LogList
+            state={state}
+            sessionId={id}
+            readonly
+            uploadUrl={(p) => uploadFileURL(id, p)}
+            workdir={workdir}
+            loadFullTool={(seq) => sessionFrame(id, seq)}
+          />
         </div>
       </div>
       <div className="modal-backdrop cursor-pointer" onClick={onClose} aria-hidden />

@@ -15,7 +15,7 @@ function withItems(items: ChatItem[]): ChatState {
   return { ...createChatState(), items };
 }
 
-const TOOL: Extract<ChatItem, { kind: "tool" }> = { kind: "tool", tcId: "t1", title: "Bash npm test", status: "run", out: "" };
+const TOOL: Extract<ChatItem, { kind: "tool" }> = { kind: "tool", tcId: "t1", title: "Bash npm test", status: "run", out: "", rawInput: { command: "npm test" } };
 
 describe("LogList 锚定分发", () => {
   it("perm 带 toolCallId 且有同 id 工具卡:按钮行嵌进工具卡,独立审批卡不渲染", () => {
@@ -62,7 +62,9 @@ describe("LogList 锚定分发", () => {
       },
     ]);
     render(<LogList state={state} sessionId="s1" />);
-    expect(screen.getByText("Bash npm test")).toBeTruthy();
+    // 工具卡标题经 presentToolCall 拆成「动作 + 目标」
+    expect(screen.getByText("执行命令")).toBeTruthy();
+    expect(screen.getByText("npm test")).toBeTruthy();
     expect(screen.getByText("需要你的回答")).toBeTruthy();
     expect(screen.getByRole("button", { name: "提交回答" })).toBeTruthy();
   });

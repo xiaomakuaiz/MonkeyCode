@@ -14,7 +14,7 @@ import { openExternal } from "@/lib/ipc/host";
 import { isImagePath } from "@/lib/ipc/uploads";
 import { splitAttachments } from "@/lib/protocol/attLine";
 import { itemKey, permAnchors } from "@/lib/protocol/reduce";
-import type { ChatItem, ChatState, PermItem } from "@/lib/protocol/types";
+import type { ChatItem, ChatState, Frame, PermItem } from "@/lib/protocol/types";
 import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
 import { ToolCard } from "./cards/ToolCard";
@@ -126,6 +126,8 @@ interface RenderOpts {
   onOpenChildSession?: (id: string) => void;
   uploadUrl?: (path: string) => Promise<string>;
   onLocalLink?: (path: string) => void;
+  workdir?: string;
+  loadFullTool?: (seq: number) => Promise<Frame>;
 }
 
 function renderItem(item: ChatItem, o: RenderOpts) {
@@ -146,6 +148,9 @@ function renderItem(item: ChatItem, o: RenderOpts) {
           sendFrame={o.sendFrame}
           onOpenChild={o.onOpenChildSession}
           uploadUrl={o.uploadUrl}
+          onLocalLink={o.onLocalLink}
+          workdir={o.workdir}
+          loadFullTool={o.loadFullTool}
         />
       );
     case "perm":
@@ -166,6 +171,8 @@ export function LogList({
   onOpenChildSession,
   uploadUrl,
   onLocalLink,
+  workdir,
+  loadFullTool,
 }: {
   state: ChatState;
   sessionId: string;
@@ -182,6 +189,10 @@ export function LogList({
   uploadUrl?: (path: string) => Promise<string>;
   /** markdown 工作区文件链接点击代理(reveal);缺省点击无动作。 */
   onLocalLink?: (path: string) => void;
+  /** 会话工作目录:工具卡 path 型目标剥绝对前缀;缺省不剥。 */
+  workdir?: string;
+  /** 工具卡大字段回读通道(按帧 seq 取原帧);缺省只展示截断头部。 */
+  loadFullTool?: (seq: number) => Promise<Frame>;
 }) {
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
@@ -206,7 +217,7 @@ export function LogList({
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
           // (包裹层是块级时 align-self 无效,居中丢失)
           <div key={itemKey(state, i)} className={`flex flex-col${gapClass}`}>
-            {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink })}
+            {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool })}
           </div>
         );
       })}

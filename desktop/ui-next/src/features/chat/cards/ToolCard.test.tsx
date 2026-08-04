@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { PermItem, ToolItem } from "@/lib/protocol/types";
+import type { Frame, PermItem, ToolItem } from "@/lib/protocol/types";
 import { ToolCard } from "./ToolCard";
 
 afterEach(() => {
@@ -21,13 +21,29 @@ function stubShell() {
   };
 }
 
-const BASE: ToolItem = { kind: "tool", tcId: "t1", title: "Bash npm test", status: "ok", out: "" };
+const BASE: ToolItem = { kind: "tool", tcId: "t1", title: "Bash npm test", status: "ok", out: "", rawInput: { command: "npm test" } };
 
 describe("工具卡", () => {
-  it("标题 + 耗时(只显示可靠的最终耗时)", () => {
+  it("标题拆「动作 + 目标」+ 耗时;悬停露原始标题与完整目标", () => {
     render(<ToolCard item={{ ...BASE, durationMs: 1234 }} sessionId="s1" />);
-    expect(screen.getByText("Bash npm test")).toBeTruthy();
+    expect(screen.getByText("执行命令")).toBeTruthy(); // 动作中文映射
+    expect(screen.getByTitle("Bash npm test")).toBeTruthy(); // 动作悬停 = 原始标题
+    expect(screen.getByTitle("npm test")).toBeTruthy(); // 目标悬停 = 完整目标
     expect(screen.getByText("1.2s")).toBeTruthy();
+  });
+
+  it("path 型目标:目录段与文件名分离(截断保末段),workdir 前缀剥掉", () => {
+    render(
+      <ToolCard
+        item={{ kind: "tool", tcId: "t2", title: "Read /w/src/main.rs", status: "ok", out: "", rawInput: { file_path: "/w/src/main.rs" } }}
+        sessionId="s1"
+        workdir="/w"
+      />,
+    );
+    expect(screen.getByText("读取文件")).toBeTruthy();
+    expect(screen.getByText("src/")).toBeTruthy(); // 目录段(已剥 /w/ 前缀)
+    expect(screen.getByText("main.rs")).toBeTruthy(); // 文件名独立节点,始终可见
+    expect(screen.getByTitle("/w/src/main.rs")).toBeTruthy(); // 悬停仍露完整路径
   });
 
   it("失败:外显 out 首行(role=alert)", () => {
@@ -35,20 +51,42 @@ describe("工具卡", () => {
     expect(screen.getByRole("alert").textContent).toContain("exit 1: 找不到模块");
   });
 
-  it("详情 collapse:入参 JSON 与结果文本(经 toolResultText)", () => {
+  it("详情面板 command 型:$ 命令 + cwd 弱化行 + 输出 pre", () => {
+    render(
+      <ToolCard
+        item={{ ...BASE, rawInput: { command: "npm test", cwd: "/repo" }, rawOutput: { stdout: "42 passed", stderr: "" } }}
+        sessionId="s1"
+      />,
+    );
+    expect(screen.getByText("详情")).toBeTruthy();
+    const cmd = screen.getByText((_, el) => el?.tagName === "PRE" && (el.textContent ?? "").startsWith("$ npm test"));
+    expect(cmd.textContent).toContain("/repo"); // cwd 行跟在命令块里
+    expect(screen.getByText("42 passed")).toBeTruthy();
+  });
+
+  it("详情面板 command 型输出为空:给 i18n 占位行", () => {
+    render(<ToolCard item={{ ...BASE, rawOutput: { stdout: "", stderr: "" } }} sessionId="s1" />);
+    expect(screen.getByText("(命令输出为空)")).toBeTruthy();
+  });
+
+  it("详情面板 diff 型:Edit old/new 走 DiffView 行渲染(hunk + 增删行)", () => {
     render(
       <ToolCard
         item={{
-          ...BASE,
-          rawInput: { command: "npm test" },
-          rawOutput: { stdout: "42 passed", stderr: "" },
+          kind: "tool",
+          tcId: "t3",
+          title: "Edit a.ts",
+          status: "ok",
+          out: "",
+          rawInput: { file_path: "a.ts", old_string: "const a = 1;", new_string: "const a = 2;" },
         }}
         sessionId="s1"
       />,
     );
     expect(screen.getByText("详情")).toBeTruthy();
-    expect(screen.getByText(/"command": "npm test"/)).toBeTruthy();
-    expect(screen.getByText("42 passed")).toBeTruthy();
+    expect(screen.getByText("@@ -1,1 +1,1 @@")).toBeTruthy(); // hunk 行 → 走了 diff 解析而非纯文本
+    expect(screen.getByText("const a = 1;")).toBeTruthy(); // 删除行
+    expect(screen.getByText("const a = 2;")).toBeTruthy(); // 新增行
   });
 
   it("运行中不出详情入口(终态才可回看入参/结果)", () => {
@@ -56,23 +94,71 @@ describe("工具卡", () => {
     expect(screen.queryByText("详情")).toBeNull();
   });
 
+  it("详情展开时按 _meta.mcSrc.seq 回读原帧,全文顶掉截断头部", async () => {
+    const calls: number[] = [];
+    const frame: Frame = {
+      type: "task-running",
+      data: { update: { sessionUpdate: "tool_call_update", rawOutput: { stdout: "完整输出尾巴", stderr: "" } } },
+    };
+    render(
+      <ToolCard
+        item={{ ...BASE, rawOutput: { stdout: "截断头部…", stderr: "" }, _meta: { mcSrc: { seq: 7 } } }}
+        sessionId="s1"
+        loadFullTool={(seq) => {
+          calls.push(seq);
+          return Promise.resolve(frame);
+        }}
+      />,
+    );
+    expect(screen.getByText("截断头部…")).toBeTruthy();
+    expect(calls).toEqual([]); // 未展开不回读
+    await userEvent.click(screen.getByText("详情"));
+    expect(calls).toEqual([7]);
+    expect(await screen.findByText("完整输出尾巴")).toBeTruthy();
+    expect(screen.queryByText("截断头部…")).toBeNull();
+  });
+
+  it("回读失败:行内外显错误(role=alert,带原因)", async () => {
+    render(
+      <ToolCard
+        item={{ ...BASE, rawOutput: { stdout: "截断头部…", stderr: "" }, _meta: { mcSrc: { seq: 9 } } }}
+        sessionId="s1"
+        loadFullTool={() => Promise.reject(new Error("网络断了"))}
+      />,
+    );
+    await userEvent.click(screen.getByText("详情"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("完整内容取不回来了");
+    expect(alert.textContent).toContain("网络断了");
+  });
+
   it("feed 窗口:运行中只显尾部 5 条,完成后收起", () => {
     const feed: ToolItem["feed"] = [
-      { kind: "tool", id: "a", title: "第 1 步", status: "ok" },
-      { kind: "tool", id: "b", title: "第 2 步", status: "ok" },
+      { kind: "tool", id: "a", title: "第1步", status: "ok" },
+      { kind: "tool", id: "b", title: "第2步", status: "ok" },
       { kind: "text", text: "第 3 步说明" },
-      { kind: "tool", id: "d", title: "第 4 步", status: "ok" },
-      { kind: "tool", id: "e", title: "第 5 步", status: "ok" },
-      { kind: "tool", id: "f", title: "第 6 步", status: "run" },
+      { kind: "tool", id: "d", title: "第4步", status: "ok" },
+      { kind: "tool", id: "e", title: "第5步", status: "ok" },
+      { kind: "tool", id: "f", title: "第6步", status: "run" },
     ];
     const { rerender } = render(<ToolCard item={{ ...BASE, status: "run", feed }} sessionId="s1" />);
-    expect(screen.queryByText("第 1 步")).toBeNull(); // 滚出窗口
-    expect(screen.getByText("第 2 步")).toBeTruthy();
+    expect(screen.queryByText("第1步")).toBeNull(); // 滚出窗口
+    expect(screen.getByText("第2步")).toBeTruthy();
     expect(screen.getByText("第 3 步说明")).toBeTruthy();
-    expect(screen.getByText("第 6 步")).toBeTruthy();
+    expect(screen.getByText("第6步")).toBeTruthy();
 
     rerender(<ToolCard item={{ ...BASE, status: "ok", feed }} sessionId="s1" />);
-    expect(screen.queryByText("第 6 步")).toBeNull();
+    expect(screen.queryByText("第6步")).toBeNull();
+  });
+
+  it("feed 工具行同样过 presentToolCall:动作中文映射 + path 目标剥 workdir", () => {
+    const feed: ToolItem["feed"] = [
+      { kind: "tool", id: "a", title: "Read", rawInput: { file_path: "/w/lib/util.ts" }, status: "ok" },
+    ];
+    render(<ToolCard item={{ ...BASE, title: "Agent 调查代码", status: "run", feed }} sessionId="s1" workdir="/w" />);
+    expect(screen.getByText("读取文件")).toBeTruthy();
+    expect(screen.getByText("lib/")).toBeTruthy();
+    expect(screen.getByText("util.ts")).toBeTruthy();
   });
 
   it("运行中的最新输出行(lastLine)外显", () => {
@@ -80,12 +166,12 @@ describe("工具卡", () => {
     expect(screen.getByText("Compiling crate…")).toBeTruthy();
   });
 
-  it("内嵌审批:暂停图标顶掉状态点 + 卡底按钮行", () => {
+  it("内嵌审批:暂停图标顶掉状态点 + 本地化标题 + 卡底按钮行", () => {
     const perm: PermItem = { kind: "perm", id: "p1", title: "npm test", tool: "Bash", state: "open", toolCallId: "t1" };
     const { container } = render(<ToolCard item={{ ...BASE, status: "run" }} perm={perm} sessionId="s1" />);
     expect(container.querySelector("svg.text-warning")).toBeTruthy(); // 暂停图标
     expect(container.querySelector(".status")).toBeNull(); // 状态点被顶掉
-    expect(screen.getByText("需要确认")).toBeTruthy();
+    expect(screen.getByText("需要确认 · 执行命令")).toBeTruthy(); // 工具名过 toolDisplayName
     expect(screen.getByRole("button", { name: "允许" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();
   });
@@ -114,6 +200,23 @@ describe("工具卡", () => {
   it("缺 onOpenChild(如云端只读流)时不渲染子会话入口", () => {
     render(<ToolCard item={{ ...BASE, childSessionId: "c1" }} sessionId="s1" />);
     expect(screen.queryByRole("button", { name: "查看子会话" })).toBeNull();
+  });
+
+  it("子会话入口缺席但有结果:「查看结果/收起结果」切换,结果走 Markdown", async () => {
+    const item: ToolItem = { ...BASE, title: "Agent 调查代码", status: "ok", background: true, result: "**结论**:一切正常" };
+    render(<ToolCard item={item} sessionId="s1" />);
+    expect(screen.queryByText("结论")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "查看结果" }));
+    expect(screen.getByText("结论")).toBeTruthy(); // Markdown 加粗节点
+    await userEvent.click(screen.getByRole("button", { name: "收起结果" }));
+    expect(screen.queryByText("结论")).toBeNull();
+  });
+
+  it("有子会话入口时不出「查看结果」兜底(结果统一从子会话看)", () => {
+    const item: ToolItem = { ...BASE, title: "Agent 调查代码", status: "ok", childSessionId: "c1", result: "结论文本" };
+    render(<ToolCard item={item} sessionId="s1" onOpenChild={() => {}} />);
+    expect(screen.getByRole("button", { name: "查看子会话" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看结果" })).toBeNull();
   });
 
   it("report_findings:渲染结构化发现列表", () => {
