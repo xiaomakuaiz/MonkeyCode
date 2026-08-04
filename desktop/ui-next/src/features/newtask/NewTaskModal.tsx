@@ -231,7 +231,12 @@ export function NewTaskModal({
           {kind === "local" && (
             <fieldset className="fieldset">
               <legend className="fieldset-legend">{t("create.workdir")}</legend>
-              <div className="relative">
+              <div
+                className={`dropdown w-full ${dirMenu ? "dropdown-open" : ""}`}
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDirMenu(false);
+                }}
+              >
                 <div className="join w-full">
                   <input
                     className="input input-sm join-item w-full font-mono text-xs"
@@ -254,11 +259,9 @@ export function NewTaskModal({
                   </button>
                 </div>
                 {dirMenu && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setDirMenu(false)} />
                     <ul
                       aria-label={t("create.recentDirs")}
-                      className="menu absolute z-20 mt-1 max-h-56 w-full flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+                      className="dropdown-content menu max-h-56 w-full flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
                     >
                       {recents.map((p) => (
                         <li key={p}>
@@ -288,7 +291,6 @@ export function NewTaskModal({
                         </button>
                       </li>
                     </ul>
-                  </>
                 )}
               </div>
             </fieldset>

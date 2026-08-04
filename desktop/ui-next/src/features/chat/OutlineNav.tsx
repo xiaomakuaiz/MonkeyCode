@@ -3,7 +3,7 @@
 // 对话流的更早提问)+ 流内实时用户消息合并(刚发的提问不等轮末物化)。
 // 点本身不响应点击:目标太小,误点代价是整屏跳走;跳转由 ChatView 执行
 // (锚不在 DOM 时先 loadEarlier 循环补页)。
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { OutlineItem } from "@/lib/ipc/controls";
@@ -62,9 +62,10 @@ export function outlineEntriesOf(outline: OutlineItem[], items: readonly ChatIte
   return out;
 }
 
-/** 点列常驻 + 悬停浮出面板。指针从点移到面板要跨一小段空白,靠 200ms
- * 延时收起兜住;面板浮在点列右侧、不盖住它(盖住会把触发源换成面板自己,
- * 指针一出面板矩形就 mouseleave 死循环)。 */
+/** 点列常驻 + 悬停浮出面板(daisyUI dropdown 外壳,受控 dropdown-open)。
+ * dropdown-right 让面板紧贴点列右缘、无空隙,指针点列↔面板不离开容器,
+ * 容器级 mouseenter/leave 即可管开合(mouseleave 把绝对定位子面板算在内),
+ * 旧 200ms 延时收起随空隙一起退役。 */
 export function OutlineNav({
   entries,
   onJump,
@@ -74,21 +75,10 @@ export function OutlineNav({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const closeTimer = useRef(0);
-
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
   // 一条提问的会话不值得占一条轨道
   if (entries.length < 2) return null;
 
-  const enter = () => {
-    window.clearTimeout(closeTimer.current);
-    setOpen(true);
-  };
-  const leave = () => {
-    window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setOpen(false), 200);
-  };
   const labelOf = (e: OutlineEntry) =>
     e.label ||
     (e.attCount > 0 ? t("chat.outline.attachments", { count: e.attCount }) : t("chat.outline.emptyMsg"));
@@ -99,37 +89,35 @@ export function OutlineNav({
       className="pointer-events-none absolute inset-y-0 left-1 z-10 flex w-5 items-center"
     >
       <div
-        className="pointer-events-auto flex max-h-[60%] flex-col items-center gap-1.5 overflow-hidden px-1.5 py-2"
-        onMouseEnter={enter}
-        onMouseLeave={leave}
+        className={`dropdown dropdown-right dropdown-center pointer-events-auto max-h-[60%] ${open ? "dropdown-open" : ""}`}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
       >
-        {entries.map((e) => (
-          <span key={e.seq} aria-hidden className="size-1.5 shrink-0 rounded-full bg-base-content/25" />
-        ))}
-      </div>
-      {open && (
-        <ul
-          className="menu pointer-events-auto absolute top-1/2 left-5 z-20 max-h-[70%] w-64 flex-nowrap -translate-y-1/2 overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
-          onMouseEnter={enter}
-          onMouseLeave={leave}
-        >
+        <div className="flex max-h-full flex-col items-center gap-1.5 overflow-hidden px-1.5 py-2">
           {entries.map((e) => (
-            <li key={e.seq}>
-              <button
-                type="button"
-                className="flex items-baseline gap-2"
-                onClick={() => {
-                  setOpen(false);
-                  onJump(e.seq);
-                }}
-              >
-                <span className="min-w-0 flex-1 truncate text-left text-xs">{labelOf(e)}</span>
-                {e.time && <span className="shrink-0 text-[10px] opacity-50">{e.time}</span>}
-              </button>
-            </li>
+            <span key={e.seq} aria-hidden className="status shrink-0" />
           ))}
-        </ul>
-      )}
+        </div>
+        {open && (
+          <ul className="dropdown-content menu max-h-[70vh] w-64 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm">
+            {entries.map((e) => (
+              <li key={e.seq}>
+                <button
+                  type="button"
+                  className="flex items-baseline gap-2"
+                  onClick={() => {
+                    setOpen(false);
+                    onJump(e.seq);
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate text-left text-xs">{labelOf(e)}</span>
+                  {e.time && <span className="shrink-0 text-[10px] opacity-50">{e.time}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </nav>
   );
 }

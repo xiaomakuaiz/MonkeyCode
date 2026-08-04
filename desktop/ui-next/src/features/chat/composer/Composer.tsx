@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
@@ -101,21 +102,20 @@ export function Composer({
     taRef.current?.focus();
   };
 
-  // Esc 关闭浮层必须在 window capture 阶段拦截并阻断全局链:审批快捷键
-  // 挂在冒泡阶段且 esc 是不可逆的拒绝,面板开着时这一下只能归面板
-  const overlayOpen = slashOpen || picker !== null;
+  // Esc 关闭斜杠面板必须在 window capture 阶段拦截并阻断全局链:审批快捷键
+  // 挂在冒泡阶段且 esc 是不可逆的拒绝,面板开着时这一下只能归面板。
+  // (模型/思考档 dropdown 的 Esc 在容器 onKeyDown 就地拦截,见 onPickerKeyDown。)
   useEffect(() => {
-    if (!overlayOpen) return;
+    if (!slashOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopImmediatePropagation();
       e.preventDefault();
-      setPicker(null);
       setSlashSuppressed(true);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [overlayOpen]);
+  }, [slashOpen]);
 
   // ==== 模型 / 思考档 / 权限模式 ====
   const currentModel = state.model || meta.model;
@@ -137,6 +137,17 @@ export function Composer({
     void sessionSetThink(sessionId, level).catch((e) => {
       ctl.notifyError(t("chat.think.failed", { reason: errText(e) }));
     });
+  };
+  // dropdown 容器的关闭胶水:焦点移出即收起(官方 dropdown 的外点关闭语义);
+  // Esc 就地拦截并阻断冒泡——不能让这一下落进全局审批链(esc = 不可逆拒绝)
+  const onPickerBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPicker(null);
+  };
+  const onPickerKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || picker === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setPicker(null);
   };
   // 权限模式可运行中热切(壳侧支持;yolo 切入时壳自动放行挂起审批)
   const modeRef = useRef(mode);
@@ -251,13 +262,16 @@ export function Composer({
         </div>
       )}
 
-      {/* 聚焦时边界强调:focus-within 转品牌色描边 */}
-      <div className="relative flex flex-col rounded-box border border-base-300 bg-base-100 transition-colors duration-150 focus-within:border-primary/60">
+      {/* 聚焦时边界强调:focus-within 转品牌色描边。斜杠面板挂 daisyUI
+          dropdown 外壳(受控 dropdown-open,焦点始终留在 textarea) */}
+      <div
+        className={`dropdown dropdown-top dropdown-start relative flex flex-col rounded-box border border-base-300 bg-base-100 transition-colors duration-150 focus-within:border-primary/60 ${slashOpen ? "dropdown-open" : ""}`}
+      >
         {slashOpen && (
           <ul
             role="listbox"
             aria-label={t("chat.slash.label")}
-            className="menu absolute bottom-full left-2 z-20 mb-1 max-h-64 w-80 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+            className="dropdown-content menu max-h-64 w-80 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
           >
             {list.length === 0 && (
               <li className="menu-disabled">
@@ -356,7 +370,11 @@ export function Composer({
           </button>
           <span className="min-w-0 flex-1" />
 
-          <div className="relative shrink-0">
+          <div
+            className={`dropdown dropdown-top dropdown-end shrink-0 ${picker === "think" ? "dropdown-open" : ""}`}
+            onBlur={onPickerBlur}
+            onKeyDown={onPickerKeyDown}
+          >
             <button
               type="button"
               disabled={state.running}
@@ -367,11 +385,9 @@ export function Composer({
               {t("chat.think.trigger", { label: t(THINK_KEY[effThink] ?? "chat.think.low") })}
             </button>
             {picker === "think" && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setPicker(null)} />
                 <ul
                   aria-label={t("chat.think.label")}
-                  className="menu absolute right-0 bottom-full z-20 mb-1 w-52 rounded-box bg-base-100 p-2 shadow-sm"
+                  className="dropdown-content menu w-52 rounded-box bg-base-100 p-2 shadow-sm"
                 >
                   {THINK_LEVELS.map((level) => (
                     <li key={level}>
@@ -386,11 +402,14 @@ export function Composer({
                     </li>
                   ))}
                 </ul>
-              </>
             )}
           </div>
 
-          <div className="relative min-w-0 shrink">
+          <div
+            className={`dropdown dropdown-top dropdown-end min-w-0 shrink ${picker === "model" ? "dropdown-open" : ""}`}
+            onBlur={onPickerBlur}
+            onKeyDown={onPickerKeyDown}
+          >
             <button
               type="button"
               disabled={state.running}
@@ -401,11 +420,9 @@ export function Composer({
               {modelShortName(currentModel) || t("chat.model.label")}
             </button>
             {picker === "model" && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setPicker(null)} />
                 <ul
                   aria-label={t("chat.model.label")}
-                  className="menu absolute right-0 bottom-full z-20 mb-1 max-h-72 w-64 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+                  className="dropdown-content menu max-h-72 w-64 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
                 >
                   {models.length === 0 && (
                     <li className="menu-disabled">
@@ -430,7 +447,6 @@ export function Composer({
                     </li>
                   ))}
                 </ul>
-              </>
             )}
           </div>
 
