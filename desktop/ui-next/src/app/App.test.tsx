@@ -224,6 +224,17 @@ describe("D8 列表增量与意图跳转", () => {
   });
 });
 
+describe("在此项目新建任务(侧栏组头 → 新建视图预填目录)", () => {
+  it("点组头 + 打开新建视图,项目目录预填", async () => {
+    const shell = stubShell({ sessions: [sess({ id: "s1", workdir: "/proj/alpha" })] });
+    render(<App />);
+    await waitFor(() => expect(shell.count("sessions_list")).toBeGreaterThanOrEqual(1));
+    await userEvent.click(await screen.findByRole("button", { name: "在此项目新建任务" }));
+    const dirInput = await screen.findByRole("textbox", { name: "项目目录" });
+    expect((dirInput as HTMLInputElement).value).toBe("/proj/alpha");
+  });
+});
+
 describe("H9 意图消费", () => {
   it("open-session / open-settings 事件送达即消费壳侧意图副本", async () => {
     const shell = stubShell({ sessions: [sess({ id: "s1" })] });

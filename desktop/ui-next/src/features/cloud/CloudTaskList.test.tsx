@@ -15,6 +15,7 @@ function stubShell(invoke: Invoke) {
 
 afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+  localStorage.clear();
 });
 
 const tasks: CloudTask[] = [
@@ -150,5 +151,48 @@ describe("CloudTaskList", () => {
     await userEvent.click(screen.getByText("加载更多"));
     await screen.findByText("更早的");
     await waitFor(() => expect(screen.queryByText("加载更多")).toBeNull()); // 4/4 载完
+  });
+
+  it("行 meta 与本地侧栏同规:运行中/出错给状态文字,已完成留白", async () => {
+    stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
+    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    const running = (await screen.findByText("修复登录")).closest("a") as HTMLElement;
+    expect(within(running).getByText("运行中")).toBeTruthy();
+    const errored = screen.getByText("旧任务乙").closest("a") as HTMLElement;
+    expect(within(errored).getByText("出错")).toBeTruthy();
+    const finished = screen.getByText("旧任务甲").closest("a") as HTMLElement;
+    expect(within(finished).queryByText("已完成")).toBeNull();
+  });
+
+  it("终止任务:仅运行中行出菜单项,二段确认 → mc_task_stop → 整表重拉", async () => {
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    stubShell((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "mc_tasks") return Promise.resolve({ tasks, page_info: { total: 3 } });
+      if (cmd === "mc_task_stop") return Promise.resolve({ ok: true });
+      return Promise.resolve({});
+    });
+    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    const running = (await screen.findByText("修复登录")).closest("a") as HTMLElement;
+    // 已完成行没有终止项
+    const finished = screen.getByText("旧任务甲").closest("a") as HTMLElement;
+    expect(within(finished).queryByText("终止任务")).toBeNull();
+
+    await userEvent.click(within(running).getByRole("button", { name: "任务操作" }));
+    await userEvent.click(within(running).getByText("终止任务"));
+    expect(calls.some((c) => c.cmd === "mc_task_stop")).toBe(false); // 一次点击不执行
+    await userEvent.click(within(running).getByText("确认终止"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "mc_task_stop" && c.args?.id === "a")).toBe(true));
+    // 状态翻转后整表重拉
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "mc_tasks").length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("云端历史开合态持久化(mc.cloudHistoryOpen 契约键)", async () => {
+    localStorage.setItem("mc.cloudHistoryOpen", "1");
+    stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
+    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    await screen.findByText("修复登录");
+    const details = screen.getByText("云端历史").closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(true);
   });
 });

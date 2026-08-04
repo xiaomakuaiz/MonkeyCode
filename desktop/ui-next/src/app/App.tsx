@@ -166,7 +166,8 @@ export function App() {
   const [space, setSpaceState] = useState<Space>(readSpace);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(readLastSession);
-  const [creating, setCreating] = useState(false);
+  // 新建任务视图:null=关;{dir} 可携带「在此项目新建」的预填目录
+  const [creating, setCreating] = useState<{ dir?: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);
   const [cloudReload, setCloudReload] = useState(0);
@@ -188,7 +189,7 @@ export function App() {
     writeSpace(next);
     // 桌面客户端心智:点导航永远切走当前覆盖视图(设置/新建),不会"没反应"
     setSettingsOpen(false);
-    setCreating(false);
+    setCreating(null);
   };
 
   /** 摘掉某会话的提醒与侧栏 attention(打开它即视为已读)。 */
@@ -327,7 +328,7 @@ export function App() {
     writeLastSession(meta.id);
     dismissSession(meta.id);
     setSettingsOpen(false);
-    setCreating(false);
+    setCreating(null);
   };
 
   const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
@@ -353,7 +354,7 @@ export function App() {
       {isWindowsShell() && <TitleBar />}
       <EngineBanner />
       <div className="flex min-h-0 flex-1">
-        <SpaceRail space={space} waiting={waiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(false); setSettingsOpen((v) => !v); }} />
+        <SpaceRail space={space} waiting={waiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(null); setSettingsOpen((v) => !v); }} />
         <Sidebar
           space={space}
           sessions={sessions}
@@ -372,7 +373,16 @@ export function App() {
             onSelect: select,
             onNewTask: () => {
               setSettingsOpen(false);
-              setCreating(true);
+              setCreating({});
+            },
+            onNewTaskIn: (workdir) => {
+              setSettingsOpen(false);
+              setCreating({ dir: workdir });
+            },
+            onRename: (meta, title) => {
+              void sessionPatch(meta.id, { title })
+                .catch(() => {})
+                .then(refresh);
             },
             onDelete: (meta) => {
               void sessionDelete(meta.id)
@@ -394,8 +404,9 @@ export function App() {
         ) : creating ? (
           <NewTaskModal
             open
+            initialDir={creating.dir}
             recentDirs={recentDirs}
-            onClose={() => setCreating(false)}
+            onClose={() => setCreating(null)}
             onCreated={(meta) => {
               refresh();
               select(meta);

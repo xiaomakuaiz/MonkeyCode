@@ -23,6 +23,7 @@ export const zh = {
   "sidebar.archivedProjects": "已归档项目",
   "sidebar.empty.title": "还没有会话",
   "sidebar.empty.detail": "点击「新建任务」开始第一个任务。",
+  "sidebar.empty.cta": "开始第一个任务",
   "sidebar.noResults.title": "没有匹配的会话",
   "sidebar.noResults.detail": "换个关键词试试。",
   "sidebar.row.menu": "会话操作",

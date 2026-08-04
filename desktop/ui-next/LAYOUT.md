@@ -30,6 +30,7 @@
 | 模型/思考档/权限模式 | composer 底部集群左端 | 头部 |
 | 任务清单(plan) | composer 上方面板 | 消息流 |
 | 后台会话提醒 | 角落 toast + 侧栏行 attention | 头部、消息流 |
+| **会话/任务状态文字** | **侧栏行内右侧 meta**(仅要紧状态发声,见 §6) | 头部、独立列 |
 | 更新可用 | 侧栏底部条 + 设置·关于 | 头部 |
 | 下载进度 | 右下 dock | 头部、消息流 |
 
@@ -49,10 +50,33 @@
 ## 6. 侧栏内部结构(四段式)
 ```
 头部 h-11(固定):品牌 + ＋新建
-搜索行(固定)
+搜索行(固定):query 非空时尾部出清空钮
 列表(flex-1,唯一滚动区,纵滚横截)
 footer(固定钉底):更新提示等常驻条,永不随列表滚动
 ```
+
+### 6.1 行解剖(单行紧凑,三空间统一;用户定案 2026-08-04)
+```
+[状态点] 标题(truncate flex-1) ……… 右侧 meta(text-xs shrink-0)
+```
+- 右侧 meta **只在要紧状态发声**:等待审批(warning)/运行中(primary)/出错
+  (error)/已停止(50% 淡);空闲、已完成一律**留白**——不展示时间(用户定案:
+  时间没用)。云端行同规(排队中/运行中/出错;finished 留白)。
+- hover / 焦点进入行时 meta 隐藏、原位换出「…」菜单钮(RowDropdown,232px 里
+  两者互斥);「…」与**行右键**共用一份 MenuItem(contextMenu.openMenu),
+  删除/终止走 confirm 二段确认,危险项 danger 红字。
+- 会话行菜单:重命名(行原位变 input,Enter 提交/Esc·失焦取消)、归档、删除。
+
+### 6.2 分组与归档(去深嵌套)
+- 项目组头:menu 内原生 details;文字 = 正常大小写 text-xs font-medium /70
+  (微标签大写样式已废);右侧 = 等待徽标 + hover 露出[+在此项目新建]与[…];
+  组头可右键;拖拽排序保留,dragover 落点给 border-t 指示线。
+- **归档一律沉底,禁止 details 套 details**:local = 「已归档」(各组归档会话
+  拍平,meta 位给项目名)+「已归档项目」两段;chat = 「已归档」一段;会话全
+  归档的项目不留空组头。
+- 折叠段开合态持久化(旧 UI 契约键,"1"/"0"):mc.archivedOpen /
+  mc.projectArchiveOpen / mc.cloudHistoryOpen(prefs.readFold/writeFold)。
+- **搜索非空 → 全部折叠段强制展开**(命中不被藏),强制展开不写盘。
 
 ## 7. 拖拽区铁律(mac/Windows 自绘 chrome)
 - Tauri 按**事件目标自身**是否带 `data-tauri-drag-region` 判定,**不继承**:

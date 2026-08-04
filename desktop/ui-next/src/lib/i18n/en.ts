@@ -24,6 +24,7 @@ export const en: Record<MessageKey, string> = {
   "sidebar.archivedProjects": "Archived projects",
   "sidebar.empty.title": "No sessions yet",
   "sidebar.empty.detail": "Click “New task” to start your first task.",
+  "sidebar.empty.cta": "Start your first task",
   "sidebar.noResults.title": "No matching sessions",
   "sidebar.noResults.detail": "Try a different keyword.",
   "sidebar.row.menu": "Session actions",

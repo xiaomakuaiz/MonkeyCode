@@ -45,6 +45,7 @@ export function NewTaskModal({
   onCreated,
   onCloudCreated,
   recentDirs,
+  initialDir,
 }: {
   open: boolean;
   onClose: () => void;
@@ -53,6 +54,8 @@ export function NewTaskModal({
   /** 最近项目目录(App 从 sessions 的 workdir 去重、按 updated_at 降序派生);
    *  环境过滤与截断在本组件内做 */
   recentDirs?: string[];
+  /** 「在此项目新建任务」预填目录:定位 local 页签,且不被异步最近目录覆盖 */
+  initialDir?: string;
 }) {
   const { t } = useI18n();
   const [kind, setKind] = useState<SessionKind | "cloud">("local");
@@ -83,6 +86,11 @@ export function NewTaskModal({
     setThink("");
     setError("");
     setOfferCreate(false);
+    if (initialDir) {
+      setKind("local");
+      setDir(initialDir);
+      dirTouched.current = true;
+    }
     void modelsList().then((list) => {
       if (!alive) return;
       setModels(list);
@@ -108,7 +116,7 @@ export function NewTaskModal({
     return () => {
       alive = false;
     };
-  }, [open]);
+  }, [open, initialDir]);
 
   const pickDir = (p: string) => {
     dirTouched.current = true;
