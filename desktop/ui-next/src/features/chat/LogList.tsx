@@ -20,7 +20,7 @@ function UserBubble({ item, flash }: { item: Extract<ChatItem, { kind: "user" }>
       className={`chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
       data-user-seq={item.seq}
     >
-      <div className="chat-bubble chat-bubble-primary max-w-[85%] text-sm whitespace-pre-wrap select-text">
+      <div className="chat-bubble max-w-[85%] text-sm whitespace-pre-wrap select-text">
         {item.text}
         {item.attachments?.map((a) => (
           <a key={a.url} href={a.url} className="link mt-1 block text-xs opacity-80">
@@ -82,7 +82,7 @@ function renderItem(
     case "ask":
       return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
     case "sys":
-      return <div className="badge badge-ghost h-auto self-center px-3 py-0.5 text-[11px] text-base-content/50">{item.text}</div>;
+      return <div className="badge badge-ghost badge-sm h-auto self-center px-2.5 py-0.5 text-[10.5px] text-base-content/40">{item.text}</div>;
   }
 }
 

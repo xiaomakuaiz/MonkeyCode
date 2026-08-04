@@ -129,3 +129,16 @@
     -webkit-user-select: none;
   }
 }
+
+/* ================================================================
+ * 统一视觉调整(主题层;§8 约定的"最后统一调"入口)。
+ * 只经 daisyUI 组件自暴露的 CSS 变量调形态,不写散落覆写。
+ * ================================================================ */
+
+/* 侧栏/菜单选中态:daisyUI 默认取 neutral(多数主题为近黑,选中行成黑块,
+ * 见 2026-08-04 截图反馈)。改为 primary 淡底 + 正文色,全部主题通用,
+ * 与旧 UI 的 accSel(primary 9%)同语言。 */
+.menu {
+  --menu-active-bg: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
+  --menu-active-fg: var(--color-base-content);
+}

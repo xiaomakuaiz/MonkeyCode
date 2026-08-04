@@ -500,12 +500,12 @@ function UpdateFooter() {
   return (
     <div
       role={error ? "alert" : "status"}
-      className={`alert ${error ? "alert-error" : "alert-info"} alert-soft m-2 mt-0 flex items-center py-1.5 text-xs`}
+      className={`alert ${error ? "alert-error" : ""} alert-soft m-2 mt-0 flex items-center py-1.5 text-xs`}
     >
       <span className="min-w-0 flex-1 truncate" title={error ?? undefined}>
         {error ? t("update.failed", { reason: error }) : t("update.available", { version: update.latest ?? "" })}
       </span>
-      <button type="button" className={`btn ${error ? "btn-error" : "btn-info"} btn-xs`} disabled={installing} onClick={install}>
+      <button type="button" className={`btn ${error ? "btn-error" : "btn-primary"} btn-xs`} disabled={installing} onClick={install}>
         {installing && <span className="loading loading-spinner loading-xs" aria-hidden />}
         {t("update.install")}
       </button>
