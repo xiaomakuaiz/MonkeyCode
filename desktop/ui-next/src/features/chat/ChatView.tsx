@@ -18,7 +18,7 @@ import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
 import { sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
-import { onNativeFileDrop } from "@/lib/ipc/uploads";
+import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { createImeGuard } from "@/lib/util/slash";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
@@ -304,7 +304,13 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
               {t("chat.loadEarlierFailed", { reason: earlierError })}
             </p>
           )}
-          <LogList state={state} sessionId={meta.id} flashSeq={flashSeq ?? undefined} onOpenChildSession={setChildId} />
+          <LogList
+            state={state}
+            sessionId={meta.id}
+            flashSeq={flashSeq ?? undefined}
+            onOpenChildSession={setChildId}
+            uploadUrl={(p) => uploadFileURL(meta.id, p)}
+          />
         </div>
       </div>
 
@@ -364,7 +370,7 @@ function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void })
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-          <LogList state={state} sessionId={id} readonly />
+          <LogList state={state} sessionId={id} readonly uploadUrl={(p) => uploadFileURL(id, p)} />
         </div>
       </div>
       <div className="modal-backdrop cursor-pointer" onClick={onClose} aria-hidden />

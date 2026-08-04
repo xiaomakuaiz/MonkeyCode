@@ -7,10 +7,8 @@ import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { OutlineItem } from "@/lib/ipc/controls";
+import { ATT_LINE } from "@/lib/protocol/attLine";
 import type { ChatItem } from "@/lib/protocol/types";
-
-/** 本地附件行(与 composer attLine / 旧 UI ATT_LINE 同口径):大纲摘要剥掉。 */
-export const ATT_LINE = /^\[(图片|文件)\] \S+$/;
 
 const MAX_LABEL = 60;
 

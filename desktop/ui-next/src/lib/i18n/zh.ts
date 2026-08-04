@@ -209,6 +209,8 @@ export const zh = {
   "chat.findings.failure": "失败场景",
   "chat.loadEarlier": "加载更早",
   "chat.loadEarlierFailed": "加载更早的对话失败:{reason}",
+  "chat.att.downloadTip": "{name}(点击下载)",
+  "chat.att.openTip": "{name}(点击在浏览器打开)",
   "chat.composer": "消息输入",
   "chat.composerPlaceholder": "输入消息,Enter 发送,Shift+Enter 换行",
   "chat.send": "发送",

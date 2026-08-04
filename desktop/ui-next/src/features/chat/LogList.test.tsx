@@ -175,3 +175,49 @@ describe("LogList 上行管道注入(sendFrame)", () => {
     expect(screen.getByText("已回答")).toBeTruthy();
   });
 });
+
+describe("用户气泡附件呈现(附件行约定)", () => {
+  const TEXT = "看看这个\n[图片] .monkeycode/uploads/a.png\n[文件] .monkeycode/uploads/b.txt";
+
+  it("有 uploadUrl:附件行剥离,图片缩略图 + 文件 chip;点图开大图浮层", async () => {
+    const uploadUrl = (p: string) => Promise.resolve(`data:image/png;base64,${p.length}`);
+    const state = withItems([{ kind: "user", text: TEXT, seq: 1 }]);
+    render(<LogList state={state} sessionId="s1" uploadUrl={uploadUrl} />);
+
+    expect(screen.getByText("看看这个")).toBeTruthy();
+    // 附件行不再出现在气泡正文
+    expect(screen.queryByText(/\[图片\]/)).toBeNull();
+    expect(screen.queryByText(/\[文件\]/)).toBeNull();
+    // 图片按路径为 alt 异步渲染;文件 chip 以文件名成钮
+    const img = await screen.findByRole("img", { name: ".monkeycode/uploads/a.png" });
+    expect(img.getAttribute("src")).toMatch(/^data:image\/png/);
+    expect(screen.getByRole("button", { name: "b.txt" })).toBeTruthy();
+
+    await userEvent.click(img);
+    expect(await screen.findByRole("dialog", { name: ".monkeycode/uploads/a.png" })).toBeTruthy();
+  });
+
+  it("无 uploadUrl(云端/无通道):正文原样,不剥附件行", () => {
+    const state = withItems([{ kind: "user", text: TEXT, seq: 1 }]);
+    render(<LogList state={state} sessionId="s1" />);
+    expect(screen.getByText(/\[图片\] \.monkeycode\/uploads\/a\.png/)).toBeTruthy();
+  });
+
+  it("云端 attachments:图片直链渲染,文件 chip 走浏览器打开语义", () => {
+    const state = withItems([
+      {
+        kind: "user",
+        text: "带附件",
+        seq: 2,
+        attachments: [
+          { url: "https://oss/x.png", filename: "x.png" },
+          { url: "https://oss/y.pdf", filename: "y.pdf" },
+        ],
+      },
+    ]);
+    render(<LogList state={state} sessionId="cloud-1" />);
+    const img = screen.getByRole("img", { name: "x.png" });
+    expect(img.getAttribute("src")).toBe("https://oss/x.png");
+    expect(screen.getByRole("button", { name: "y.pdf" })).toBeTruthy();
+  });
+});

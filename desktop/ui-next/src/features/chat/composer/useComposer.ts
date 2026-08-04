@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { t } from "@/lib/i18n";
 import { sessionSend } from "@/lib/ipc/sessions";
+import { attLineOf } from "@/lib/protocol/attLine";
 import {
   isImagePath,
   nativePathOf,
@@ -37,8 +38,8 @@ export interface ComposerUpload {
   cancel?: () => void;
 }
 
-/** 本地附件行(与旧 UI ATT_LINE 正则同口径,进消息正文)。 */
-export const attLine = (a: ComposerAtt) => `${a.isImage ? "[图片]" : "[文件]"} ${a.path}`;
+/** 本地附件行(约定唯一出处在 lib/protocol/attLine,进消息正文)。 */
+export const attLine = (a: ComposerAtt) => attLineOf(a.path, a.isImage);
 
 export interface ComposerCtl {
   draft: string;
