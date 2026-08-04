@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Frame, PermItem, ToolItem } from "@/lib/protocol/types";
 import { ToolCard } from "./ToolCard";
@@ -235,6 +235,23 @@ describe("工具卡", () => {
     expect(screen.getByText("token 未过期校验")).toBeTruthy();
     expect(screen.getByText("已证实")).toBeTruthy();
     expect(screen.getByText("auth.ts:42")).toBeTruthy();
+  });
+
+  it("report_findings:onLocalLink 透传为发现行 file:line 的点击定位", async () => {
+    const onLocalLink = vi.fn();
+    render(
+      <ToolCard
+        item={{
+          ...BASE,
+          title: "ReportFindings: 1 项发现",
+          rawInput: { findings: [{ file: "src/auth.ts", line: 42, summary: "token 未过期校验" }] },
+        }}
+        sessionId="s1"
+        onLocalLink={onLocalLink}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "auth.ts:42" }));
+    expect(onLocalLink).toHaveBeenCalledWith("src/auth.ts");
   });
 });
 

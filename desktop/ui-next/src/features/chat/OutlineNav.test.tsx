@@ -23,6 +23,8 @@ describe("outlineEntriesOf:目录 + 流内实时合并", () => {
       [5, "第二问"],
       [9, "刚发的第三问"],
     ]);
+    // 目录条目带真实翻页 offset;流内补的还没物化,无 offset
+    expect(entries.map((e) => e.offset)).toEqual([0, 40, undefined]);
     expect(entries[0]?.time).toBe("09:05");
     expect(entries[1]?.time).toBe("");
   });
@@ -57,7 +59,7 @@ describe("OutlineNav 交互", () => {
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 
-  it("悬停点列浮出面板;点条目回调 seq 并收起;空消息给兜底文案", () => {
+  it("悬停点列浮出面板;点条目回调 seq+offset 并收起;空消息给兜底文案", () => {
     const onJump = vi.fn();
     render(<OutlineNav entries={entries} onJump={onJump} />);
     const nav = screen.getByRole("navigation", { name: "提问大纲" });
@@ -66,7 +68,26 @@ describe("OutlineNav 交互", () => {
     expect(screen.getByText("第一问")).toBeTruthy();
     expect(screen.getByText("(空消息)")).toBeTruthy();
     fireEvent.click(screen.getByText("第一问"));
-    expect(onJump).toHaveBeenCalledWith(1);
+    expect(onJump).toHaveBeenCalledWith(1, 0); // 目录条目透传翻页 offset
     expect(screen.queryByText("第一问")).toBeNull(); // 跳转即收起
+  });
+
+  it("流内实时条目无 offset:回调 (seq, undefined),调用方走 DOM 兜底", () => {
+    const onJump = vi.fn();
+    const merged = outlineEntriesOf(
+      [{ seq: 1, offset: 0, text: "第一问" }],
+      [{ kind: "user", text: "刚发的提问", seq: 9 }],
+    );
+    render(<OutlineNav entries={merged} onJump={onJump} />);
+    fireEvent.mouseEnter(screen.getByRole("navigation", { name: "提问大纲" }).firstElementChild!);
+    fireEvent.click(screen.getByText("刚发的提问"));
+    expect(onJump).toHaveBeenCalledWith(9, undefined);
+  });
+
+  it("activeSeq 当前项:面板内该条 aria-current=true,其余不带", () => {
+    render(<OutlineNav entries={entries} activeSeq={5} onJump={() => {}} />);
+    fireEvent.mouseEnter(screen.getByRole("navigation", { name: "提问大纲" }).firstElementChild!);
+    expect(screen.getByText("(空消息)").closest("button")?.getAttribute("aria-current")).toBe("true");
+    expect(screen.getByText("第一问").closest("button")?.getAttribute("aria-current")).toBeNull();
   });
 });

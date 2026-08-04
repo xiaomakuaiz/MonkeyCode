@@ -23,6 +23,7 @@ function stubShell({
   outline,
   frames,
   changes,
+  historyPages,
 }: {
   hasMore?: boolean;
   outline?: unknown[];
@@ -30,6 +31,8 @@ function stubShell({
   frames?: unknown[];
   /** session_call repo_file_changes 的应答(改动徽标用例) */
   changes?: unknown;
+  /** session_history 逐次应答队列(offset 补页用例);耗尽/缺省走单页默认 */
+  historyPages?: unknown[];
 } = {}) {
   const ops: Op[] = [];
   const listeners = new Map<string, (e: { payload: unknown }) => void>();
@@ -60,11 +63,13 @@ function stubShell({
         }
         if (cmd === "session_history") {
           // 真实壳形状:session_history 的游标叫 next_cursor(≠ session_open 的 cursor)
-          return Promise.resolve({
-            frames: [{ type: "user-input", data: { content: b64encode("更早的问题") }, timestamp: 0, seq: 0 }],
-            next_cursor: 3,
-            has_more: false,
-          });
+          return Promise.resolve(
+            historyPages?.shift() ?? {
+              frames: [{ type: "user-input", data: { content: b64encode("更早的问题") }, timestamp: 0, seq: 0 }],
+              next_cursor: 3,
+              has_more: false,
+            },
+          );
         }
         return Promise.resolve(null);
       },
@@ -416,12 +421,28 @@ describe("聊天视图", () => {
     expect(ops.some((o) => o.cmd === "session_send" && (o.args?.ftype as string) === "permission-resp")).toBe(false);
   });
 
-  it("提问大纲:目标锚不在当前窗口时循环 loadEarlier 补页直到出现", async () => {
+  it("提问大纲:锚不在窗口时按条目 offset ensureLoaded 精确补页(offset 为终点,不盲翻),补齐后跳转", async () => {
     const { ops } = stubShell({
       hasMore: true,
+      // 两页历史:目标那轮(offset 0)要翻到第二页;两页都自称 has_more,
+      // 翻页只认「cursor 已越过 offset」这个终点,不再按锚在不在 DOM 盲翻
+      historyPages: [
+        {
+          frames: [{ type: "user-input", data: { content: b64encode("中间的问题") }, timestamp: 0, seq: 3 }],
+          next_cursor: 4,
+          has_more: true,
+        },
+        {
+          frames: [{ type: "user-input", data: { content: b64encode("最早的问题") }, timestamp: 0, seq: 1 }],
+          next_cursor: 0,
+          has_more: true,
+        },
+      ],
+      frames: [{ type: "user-input", data: { content: b64encode("帮我修 bug") }, timestamp: 1, seq: 5 }],
       outline: [
-        { seq: 0, offset: 0, content: b64encode("更早的问题"), timestamp: 0 },
-        { seq: 1, offset: 10, content: b64encode("帮我修 bug"), timestamp: 1 },
+        { seq: 1, offset: 0, content: b64encode("最早的问题"), timestamp: 0 },
+        { seq: 3, offset: 4, content: b64encode("中间的问题"), timestamp: 0 },
+        { seq: 5, offset: 7, content: b64encode("帮我修 bug"), timestamp: 1 },
       ],
     });
     render(<ChatView meta={META} />);
@@ -429,12 +450,36 @@ describe("聊天视图", () => {
     const nav = await screen.findByRole("navigation", { name: "提问大纲" });
     fireEvent.mouseEnter(nav.firstElementChild!);
     // 目录条目在,正文里还没有(在更早的历史页里)
-    expect(screen.getByText("更早的问题")).toBeTruthy();
+    expect(screen.getByText("最早的问题")).toBeTruthy();
     expect(ops.some((o) => o.cmd === "session_history")).toBe(false);
-    fireEvent.click(screen.getByText("更早的问题"));
-    // 补页循环:effect 驱动,每页提交后重查锚,直到气泡渲染出来
-    await waitFor(() => expect(screen.getByText("更早的问题")).toBeTruthy());
-    expect(ops.some((o) => o.cmd === "session_history")).toBe(true);
+    fireEvent.click(screen.getByText("最早的问题"));
+    // ensureLoaded(0):cursor 7 → 4 → 0,两页即止;目标气泡随第二页渲染
+    await waitFor(() => expect(screen.getByText("最早的问题")).toBeTruthy());
+    expect(screen.getByText("中间的问题")).toBeTruthy();
+    const hist = ops.filter((o) => o.cmd === "session_history");
+    expect(hist.map((o) => o.args?.cursor)).toEqual([7, 4]);
+    // has_more 仍为 true 也不再翻第三页:session_history 以 outline 的
+    // offset 为终点(旧的 80 页盲翻上限机制已退役)
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ops.filter((o) => o.cmd === "session_history")).toHaveLength(2);
+  });
+
+  it("提问大纲 activeSeq 冒烟:面板给当前项 aria-current(jsdom 几何全 0 → 最后一条已加载提问)", async () => {
+    stubShell({
+      outline: [
+        { seq: 1, offset: 0, content: b64encode("第一问"), timestamp: 1 },
+        { seq: 9, offset: 40, content: b64encode("第二问"), timestamp: 2 },
+      ],
+    });
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const nav = await screen.findByRole("navigation", { name: "提问大纲" });
+    fireEvent.mouseEnter(nav.firstElementChild!);
+    // DOM 里只有 seq=1 的气泡(seq=9 未加载),它就是滚动跟踪的当前项
+    await waitFor(() =>
+      expect(screen.getByText("第一问").closest("button")?.getAttribute("aria-current")).toBe("true"),
+    );
+    expect(screen.getByText("第二问").closest("button")?.getAttribute("aria-current")).toBeNull();
   });
 
   // 滚动几何 jsdom 验不了(rect 全 0),可测部分在 lib/util/scrollAnchor.test;

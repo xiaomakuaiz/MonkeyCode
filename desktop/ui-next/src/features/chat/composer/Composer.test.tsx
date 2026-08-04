@@ -1,7 +1,7 @@
 // composer 全功能的集成测试:经 ChatView 挂载(真实 useSessionFeed/
 // useComposer 链路),假壳 IPC 断言发送面契约(载荷以壳侧 session.rs /
 // uploads.rs 为准)。
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -164,15 +164,93 @@ describe("模型 / 思考深度 / 权限模式", () => {
     expect(screen.queryByRole("list", { name: "切换模型" })).toBeNull();
   });
 
-  it("思考档:触发器显示生效档(会话档 > 模型默认档);选择发 session_set_think", async () => {
+  it("思考档:触发器显示生效档(会话档 > 模型默认档);四档带 hint 副文案;选择发 session_set_think", async () => {
     const { ops } = stubShell({ models: MODELS });
     render(<ChatView meta={META} />);
     await ready();
     // 会话未显式选档 → 跟随当前模型 m 配置的 medium
     await userEvent.click(screen.getByRole("button", { name: "思考·中" }));
     await screen.findByRole("list", { name: "思考深度" });
-    await userEvent.click(screen.getByRole("button", { name: "高" }));
+    // 四档各带一句取舍说明(旧 UI THINK_LEVELS hint 随迁)
+    expect(screen.getByText("不思考,响应最快")).toBeTruthy();
+    expect(screen.getByText("简单任务,快速")).toBeTruthy();
+    expect(screen.getByText("日常任务,均衡")).toBeTruthy();
+    expect(screen.getByText("疑难任务,深入但更慢")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "高疑难任务,深入但更慢" }));
     expect(calls(ops, "session_set_think").map((o) => o.args?.payload)).toEqual([{ think: "high" }]);
+  });
+
+  it("≥2 来源出 tabs(会员→百智云→自定义序,默认跟随当前模型来源);切 tab 换列表,选中发原名", async () => {
+    const SOURCED: ModelInfo[] = [
+      { name: "m", default: true },
+      { name: "gpt-x@baizhi", default: false, source: "baizhi" },
+      { name: "monkeycode-basic/glm@monkeycode#c1", model: "monkeycode-basic/glm", source: "monkeycode", owner: "public", default: false },
+    ];
+    const { ops } = stubShell({ models: SOURCED });
+    render(<ChatView meta={META} />);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "m" }));
+    const tablist = await screen.findByRole("tablist", { name: "模型来源" });
+    expect(within(tablist).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["会员", "百智云", "自定义"]);
+    // 当前模型 m 是手工条目 → 活跃 tab「自定义」,其它来源的条目不在列表里
+    expect(screen.getByRole("tab", { name: "自定义" }).getAttribute("aria-selected")).toBe("true");
+    const menu = screen.getByRole("list", { name: "切换模型" });
+    expect(within(menu).queryByRole("button", { name: "gpt-x" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("tab", { name: "百智云" }));
+    await userEvent.click(within(menu).getByRole("button", { name: "gpt-x" }));
+    // onPick 用原始 name(引擎寻址键),展示层剥的后缀不能丢
+    expect(calls(ops, "session_set_model").map((o) => o.args?.payload)).toEqual([{ model: "gpt-x@baizhi" }]);
+  });
+
+  it("会员 tab 分节:节头 + 资格徽标;locked 条目灰态禁选(title 说明);选中发原名", async () => {
+    const MEMBER: ModelInfo[] = [
+      { name: "m", default: true },
+      { name: "monkeycode-basic/glm@monkeycode#c1", model: "monkeycode-basic/glm", source: "monkeycode", owner: "public", default: false },
+      { name: "monkeycode-ultra/claude@monkeycode#c2", model: "monkeycode-ultra/claude", source: "monkeycode", owner: "public", locked: true, default: false },
+      { name: "团队甲", model: "team-x", source: "monkeycode", owner: "team", default: false },
+    ];
+    const { ops } = stubShell({ models: MEMBER });
+    render(<ChatView meta={META} />);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "m" }));
+    await userEvent.click(await screen.findByRole("tab", { name: "会员" }));
+    const menu = screen.getByRole("list", { name: "切换模型" });
+    // 档位/团队分节的节头恒显,徽标是资格说明
+    expect(within(menu).getByText("基础模型")).toBeTruthy();
+    expect(within(menu).getByText("免费使用")).toBeTruthy();
+    expect(within(menu).getByText("旗舰模型")).toBeTruthy();
+    expect(within(menu).getByText("旗舰会员免费")).toBeTruthy();
+    expect(within(menu).getByText("团队模型")).toBeTruthy();
+    // locked:超档条目留在档位节内,灰态禁选,title 讲解锁路径
+    const locked = within(menu).getByRole("button", { name: "claude" }) as HTMLButtonElement;
+    expect(locked.disabled).toBe(true);
+    expect(locked.title).toContain("当前会员档不可用");
+
+    await userEvent.click(within(menu).getByRole("button", { name: "glm" }));
+    expect(calls(ops, "session_set_model").map((o) => o.args?.payload)).toEqual([
+      { model: "monkeycode-basic/glm@monkeycode#c1" },
+    ]);
+  });
+
+  it("模型多(>6)出过滤框:按展示名过滤 tab 内条目,无命中给空态;单来源不出 tab 行", async () => {
+    const many: ModelInfo[] = Array.from({ length: 7 }, (_, i) => ({ name: `model-${i + 1}`, default: i === 0 }));
+    stubShell({ models: many });
+    render(<ChatView meta={META} />);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "m" }));
+    const input = await screen.findByRole("textbox", { name: "过滤模型…" });
+    expect(screen.queryByRole("tablist", { name: "模型来源" })).toBeNull(); // 全是手工条目 = 单来源
+    const menu = screen.getByRole("list", { name: "切换模型" });
+    expect(within(menu).getAllByRole("button")).toHaveLength(7);
+
+    await userEvent.type(input, "model-7");
+    expect(within(menu).getByRole("button", { name: "model-7" })).toBeTruthy();
+    expect(within(menu).queryByRole("button", { name: "model-1" })).toBeNull();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "不存在的");
+    expect(within(menu).getByText("无匹配模型")).toBeTruthy();
   });
 
   it("权限 pill:点击与 ⇧⇥ 互切;发送面 = session_set_mode,状态以帧回写为准", async () => {

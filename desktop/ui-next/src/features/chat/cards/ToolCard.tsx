@@ -247,7 +247,8 @@ export function ToolCard({
           </button>
         )}
       </div>
-      {findings && <FindingsCard report={findings} />}
+      {/* 发现行的 file:line 复用工作区文件链接通道(ChatView revealMarkdownLink) */}
+      {findings && <FindingsCard report={findings} onOpenFile={onLocalLink} />}
       {visibleFeed.length > 0 && (
         <div className="flex flex-col gap-1 px-3 pb-2 ps-6 text-xs">
           {visibleFeed.map((entry, i) => (

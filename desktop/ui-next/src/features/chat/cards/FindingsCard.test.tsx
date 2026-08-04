@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { FindingsCard, findingsReportFor, parseFindingsReport } from "./FindingsCard";
 
@@ -115,5 +116,28 @@ describe("发现列表渲染", () => {
   it("未知 outcome 枚举原样外显,不无声吞掉", () => {
     render(<FindingsCard report={{ findings: [{ file: "a.ts", summary: "x", outcome: "deferred" }] }} />);
     expect(screen.getByText("deferred")).toBeTruthy();
+  });
+
+  it("file:line 可点:传 onOpenFile 时定位是按钮,点击回调完整路径;不传保持纯文本", async () => {
+    const onOpenFile = vi.fn();
+    const { unmount } = render(
+      <FindingsCard
+        report={{ findings: [{ file: "src/deep/auth.ts", line: 42, summary: "短摘要", failureScenario: "崩" }] }}
+        onOpenFile={onOpenFile}
+      />,
+    );
+    // 行内展示仍是 文件名:行号,回调给的是完整路径(reveal 需要)
+    await userEvent.click(screen.getByRole("button", { name: "auth.ts:42" }));
+    expect(onOpenFile).toHaveBeenCalledWith("src/deep/auth.ts");
+    unmount();
+
+    render(<FindingsCard report={{ findings: [{ file: "src/deep/auth.ts", line: 42, summary: "短摘要" }] }} />);
+    expect(screen.queryByRole("button", { name: "auth.ts:42" })).toBeNull();
+    expect(screen.getByText("auth.ts:42")).toBeTruthy();
+  });
+
+  it("file 无值:即便传了 onOpenFile 也不渲染点击件", () => {
+    render(<FindingsCard report={{ findings: [{ file: "", summary: "只有摘要" }] }} onOpenFile={() => {}} />);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

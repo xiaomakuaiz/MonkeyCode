@@ -98,7 +98,7 @@ function outcomeBadge(outcome?: string): BadgeSpec | null {
   return outcome ? { key: null, raw: outcome, cls: "badge badge-ghost badge-xs" } : null;
 }
 
-function FindingRow({ finding }: { finding: ReviewFinding }) {
+function FindingRow({ finding, onOpenFile }: { finding: ReviewFinding; onOpenFile?: (path: string) => void }) {
   const { t } = useI18n();
   const title = finding.shortSummary || finding.summary;
   // 展开块只放行内没有的信息:完整一句话(与行内不同时)+ 失败场景
@@ -119,11 +119,28 @@ function FindingRow({ finding }: { finding: ReviewFinding }) {
       <span aria-hidden className={`status ${dot}`} />
       {verdict && <span className={verdict.cls}>{verdict.key ? t(verdict.key) : verdict.raw}</span>}
       <MarkdownInline source={title} className="min-w-0 flex-1" />
-      {location && (
-        <span title={finding.file + (finding.line ? `:${finding.line}` : "")} className="font-mono whitespace-nowrap text-base-content/50">
-          {location}
-        </span>
-      )}
+      {location &&
+        (onOpenFile ? (
+          // file:line 可点定位(旧 findingsCard.tsx onOpenFile 设计):
+          // 行可能在 <summary> 里,preventDefault/stopPropagation 保证这一
+          // 下只归定位,不顺手切换展开态
+          <button
+            type="button"
+            title={finding.file + (finding.line ? `:${finding.line}` : "")}
+            className="link link-hover font-mono whitespace-nowrap text-base-content/50"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenFile(finding.file);
+            }}
+          >
+            {location}
+          </button>
+        ) : (
+          <span title={finding.file + (finding.line ? `:${finding.line}` : "")} className="font-mono whitespace-nowrap text-base-content/50">
+            {location}
+          </span>
+        ))}
       {outcome && <span className={outcome.cls}>{outcome.key ? t(outcome.key) : outcome.raw}</span>}
     </>
   );
@@ -138,7 +155,15 @@ function FindingRow({ finding }: { finding: ReviewFinding }) {
   );
 }
 
-export function FindingsCard({ report }: { report: FindingsReport }) {
+export function FindingsCard({
+  report,
+  onOpenFile,
+}: {
+  report: FindingsReport;
+  /** file:line 点击定位(ChatView 的 revealMarkdownLink 经 ToolCard 透传);
+   * 缺省保持纯文本展示。 */
+  onOpenFile?: (path: string) => void;
+}) {
   const { t } = useI18n();
   if (report.findings.length === 0) {
     // 空态统一形态:图标 + 标题档,居中
@@ -152,7 +177,7 @@ export function FindingsCard({ report }: { report: FindingsReport }) {
   return (
     <div className="flex flex-col gap-1.5 px-3 pb-2">
       {report.findings.map((finding, i) => (
-        <FindingRow key={i} finding={finding} />
+        <FindingRow key={i} finding={finding} onOpenFile={onOpenFile} />
       ))}
     </div>
   );

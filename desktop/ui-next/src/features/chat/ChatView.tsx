@@ -6,8 +6,10 @@
 // - 会话滚动记忆:卸载/切会话写档「视口顶条目 + 条目内偏移 + pinned」,
 //   回来按锚点恢复(纯函数在 lib/util/scrollAnchor,几何可测);
 // - 「加载更早」前插保位记**元素**,提交后 layoutEffect 对齐回原视口位。
-// 大纲跳转:锚(data-user-seq)不在 DOM 时循环 loadEarlier 补页——用
-// effect 驱动(每页提交后重查),不赌 React 提交时序;上限重试防死循环。
+// 大纲跳转:锚(data-user-seq)不在 DOM 时按条目 offset 走 ensureLoaded
+// 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
+// 用短时重试兜(旧 chat.tsx jumpWithRetry 语义);大纲当前项 activeSeq 由
+// rAF 节流的滚动跟踪算出(lib/util/scrollAnchor.outlineActiveSeq)。
 import { Ellipsis, FolderOpen, X } from "lucide-react";
 import {
   useEffect,
@@ -29,7 +31,7 @@ import { repoChanges, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
-import { anchorScrollTop, findAnchor } from "@/lib/util/scrollAnchor";
+import { anchorScrollTop, findAnchor, outlineActiveSeq } from "@/lib/util/scrollAnchor";
 import { createImeGuard } from "@/lib/util/slash";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
@@ -42,7 +44,6 @@ import { useSessionFeed } from "./useSessionFeed";
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
 const RESTORE_POLLS = 15; // 锚点恢复的轮询校准次数(200ms 一次,3s 内收敛)
-const JUMP_MAX_PAGES = 80; // 大纲跳转补页上限(cursor 不前进/坏锚时不空转)
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
 
 // 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
@@ -63,7 +64,7 @@ export function ChatView({
   onDeleted?: () => void;
 }) {
   const { t } = useI18n();
-  const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier } = useSessionFeed(meta.id, epoch);
+  const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier, ensureLoaded } = useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
   const composer = useComposer(meta.id, state.running);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -172,6 +173,7 @@ export function ChatView({
     if (!el) return;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) pinnedRef.current = true;
     saveAnchor();
+    scheduleActive();
     // 滚动停止后布局仍会微调一次(不发 scroll 事件),停稳后补一次写档
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(saveAnchor, 600);
@@ -328,36 +330,74 @@ export function ChatView({
   }, [state.running, meta.id]);
   const entries = useMemo(() => outlineEntriesOf(outline, state.items), [outline, state.items]);
 
-  // ==== 大纲跳转:effect 驱动的补页循环 + 目标气泡闪光 ====
-  const [jumpSeq, setJumpSeq] = useState<number | null>(null);
+  // ==== 当前项跟踪:视口顶所在的提问(rAF 节流——流式期间每批帧都重算
+  // 会把点列刷成动画;判定纯函数在 lib/util/scrollAnchor,与跳转 INSET
+  // 同一条线) ====
+  const [activeSeq, setActiveSeq] = useState<number | null>(null);
+  const activeRaf = useRef(0);
+  const updateActive = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const seqTops = Array.from(el.querySelectorAll<HTMLElement>("[data-user-seq]"), (node) => ({
+      seq: Number(node.dataset.userSeq),
+      top: node.getBoundingClientRect().top,
+    })).filter((it) => Number.isFinite(it.seq));
+    setActiveSeq(outlineActiveSeq(seqTops, el.getBoundingClientRect().top));
+  };
+  const scheduleActive = () => {
+    if (activeRaf.current) return;
+    activeRaf.current = window.requestAnimationFrame(() => {
+      activeRaf.current = 0;
+      updateActive();
+    });
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(scheduleActive, [state.items]);
+  // 取消后必须把 id 清零:scheduleActive 以「非零 = 已排队」做节流,残留
+  // 旧 id 会让它永远短路(StrictMode 双挂载即触发,当前项从此不再更新)
+  useEffect(
+    () => () => {
+      window.cancelAnimationFrame(activeRaf.current);
+      activeRaf.current = 0;
+    },
+    [],
+  );
+
+  // ==== 大纲跳转:offset 精确补页 + 目标气泡闪光 ====
   const [flashSeq, setFlashSeq] = useState<number | null>(null);
-  const jumpTries = useRef(0);
   const flashTimer = useRef(0);
-  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
-  useEffect(() => {
-    if (jumpSeq === null) return;
-    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-user-seq="${jumpSeq}"]`);
-    if (node) {
-      finishRestore(); // 跳转接管滚动:进行中的锚点恢复轮询不许再拽回去
-      pinnedRef.current = false;
-      node.scrollIntoView?.({ block: "start" });
-      setJumpSeq(null);
-      setFlashSeq(jumpSeq);
+  const jumpTimer = useRef(0);
+  useEffect(
+    () => () => {
       window.clearTimeout(flashTimer.current);
-      flashTimer.current = window.setTimeout(() => setFlashSeq(null), FLASH_MS);
-      return;
-    }
-    if (!hasMore || jumpTries.current >= JUMP_MAX_PAGES) {
-      setJumpSeq(null); // 锚不存在(坏 seq/历史被清):放弃,不空转
-      return;
-    }
-    if (loadingEarlier) return; // 本页落地(items 变化)后 effect 重跑再查
-    jumpTries.current += 1;
-    void loadEarlier();
-  }, [jumpSeq, state.items, hasMore, loadingEarlier, loadEarlier]);
-  const onJump = (seq: number) => {
-    jumpTries.current = 0;
-    setJumpSeq(seq);
+      window.clearTimeout(jumpTimer.current);
+    },
+    [],
+  );
+  /** 定位到某次提问;锚还没渲染进 DOM 返回 false。 */
+  const jumpToSeq = (seq: number): boolean => {
+    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-user-seq="${seq}"]`);
+    if (!node) return false;
+    finishRestore(); // 跳转接管滚动:进行中的锚点恢复轮询不许再拽回去
+    pinnedRef.current = false;
+    node.scrollIntoView?.({ block: "start" });
+    setFlashSeq(seq);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashSeq(null), FLASH_MS);
+    return true;
+  };
+  // 补页后的锚要等 React 提交才进 DOM,短时重试兜时序(旧 chat.tsx
+  // jumpWithRetry 随迁);重试耗尽 = 坏 seq/历史被清,放弃不空转
+  const jumpWithRetry = (seq: number, tries = 12) => {
+    if (jumpToSeq(seq) || tries <= 0) return;
+    jumpTimer.current = window.setTimeout(() => jumpWithRetry(seq, tries - 1), 32);
+  };
+  const onJump = (seq: number, offset?: number) => {
+    if (jumpToSeq(seq)) return;
+    // 更早的提问还没加载:按它那一轮的 offset 精确补页再定位(session_history
+    // 以 offset 为终点);流内新条目无 offset(按理已在 DOM),只走重试兜底
+    if (offset !== undefined) void ensureLoaded(offset).then(() => jumpWithRetry(seq));
+    else jumpWithRetry(seq);
   };
 
   // ==== 拖拽附件:HTML5 事件(dragenter/leave 计数配对)+ Linux 壳原生事件 ====
@@ -642,7 +682,7 @@ export function ChatView({
 
       {/* 大纲挂在视图根(高度恒定的参照物),不挂日志视口:下方任务面板/
           排队条长高会压矮视口,居中点列跟着跳 */}
-      <OutlineNav entries={entries} onJump={onJump} />
+      <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
 
       <footer className="shrink-0 border-t border-base-300 p-3">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
