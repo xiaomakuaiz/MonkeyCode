@@ -2,10 +2,13 @@
 // 子代理进度窗(只显尾部若干条,完整过程在子会话);失败外显 out 首行;
 // report_findings 走结构化发现列表;锚定的待决审批内嵌卡底(独立大卡不渲染)。
 import { Pause } from "lucide-react";
+import { useState } from "react";
 
 import { MarkdownInline } from "@/components/markdown/Markdown";
+import { Lightbox, UploadImg } from "@/components/media/UploadImg";
 import { useI18n } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
+import { isImagePath } from "@/lib/ipc/uploads";
 import { toolResultText } from "@/lib/protocol/codec";
 import type { PermItem, SubEntry, ToolItem } from "@/lib/protocol/types";
 import { FindingsCard, findingsReportFor } from "./FindingsCard";
@@ -68,6 +71,7 @@ export function ToolCard({
   sessionId,
   sendFrame,
   onOpenChild,
+  uploadUrl,
 }: {
   item: ToolItem;
   /** 锚定到本卡的待决审批(permAnchors 判定):⏸ 顶掉状态点 + 底部内嵌
@@ -78,8 +82,12 @@ export function ToolCard({
   sendFrame?: FrameSender;
   /** 子代理卡「查看子会话」入口(item.childSessionId 存在时渲染) */
   onOpenChild?: (id: string) => void;
+  /** 工具产出图片的回读通道(截图/读图工具);缺省不渲染图片区 */
+  uploadUrl?: (path: string) => Promise<string>;
 }) {
   const { t } = useI18n();
+  const [zoom, setZoom] = useState<string | null>(null);
+  const images = uploadUrl ? (item.images ?? []).filter(isImagePath) : [];
   const duration = formatDuration(item.durationMs);
   const findings = findingsReportFor(item);
   const feed = item.status === "run" ? (item.feed ?? []).slice(-FEED_WINDOW) : [];
@@ -124,6 +132,26 @@ export function ToolCard({
         <div role="alert" title={item.result || item.out} className="truncate px-3 pb-2 text-xs text-error">
           {item.out}
         </div>
+      )}
+      {/* 工具产出图片(截图/读图):缩略图点击看大图;裂图防御在 UploadImg */}
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3 pb-2 ps-6">
+          {images.map((p) => (
+            <UploadImg
+              key={p}
+              load={() => uploadUrl!(p)}
+              alt={p}
+              title={p}
+              className="block max-h-32 max-w-44 cursor-zoom-in rounded-box"
+              onClick={() => setZoom(p)}
+            />
+          ))}
+        </div>
+      )}
+      {zoom && uploadUrl && (
+        <Lightbox alt={zoom} onClose={() => setZoom(null)}>
+          <UploadImg load={() => uploadUrl(zoom)} alt={zoom} className="max-h-[84vh] max-w-full" />
+        </Lightbox>
       )}
       {showDetail && (
         <details className="collapse-arrow collapse rounded-none border-t border-base-300">

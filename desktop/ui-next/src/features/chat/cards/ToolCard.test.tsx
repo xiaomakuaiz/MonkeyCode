@@ -134,3 +134,20 @@ describe("工具卡", () => {
     expect(screen.getByText("auth.ts:42")).toBeTruthy();
   });
 });
+
+describe("工具产出图片", () => {
+  it("有 uploadUrl:images 过滤图片路径渲染缩略图,点击开大图浮层", async () => {
+    const item = { kind: "tool", tcId: "t9", title: "浏览器截图", status: "ok", out: "", images: [".monkeycode/uploads/shot.png", "notes.txt"] } as ToolItem;
+    render(<ToolCard item={item} sessionId="s1" uploadUrl={() => Promise.resolve("data:image/png;base64,AAA")} />);
+    const img = await screen.findByRole("img", { name: ".monkeycode/uploads/shot.png" });
+    expect(screen.queryByRole("img", { name: "notes.txt" })).toBeNull();
+    await userEvent.click(img);
+    expect(await screen.findByRole("dialog", { name: ".monkeycode/uploads/shot.png" })).toBeTruthy();
+  });
+
+  it("无 uploadUrl:不渲染图片区", () => {
+    const item = { kind: "tool", tcId: "t9", title: "浏览器截图", status: "ok", out: "", images: [".monkeycode/uploads/shot.png"] } as ToolItem;
+    render(<ToolCard item={item} sessionId="s1" />);
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+});

@@ -117,21 +117,23 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   );
 }
 
-function renderItem(
-  item: ChatItem,
-  sessionId: string,
-  anchors: Map<string, PermItem>,
-  flashSeq?: number,
-  sendFrame?: FrameSender,
-  readonly?: boolean,
-  onOpenChildSession?: (id: string) => void,
-  uploadUrl?: (path: string) => Promise<string>,
-) {
+interface RenderOpts {
+  sessionId: string;
+  anchors: Map<string, PermItem>;
+  flashSeq?: number;
+  sendFrame?: FrameSender;
+  readonly?: boolean;
+  onOpenChildSession?: (id: string) => void;
+  uploadUrl?: (path: string) => Promise<string>;
+  onLocalLink?: (path: string) => void;
+}
+
+function renderItem(item: ChatItem, o: RenderOpts) {
   switch (item.kind) {
     case "user":
-      return <UserBubble item={item} flash={item.seq !== undefined && item.seq === flashSeq} uploadUrl={uploadUrl} />;
+      return <UserBubble item={item} flash={item.seq !== undefined && item.seq === o.flashSeq} uploadUrl={o.uploadUrl} />;
     case "agent":
-      return <Markdown source={item.text} />;
+      return <Markdown source={item.text} localImageUrl={o.uploadUrl} onLocalLink={o.onLocalLink} />;
     case "thought":
       return <ThoughtBlock item={item} />;
     case "tool":
@@ -139,16 +141,17 @@ function renderItem(
       return (
         <ToolCard
           item={item}
-          perm={readonly ? undefined : anchors.get(item.tcId)}
-          sessionId={sessionId}
-          sendFrame={sendFrame}
-          onOpenChild={onOpenChildSession}
+          perm={o.readonly ? undefined : o.anchors.get(item.tcId)}
+          sessionId={o.sessionId}
+          sendFrame={o.sendFrame}
+          onOpenChild={o.onOpenChildSession}
+          uploadUrl={o.uploadUrl}
         />
       );
     case "perm":
-      return <PermCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
+      return <PermCard item={item} sessionId={o.sessionId} sendFrame={o.sendFrame} readonly={o.readonly} />;
     case "ask":
-      return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
+      return <AskCard item={item} sessionId={o.sessionId} sendFrame={o.sendFrame} readonly={o.readonly} />;
     case "sys":
       return <div className="badge badge-ghost badge-sm self-center text-base-content/40">{item.text}</div>;
   }
@@ -162,6 +165,7 @@ export function LogList({
   readonly,
   onOpenChildSession,
   uploadUrl,
+  onLocalLink,
 }: {
   state: ChatState;
   sessionId: string;
@@ -176,6 +180,8 @@ export function LogList({
   onOpenChildSession?: (id: string) => void;
   /** 本地附件回读通道(路径 → data URL);缺省 = 不剥附件行、正文原样。 */
   uploadUrl?: (path: string) => Promise<string>;
+  /** markdown 工作区文件链接点击代理(reveal);缺省点击无动作。 */
+  onLocalLink?: (path: string) => void;
 }) {
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
@@ -200,7 +206,7 @@ export function LogList({
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
           // (包裹层是块级时 align-self 无效,居中丢失)
           <div key={itemKey(state, i)} className={`flex flex-col${gapClass}`}>
-            {renderItem(item, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl)}
+            {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink })}
           </div>
         );
       })}

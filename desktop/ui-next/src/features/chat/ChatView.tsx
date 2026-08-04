@@ -17,8 +17,10 @@ import {
 import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
+import { repoReveal } from "@/lib/ipc/repo";
 import { sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
+import { workspaceRelativePath } from "@/lib/util/markdownPaths";
 import { createImeGuard } from "@/lib/util/slash";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
@@ -69,6 +71,19 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
     pinnedRef.current = true;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+  };
+
+  // markdown 工作区文件链接:判界(工作区外拒绝)→ repo_reveal 文件管理器
+  // 定位;失败走 composer 提示条(§3:会话内操作失败的法定位置)
+  const revealMarkdownLink = (path: string) => {
+    const rel = workspaceRelativePath(path, meta.workdir);
+    if (rel === null) {
+      composer.notifyError(t("chat.revealOutside"));
+      return;
+    }
+    void repoReveal(meta.id, rel).catch((e: unknown) => {
+      composer.notifyError(t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }));
+    });
   };
 
   // ==== 标题重命名(D4):h1 双击进输入态。提交只发 sessionPatch,不乐观
@@ -310,6 +325,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
             flashSeq={flashSeq ?? undefined}
             onOpenChildSession={setChildId}
             uploadUrl={(p) => uploadFileURL(meta.id, p)}
+            onLocalLink={revealMarkdownLink}
           />
         </div>
       </div>
