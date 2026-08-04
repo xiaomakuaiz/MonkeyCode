@@ -50,7 +50,9 @@ describe("CloudTaskList", () => {
     expect(history.open).toBe(true);
     expect(screen.getByText("旧任务甲")).toBeTruthy(); // title 缺省回退 summary
     expect(within(rowOf("旧任务乙")).getByText("运行出错")).toBeTruthy(); // 再回退 content;error 着色词
-    expect(within(rowOf("旧任务甲")).getByText("已完成")).toBeTruthy();
+    // 安静行:终态无尾注,状态词收进 tooltip
+    expect(within(rowOf("旧任务甲")).queryByText("已完成")).toBeNull();
+    expect(rowOf("旧任务甲").title).toContain("已完成");
     await userEvent.click(screen.getByText("旧任务甲"));
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "b" }));
     // 开合态落契约键

@@ -1,7 +1,8 @@
 // 侧栏云端空间的任务列表。信息布局参考旧 UI(进行中区 / 「历史任务 · N」
 // 小节 / 「项目」区懒拉分组 + 快速开始),组件一律 daisyUI 原生形态:
 // menu(menu-title 区标签、details 折叠)、status 状态点、loading。
-// 行 = 单行:标题 + 状态尾注(要紧态着色,已完成低调);行菜单 = 右键
+// 行 = 单行(安静行同构,定案 2026-08-04):标题 + 尾注(仅要紧态着色;
+// 终态无点无尾注,状态词进 tooltip);行菜单 = 右键
 // (终止任务仅运行中 / 删除,均二段确认)。历史开合态持久化
 // mc.cloudHistoryOpen(旧 UI 契约键);query 非空过滤并强制展开(未拉过
 // 的组顺势懒拉)。导出组件与数据 hook,Sidebar 接线由 App 侧完成。
@@ -120,8 +121,8 @@ export function cloudTaskLabel(task: CloudTask, fallback: string): string {
 
 type T = ReturnType<typeof useI18n>["t"];
 
-/** 行状态尾注(旧 UI 信息布局):运行/出错着色,已完成低调。 */
-function cloudState(status: string | undefined, t: T): { text: string; cls: string } {
+/** 行状态尾注(安静行同构):仅要紧态给着色词,终态无尾注(状态词进 tooltip)。 */
+function cloudState(status: string | undefined, t: T): { text: string; cls: string } | null {
   switch (status) {
     case "pending":
       return { text: t("cloud.status.pending"), cls: "text-warning" };
@@ -129,10 +130,8 @@ function cloudState(status: string | undefined, t: T): { text: string; cls: stri
       return { text: t("cloud.status.processing"), cls: "text-primary" };
     case "error":
       return { text: t("cloud.status.error"), cls: "text-error" };
-    case "finished":
-      return { text: t("cloud.status.finished"), cls: "text-base-content/50" };
     default:
-      return { text: t("cloud.list.untitled"), cls: "text-base-content/35" };
+      return null;
   }
 }
 
@@ -140,7 +139,8 @@ function StatusDot({ status }: { status?: string }) {
   if (status === "processing") return <span aria-hidden className="status status-primary animate-pulse" />;
   if (status === "pending") return <span aria-hidden className="status status-warning animate-pulse" />;
   if (status === "error") return <span aria-hidden className="status status-error" />;
-  return <span aria-hidden className="status opacity-30" />;
+  // 终态行:状态槽只占位不显形(与本地行同构)
+  return <span aria-hidden className="status invisible" />;
 }
 
 function TaskRow({
@@ -159,6 +159,8 @@ function TaskRow({
   const { t } = useI18n();
   const label = cloudTaskLabel(task, t("cloud.list.untitled"));
   const st = cloudState(task.status, t);
+  // tooltip 保留状态词:尾注被安静掉的终态在这里仍可查
+  const stateWord = st?.text ?? (task.status === "finished" ? t("cloud.status.finished") : "");
   const running = ACTIVE.has(task.status ?? "");
   const menuItems: MenuItem[] = [
     ...(running ? [{ label: t("cloud.view.stop"), confirm: t("cloud.view.stopConfirm"), danger: true, run: () => onStop(task) }] : []),
@@ -168,7 +170,7 @@ function TaskRow({
     <li>
       <a
         className={`flex min-h-8 min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${task.id === currentId ? "menu-active" : ""}`}
-        title={`${label}\n${st.text}\n${t("sidebar.row.hint")}`}
+        title={`${label}\n${stateWord ? `${stateWord}\n` : ""}${t("sidebar.row.hint")}`}
         onClick={() => onSelect(task)}
         onContextMenu={(e: MouseEvent) => {
           e.preventDefault();
@@ -178,7 +180,7 @@ function TaskRow({
       >
         <StatusDot status={task.status} />
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span className={`max-w-16 shrink-0 truncate text-xs ${st.cls}`}>{st.text}</span>
+        {st && <span className={`max-w-16 shrink-0 truncate text-xs ${st.cls}`}>{st.text}</span>}
       </a>
     </li>
   );
@@ -310,7 +312,8 @@ export function CloudTaskList({
     const state = groupTasks[key];
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
-      <ul className="min-w-0 before:hidden">
+      // 组内不缩进(与本地组同构):层级感靠组间留白,不靠嵌套缩进
+      <ul className="ms-0 min-w-0 ps-0 before:hidden">
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
@@ -327,10 +330,12 @@ export function CloudTaskList({
     );
   };
 
-  const projectGroup = (key: string, name: string, projectId: string | null) => (
-    <li key={key}>
+  const projectGroup = (key: string, name: string, projectId: string | null) => {
+    const isOpen = forceOpen || openGroups.has(key);
+    return (
+    <li key={key} className="mt-1 first:mt-0">
       <details
-        open={forceOpen || openGroups.has(key)}
+        open={isOpen}
         onToggle={(e) => {
           if (forceOpen) return;
           const open = (e.target as HTMLDetailsElement).open;
@@ -344,17 +349,21 @@ export function CloudTaskList({
           if (open) loadGroup(key, projectId);
         }}
       >
-        <summary title={name}>
-          <Folder size={13} strokeWidth={1.75} className="shrink-0 text-base-content/50" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-base-content/70">{name}</span>
+        {/* 区块标签形态(与本地组头同构):无图标、无折叠箭头,开合只靠点击组头 */}
+        <summary title={name} className="flex items-center after:hidden">
+          <Folder size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-base-content/50">
+            {name}
+          </span>
         </summary>
         {groupBody(key)}
       </details>
     </li>
-  );
+    );
+  };
 
   return (
-    <ul className="menu menu-sm w-full flex-nowrap p-0">
+    <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
       {activeRows.length > 0 && (
         <>
           <li className="menu-title">{t("cloud.list.active")}</li>

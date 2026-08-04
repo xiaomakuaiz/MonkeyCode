@@ -48,21 +48,26 @@
 - 横向滚动只允许出现在**专用滚动区**:代码块(pre)、diff/代码预览、markdown
   表格包裹层(.md-scroll)、xterm。
 
-## 6. 侧栏内部结构(三段式;信息布局参考旧 UI,组件一律 daisyUI)
+## 6. 侧栏内部结构(四段式;信息布局参考旧 UI,组件一律 daisyUI)
 ```
 头部 h-13(固定):品牌 + ＋新建(云端加刷新)
+概览块(固定,2026-08-04 用户定案):空间标题 + 一句描述 + 统计行
+  (本地 = N 项目/N 任务,chat = N 对话;运行中 primary/等待确认 warning
+   着色且仅 >0 时出现;云端数据在 CloudTaskList 内,只给标题+描述)
 列表(flex-1,唯一滚动区,纵滚横截):menu menu-sm + details 折叠
 footer(固定钉底):更新提示等常驻条,永不随列表滚动
 ```
 > 搜索行已撤(用户指令 2026-08-04「搜索先去掉」);回归时恢复 input 行 +
 > query 过滤 + 全折叠段强制展开(CloudTaskList 仍保留 query prop)。
 
-### 6.1 行信息布局(用户定案 2026-08-04;载体 = menu 的 li>a)
-- **行一律单行**:状态点 + 主文案(**摘要优先**,缺席回落标题;标题进
+### 6.1 行信息布局(用户定案 2026-08-04,二次定案「区块标签+安静行」;
+载体 = menu 的 li>a)
+- **行一律单行**:状态槽 + 主文案(**摘要优先**,缺席回落标题;标题进
   tooltip)+ 状态尾注殿后;云端行同构(标题‖摘要 + 状态尾注)。
-- 状态尾注(text-xs,max-w-16 截断,tabular):要紧态着色词(等待确认
-  warning / 运行中 primary / 运行出错 error),静默态低调(N 轮/可继续/
-  尚未开始/已停止/已完成,/50 与 /35 档);左端 status 状态点同色呼应。
+- **安静行**:静默态(N 轮/可继续/未开始/已完成)**无点无尾注**——状态槽
+  常驻 invisible 占位(活↔静切换不位移,合 §6.2 hover 铁律),轮次/终态
+  词收进行 tooltip;要紧态才显形:彩点 + 着色尾注(等待确认 warning /
+  运行中 primary / 运行出错 error / 未读 attention warning)。
   **不展示时间**(用户定案)。
 - 选中 = menu-active;attention(D3 未读)= warning 状态点 + bg-warning/10
   行淡底(功能性状态色,§8 白名单)。
@@ -71,10 +76,17 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
   行 tooltip 给 标题/摘要/目录/「右键管理」。
 
 ### 6.2 分组与折叠(daisyUI details 原生折叠)
-- 项目组头 = details summary(daisyUI grid 列:图标/自动伸展名/尾部):
-  **文件夹图标** + 名称(text-xs font-medium /70)+ waiting 徽标 +
-  快捷「+」殿后(常驻占位 hover 显形);组头可右键(在此新建任务/归档
-  项目);HTML5 拖拽排序,dragover 落点 border-t 指示线。
+- 项目组头 = details summary,**区块标签形态**(定案 2026-08-04 二次):
+  summary 用 flex 覆写默认 grid,项目图标(Folder 12px /40)+ 名称
+  (text-[11px] font-medium /50;**保留原大小写**——目录名是标识符,
+  不做 uppercase,用户定案 2026-08-04)flex-1 伸展 + waiting 徽标 +
+  快捷「+」殿后(常驻占位 hover 显形);**原生折叠箭头去掉**(after:hidden,
+  用户定案 2026-08-04,开合只靠点击组头);同名项目不做展示名消歧
+  (「父 · 名」前缀已撤,用户定案 2026-08-04,靠 tooltip 完整路径区分);
+  组头可右键(在此新建任务/归档项目);HTML5 拖拽排序,dragover 落点
+  border-t 指示线。
+- **组内不缩进**(嵌套 ul 加 ms-0 ps-0):层级感靠组间留白(组 li
+  mt-2 first:mt-0)+ 行内状态槽错位,不靠缩进;云端项目组同构。
 - 归档结构(旧 UI 同构):项目内「已归档任务 · N」小节;底部「已归档项目
   · N」;chat 底部「已归档会话 · N」。云端:「进行中」(menu-title 区标签)
   →「历史任务 · N」小节 →「项目」区(懒拉分组 + 快速开始)。
@@ -87,8 +99,10 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
 - **hover 显隐铁律**:悬停才出现的元素不许插入布局(hidden→flex 会挤动
   同行内容形成抖动);只许 invisible→visible(常驻占位)或绝对定位。
 - **menu 截断铁律**:daisyUI `.menu` 默认 `flex-flow: column wrap` + 自带
-  nowrap——wrap 列的行宽跟内容走,truncate 不触发。列表级 menu 一律
-  `w-full flex-nowrap`,行内文字走 min-w-0+truncate 链。
+  nowrap——wrap 列的行宽跟内容走,truncate 不触发。**且 `.menu li` 自身
+  也是 `column wrap`**(2026-08-04 溢出事故根因:只改顶层 ul 管不到行,
+  嵌套行照样冲出行底)。列表级 menu 一律
+  `w-full flex-nowrap [&_li]:flex-nowrap`,行内文字走 min-w-0+truncate 链。
 
 ## 7. 拖拽区铁律(mac/Windows 自绘 chrome)
 - Tauri 按**事件目标自身**是否带 `data-tauri-drag-region` 判定,**不继承**:

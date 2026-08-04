@@ -1,10 +1,11 @@
 // 侧栏:三空间(本地/云端/对话)+ 会话列表。
 // 分层约定(tasks/lessons.md 2026-08-04):
 // - 壳布局不动:h-13 品牌头(LAYOUT.md §2)→ 列表滚动区 → footer;
-// - 信息布局(用户定案):行单行 = 状态点 + 摘要‖标题 + 状态尾注殿后
-//   (要紧态着色,静默态给轮次/可继续);组头 = 文件夹图标 + 项目名 +
-//   等待徽标 + 快捷「+」殿后;项目内「已归档任务 · N」小节、底部
-//   「已归档项目 · N」;
+// - 信息布局(用户定案 2026-08-04「区块标签+安静行」):行单行 = 状态槽
+//   (常驻占位,要紧态才显形)+ 摘要‖标题 + 尾注(仅要紧态着色词;静默行
+//   无点无尾注,轮次进 tooltip);组头 = 区块小标签(项目图标 + 原大小写
+//   名称,同名靠 tooltip 路径区分)+ 等待徽标 + 快捷「+」殿后;项目内「已归档任务
+//   · N」小节、底部「已归档项目 · N」;
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
@@ -19,6 +20,7 @@ import { useI18n } from "@/lib/i18n";
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import {
   groupSessions,
+  projectKey,
   readArchivedProjects,
   readCollapsedGroups,
   readProjectOrder,
@@ -50,20 +52,16 @@ function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean
   if (attention) return <span aria-hidden className="status status-warning" />;
   if (meta.status === "running") return <span aria-hidden className="status status-primary animate-pulse" />;
   if (meta.status === "error") return <span aria-hidden className="status status-error" />;
-  return <span aria-hidden className="status opacity-30" />;
+  // 静默行:状态槽只占位不显形(活↔静切换不位移;一眼只看到标题)
+  return <span aria-hidden className="status invisible" />;
 }
 
-/** 行状态尾注(旧 UI 信息布局):要紧态着色词,静默态给轮次/可继续。 */
-function rowTrailing(meta: SessionMeta, t: T): { text: string; cls: string } {
+/** 行状态尾注(安静行定案):仅要紧态给着色词,静默态无尾注(轮次进 tooltip)。 */
+function rowTrailing(meta: SessionMeta, t: T): { text: string; cls: string } | null {
   if (meta.waiting_ask) return { text: t("status.waitingAsk"), cls: "text-warning" };
   if (meta.status === "running") return { text: t("status.running"), cls: "text-primary" };
   if (meta.status === "error") return { text: t("status.error"), cls: "text-error" };
-  if (meta.status === "interrupted") return { text: t("status.interrupted"), cls: "text-base-content/50" };
-  const turns = meta.turns > 0 ? t("status.turns", { n: String(Math.trunc(meta.turns)) }) : "";
-  if (turns) return { text: turns, cls: "text-base-content/50" };
-  return meta.status === "idle" || meta.status === "finished"
-    ? { text: t("status.idle"), cls: "text-base-content/50" }
-    : { text: t("status.notStarted"), cls: "text-base-content/35" };
+  return null;
 }
 
 interface RowPlumbing {
@@ -110,6 +108,7 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
   // 单行(用户定案):有摘要给摘要(随对话演进,比标题达意),缺席回落标题
   const primary = meta.summary || meta.title;
   const trailing = rowTrailing(meta, t);
+  const turns = meta.turns > 0 ? t("status.turns", { n: String(Math.trunc(meta.turns)) }) : "";
   const menuItems: MenuItem[] = [
     { label: t("sidebar.row.rename"), run: () => p.onRenameStart(meta.id) },
     { label: meta.archived ? t("sidebar.row.unarchive") : t("sidebar.row.archive"), run: () => p.actions.onToggleArchive(meta) },
@@ -120,7 +119,7 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
       <a
         className={`flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${meta.id === p.currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
         data-attention={attention ? "" : undefined}
-        title={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${t("sidebar.row.hint")}`}
+        title={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
         onClick={() => p.actions.onSelect(meta)}
         onContextMenu={(e: MouseEvent) => {
           e.preventDefault();
@@ -130,7 +129,7 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
       >
         <StatusDot meta={meta} attention={attention} />
         <span className="min-w-0 flex-1 truncate">{primary}</span>
-        <span className={`max-w-16 shrink-0 truncate text-xs tabular-nums ${trailing.cls}`}>{trailing.text}</span>
+        {trailing && <span className={`max-w-16 shrink-0 truncate text-xs ${trailing.cls}`}>{trailing.text}</span>}
       </a>
     </li>
   );
@@ -179,13 +178,15 @@ function ProjectDetails({
     },
   ];
   return (
-    <li>
+    <li className="mt-2 first:mt-0">
       <details
         open={!collapsed}
         onToggle={(e) => onToggleCollapsed(group.key, (e.target as HTMLDetailsElement).open)}
       >
+        {/* 区块标签形态:summary 由 grid 覆写为 flex(名称伸展、徽标/＋殿后);
+            原生折叠箭头整个去掉(用户定案 2026-08-04),开合只靠点击组头 */}
         <summary
-          className={`group ${dropTarget ? "border-t-2 border-primary" : ""}`}
+          className={`group flex items-center after:hidden ${dropTarget ? "border-t-2 border-primary" : ""}`}
           title={[group.key, t("sidebar.project.hint"), drag ? t("sidebar.project.dragHint") : ""].filter(Boolean).join("\n")}
           draggable={!!drag}
           onDragStart={() => drag?.onDragStart(group.key)}
@@ -205,9 +206,10 @@ function ProjectDetails({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
         >
-          <Folder size={13} strokeWidth={1.75} className="shrink-0 text-base-content/50" aria-hidden />
-          {/* menu 组头是 grid(图标/自动伸展列/尾部),名字占第二列自动撑满,+ 自然殿后 */}
-          <span className="min-w-0 truncate text-xs font-medium text-base-content/70">{group.name}</span>
+          <Folder size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-base-content/50">
+            {group.name}
+          </span>
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           {/* 快捷钮常驻占位、hover 只切可见性:插入式显隐会挤动项目名,鼠标一进一出就抖 */}
           {!archivedProject && (
@@ -226,7 +228,8 @@ function ProjectDetails({
             </button>
           )}
         </summary>
-        <ul className="min-w-0 before:hidden">
+        {/* 组内不缩进:层级感靠组间留白 + 行内状态槽的天然错位,不靠嵌套缩进 */}
+        <ul className="ms-0 min-w-0 ps-0 before:hidden">
           {rows(group.sessions, p)}
           {group.archivedSessions.length > 0 && (
             <li>
@@ -272,6 +275,53 @@ function FoldSection({
         <ul className="min-w-0 before:hidden">{children}</ul>
       </details>
     </li>
+  );
+}
+
+/** 概览块(固定,品牌头之下、列表之上):空间标题 + 一句描述 + 统计。
+ *  统计只给现况:总量低调,运行中/等待确认着色浮出(与行状态词同色语);
+ *  云端统计数据在 CloudTaskList 内部,此处只给标题与描述。 */
+function Overview({ space, sessions }: { space: Space; sessions: SessionMeta[] }) {
+  const { t } = useI18n();
+  const title = t(space === "cloud" ? "rail.cloud" : space === "chat" ? "rail.chat" : "rail.local");
+  const desc = t(
+    space === "cloud"
+      ? "sidebar.overview.cloud.desc"
+      : space === "chat"
+        ? "sidebar.overview.chat.desc"
+        : "sidebar.overview.local.desc",
+  );
+  const pool = sessions
+    .filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat"))
+    .filter((m) => !m.archived);
+  const stats: { text: string; cls?: string }[] = [];
+  if (space === "local") {
+    const projects = new Set(pool.map((m) => projectKey(m.workdir))).size;
+    stats.push({ text: t("sidebar.overview.projects", { n: String(projects) }) });
+    stats.push({ text: t("sidebar.overview.tasks", { n: String(pool.length) }) });
+  } else if (space === "chat") {
+    stats.push({ text: t("sidebar.overview.chats", { n: String(pool.length) }) });
+  }
+  if (space !== "cloud") {
+    const running = pool.filter((m) => m.status === "running").length;
+    const waiting = pool.filter((m) => m.waiting_ask).length;
+    if (running > 0) stats.push({ text: t("sidebar.overview.running", { n: String(running) }), cls: "text-primary" });
+    if (waiting > 0) stats.push({ text: t("sidebar.overview.waiting", { n: String(waiting) }), cls: "text-warning" });
+  }
+  return (
+    <div className="shrink-0 px-5 pt-3 pb-1">
+      <div className="text-xs font-semibold">{title}</div>
+      <div className="mt-0.5 text-[11px] leading-relaxed text-base-content/45">{desc}</div>
+      {stats.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] tabular-nums text-base-content/60">
+          {stats.map((s) => (
+            <span key={s.text} className={s.cls}>
+              {s.text}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -385,7 +435,7 @@ export function Sidebar({
       const active = pool.filter((m) => !m.archived);
       const archived = pool.filter((m) => m.archived);
       return (
-        <ul className="menu menu-sm w-full flex-nowrap p-0">
+        <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
           {rows(active, p)}
           {archived.length > 0 && (
             <FoldSection label={t("sidebar.archivedChats", { n: String(archived.length) })} foldKey="mc.archivedOpen">
@@ -415,7 +465,7 @@ export function Sidebar({
       },
     };
     return (
-      <ul className="menu menu-sm w-full flex-nowrap p-0">
+      <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
         {grouped.projects.map((group) => (
           <ProjectDetails
             key={group.key}
@@ -482,7 +532,8 @@ export function Sidebar({
           <Plus size={14} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      {/* 三段式(LAYOUT.md):头部固定 → 列表 = 唯一滚动区 → footer 钉底 */}
+      {/* 四段式(LAYOUT.md):头部固定 → 概览块固定 → 列表 = 唯一滚动区 → footer 钉底 */}
+      <Overview space={space} sessions={sessions} />
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">{body()}</div>
       <div className="shrink-0 empty:hidden">
         <UpdateFooter />

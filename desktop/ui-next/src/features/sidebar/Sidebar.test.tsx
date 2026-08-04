@@ -1,5 +1,5 @@
-// 侧栏:壳布局(h-13 品牌头/滚动列表)+ 信息布局(单行摘要优先、
-// 状态尾注殿后、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
+// 侧栏:壳布局(h-13 品牌头/滚动列表)+ 信息布局(单行摘要优先、安静行:
+// 尾注仅要紧态、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
 // 交互:行右键菜单、行内重命名、组头快捷新建、折叠契约键。
 // (搜索行按用户指令暂撤,回归时补测:query 过滤 + 全折叠段强制展开)
 import { fireEvent, render, screen, within } from "@testing-library/react";
@@ -62,10 +62,22 @@ describe("侧栏(local 空间)", () => {
     expect(acts.onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "修复登录" }));
   });
 
-  it("状态尾注殿后:等待确认着色,静默态给轮次", () => {
+  it("概览块:空间标题 + 描述 + 统计(归档不计;等待确认仅 >0 时着色出现)", () => {
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    expect(screen.getByText("本地会话")).toBeTruthy();
+    expect(screen.getByText("按项目组织的本地 Agent 任务")).toBeTruthy();
+    expect(screen.getByText("1 项目")).toBeTruthy(); // beta 只剩归档任务,不计
+    expect(screen.getByText("2 任务")).toBeTruthy();
+    expect(screen.getByText("1 等待确认")).toBeTruthy();
+    expect(screen.queryByText(/运行中/)).toBeNull(); // 无运行中则不出现
+  });
+
+  it("状态尾注只给要紧态:等待确认着色;静默行无尾注,轮次收进 tooltip", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(within(rowOf("重构侧栏")).getByText("等待确认")).toBeTruthy();
-    expect(within(rowOf("修复了闪退,补了用例")).getByText("3 轮")).toBeTruthy();
+    const quiet = rowOf("修复了闪退,补了用例");
+    expect(within(quiet).queryByText("3 轮")).toBeNull();
+    expect(quiet.title).toContain("3 轮");
   });
 
   it("归档任务收进项目内「已归档任务 · N」小节(默认收起,点开并落契约键);chat 会话不出现", async () => {
