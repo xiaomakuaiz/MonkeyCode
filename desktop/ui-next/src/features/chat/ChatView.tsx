@@ -285,7 +285,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
           以内嵌条挂在 header 之下,恢复即消 */}
       {conn && !conn.connected && (
-        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs">
+        <div role="status" className="alert alert-warning alert-soft shrink-0 rounded-none py-1.5 text-xs">
           <span aria-hidden className="status status-warning status-xs animate-pulse" />
           <span className="min-w-0 flex-1 truncate" title={conn.text}>{conn.text}</span>
         </div>

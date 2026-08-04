@@ -70,10 +70,7 @@ export function Brand({ logo = false }: { logo?: boolean }) {
       <span data-tauri-drag-region="" className="shrink-0 text-xs font-bold tracking-tight text-base-content/80">
         MonkeyCode
       </span>
-      <span
-        data-tauri-drag-region=""
-        className="shrink-0 rounded bg-primary/10 px-1.5 text-[10px] leading-4 font-bold tracking-wide text-primary"
-      >
+      <span data-tauri-drag-region="" className="badge badge-soft badge-primary badge-xs shrink-0 font-bold">
         {BRAND_BADGE}
       </span>
     </>
