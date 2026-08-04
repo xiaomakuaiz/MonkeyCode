@@ -3,7 +3,7 @@
 // 状态机的行为契约在 lib/cloud/stream.test.ts,这里只验编排与渲染)。
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { b64decode, b64encode } from "@/lib/protocol/codec";
 import { CloudTaskView } from "./CloudTaskView";
@@ -196,6 +196,17 @@ describe("CloudTaskView", () => {
     expect(screen.getByRole("button", { name: "刷新" })).toBeTruthy(); // CloudFiles 头部已挂载
     await userEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+
+    // 重开后 Esc(window capture)也能关,且截断传播——审批热键(esc = deny
+    // 不可逆)同挂 window,这一下按键绝不能双消费(与 FilesDrawer 同契约)
+    await userEvent.click(btn);
+    expect(screen.getByRole("button", { name: "刷新" })).toBeTruthy();
+    const leaked = vi.fn();
+    window.addEventListener("keydown", leaked);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+    expect(leaked).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", leaked);
   });
 
   it("云端文件:vmId 未就绪时按钮禁用", async () => {

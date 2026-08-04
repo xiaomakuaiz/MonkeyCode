@@ -96,7 +96,7 @@ export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void
   const backdrop = document.createElement("div");
   backdrop.className = "fixed inset-0 z-40";
   const menu = document.createElement("ul");
-  menu.className = "menu menu-sm bg-base-100 border-base-300 rounded-box fixed z-50 w-36 border shadow-md";
+  menu.className = "menu menu-sm bg-base-100 rounded-box fixed z-50 w-36 shadow-sm";
   for (const it of items) {
     const li = document.createElement("li");
     const btn = document.createElement("button");

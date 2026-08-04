@@ -7,10 +7,7 @@
 :root {
   --termBg: #1c1d20; /* 终端底色(xterm background + 卡片面) */
   --termTx: #d6d7d2; /* 终端前景(xterm foreground) */
-  --termTx2: #9a9b96; /* 状态覆盖层/次级文字 */
-  --termHdr: #26272b; /* 终端卡头部条 */
-  --termBd: #34353a; /* 终端卡内分隔线 */
-  --termAcc: #34d399; /* 头部状态点 */
+  --termTx2: #9a9b96; /* 状态覆盖层文字(CloudTerminal 深色面上的次级字) */
 }
 
 /* xterm 自绘层的底色对齐令牌(滚动区默认透明,深色卡内会露出白底)。 */

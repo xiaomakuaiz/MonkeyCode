@@ -250,7 +250,7 @@ export function FilesDrawer({
 
   return (
     <>
-      <div aria-hidden className={`fixed ${topClass} inset-x-0 bottom-0 z-30 bg-black/30`} onClick={onClose} />
+      <div aria-hidden className={`fixed ${topClass} inset-x-0 bottom-0 z-30 bg-base-content/20`} onClick={onClose} />
       <section
         aria-label={t("files.label")}
         style={{ width }}

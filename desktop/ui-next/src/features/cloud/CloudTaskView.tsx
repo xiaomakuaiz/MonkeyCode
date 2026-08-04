@@ -69,6 +69,20 @@ export function CloudTaskView({
   const [termOpen, setTermOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
 
+  // Esc 关文件抽屉(window capture,与 FilesDrawer 同法):浮层优先,这一下
+  // Esc 已被抽屉消费必须立即截断——window 上还挂着审批热键(app/shortcuts.ts,
+  // esc = deny 不可逆),同一下按键绝不能"关抽屉 + 拒绝审批"双消费
+  useEffect(() => {
+    if (!filesOpen) return;
+    const onEsc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      setFilesOpen(false);
+    };
+    window.addEventListener("keydown", onEsc, true);
+    return () => window.removeEventListener("keydown", onEsc, true);
+  }, [filesOpen]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
@@ -208,7 +222,7 @@ export function CloudTaskView({
         {!h.ended && (
           <button
             type="button"
-            className={`btn btn-xs ${confirmingStop ? "btn-error" : "btn-ghost text-error"}`}
+            className={`btn btn-xs ${confirmingStop ? "btn-error" : "btn-ghost"}`}
             title={t("cloud.view.stopHint")}
             onBlur={() => setConfirmingStop(false)}
             onClick={() => {
@@ -262,31 +276,33 @@ export function CloudTaskView({
       {/* 大纲挂在视图根(高度恒定的参照物),不挂日志视口(与 ChatView 同理) */}
       {!pending && <OutlineNav entries={entries} onJump={onJumpOutline} />}
 
-      {/* 云端文件:右滑面板(CloudFiles 自带头部与关闭;下载走全局 downloads) */}
+      {/* 云端文件:右滑抽屉,受控开合手法与 FilesDrawer 统一(scrim 点击关 +
+          Esc 关,见上方 effect);面板挂在主区内(absolute,参照 relative main),
+          CloudFiles 自带头部与关闭;下载走全局 downloads */}
       {filesOpen && (
-        <aside className="absolute inset-y-0 right-0 z-20 flex w-[26rem] max-w-[85%] flex-col border-l border-base-300 bg-base-100 shadow-xl">
-          <CloudFiles taskId={h.id} vmId={h.ended ? undefined : h.vmId || undefined} onClose={() => setFilesOpen(false)} />
-        </aside>
+        <>
+          <div aria-hidden className="absolute inset-0 z-10 bg-base-content/20" onClick={() => setFilesOpen(false)} />
+          <aside className="absolute inset-y-0 right-0 z-20 flex w-[26rem] max-w-[85%] flex-col border-l border-base-300 bg-base-100 shadow-xl">
+            <CloudFiles taskId={h.id} vmId={h.ended ? undefined : h.vmId || undefined} onClose={() => setFilesOpen(false)} />
+          </aside>
+        </>
       )}
 
       <footer className="shrink-0 border-t border-base-300 p-3">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
+          {/* 终端卡:外壳走 card card-border 官方形态,头部条普通 base 底 +
+              结构线;深色只留给 xterm 本体(term.css 白名单) */}
           {termOpen && h.vmId && !h.ended && (
-            <div className="flex h-64 min-h-0 flex-col overflow-hidden rounded-box border border-base-300">
-              <div className="flex h-8 shrink-0 items-center gap-2 px-3" style={{ background: "var(--termHdr)" }}>
-                <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--termAcc)" }} />
-                <span className="text-[11px] font-semibold" style={{ color: "var(--termTx)" }}>
-                  {t("cloud.view.terminalTitle")}
-                </span>
-                <span className="text-[11px]" style={{ color: "var(--termTx2)" }}>
-                  {t("cloud.view.terminalSub")}
-                </span>
+            <div className="card card-border h-64 min-h-0 overflow-hidden bg-base-100">
+              <div className="flex h-8 shrink-0 items-center gap-2 border-b border-base-300 px-3">
+                <span aria-hidden className="status status-success" />
+                <span className="text-[11px] font-semibold">{t("cloud.view.terminalTitle")}</span>
+                <span className="text-[11px] text-base-content/60">{t("cloud.view.terminalSub")}</span>
                 <span className="flex-1" />
                 <button
                   type="button"
                   className="btn btn-ghost btn-square btn-xs"
                   aria-label={t("cloud.view.terminalClose")}
-                  style={{ color: "var(--termTx2)" }}
                   onClick={() => setTermOpen(false)}
                 >
                   <X size={14} strokeWidth={1.75} aria-hidden />
@@ -324,10 +340,11 @@ export function CloudTaskView({
             </div>
           )}
 
+          {/* 连接条:与 ChatView 会话连接条同形态(alert-soft + 状态点) */}
           {connText && !h.ended && (
-            <div role="status" className="flex items-center gap-1.5 text-[11px] text-base-content/50">
-              <span aria-hidden className={`status status-xs ${h.connected ? "status-success" : ""}`} />
-              <span className="min-w-0 truncate">{connText}</span>
+            <div role="status" className="alert alert-warning alert-soft py-1.5 text-xs">
+              <span aria-hidden className={`status status-xs ${h.connected ? "status-success" : "status-warning animate-pulse"}`} />
+              <span className="min-w-0 flex-1 truncate">{connText}</span>
             </div>
           )}
 
@@ -337,7 +354,7 @@ export function CloudTaskView({
             <div className="flex items-end gap-2">
               <textarea
                 aria-label={t("chat.composer")}
-                className="textarea min-h-10 w-full resize-none text-sm transition-colors duration-150 focus:border-primary/60 focus:outline-none"
+                className="textarea min-h-10 w-full resize-none text-sm"
                 rows={2}
                 placeholder={pending ? t("cloud.view.composerPending") : t("cloud.view.composerPlaceholder")}
                 value={h.input}

@@ -123,3 +123,14 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
   不散落在组件类上。
 - 允许保留:功能性状态色(attention 行的 warning 淡底)、文字四档透明度
   (内容排版,非组件覆写)、布局结构线(列分界/头部基线)。
+
+### 8.1 豁免清单(daisyUI 无对应形态,自绘保留;新增豁免须在此登记)
+- TitleBar Windows caption 三键 / mac 红绿灯:系统 chrome 规范(热区/配色跟
+  平台),btn 表达不了;§1 已归窗体 chrome 层。
+- lib/contextMenu:命令式右键菜单按指针位定位,dropdown(锚定触发器)表达
+  不了;皮相仍取 menu 文档形态(`menu bg-base-100 rounded-box shadow-sm`)。
+- FilesDrawer 与 CloudTaskView 详情抽屉:daisyUI drawer 是 checkbox 驱动的
+  整页布局原语,与受控开合+拖拽调宽不适配(FilesDrawer 头注 L1-4);面板
+  自绘,scrim 用语义色 `bg-base-content/20`。
+- xterm/term.css:第三方 canvas/DOM,吃不了主题变量且终端岛恒深色面
+  (见 term.css 头注);仅限 xterm 本体,壳外皮相(终端卡)不豁免。
