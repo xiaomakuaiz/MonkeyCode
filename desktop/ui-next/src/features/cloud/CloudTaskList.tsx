@@ -354,7 +354,7 @@ export function CloudTaskList({
   );
 
   return (
-    <ul className="menu menu-sm w-full p-0">
+    <ul className="menu menu-sm w-full flex-nowrap p-0">
       {activeRows.length > 0 && (
         <>
           <li className="menu-title">{t("cloud.list.active")}</li>

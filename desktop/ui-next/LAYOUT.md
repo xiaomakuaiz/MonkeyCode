@@ -83,6 +83,9 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
 - (搜索回归时)query 非空 → 全部折叠段强制展开、不写盘;云端未拉过的组
   顺势懒拉。
 - menu 嵌套缩进竖线(li ul::before)按用户指令隐藏:嵌套 ul 加 before:hidden。
+- **menu 截断铁律**:daisyUI `.menu` 默认 `flex-flow: column wrap` + 自带
+  nowrap——wrap 列的行宽跟内容走,truncate 不触发。列表级 menu 一律
+  `w-full flex-nowrap`,行内文字走 min-w-0+truncate 链。
 
 ## 7. 拖拽区铁律(mac/Windows 自绘 chrome)
 - Tauri 按**事件目标自身**是否带 `data-tauri-drag-region` 判定,**不继承**:

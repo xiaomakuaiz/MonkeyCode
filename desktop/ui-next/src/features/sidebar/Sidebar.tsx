@@ -386,7 +386,7 @@ export function Sidebar({
       const active = pool.filter((m) => !m.archived);
       const archived = pool.filter((m) => m.archived);
       return (
-        <ul className="menu menu-sm w-full p-0">
+        <ul className="menu menu-sm w-full flex-nowrap p-0">
           {rows(active, p)}
           {archived.length > 0 && (
             <FoldSection label={t("sidebar.archivedChats", { n: String(archived.length) })} foldKey="mc.archivedOpen">
@@ -416,7 +416,7 @@ export function Sidebar({
       },
     };
     return (
-      <ul className="menu menu-sm w-full p-0">
+      <ul className="menu menu-sm w-full flex-nowrap p-0">
         {grouped.projects.map((group) => (
           <ProjectDetails
             key={group.key}
