@@ -9,12 +9,18 @@
 // - session-summary 是模型异步吐的摘要,与用户的等待无关,不提醒。
 import type { SessionEvent } from "@/lib/ipc/sessions";
 
-export type NoticeKind = "ask" | "done" | "error";
+export type NoticeKind = "ask" | "done" | "error" | "queued";
 
 export interface SessionNotice {
   sessionId: string;
   title: string;
   kind: NoticeKind;
+}
+
+/** 后台补投成功的提示(stash::deliverQueued 回调):title = 消息摘录。 */
+export function noticeForQueuedDelivery(sessionId: string, text: string): SessionNotice {
+  const excerpt = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  return { sessionId, title: excerpt, kind: "queued" };
 }
 
 export function noticeForSessionEvent(e: SessionEvent, currentId: string | null): SessionNotice | null {

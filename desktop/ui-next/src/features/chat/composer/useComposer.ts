@@ -21,6 +21,7 @@ import {
   uploadFileStream,
 } from "@/lib/ipc/uploads";
 import { b64encode } from "@/lib/protocol/codec";
+import { bindActiveComposer, stashGet, stashSet } from "./stash";
 
 export interface ComposerAtt {
   /** 工作区相对路径(壳返回;附件行与模型可读路径都用它)。 */
@@ -79,16 +80,39 @@ export function useComposer(sessionId: string, running: boolean): ComposerCtl {
   const uploadSeqRef = useRef(0);
   const errorTimer = useRef(0);
 
-  // 切会话即整体复位(排队/附件不跨会话;在途上传的收尾回调按 id 过滤,
-  // 清空后的 filter/map 无害)
+  // 编辑面快照(留档用):cleanup 时拿到的是最后一次已提交状态
+  const snapRef = useRef<{ draft: string; queued: string | null; atts: ComposerAtt[] }>({
+    draft: "",
+    queued: null,
+    atts: [],
+  });
+  snapRef.current = { draft, queued, atts };
+  // 当前活跃会话(迟到的发送回执按它守卫,不污染切换后的会话)
+  const activeRef = useRef(sessionId);
+  activeRef.current = sessionId;
+
+  // 切会话 = 先留档再恢复(草稿/排队/附件按 sid 暂存,切回不丢;上传中列表
+  // 是瞬态不入档,在途收尾回调按 id 过滤,清空后的 filter/map 无害)。
+  // 留档挂在 cleanup:切走与卸载(关视图/进设置)统一走同一条路径。
   useEffect(() => {
-    setDraft("");
-    setQueued(null);
-    setAtts([]);
+    const entry = stashGet(sessionId);
+    setDraft(entry?.draft ?? "");
+    setQueued(entry?.queued ?? null);
+    setAtts(entry?.atts ? [...entry.atts] : []);
     setUploads([]);
     setError(null);
     sendingRef.current = false;
     flushBlockedRef.current = false;
+    // 登记活动队列槽:后台补投失败且人恰好切进来时,消息回到这里
+    const unbind = bindActiveComposer(sessionId, (text) => {
+      if (snapRef.current.queued) return false; // 已排新内容则让位(单槽后发优先)
+      setQueued(text);
+      return true;
+    });
+    return () => {
+      unbind();
+      stashSet(sessionId, snapRef.current);
+    };
   }, [sessionId]);
 
   useEffect(() => () => window.clearTimeout(errorTimer.current), []);
@@ -117,6 +141,7 @@ export function useComposer(sessionId: string, running: boolean): ComposerCtl {
       return true;
     }
     sendingRef.current = true;
+    const forSid = sessionId;
     const prevDraft = draft;
     const prevAtts = atts;
     setDraft("");
@@ -128,6 +153,16 @@ export function useComposer(sessionId: string, running: boolean): ComposerCtl {
       .catch(() => {
         sendingRef.current = false;
         // 失败不丢草稿:文本回输入框、附件回 chips(壳契约 Err ⟺ 未入会话)。
+        // 回执迟到且人已切走 → 回原会话留档,不污染当前会话(纪元守卫)
+        if (activeRef.current !== forSid) {
+          const prev = stashGet(forSid);
+          stashSet(forSid, {
+            draft: prev?.draft || prevDraft,
+            queued: prev?.queued ?? null,
+            atts: prev?.atts.length ? prev.atts : prevAtts,
+          });
+          return;
+        }
         // 期间用户已敲了新内容/新附件则让位,不覆盖
         setDraft((cur) => (cur ? cur : prevDraft));
         setAtts((cur) => (cur.length ? cur : prevAtts));
@@ -145,6 +180,7 @@ export function useComposer(sessionId: string, running: boolean): ComposerCtl {
     }
     if (!queued || sendingRef.current || flushBlockedRef.current) return;
     const q = queued;
+    const forSid = sessionId;
     sendingRef.current = true;
     setQueued(null);
     void sessionSend(sessionId, "user-input", { content: b64encode(q) })
@@ -154,6 +190,14 @@ export function useComposer(sessionId: string, running: boolean): ComposerCtl {
       .catch(() => {
         sendingRef.current = false;
         flushBlockedRef.current = true;
+        // 回执迟到且人已切走 → 回原会话暂存(deliverQueued 接手后台补投)
+        if (activeRef.current !== forSid) {
+          const prev = stashGet(forSid);
+          if (!prev?.queued) {
+            stashSet(forSid, { draft: prev?.draft ?? "", queued: q, atts: prev?.atts ?? [] });
+          }
+          return;
+        }
         // 失败回队;在途期间用户又排了新的,按单槽语义保留最新那条
         setQueued((cur) => cur ?? q);
       });

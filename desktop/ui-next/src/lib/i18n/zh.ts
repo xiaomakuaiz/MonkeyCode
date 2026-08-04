@@ -161,6 +161,7 @@ export const zh = {
   "notice.ask": "「{title}」等待审批",
   "notice.done": "「{title}」已回复",
   "notice.error": "「{title}」出错了",
+  "notice.queued": "排队消息已发出:「{title}」",
   "notice.dismiss": "关闭提醒",
   "notice.untitled": "任务",
 

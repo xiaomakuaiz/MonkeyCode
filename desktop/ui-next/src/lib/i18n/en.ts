@@ -162,6 +162,7 @@ export const en: Record<MessageKey, string> = {
   "notice.ask": "“{title}” awaits approval",
   "notice.done": "“{title}” has replied",
   "notice.error": "“{title}” hit an error",
+  "notice.queued": "Queued message sent: “{title}”",
   "notice.dismiss": "Dismiss alert",
   "notice.untitled": "Task",
 

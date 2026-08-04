@@ -39,7 +39,8 @@ import {
   sessionsList,
   type SessionMeta,
 } from "@/lib/ipc/sessions";
-import { noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
+import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
+import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
@@ -54,12 +55,14 @@ const NOTICE_TONE: Record<NoticeKind, string> = {
   ask: "alert-warning",
   done: "alert-success",
   error: "alert-error",
+  queued: "alert-success",
 };
 
 const NOTICE_TEXT: Record<NoticeKind, MessageKey> = {
   ask: "notice.ask",
   done: "notice.done",
   error: "notice.error",
+  queued: "notice.queued",
 };
 
 function SpaceRail({
@@ -275,6 +278,15 @@ export function App() {
         // D8:未知 id = 本地增量快照已失真(别处新建/漏事件),重拉全表
         refresh();
       }
+      // 后台会话轮结束 → 补投其暂存的排队消息(stash 模块状态机;成功走
+      // queued toast + 侧栏 attention,§3 后台会话提醒的法定位置)
+      if (e.type === "session-status" && e.status) {
+        deliverQueued(e.id, e.status, (sid, text) => {
+          const n = noticeForQueuedDelivery(sid, text);
+          setNotices((list) => [...list.filter((x) => x.sessionId !== n.sessionId), n]);
+          setAttentionIds((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
+        });
+      }
       // D3:非当前会话的等待审批/终态提醒(文案取自事件本身,不依赖列表快照)
       const notice = noticeForSessionEvent(e, currentIdRef.current);
       if (!notice) return;
@@ -390,6 +402,7 @@ export function App() {
                 .then(refresh);
             },
             onDelete: (meta) => {
+              dropStash(meta.id); // 会话没了,composer 留档随之清除
               void sessionDelete(meta.id)
                 .catch(() => {})
                 .then(() => {
