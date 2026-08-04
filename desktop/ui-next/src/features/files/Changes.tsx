@@ -41,38 +41,37 @@ export function Changes({
   }
   const sorted = [...changes].sort((a, b) => a.path.localeCompare(b.path));
   return (
-    <div className="flex flex-col">
+    <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
       {sorted.map((c) => {
         const meta = statusMeta(c.status);
         const sep = c.path.lastIndexOf("/");
         const dir = sep > 0 ? c.path.slice(0, sep) : "";
         const deleted = c.status === "D" || c.status === "RM";
         return (
-          <button
-            key={c.path}
-            type="button"
-            title={c.path}
-            onClick={() => onOpen(c.path)}
-            className={`flex w-full cursor-pointer items-center gap-2 px-4 py-1 text-left text-xs transition-colors duration-150 ${
-              activePath === c.path ? "bg-base-200" : "hover:bg-base-200/60"
-            }`}
-          >
-            <span className={`shrink-0 ${deleted ? "line-through opacity-60" : ""}`}>{basename(c.path)}</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-base-content/40">{dir}</span>
-            {(c.additions ?? 0) > 0 && (
-              <span className="shrink-0 font-mono text-[10px] text-success tabular-nums">+{c.additions}</span>
-            )}
-            {(c.deletions ?? 0) > 0 && (
-              <span className="shrink-0 font-mono text-[10px] text-error tabular-nums">-{c.deletions}</span>
-            )}
-            {meta ? (
-              <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
-            ) : (
-              <span className="badge badge-ghost badge-xs shrink-0">{c.status}</span>
-            )}
-          </button>
+          <li key={c.path}>
+            <button
+              type="button"
+              title={c.path}
+              onClick={() => onOpen(c.path)}
+              className={`flex min-w-0 items-center gap-2 ${activePath === c.path ? "menu-active" : ""}`}
+            >
+              <span className={`shrink-0 ${deleted ? "line-through opacity-60" : ""}`}>{basename(c.path)}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-base-content/40">{dir}</span>
+              {(c.additions ?? 0) > 0 && (
+                <span className="shrink-0 font-mono text-[10px] text-success tabular-nums">+{c.additions}</span>
+              )}
+              {(c.deletions ?? 0) > 0 && (
+                <span className="shrink-0 font-mono text-[10px] text-error tabular-nums">-{c.deletions}</span>
+              )}
+              {meta ? (
+                <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
+              ) : (
+                <span className="badge badge-ghost badge-xs shrink-0">{c.status}</span>
+              )}
+            </button>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }

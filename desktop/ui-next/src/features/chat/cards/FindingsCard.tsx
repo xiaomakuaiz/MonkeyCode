@@ -129,9 +129,9 @@ function FindingRow({ finding }: { finding: ReviewFinding }) {
   );
   if (!detail) return <div className="flex items-center gap-2 text-xs">{row}</div>;
   return (
-    <details className="text-xs">
-      <summary className="flex cursor-pointer list-none items-center gap-2">{row}</summary>
-      <div className="mt-1 border-s-2 border-base-300 ps-3">
+    <details className="collapse collapse-arrow text-xs">
+      <summary className="collapse-title flex items-center gap-2">{row}</summary>
+      <div className="collapse-content">
         <Markdown source={detail} className="opacity-80" />
       </div>
     </details>

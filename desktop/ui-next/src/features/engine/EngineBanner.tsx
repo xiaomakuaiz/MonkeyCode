@@ -91,9 +91,11 @@ export function EngineBanner() {
           )}
         </div>
         {crashed && crashed.log_tail.trim() !== "" && (
-          <details className="text-[11px] opacity-75">
-            <summary className="cursor-pointer select-none">{t("engine.logTail")}</summary>
-            <pre className="max-h-24 overflow-auto font-mono whitespace-pre-wrap">{crashed.log_tail}</pre>
+          <details className="collapse collapse-arrow text-[11px] opacity-75">
+            <summary className="collapse-title select-none">{t("engine.logTail")}</summary>
+            <div className="collapse-content">
+              <pre className="max-h-24 overflow-auto font-mono whitespace-pre-wrap">{crashed.log_tail}</pre>
+            </div>
           </details>
         )}
         {restartError && <span className="text-error">{t("engine.restartFailed", { reason: restartError })}</span>}

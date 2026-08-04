@@ -73,7 +73,7 @@ export function Tree({
     });
   };
 
-  // 展开的目录原地铺开子项,层级用缩进表达
+  // 展开的目录原地铺开子项,层级用缩进表达(行 = menu 的 li>button)
   const renderDir = (dir: string, depth: number): ReactNode[] => {
     const rows: ReactNode[] = [];
     const items = tree.get(dir);
@@ -81,15 +81,16 @@ export function Tree({
       if (loading.has(dir)) {
         for (let i = 0; i < (dir === "" ? 4 : 2); i++) {
           rows.push(
-            <div
-              key={`skeleton:${dir}:${i}`}
-              aria-hidden
-              className="flex items-center gap-2 py-1.5 pr-4"
-              style={{ paddingLeft: 24 + depth * 16 }}
-            >
-              <div className="skeleton size-3.5 rounded" />
-              <div className="skeleton h-3 w-32" />
-            </div>,
+            <li key={`skeleton:${dir}:${i}`} className="menu-disabled">
+              <div
+                aria-hidden
+                className="flex items-center gap-2 py-1.5 pr-4"
+                style={{ paddingLeft: 24 + depth * 16 }}
+              >
+                <div className="skeleton size-3.5 rounded" />
+                <div className="skeleton h-3 w-32" />
+              </div>
+            </li>,
           );
         }
       }
@@ -99,61 +100,57 @@ export function Tree({
       const open = en.isDir && expanded.has(en.path);
       const meta = !en.isDir && changeStatus ? statusMeta(changeStatus.get(en.path) ?? "") : undefined;
       rows.push(
-        <button
-          key={en.path}
-          type="button"
-          title={en.path}
-          onClick={() => (en.isDir ? toggleDir(en.path) : onOpenFile(en))}
-          className={`flex w-full cursor-pointer items-center gap-2 py-1 pr-4 text-left text-xs transition-colors duration-150 ${
-            activePath === en.path ? "bg-base-200" : "hover:bg-base-200/60"
-          }`}
-          style={{ paddingLeft: 8 + depth * 16 }}
-        >
-          <span className="flex w-3 shrink-0 justify-center">
-            {en.isDir && (
-              <ChevronRight
-                size={12}
-                strokeWidth={1.75}
-                aria-hidden
-                className={`text-base-content/40 transition-transform ${open ? "rotate-90" : ""}`}
-              />
+        <li key={en.path}>
+          <button
+            type="button"
+            title={en.path}
+            onClick={() => (en.isDir ? toggleDir(en.path) : onOpenFile(en))}
+            className={`flex min-w-0 items-center gap-2 ${activePath === en.path ? "menu-active" : ""}`}
+            style={{ paddingLeft: 8 + depth * 16 }}
+          >
+            <span className="flex w-3 shrink-0 justify-center">
+              {en.isDir && (
+                <ChevronRight
+                  size={12}
+                  strokeWidth={1.75}
+                  aria-hidden
+                  className={`text-base-content/40 transition-transform ${open ? "rotate-90" : ""}`}
+                />
+              )}
+            </span>
+            {en.isDir ? (
+              <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+            ) : (
+              <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
             )}
-          </span>
-          {en.isDir ? (
-            <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
-          ) : (
-            <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
-          )}
-          <span className="min-w-0 flex-1 truncate">{en.name}</span>
-          {meta ? (
-            <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
-          ) : (
-            !en.isDir && (
-              <span className="shrink-0 font-mono text-[10px] text-base-content/35 tabular-nums">{fmtSize(en.size)}</span>
-            )
-          )}
-        </button>,
+            <span className="min-w-0 flex-1 truncate">{en.name}</span>
+            {meta ? (
+              <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
+            ) : (
+              !en.isDir && (
+                <span className="shrink-0 font-mono text-[10px] text-base-content/35 tabular-nums">
+                  {fmtSize(en.size)}
+                </span>
+              )
+            )}
+          </button>
+        </li>,
       );
       if (open) rows.push(...renderDir(en.path, depth + 1));
     }
-    if (items.length === 0) {
+    if (items.length === 0 && dir !== "") {
       rows.push(
-        dir === "" ? (
-          // 空态统一形态:图标 + 标题档,居中
-          <div key="empty-root" className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
-            <Files size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
-            <div className="text-sm font-semibold">{t("files.tree.emptyRoot")}</div>
-          </div>
-        ) : (
-          <p key={`empty:${dir}`} className="py-1 text-xs text-base-content/40" style={{ paddingLeft: 28 + depth * 16 }}>
+        <li key={`empty:${dir}`} className="menu-disabled">
+          <p className="py-1 text-base-content/40" style={{ paddingLeft: 28 + depth * 16 }}>
             {t("files.tree.empty")}
           </p>
-        ),
+        </li>,
       );
     }
     return rows;
   };
 
+  const rootItems = tree.get("");
   return (
     <div className="flex flex-col">
       {err && (
@@ -161,7 +158,15 @@ export function Tree({
           {err}
         </p>
       )}
-      {renderDir("", 0)}
+      {rootItems && rootItems.length === 0 ? (
+        // 空态统一形态:图标 + 标题档,居中(整块面板态,不进 menu 行)
+        <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+          <Files size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+          <div className="text-sm font-semibold">{t("files.tree.emptyRoot")}</div>
+        </div>
+      ) : (
+        <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">{renderDir("", 0)}</ul>
+      )}
     </div>
   );
 }

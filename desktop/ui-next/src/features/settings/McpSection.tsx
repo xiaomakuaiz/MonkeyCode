@@ -35,8 +35,11 @@ export function McpSection({
       {draft.mcps.map((m, i) => {
         const open = expanded === i;
         return (
-          <div key={i} className="card card-border bg-base-100">
-            <div className="flex items-center gap-2 px-2 py-1.5">
+          <div
+            key={i}
+            className={`collapse collapse-arrow border border-base-300 bg-base-100 ${open ? "collapse-open" : "collapse-close"}`}
+          >
+            <div className="collapse-title flex items-center gap-2 py-1.5 ps-2">
               <button
                 type="button"
                 aria-expanded={open}
@@ -51,7 +54,7 @@ export function McpSection({
               </button>
             </div>
             {open && (
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-base-300 p-3">
+              <div className="collapse-content grid grid-cols-2 gap-x-3 gap-y-1">
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.mcp.name")}</legend>
                   <input
