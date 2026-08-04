@@ -553,22 +553,21 @@ export function Sidebar({
           <Plus size={13} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      {/* 搜索框:内嵌浅底,query 非空出清空钮 */}
-      <label className="mx-2.5 mb-2 flex h-8 flex-none items-center gap-[7px] rounded-[9px] border border-base-content/10 bg-base-100/90 px-2 text-base-content/45">
-        <Search size={12} strokeWidth={1.75} className="flex-none" aria-hidden />
+      {/* 搜索框:daisyUI input 底座,收窄成旧 UI 的内嵌形态;query 非空出清空钮 */}
+      <label className="input input-sm mx-2.5 mb-2 h-8 w-auto flex-none rounded-[9px] bg-base-100/90 text-[11.5px]">
+        <Search size={12} strokeWidth={1.75} className="flex-none opacity-50" aria-hidden />
         <input
           type="search"
           aria-label={t("sidebar.search")}
           placeholder={head.placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="min-w-0 flex-1 border-none bg-transparent text-[11.5px] text-base-content/90 outline-none"
         />
         {query !== "" && (
           <button
             type="button"
             aria-label={t("sidebar.clearSearch")}
-            className="flex h-[18px] w-[18px] flex-none items-center justify-center rounded-[5px] hover:bg-base-content/10"
+            className="btn btn-ghost btn-square h-[18px] w-[18px] min-h-0 flex-none rounded-[5px]"
             onClick={() => setQuery("")}
           >
             <X size={9} strokeWidth={2} aria-hidden />

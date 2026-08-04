@@ -1,7 +1,7 @@
 // 侧栏视觉件(本地/云端列表共用)。设计基线 = 旧 UI(desktop/ui sidebar.tsx)
 // 的桌面密度语言:34px 组头行、13px 文件夹图标/9px 旋转箭头、10.5px 区标签、
 // 卡片式空态。色彩全部走 daisyUI 语义变量(base-content 灰阶 / primary)。
-import { ChevronRight, Folder } from "lucide-react";
+import { ChevronRight, Folder, Plus } from "lucide-react";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
 
 /** 区标签(快速任务/项目):10.5px 加粗微距。 */
@@ -94,9 +94,7 @@ export function GroupHeader({
             quickAdd.onClick();
           }}
         >
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-            <path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
+          <Plus size={10} strokeWidth={2} aria-hidden />
         </button>
       )}
     </div>
