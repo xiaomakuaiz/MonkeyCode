@@ -1,5 +1,5 @@
-// 侧栏:壳布局(h-13 品牌头/滚动列表)+ 旧 UI 信息布局(两行式行、
-// 状态尾注、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
+// 侧栏:壳布局(h-13 品牌头/滚动列表)+ 信息布局(单行摘要优先、
+// 状态尾注殿后、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
 // 交互:行右键菜单、行内重命名、组头快捷新建、折叠契约键。
 // (搜索行按用户指令暂撤,回归时补测:query 过滤 + 全折叠段强制展开)
 import { fireEvent, render, screen, within } from "@testing-library/react";
@@ -49,22 +49,23 @@ const rowOf = (text: string) => screen.getByText(text).closest("a") as HTMLEleme
 const detailsOf = (text: string) => screen.getByText(text).closest("details") as HTMLDetailsElement;
 
 describe("侧栏(local 空间)", () => {
-  it("按项目分组(details 折叠):行可选中;两行式带摘要行;组头等待徽标", async () => {
+  it("按项目分组(details 折叠):行单行且摘要优先(缺席回落标题);组头等待徽标;行可选中", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
     const alphaGroup = detailsOf("alpha");
-    expect(alphaGroup && within(alphaGroup).getByText("修复登录")).toBeTruthy();
-    // 两行式:标题行 + 引擎摘要行;组头 waiting_ask 计数徽标
-    expect(within(rowOf("修复登录")).getByText("修复了闪退,补了用例")).toBeTruthy();
-    expect(within(alphaGroup).getByText("1")).toBeTruthy();
-    await userEvent.click(screen.getByText("修复登录"));
+    // 有摘要的行主文案 = 摘要,标题只进 tooltip;无摘要的行给标题
+    expect(within(alphaGroup).getByText("修复了闪退,补了用例")).toBeTruthy();
+    expect(within(alphaGroup).queryByText("修复登录")).toBeNull();
+    expect(within(alphaGroup).getByText("重构侧栏")).toBeTruthy();
+    expect(within(alphaGroup).getByText("1")).toBeTruthy(); // waiting_ask 计数徽标
+    await userEvent.click(screen.getByText("修复了闪退,补了用例"));
     expect(acts.onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "修复登录" }));
   });
 
-  it("状态尾注(旧 UI 信息布局):等待确认着色,静默态给轮次", () => {
+  it("状态尾注殿后:等待确认着色,静默态给轮次", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(within(rowOf("重构侧栏")).getByText("等待确认")).toBeTruthy();
-    expect(within(rowOf("修复登录")).getByText("3 轮")).toBeTruthy();
+    expect(within(rowOf("修复了闪退,补了用例")).getByText("3 轮")).toBeTruthy();
   });
 
   it("归档任务收进项目内「已归档任务 · N」小节(默认收起,点开并落契约键);chat 会话不出现", async () => {
@@ -80,11 +81,11 @@ describe("侧栏(local 空间)", () => {
   it("行右键菜单:归档直接触发;删除二段确认", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
-    let menu = contextMenuOf(rowOf("修复登录"));
+    let menu = contextMenuOf(rowOf("修复了闪退,补了用例"));
     await userEvent.click(within(menu).getByText("归档"));
     expect(acts.onToggleArchive).toHaveBeenCalledWith(expect.objectContaining({ id: "修复登录" }));
 
-    menu = contextMenuOf(rowOf("修复登录"));
+    menu = contextMenuOf(rowOf("修复了闪退,补了用例"));
     await userEvent.click(within(menu).getByText("删除"));
     expect(acts.onDelete).not.toHaveBeenCalled(); // 第一次点只换文案
     await userEvent.click(within(menu).getByText("确认删除"));
@@ -94,7 +95,7 @@ describe("侧栏(local 空间)", () => {
   it("重命名:右键菜单进入行内输入,Enter 提交新标题", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
-    const menu = contextMenuOf(rowOf("修复登录"));
+    const menu = contextMenuOf(rowOf("修复了闪退,补了用例"));
     await userEvent.click(within(menu).getByText("重命名"));
     const input = screen.getByRole("textbox", { name: "重命名" });
     await userEvent.clear(input);
@@ -160,7 +161,7 @@ describe("后台提醒 attention(D3)", () => {
         attentionIds={new Set(["修复登录"])}
       />,
     );
-    expect(rowOf("修复登录").dataset.attention).toBeDefined();
+    expect(rowOf("修复了闪退,补了用例").dataset.attention).toBeDefined();
     expect(rowOf("重构侧栏").dataset.attention).toBeUndefined();
   });
 

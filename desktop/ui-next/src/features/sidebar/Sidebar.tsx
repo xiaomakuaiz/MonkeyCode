@@ -1,13 +1,14 @@
 // 侧栏:三空间(本地/云端/对话)+ 会话列表。
 // 分层约定(tasks/lessons.md 2026-08-04):
-// - 壳布局不动:h-11 品牌头(LAYOUT.md §2)→ 搜索行 → 列表滚动区 → footer;
-// - 信息布局参考旧 UI:本地行两行式(标题+状态尾注 / 引擎摘要行),尾注只在
-//   要紧态着色(等待确认/运行中/运行出错),静默态给轮次/可继续;项目组内
-//   「已归档任务 · N」小节、底部「已归档项目 · N」;搜索非空强制展开;
+// - 壳布局不动:h-13 品牌头(LAYOUT.md §2)→ 列表滚动区 → footer;
+// - 信息布局(用户定案):行单行 = 状态点 + 摘要‖标题 + 状态尾注殿后
+//   (要紧态着色,静默态给轮次/可继续);组头 = 文件夹图标 + 项目名 +
+//   等待徽标 + 快捷「+」殿后;项目内「已归档任务 · N」小节、底部
+//   「已归档项目 · N」;
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
-//   input 搜索、btn、右键菜单走 lib/contextMenu(menu 皮相)。
-// 行交互:右键 = 行菜单(重命名/归档/删除二段确认);组头 hover 快捷「+」。
-import { Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
+//   btn、右键菜单走 lib/contextMenu(menu 皮相)。
+// 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
+import { Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -106,7 +107,8 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
   }
 
   const isChat = meta.kind === "chat";
-  const primary = isChat && meta.summary ? meta.summary : meta.title;
+  // 单行(用户定案):有摘要给摘要(随对话演进,比标题达意),缺席回落标题
+  const primary = meta.summary || meta.title;
   const trailing = rowTrailing(meta, t);
   const menuItems: MenuItem[] = [
     { label: t("sidebar.row.rename"), run: () => p.onRenameStart(meta.id) },
@@ -127,14 +129,8 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
         }}
       >
         <StatusDot meta={meta} attention={attention} />
-        {/* 两行式(旧 UI 信息布局):标题行 + 状态尾注;引擎摘要行缺席不长 */}
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate">{primary}</span>
-            <span className={`max-w-16 shrink-0 truncate text-xs tabular-nums ${trailing.cls}`}>{trailing.text}</span>
-          </span>
-          {!isChat && meta.summary && <span className="truncate text-xs text-base-content/50">{meta.summary}</span>}
-        </span>
+        <span className="min-w-0 flex-1 truncate">{primary}</span>
+        <span className={`max-w-16 shrink-0 truncate text-xs tabular-nums ${trailing.cls}`}>{trailing.text}</span>
       </a>
     </li>
   );
@@ -209,7 +205,9 @@ function ProjectDetails({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
         >
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-base-content/70">{group.name}</span>
+          <Folder size={13} strokeWidth={1.75} className="shrink-0 text-base-content/50" aria-hidden />
+          {/* menu 组头是 grid(图标/自动伸展列/尾部),名字占第二列自动撑满,+ 自然殿后 */}
+          <span className="min-w-0 truncate text-xs font-medium text-base-content/70">{group.name}</span>
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           {/* 快捷钮常驻占位、hover 只切可见性:插入式显隐会挤动项目名,鼠标一进一出就抖 */}
           {!archivedProject && (
