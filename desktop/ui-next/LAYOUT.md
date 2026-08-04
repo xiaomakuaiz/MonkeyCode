@@ -61,3 +61,13 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
 - 不带属性的例外:按钮等交互件、可双击重命名的文字 span(拖拽区双击会被
   吃成窗口最大化)。
 - 新增头部时按本条自查;有 ChatView 结构测试可参照。
+
+## 8. 阶段纪律:裸组件优先(用户指令,2026-08-04)
+- 现阶段 daisyUI 组件一律用**官方文档形态**,不叠色彩/边线/阴影覆写
+  (card 用 `card-border` 的 base-200 线;dropdown-content 用文档标准
+  `menu bg-base-100 rounded-box shadow-sm`;激活态用 `menu-active/
+  tab-active/btn-active` 原生类)。
+- 统一视觉调整放到收尾,一次性经**主题变量**(monkeycode 主题块)完成,
+  不散落在组件类上。
+- 允许保留:功能性状态色(attention 行的 warning 淡底)、文字四档透明度
+  (内容排版,非组件覆写)、布局结构线(列分界/头部基线)。
