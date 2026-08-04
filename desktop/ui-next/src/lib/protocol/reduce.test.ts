@@ -479,7 +479,7 @@ describe("轮次与系统帧", () => {
     expect(started.running).toBe(true);
     const ended = reduceFrame(started, frame("task-ended"));
     expect(ended).toMatchObject({ running: false, turnEnded: true, streamKind: "" });
-    expect(ended.items.at(-1)).toEqual({ kind: "sys", text: "— 本轮结束 —" });
+    expect(ended.items.at(-1)).toEqual({ kind: "sys", tag: "turn-end", text: "— 本轮结束 —" });
   });
 
   it("task-error 渲染错误系统行,缺 error 字段回退文案", () => {
@@ -540,21 +540,21 @@ describe("轮次与系统帧", () => {
 
   it("model_update 的系统行剥寻址后缀与会员档位前缀,状态仍存原始名", () => {
     const s = run([acp({ sessionUpdate: "model_update", model: "monkeycode-pro/deepseek@monkeycode#cfg-9" })]);
-    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "模型已切换为 deepseek" });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "model", text: "模型已切换为 deepseek" });
     expect(s.model).toBe("monkeycode-pro/deepseek@monkeycode#cfg-9");
 
     const remark = run([acp({ sessionUpdate: "model_update", model: "深度求索@monkeycode#cfg-9" })]);
-    expect(remark.items.at(-1)).toEqual({ kind: "sys", text: "模型已切换为 深度求索" });
+    expect(remark.items.at(-1)).toEqual({ kind: "sys", tag: "model", text: "模型已切换为 深度求索" });
   });
 
   it("think_update 回写档位并留系统行,空档位显示为默认", () => {
     const s = run([acp({ sessionUpdate: "think_update", think: "high" })]);
     expect(s.think).toBe("high");
-    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "思考深度已调整为「高」" });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "think", text: "思考深度已调整为「高」" });
 
     const back = run([acp({ sessionUpdate: "think_update", think: "" })]);
     expect(back.think).toBe("");
-    expect(back.items.at(-1)).toEqual({ kind: "sys", text: "思考深度已调整为「默认」" });
+    expect(back.items.at(-1)).toEqual({ kind: "sys", tag: "think", text: "思考深度已调整为「默认」" });
   });
 
   it("available_commands_update 只回写指令清单,不进对话流", () => {
@@ -594,6 +594,32 @@ describe("轮次与系统帧", () => {
     expect(reduceFrame(s, frame("不认识"))).toBe(s);
     expect(reduceFrame(s, acp({ sessionUpdate: "future_update" }))).toBe(s);
     expect(reduceFrame(s, { type: "task-running", kind: "别的" })).toBe(s);
+  });
+});
+
+describe("SysItem.tag(系统行渲染分流标记)", () => {
+  const tagOf = (s: ChatState) => (s.items.at(-1) as SysItem).tag;
+
+  it("各产出点打上对应 tag,文案字段原样保留(向后兼容)", () => {
+    expect(tagOf(run([frame("task-ended")]))).toBe("turn-end");
+    expect(tagOf(run([acp({ sessionUpdate: "model_update", model: "m1" })]))).toBe("model");
+    expect(tagOf(run([acp({ sessionUpdate: "think_update", think: "high" })]))).toBe("think");
+    expect(tagOf(run([acp({ sessionUpdate: "permission_mode_update", mode: "yolo" })]))).toBe("mode");
+    expect(tagOf(run([acp({ sessionUpdate: "llm_call_retry", attempt: 1, message: "429" })]))).toBe("retry");
+    expect(tagOf(run([acp({ sessionUpdate: "task_notification", text: "📌 后台完成" })]))).toBe("notify");
+    expect(tagOf(run([acp({ sessionUpdate: "compact_status", status: "started" })]))).toBe("compact");
+    // 文案不因打标而变:老消费方仍按 text 渲染
+    expect(run([acp({ sessionUpdate: "permission_mode_update", mode: "yolo" })]).items.at(-1)).toEqual({
+      kind: "sys",
+      tag: "mode",
+      text: "⚡ 已开启 YOLO 模式:所有操作不再询问,直接执行",
+    });
+  });
+
+  it("task-error 行不打 tag,只带 error 标记(着色走 error 字段)", () => {
+    const err = run([frame("task-error", { error: "配额耗尽" })]).items.at(-1) as SysItem;
+    expect(err.tag).toBeUndefined();
+    expect(err.error).toBe(true);
   });
 });
 

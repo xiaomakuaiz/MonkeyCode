@@ -82,6 +82,78 @@ describe("LogList 系统行居中(H7)", () => {
   });
 });
 
+describe("LogList 系统行按 tag 分流", () => {
+  it("turn-end 收敛为呼吸位:不渲染文字,全文留在 title", () => {
+    const state = withItems([{ kind: "sys", text: "— 本轮结束 —", tag: "turn-end" }]);
+    render(<LogList state={state} sessionId="s1" />);
+    expect(screen.queryByText("— 本轮结束 —")).toBeNull();
+    expect(screen.getByTitle("— 本轮结束 —")).toBeTruthy();
+  });
+
+  it("连续模型切换只渲最后一条;被合并行保占位,结构契约不平移", () => {
+    const state = withItems([
+      { kind: "sys", text: "模型已切换为 A", tag: "model" },
+      { kind: "sys", text: "模型已切换为 B", tag: "model" },
+      { kind: "sys", text: "模型已切换为 C", tag: "model" },
+    ]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    expect(screen.queryByText("模型已切换为 A")).toBeNull();
+    expect(screen.queryByText("模型已切换为 B")).toBeNull();
+    expect(screen.getByText("模型已切换为 C")).toBeTruthy();
+    // 直接子元素仍与 items 一一对应(被合并项是占位 div)
+    expect(container.firstElementChild?.children).toHaveLength(3);
+  });
+
+  it("模型行被其他条目隔断即各自成段,不跨条目合并", () => {
+    const state = withItems([
+      { kind: "sys", text: "模型已切换为 A", tag: "model" },
+      { kind: "agent", text: "中间正文" },
+      { kind: "sys", text: "模型已切换为 B", tag: "model" },
+    ]);
+    render(<LogList state={state} sessionId="s1" />);
+    expect(screen.getByText("模型已切换为 A")).toBeTruthy();
+    expect(screen.getByText("模型已切换为 B")).toBeTruthy();
+  });
+
+  it("error 系统行按 text-error 着色,普通系统行不带", () => {
+    const state = withItems([
+      { kind: "sys", text: "✗ 配额耗尽", error: true },
+      { kind: "sys", text: "📌 后台完成", tag: "notify" },
+    ]);
+    render(<LogList state={state} sessionId="s1" />);
+    expect(screen.getByText("✗ 配额耗尽").className).toContain("text-error");
+    expect(screen.getByText("📌 后台完成").className).not.toContain("text-error");
+  });
+});
+
+describe("消息时间(悬停显影的 <time>)", () => {
+  it("用户气泡与 agent 块渲染 dateTime 语义的 HH:MM;缺 timestamp 不渲染", () => {
+    const ts = new Date(2026, 0, 2, 9, 5).getTime();
+    const state = withItems([
+      { kind: "user", text: "带时间的提问", seq: 1, timestamp: ts },
+      { kind: "agent", text: "带时间的回答", timestamp: ts },
+      { kind: "agent", text: "没有时间" },
+    ]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    const times = Array.from(container.querySelectorAll("time"));
+    expect(times).toHaveLength(2);
+    for (const t of times) {
+      expect(t.getAttribute("datetime")).toBe(new Date(ts).toISOString());
+      expect(t.textContent).toBe("09:05");
+    }
+  });
+});
+
+describe("思考块(thoughtMarkdown 修复)", () => {
+  it("流式连拼的相邻加粗标题拆开渲染,不吞成一个 strong", () => {
+    const state = withItems([{ kind: "thought", text: "**先看日志****再改代码**" }]);
+    render(<LogList state={state} sessionId="s1" />);
+    // 修复生效 = 两个独立的加粗段(吞并时会渲成含 ** 字面量的单个 strong)
+    expect(screen.getAllByText("先看日志").some((el) => el.tagName === "STRONG")).toBe(true);
+    expect(screen.getAllByText("再改代码").some((el) => el.tagName === "STRONG")).toBe(true);
+  });
+});
+
 describe("LogList 只读回放(readonly,子会话浮层)", () => {
   it("独立 open 审批收成审计行:无按钮,标「需要确认」", () => {
     const state = withItems([

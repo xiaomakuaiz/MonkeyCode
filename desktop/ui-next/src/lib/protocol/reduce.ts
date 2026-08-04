@@ -421,7 +421,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       return { ...s, plan: u.entries ?? [] };
     case "llm_call_retry":
       // 仅云端流出现;渲染系统行让用户知道为什么"卡住了"
-      return pushItem(s, { kind: "sys", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
+      return pushItem(s, { kind: "sys", tag: "retry", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
     case "task_notification": {
       // 后台子代理完成通知(📌):独立系统行。不能走流式追加——会把它
       // 并进正在流式的模型正文气泡。已回填后台卡时通知信息重复:消费卡上
@@ -433,7 +433,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
         items[i] = { ...it, backgroundNoticePending: false };
         return { ...s, items, streamKind: "" };
       }
-      return u.text ? pushItem(s, { kind: "sys", text: u.text }) : s;
+      return u.text ? pushItem(s, { kind: "sys", tag: "notify", text: u.text }) : s;
     }
     case "available_commands_update":
       // 斜杠指令清单是"此刻"的会话状态(全量重发,不是对话内容):只回写
@@ -444,6 +444,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
     case "compact_status":
       return pushItem(s, {
         kind: "sys",
+        tag: "compact",
         text: u.status === "started" ? "⟳ 上下文接近上限,正在压缩…" : "⟳ 上下文压缩完成",
       });
     case "model_update": {
@@ -451,18 +452,18 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       // 状态 model 保持原始名——它是按 name 回查模型/think 档的键
       const name = u.model ?? "";
       const shown = stripTierPrefix(stripSourceSuffix(name));
-      return { ...pushItem(s, { kind: "sys", text: `模型已切换为 ${shown}` }), model: name };
+      return { ...pushItem(s, { kind: "sys", tag: "model", text: `模型已切换为 ${shown}` }), model: name };
     }
     case "think_update": {
       const level = u.think ?? "";
       const label = THINK_LABELS[level] ?? "默认";
-      return { ...pushItem(s, { kind: "sys", text: `思考深度已调整为「${label}」` }), think: level };
+      return { ...pushItem(s, { kind: "sys", tag: "think", text: `思考深度已调整为「${label}」` }), think: level };
     }
     case "permission_mode_update": {
       const mode = u.mode ?? "default";
       const text =
         mode === "yolo" ? "⚡ 已开启 YOLO 模式:所有操作不再询问,直接执行" : "已恢复默认权限模式";
-      return { ...pushItem(s, { kind: "sys", text }), permMode: mode };
+      return { ...pushItem(s, { kind: "sys", tag: "mode", text }), permMode: mode };
     }
     default:
       // 未知词汇原样返回:引擎/云端会长出新 sessionUpdate,归约不许炸
@@ -490,7 +491,7 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         running: false,
         streamKind: "",
         turnEnded: true,
-        items: [...expireOpenAsks(s.items), { kind: "sys", text: "— 本轮结束 —" }],
+        items: [...expireOpenAsks(s.items), { kind: "sys", tag: "turn-end", text: "— 本轮结束 —" }],
       };
     case "task-error": {
       const data = frameData<{ error?: string }>(f);

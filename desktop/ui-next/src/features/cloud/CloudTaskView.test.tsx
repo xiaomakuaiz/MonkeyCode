@@ -57,7 +57,9 @@ describe("CloudTaskView", () => {
     });
     render(<CloudTaskView task={{ id: "t1", title: "完结任务", status: "finished" }} />);
     await screen.findByText("部署到测试环境"); // 回放的用户消息(content 解 base64)
-    expect(screen.getByText("— 本轮结束 —")).toBeTruthy();
+    // 轮次边界收敛为呼吸位:不渲染文字,全文留在 title(LogList turn-end 分流)
+    expect(screen.queryByText("— 本轮结束 —")).toBeNull();
+    expect(screen.getByTitle("— 本轮结束 —")).toBeTruthy();
     expect(screen.getByText(/只读回放/)).toBeTruthy();
     expect(screen.queryByLabelText("消息输入")).toBeNull(); // 结束态无 composer
     expect(screen.queryByText("终止任务")).toBeNull(); // 结束态无停止按钮

@@ -183,6 +183,10 @@ export interface SysItem {
   kind: "sys";
   text: string;
   error?: boolean;
+  /** 行种类(reduce 各产出点打标):渲染层按 tag 分流呈现(turn-end 收敛
+   * 为呼吸位、连续 model 行合并等),不再嗅探 text 文案。text 保留全文,
+   * 向后兼容——缺席 tag 的行(含 task-error)按普通系统行渲染。 */
+  tag?: "turn-end" | "model" | "think" | "mode" | "retry" | "notify" | "compact";
 }
 
 /** 审批卡。 */
