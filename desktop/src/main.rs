@@ -730,8 +730,20 @@ async fn check_update(app: AppHandle) {
 fn is_internal_url(url: &tauri::Url) -> bool {
     match url.scheme() {
         "tauri" => true,
-        // Windows 下 Tauri app 页面以 http(s)://tauri.localhost 承载
-        "http" | "https" => matches!(url.host_str(), Some("tauri.localhost")),
+        "http" | "https" => {
+            // Windows 下 Tauri app 页面以 http(s)://tauri.localhost 承载
+            if matches!(url.host_str(), Some("tauri.localhost")) {
+                return true;
+            }
+            // dev 构建:`tauri dev` 的 devUrl 是 http://localhost:<port>(vite),
+            // 初始加载同样走本守卫,不放行就是一扇纯白窗口。发布版无 devUrl,
+            // 不放行 localhost,守卫语义不变。
+            #[cfg(dev)]
+            if matches!(url.host_str(), Some("localhost") | Some("127.0.0.1")) {
+                return true;
+            }
+            false
+        }
         _ => false,
     }
 }
