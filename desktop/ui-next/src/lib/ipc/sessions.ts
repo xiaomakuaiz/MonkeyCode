@@ -91,15 +91,25 @@ export interface SessionWindow {
   has_more: boolean;
 }
 
+/** ⚠️ session_history 的返回形状与 session_open **不同**:游标叫
+ *  `next_cursor`(壳 session.rs 两处 json! 字面量),按 `cursor` 取会拿到
+ *  undefined,首次翻页后游标即坏死——两个形状必须分开建型。 */
+export interface HistoryPage {
+  frames: Frame[];
+  next_cursor: number;
+  has_more: boolean;
+}
+
 /** ⚠️ 铁律「监听先于命令」:壳在 session_open 处理中同步 emit 首批实时帧,
  *  调用方必须先 `await onFrames(id, cb)` 再调本函数,否则丢帧。 */
 export function sessionOpen(id: string): Promise<SessionWindow> {
   return invoke<SessionWindow>("session_open", { id });
 }
 
-/** 往更早翻页(前插历史);cursor 来自上一窗口的返回值。 */
-export function sessionHistory(id: string, cursor: number, limit: number): Promise<SessionWindow> {
-  return invoke<SessionWindow>("session_history", { id, cursor, limit });
+/** 往更早翻页(前插历史);cursor 来自 session_open 的 cursor 或上一页的
+ *  next_cursor(replay.jsonl 字节偏移,与 session_outline 的 offset 同坐标系)。 */
+export function sessionHistory(id: string, cursor: number, limit: number): Promise<HistoryPage> {
+  return invoke<HistoryPage>("session_history", { id, cursor, limit });
 }
 
 /** 回读单帧原文(工具卡被截断的大字段按需取)。 */

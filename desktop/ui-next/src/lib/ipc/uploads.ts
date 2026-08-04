@@ -64,6 +64,13 @@ export function uploadFilePath(sessionId: string, src: string): Promise<{ path: 
   return invoke<{ path: string }>("upload_file_path", { id: sessionId, src });
 }
 
+/** 回读本地资源为 data URL(壳 upload_read):uploads 目录内附件放行,
+ * 其余路径只放行工作区内常见图片;20MB 上限。Tauri 下 <img> 带不了鉴权头,
+ * 也不开 asset scope 到任意工作区,小图 base64 内联最稳(壳侧头注同口径)。 */
+export function uploadFileURL(sessionId: string, path: string): Promise<string> {
+  return invoke<string>("upload_read", { id: sessionId, path });
+}
+
 // path-backed 占位 File:原生拖拽只有路径,造一个空内容、仅元数据的 File
 // 走既有 File[] 附件管线,真实内容由壳按路径直拷(nativePathOf 分流)。
 // 路径侧带在 WeakMap,不在 File 上挂扩展属性。

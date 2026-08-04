@@ -209,6 +209,7 @@ export const en: Record<MessageKey, string> = {
   "chat.findings.noChange": "No change needed",
   "chat.findings.failure": "Failure scenario",
   "chat.loadEarlier": "Load earlier",
+  "chat.loadEarlierFailed": "Failed to load earlier messages: {reason}",
   "chat.composer": "Message input",
   "chat.composerPlaceholder": "Type a message. Enter to send, Shift+Enter for newline",
   "chat.send": "Send",

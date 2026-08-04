@@ -43,9 +43,10 @@ function stubShell({ hasMore = false, outline }: { hasMore?: boolean; outline?: 
           });
         }
         if (cmd === "session_history") {
+          // 真实壳形状:session_history 的游标叫 next_cursor(≠ session_open 的 cursor)
           return Promise.resolve({
             frames: [{ type: "user-input", data: { content: b64encode("更早的问题") }, timestamp: 0, seq: 0 }],
-            cursor: 3,
+            next_cursor: 3,
             has_more: false,
           });
         }

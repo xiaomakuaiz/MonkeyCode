@@ -34,7 +34,7 @@ const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1
 
 export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: number }) {
   const { t } = useI18n();
-  const { state, conn, hasMore, loadingEarlier, loadEarlier } = useSessionFeed(meta.id, epoch);
+  const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier } = useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
   const composer = useComposer(meta.id, state.running);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -298,6 +298,11 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
               {loadingEarlier && <span className="loading loading-spinner loading-xs" aria-hidden />}
               {t("chat.loadEarlier")}
             </button>
+          )}
+          {earlierError && (
+            <p role="status" className="self-center text-xs text-error">
+              {t("chat.loadEarlierFailed", { reason: earlierError })}
+            </p>
           )}
           <LogList state={state} sessionId={meta.id} flashSeq={flashSeq ?? undefined} onOpenChildSession={setChildId} />
         </div>

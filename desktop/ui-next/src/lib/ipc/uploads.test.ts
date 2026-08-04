@@ -8,6 +8,7 @@ import {
   pickAttachmentPaths,
   uploadFilePath,
   uploadFileStream,
+  uploadFileURL,
 } from "./uploads";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -115,6 +116,13 @@ describe("路径直拷与对话框选择", () => {
     const r = await uploadFilePath("s1", "/home/u/数据.csv");
     expect(r.path).toBe(".monkeycode/uploads/数据.csv");
     expect(calls[0]).toEqual({ cmd: "upload_file_path", args: { id: "s1", src: "/home/u/数据.csv" } });
+  });
+
+  it("uploadFileURL:{id, path} 契约透传,返回 data URL 原样", async () => {
+    const calls = stubShell((cmd) => (cmd === "upload_read" ? "data:image/png;base64,AAA" : undefined));
+    const r = await uploadFileURL("s1", ".monkeycode/uploads/截图.png");
+    expect(r).toBe("data:image/png;base64,AAA");
+    expect(calls[0]).toEqual({ cmd: "upload_read", args: { id: "s1", path: ".monkeycode/uploads/截图.png" } });
   });
 
   it("pickAttachmentPaths:数组/单串/取消(null)/浏览器模式各形态收敛", async () => {
