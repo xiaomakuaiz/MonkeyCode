@@ -147,7 +147,7 @@ export function ToolCard({
         </details>
       )}
       {perm && (
-        <div className="flex flex-col gap-2 border-t border-dashed border-warning/40 px-3 py-2">
+        <div className="flex flex-col gap-2 border-t border-base-300 px-3 py-2">
           <div className="flex items-center gap-2 text-xs font-semibold text-warning">
             <span>{t("chat.perm.needConfirm")}</span>
             {perm.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{perm.tool}</span>}

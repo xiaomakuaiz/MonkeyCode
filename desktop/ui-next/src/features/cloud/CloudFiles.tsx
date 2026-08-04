@@ -201,33 +201,34 @@ export function CloudFiles({
                 <span className="text-sm font-semibold">{t("cloud.files.empty")}</span>
               </li>
             )}
+            {/* menu 文档形态:主行是 li 的直接子交互件(目录=button,文件=span);
+                下载钮是 li 内绝对定位的 .btn(menu.css 里 li 自带 relative、
+                .btn 被排除在菜单行样式之外),hover 只切可见性不插入布局 */}
             {files.map((f) => (
-              <li key={f.path}>
-                <div className="group flex items-center gap-2">
-                  {isDir(f) ? (
-                    <button type="button" className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-start" onClick={() => setDir(f.path)}>
-                      <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
-                      <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                    </button>
-                  ) : (
-                    <span className="flex min-w-0 flex-1 items-center gap-2">
-                      <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
-                      <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                      <span className="font-mono text-[10px] text-base-content/40 tabular-nums">{fmtSize(f.size)}</span>
-                    </span>
-                  )}
-                  {vmId && (
-                    <button
-                      type="button"
-                      aria-label={t("cloud.files.download")}
-                      title={t("cloud.files.download")}
-                      className="btn btn-ghost btn-square btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
-                      onClick={() => void download(f)}
-                    >
-                      <Download size={14} strokeWidth={1.75} aria-hidden />
-                    </button>
-                  )}
-                </div>
+              <li key={f.path} className="group">
+                {isDir(f) ? (
+                  <button type="button" className={vmId ? "pe-9" : undefined} onClick={() => setDir(f.path)}>
+                    <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                    <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  </button>
+                ) : (
+                  <span className={vmId ? "pe-9" : undefined}>
+                    <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
+                    <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                    <span className="font-mono text-[10px] text-base-content/40 tabular-nums">{fmtSize(f.size)}</span>
+                  </span>
+                )}
+                {vmId && (
+                  <button
+                    type="button"
+                    aria-label={t("cloud.files.download")}
+                    title={t("cloud.files.download")}
+                    className="btn btn-ghost btn-square btn-xs absolute end-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    onClick={() => void download(f)}
+                  >
+                    <Download size={14} strokeWidth={1.75} aria-hidden />
+                  </button>
+                )}
               </li>
             ))}
           </ul>

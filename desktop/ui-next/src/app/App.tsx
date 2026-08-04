@@ -94,34 +94,38 @@ function SpaceRail({
             {s === "local" && waiting > 0 && (
               <span className="indicator-item badge badge-warning badge-xs">{waiting}</span>
             )}
-            {/* 44px 命中区;悬停 tooltip 替代原生 title */}
-            <button
-              type="button"
-              aria-label={labels[s]}
-              aria-pressed={space === s}
-              data-tip={labels[s]}
-              className={`btn btn-ghost btn-square tooltip tooltip-right size-11 ${space === s ? "btn-active" : ""}`}
-              onClick={() => onChange(s)}
-            >
-              {(() => {
-                const Icon = SPACE_ICONS[s];
-                return <Icon size={18} strokeWidth={1.75} aria-hidden />;
-              })()}
-            </button>
+            {/* tooltip 按文档形态外包一层;size-11 是 rail 定宽下的结构尺寸
+                (44px 命中区,btn 默认档与 rail 宽不齐) */}
+            <div className="tooltip tooltip-right" data-tip={labels[s]}>
+              <button
+                type="button"
+                aria-label={labels[s]}
+                aria-pressed={space === s}
+                className={`btn btn-ghost btn-square size-11 ${space === s ? "btn-active" : ""}`}
+                onClick={() => onChange(s)}
+              >
+                {(() => {
+                  const Icon = SPACE_ICONS[s];
+                  return <Icon size={18} strokeWidth={1.75} aria-hidden />;
+                })()}
+              </button>
+            </div>
           </div>
         ))}
       </div>
       <div className="pb-2">
-        <button
-          type="button"
-          aria-label={t("rail.settings")}
-          aria-pressed={settingsOpen}
-          data-tip={t("rail.settings")}
-          className={`btn btn-ghost btn-square tooltip tooltip-right size-11 ${settingsOpen ? "btn-active" : ""}`}
-          onClick={onToggleSettings}
-        >
-          <Settings size={18} strokeWidth={1.75} aria-hidden />
-        </button>
+        {/* tooltip 外包一层同上;size-11 为 rail 结构尺寸 */}
+        <div className="tooltip tooltip-right" data-tip={t("rail.settings")}>
+          <button
+            type="button"
+            aria-label={t("rail.settings")}
+            aria-pressed={settingsOpen}
+            className={`btn btn-ghost btn-square size-11 ${settingsOpen ? "btn-active" : ""}`}
+            onClick={onToggleSettings}
+          >
+            <Settings size={18} strokeWidth={1.75} aria-hidden />
+          </button>
+        </div>
       </div>
     </nav>
   );
@@ -430,7 +434,7 @@ export function App() {
       {notices.length > 0 && (
         <div className="toast toast-top toast-end z-50 mt-9" aria-label={t("notice.label")}>
           {notices.map((n) => (
-            <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs shadow-md`}>
+            <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs`}>
               <button
                 type="button"
                 className="link link-hover max-w-64 min-w-0 truncate text-left"

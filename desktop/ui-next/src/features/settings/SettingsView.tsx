@@ -320,9 +320,9 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
           <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
             <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">{body()}</div>
           </div>
-          {/* 保存条:毛玻璃底贴底 */}
+          {/* 保存条:结构线贴底 */}
           {dirty && (
-            <div className="flex shrink-0 items-center gap-2 border-t border-base-300 bg-base-100/90 px-4 py-2 backdrop-blur">
+            <div className="flex shrink-0 items-center gap-2 border-t border-base-300 bg-base-100 px-4 py-2">
               <span className="text-xs text-base-content/70">{t("settings.save.dirty")}</span>
               {saveError && (
                 <span role="alert" className="min-w-0 truncate text-xs text-error" title={saveError}>

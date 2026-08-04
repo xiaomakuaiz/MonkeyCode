@@ -262,10 +262,10 @@ export function Composer({
         </div>
       )}
 
-      {/* 聚焦时边界强调:focus-within 转品牌色描边。斜杠面板挂 daisyUI
-          dropdown 外壳(受控 dropdown-open,焦点始终留在 textarea) */}
+      {/* 输入卡外框:结构线 + 默认底。斜杠面板挂 daisyUI dropdown 外壳
+          (受控 dropdown-open,焦点始终留在 textarea) */}
       <div
-        className={`dropdown dropdown-top dropdown-start relative flex flex-col rounded-box border border-base-300 bg-base-100 transition-colors duration-150 focus-within:border-primary/60 ${slashOpen ? "dropdown-open" : ""}`}
+        className={`dropdown dropdown-top dropdown-start relative flex flex-col rounded-box border border-base-300 bg-base-100 ${slashOpen ? "dropdown-open" : ""}`}
       >
         {slashOpen && (
           <ul
@@ -323,21 +323,21 @@ export function Composer({
         {(ctl.uploads.length > 0 || ctl.atts.length > 0) && (
           <div className="flex flex-wrap gap-2 px-3 pt-2">
             {ctl.uploads.map((u) => (
-              <span key={u.id} className="badge badge-ghost h-auto gap-1.5 py-1.5 text-xs">
+              <span key={u.id} className="badge badge-ghost text-xs">
                 <span className="loading loading-spinner loading-xs" aria-hidden />
                 <span className="max-w-40 truncate">{u.name}</span>
                 {u.pct >= 0 && <span className="tabular-nums opacity-60">{u.pct}%</span>}
                 {u.cancel && (
-                  <button type="button" aria-label={t("chat.uploadCancel")} className="cursor-pointer" onClick={u.cancel}>
+                  <button type="button" aria-label={t("chat.uploadCancel")} className="btn btn-ghost btn-circle btn-xs" onClick={u.cancel}>
                     <X size={12} strokeWidth={1.75} aria-hidden />
                   </button>
                 )}
               </span>
             ))}
             {ctl.atts.map((a, i) => (
-              <span key={a.path} title={a.path} className="badge badge-ghost h-auto gap-1.5 py-1.5 text-xs">
+              <span key={a.path} title={a.path} className="badge badge-ghost text-xs">
                 <span className="max-w-40 truncate">{a.name}</span>
-                <button type="button" aria-label={t("chat.attachRemove")} className="cursor-pointer" onClick={() => ctl.removeAtt(i)}>
+                <button type="button" aria-label={t("chat.attachRemove")} className="btn btn-ghost btn-circle btn-xs" onClick={() => ctl.removeAtt(i)}>
                   <X size={12} strokeWidth={1.75} aria-hidden />
                 </button>
               </span>
@@ -363,7 +363,7 @@ export function Composer({
           <button
             type="button"
             title={t("chat.mode.tip")}
-            className={`btn btn-xs rounded-full ${yolo ? "btn-warning" : "btn-ghost text-base-content/60"}`}
+            className={`btn btn-xs ${yolo ? "btn-warning btn-soft" : "btn-ghost"}`}
             onClick={toggleMode}
           >
             {yolo ? t("chat.mode.yolo") : t("chat.mode.default")}

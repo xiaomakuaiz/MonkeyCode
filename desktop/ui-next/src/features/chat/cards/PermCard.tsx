@@ -107,10 +107,10 @@ export function PermCard({
     );
   }
   return (
-    <div role="alert" className="card card-border border-warning/50 bg-warning/5" data-perm-id={item.id}>
-      <div className="flex flex-col gap-2 p-3">
-        <div className="flex items-center gap-2 text-xs font-semibold text-warning">
-          <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+    <div role="alert" className="alert alert-warning alert-soft items-start" data-perm-id={item.id}>
+      <Pause size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex items-center gap-2 text-xs font-semibold">
           <span>{t("chat.perm.needConfirm")}</span>
           {item.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{item.tool}</span>}
         </div>

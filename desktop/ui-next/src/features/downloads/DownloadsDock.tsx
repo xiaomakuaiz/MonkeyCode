@@ -14,7 +14,7 @@ function DownloadCard({ item }: { item: DownloadItem }) {
   const { t } = useI18n();
   const pct = item.total ? Math.min(100, Math.round((item.written / item.total) * 100)) : null;
   return (
-    <div className="card card-border w-72 bg-base-100 shadow-md">
+    <div className="card card-border w-72 bg-base-100">
       <div className="flex flex-col gap-1.5 p-3 text-xs">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate font-medium" title={item.filename}>

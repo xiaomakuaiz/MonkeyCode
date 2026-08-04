@@ -36,8 +36,8 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   const { t } = useI18n();
   const summary = item.text.split("\n").find((l) => l.trim()) ?? "";
   return (
-    // 思考块刻意弱化:虚线边 + 半透明面,视觉上退到消息流之后
-    <details className="collapse-arrow collapse rounded-box border border-dashed border-base-300 bg-base-200/50">
+    // 思考块走官方 collapse 形态;弱化收尾交给主题变量,不在组件上叠覆写
+    <details className="collapse-arrow collapse border border-base-300 bg-base-200">
       <summary className="collapse-title min-h-0 py-2 text-xs text-base-content/60">
         <Sparkles size={12} strokeWidth={1.75} aria-hidden className="me-1.5 inline-block align-[-1px]" />
         {t("chat.thought")}
@@ -82,7 +82,7 @@ function renderItem(
     case "ask":
       return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
     case "sys":
-      return <div className="badge badge-ghost badge-sm h-auto self-center px-2.5 py-0.5 text-[10.5px] text-base-content/40">{item.text}</div>;
+      return <div className="badge badge-ghost badge-sm self-center text-base-content/40">{item.text}</div>;
   }
 }
 

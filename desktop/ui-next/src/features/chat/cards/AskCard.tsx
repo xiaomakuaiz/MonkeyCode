@@ -116,7 +116,7 @@ export function AskCard({
   };
 
   return (
-    <div className="card card-border border-primary/40 bg-base-100">
+    <div className="card card-border bg-base-100">
       <div className="flex flex-col gap-3 p-3">
         <div className="text-xs font-semibold">{t("chat.ask.title")}</div>
         {item.questions.map((q, qi) => {

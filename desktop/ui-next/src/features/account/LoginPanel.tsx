@@ -51,7 +51,7 @@ function WechatTab({ onLoggedIn }: { onLoggedIn: () => void }) {
 
   return (
     <div className="flex flex-col items-center gap-3 py-2">
-      <div className="relative flex size-42 items-center justify-center overflow-hidden rounded-box border border-base-300 bg-base-200">
+      <div className="card card-border relative size-42 items-center justify-center overflow-hidden">
         {snap.qr && (
           <img
             src={snap.qr}
@@ -276,7 +276,7 @@ export function LoginPanel({
       <div className="flex max-w-sm flex-col gap-1">
         <p className="text-xs text-base-content/60">{t("account.pw.hint")}</p>
         <PasswordForm onLoggedIn={onMcLoggedIn} />
-        <button type="button" className="btn btn-link btn-xs self-start px-0" onClick={() => setMode("wechat")}>
+        <button type="button" className="btn btn-link btn-xs self-start" onClick={() => setMode("wechat")}>
           {t("account.pw.back")}
         </button>
       </div>
@@ -308,7 +308,7 @@ export function LoginPanel({
       </div>
       {mode === "wechat" ? <WechatTab onLoggedIn={onBaizhiLoggedIn} /> : <SmsTab onLoggedIn={onBaizhiLoggedIn} />}
       {withPassword && (
-        <button type="button" className="btn btn-link btn-xs self-start px-0" onClick={() => setMode("password")}>
+        <button type="button" className="btn btn-link btn-xs self-start" onClick={() => setMode("password")}>
           {t("account.pw.entry")}
         </button>
       )}
