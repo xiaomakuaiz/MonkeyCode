@@ -194,7 +194,7 @@ export function NewTaskModal({
                 type="button"
                 role="tab"
                 aria-selected={kind === k}
-                className={`tab font-semibold transition-colors duration-150 ${kind === k ? "tab-active text-primary" : ""}`}
+                className={`tab font-semibold transition-colors duration-150 ${kind === k ? "tab-active" : ""}`}
                 onClick={() => setKind(k)}
               >
                 {k === "local" ? t("create.kind.local") : k === "chat" ? t("create.kind.chat") : t("create.kind.cloud")}
@@ -250,7 +250,7 @@ export function NewTaskModal({
                     <div className="fixed inset-0 z-10" onClick={() => setDirMenu(false)} />
                     <ul
                       aria-label={t("create.recentDirs")}
-                      className="menu absolute z-20 mt-1 max-h-56 w-full flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+                      className="menu absolute z-20 mt-1 max-h-56 w-full flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
                     >
                       {recents.map((p) => (
                         <li key={p}>

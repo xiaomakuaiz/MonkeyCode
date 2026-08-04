@@ -135,7 +135,7 @@ function RowMenu({ task, onDelete }: { task: CloudTask; onDelete: (task: CloudTa
       >
         <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
       </button>
-      <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 shadow-md">
+      <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box bg-base-100 p-2 shadow-sm">
         <li>
           <button
             type="button"
@@ -173,9 +173,8 @@ function TaskRow({
   const { t } = useI18n();
   return (
     <li>
-      {/* 当前任务激活态统一 bg-primary/10 text-primary(与本地侧栏同语言) */}
       <a
-        className={`group flex min-h-8 items-center gap-2 transition-colors duration-150 ${task.id === currentId ? "bg-primary/10 text-primary" : ""}`}
+        className={`group flex min-h-8 items-center gap-2 transition-colors duration-150 ${task.id === currentId ? "menu-active" : ""}`}
         onClick={() => onSelect(task)}
       >
         <StatusDot status={task.status} />

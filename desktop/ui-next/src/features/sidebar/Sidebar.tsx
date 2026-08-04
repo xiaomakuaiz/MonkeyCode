@@ -53,7 +53,7 @@ function RowMenu({ meta, actions }: { meta: SessionMeta; actions: SidebarActions
       >
         <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
       </button>
-      <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 shadow-md">
+      <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box bg-base-100 p-2 shadow-sm">
         <li>
           <button type="button" onClick={() => actions.onToggleArchive(meta)}>
             {meta.archived ? t("sidebar.row.unarchive") : t("sidebar.row.archive")}
@@ -95,9 +95,8 @@ function SessionRow({
 }) {
   return (
     <li>
-      {/* 当前会话激活态统一 bg-primary/10 text-primary(与 rail/设置导航同语言) */}
       <a
-        className={`group flex min-h-8 items-center gap-2 transition-colors duration-150 ${meta.id === currentId ? "bg-primary/10 text-primary" : ""}${attention ? " bg-warning/10" : ""}`}
+        className={`group flex min-h-8 items-center gap-2 transition-colors duration-150 ${meta.id === currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
         data-attention={attention ? "" : undefined}
         onClick={() => actions.onSelect(meta)}
       >
@@ -167,7 +166,7 @@ function ProjectDetails({
             >
               <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
             </button>
-            <ul className="dropdown-content menu menu-sm z-10 w-44 rounded-box border border-base-300 bg-base-100 shadow-md">
+            <ul className="dropdown-content menu menu-sm z-10 w-44 rounded-box bg-base-100 p-2 shadow-sm">
               <li>
                 <button type="button" onClick={() => onProjectArchiveToggle(group.key)}>
                   {archivedProject ? t("sidebar.project.unarchive") : t("sidebar.project.archive")}

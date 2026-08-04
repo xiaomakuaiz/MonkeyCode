@@ -109,7 +109,7 @@ export function OutlineNav({
       </div>
       {open && (
         <ul
-          className="menu pointer-events-auto absolute top-1/2 left-5 z-20 max-h-[70%] w-64 flex-nowrap -translate-y-1/2 overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+          className="menu pointer-events-auto absolute top-1/2 left-5 z-20 max-h-[70%] w-64 flex-nowrap -translate-y-1/2 overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
           onMouseEnter={enter}
           onMouseLeave={leave}
         >

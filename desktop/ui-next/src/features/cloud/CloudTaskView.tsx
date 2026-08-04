@@ -185,10 +185,9 @@ export function CloudTaskView({
         </h1>
         <span data-tauri-drag-region="" className={`badge badge-soft badge-sm ${STATUS_BADGE[h.taskStatus] ?? "badge-ghost"}`}>{statusLabel}</span>
         <span data-tauri-drag-region="" className="badge badge-ghost badge-sm">{t("cloud.view.badge")}</span>
-        {/* 开合态统一 bg-primary/10 text-primary(与 rail/侧栏同语言) */}
         <button
           type="button"
-          className={`btn btn-ghost btn-xs ${filesOpen ? "bg-primary/10 text-primary" : ""}`}
+          className={`btn btn-ghost btn-xs ${filesOpen ? "btn-active" : ""}`}
           disabled={!h.vmId}
           title={h.vmId ? undefined : t("cloud.view.filesPending")}
           onClick={() => setFilesOpen((o) => !o)}
@@ -199,7 +198,7 @@ export function CloudTaskView({
         {h.vmId && !h.ended && (
           <button
             type="button"
-            className={`btn btn-ghost btn-xs ${termOpen ? "bg-primary/10 text-primary" : ""}`}
+            className={`btn btn-ghost btn-xs ${termOpen ? "btn-active" : ""}`}
             onClick={() => setTermOpen((o) => !o)}
           >
             <SquareTerminal size={14} strokeWidth={1.75} aria-hidden />

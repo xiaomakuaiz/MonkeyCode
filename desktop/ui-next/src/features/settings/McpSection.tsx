@@ -35,7 +35,7 @@ export function McpSection({
       {draft.mcps.map((m, i) => {
         const open = expanded === i;
         return (
-          <div key={i} className="card border border-base-300 bg-base-100">
+          <div key={i} className="card card-border bg-base-100">
             <div className="flex items-center gap-2 px-2 py-1.5">
               <button
                 type="button"

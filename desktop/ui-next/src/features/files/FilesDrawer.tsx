@@ -268,7 +268,7 @@ export function FilesDrawer({
             <button
               type="button"
               role="tab"
-              className={`tab transition-colors duration-150 ${tab === "files" ? "tab-active text-primary" : ""}`}
+              className={`tab transition-colors duration-150 ${tab === "files" ? "tab-active" : ""}`}
               onClick={() => selectTab("files")}
             >
               {t("files.tab.files")}
@@ -277,7 +277,7 @@ export function FilesDrawer({
               <button
                 type="button"
                 role="tab"
-                className={`tab gap-1.5 transition-colors duration-150 ${tab === "changes" ? "tab-active text-primary" : ""}`}
+                className={`tab gap-1.5 transition-colors duration-150 ${tab === "changes" ? "tab-active" : ""}`}
                 onClick={() => selectTab("changes")}
               >
                 {t("files.tab.changes")}

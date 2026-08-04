@@ -21,7 +21,7 @@ function ReadonlyAsk({ item, local }: { item: AskItem; local: Answers | null }) 
   };
   const answered = item.questions.some((q) => answerOf(q) !== "");
   return (
-    <div role="status" className="card border border-base-300 bg-base-100">
+    <div role="status" className="card card-border bg-base-100">
       <div className="flex flex-col gap-2 p-3 text-xs">
         <span className={answered ? "badge badge-success badge-soft badge-xs" : "badge badge-ghost badge-xs"}>
           {answered ? t("chat.ask.answered") : t("chat.ask.unanswered")}
@@ -116,7 +116,7 @@ export function AskCard({
   };
 
   return (
-    <div className="card border border-primary/40 bg-base-100">
+    <div className="card card-border border-primary/40 bg-base-100">
       <div className="flex flex-col gap-3 p-3">
         <div className="text-xs font-semibold">{t("chat.ask.title")}</div>
         {item.questions.map((q, qi) => {

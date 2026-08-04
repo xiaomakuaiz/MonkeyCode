@@ -100,7 +100,7 @@ function BaizhiCard({
   };
 
   return (
-    <div className="card border border-base-300 bg-base-100">
+    <div className="card card-border bg-base-100">
       <div className="flex flex-col gap-2 p-4">
         <h2 className="text-sm font-semibold">{t("account.baizhi.title")}</h2>
         <div className="flex items-center gap-2">
@@ -187,7 +187,7 @@ function McCard({
   const userName = user?.name || user?.username || user?.email || t("account.loggedIn");
 
   return (
-    <div className="card border border-base-300 bg-base-100">
+    <div className="card card-border bg-base-100">
       <div className="flex flex-col gap-2 p-4">
         <h2 className="text-sm font-semibold">{t("account.mc.title")}</h2>
         {!connected ? (

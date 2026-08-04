@@ -290,7 +290,7 @@ export function LoginPanel({
         <button
           type="button"
           role="tab"
-          className={mode === "wechat" ? "tab tab-active text-primary" : "tab"}
+          className={mode === "wechat" ? "tab tab-active" : "tab"}
           aria-selected={mode === "wechat"}
           onClick={() => setMode("wechat")}
         >
@@ -299,7 +299,7 @@ export function LoginPanel({
         <button
           type="button"
           role="tab"
-          className={mode === "sms" ? "tab tab-active text-primary" : "tab"}
+          className={mode === "sms" ? "tab tab-active" : "tab"}
           aria-selected={mode === "sms"}
           onClick={() => setMode("sms")}
         >

@@ -303,10 +303,9 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
           <ul className="menu w-full gap-0.5 p-0">
             {items.map((it) => (
               <li key={it.id}>
-                {/* 当前项激活态统一 bg-primary/10 text-primary(与 rail/侧栏同语言) */}
                 <button
                   type="button"
-                  className={`transition-colors duration-150 ${section === it.id ? "bg-primary/10 text-primary" : ""}`}
+                  className={`transition-colors duration-150 ${section === it.id ? "menu-active" : ""}`}
                   aria-current={section === it.id ? "page" : undefined}
                   onClick={() => setSection(it.id)}
                 >

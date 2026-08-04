@@ -94,15 +94,13 @@ function SpaceRail({
             {s === "local" && waiting > 0 && (
               <span className="indicator-item badge badge-warning badge-xs">{waiting}</span>
             )}
-            {/* 44px 命中区;激活态 = 品牌淡底色块;悬停 tooltip 替代原生 title */}
+            {/* 44px 命中区;悬停 tooltip 替代原生 title */}
             <button
               type="button"
               aria-label={labels[s]}
               aria-pressed={space === s}
               data-tip={labels[s]}
-              className={`tooltip tooltip-right flex size-11 cursor-pointer items-center justify-center rounded-box transition-colors duration-150 ${
-                space === s ? "bg-primary/10 text-primary" : "text-base-content/60 hover:bg-base-content/10 hover:text-base-content"
-              }`}
+              className={`btn btn-ghost btn-square tooltip tooltip-right size-11 ${space === s ? "btn-active" : ""}`}
               onClick={() => onChange(s)}
             >
               {(() => {
@@ -119,9 +117,7 @@ function SpaceRail({
           aria-label={t("rail.settings")}
           aria-pressed={settingsOpen}
           data-tip={t("rail.settings")}
-          className={`tooltip tooltip-right flex size-11 cursor-pointer items-center justify-center rounded-box transition-colors duration-150 ${
-            settingsOpen ? "bg-primary/10 text-primary" : "text-base-content/60 hover:bg-base-content/10 hover:text-base-content"
-          }`}
+          className={`btn btn-ghost btn-square tooltip tooltip-right size-11 ${settingsOpen ? "btn-active" : ""}`}
           onClick={onToggleSettings}
         >
           <Settings size={18} strokeWidth={1.75} aria-hidden />
