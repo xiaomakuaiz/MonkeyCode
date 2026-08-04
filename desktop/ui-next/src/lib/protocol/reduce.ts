@@ -479,10 +479,12 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
     case "task-started":
       // plan/todo 是轮次级状态:上一轮的最终清单可在结束后保留供回顾,
       // 新一轮开始时只清掉已全部完成的清单;还有未完成项则跨轮保留,
-      // 直到本轮 plan 帧继续更新它
+      // 直到本轮 plan 帧继续更新它。turnEnded 同为轮次级:新一轮开始即复位,
+      // 视图的「轮末边沿」检测(改动计数刷新)每轮都能触发,不是只有首轮
       return {
         ...s,
         running: true,
+        turnEnded: false,
         plan: s.plan.length > 0 && s.plan.every((e) => e.status === "completed") ? [] : s.plan,
       };
     case "task-ended":

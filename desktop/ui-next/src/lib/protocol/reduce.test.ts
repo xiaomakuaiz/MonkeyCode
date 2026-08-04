@@ -480,6 +480,8 @@ describe("轮次与系统帧", () => {
     const ended = reduceFrame(started, frame("task-ended"));
     expect(ended).toMatchObject({ running: false, turnEnded: true, streamKind: "" });
     expect(ended.items.at(-1)).toEqual({ kind: "sys", tag: "turn-end", text: "— 本轮结束 —" });
+    // turnEnded 是轮次级状态:新一轮开始即复位,轮末边沿检测每轮可触发
+    expect(reduceFrame(ended, frame("task-started")).turnEnded).toBe(false);
   });
 
   it("task-error 渲染错误系统行,缺 error 字段回退文案", () => {

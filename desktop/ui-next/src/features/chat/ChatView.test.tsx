@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
@@ -18,7 +18,19 @@ interface Op {
   args?: Record<string, unknown>;
 }
 
-function stubShell({ hasMore = false, outline }: { hasMore?: boolean; outline?: unknown[] } = {}) {
+function stubShell({
+  hasMore = false,
+  outline,
+  frames,
+  changes,
+}: {
+  hasMore?: boolean;
+  outline?: unknown[];
+  /** session_open 回放窗口帧覆写(空态用例给 []) */
+  frames?: unknown[];
+  /** session_call repo_file_changes 的应答(改动徽标用例) */
+  changes?: unknown;
+} = {}) {
   const ops: Op[] = [];
   const listeners = new Map<string, (e: { payload: unknown }) => void>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
@@ -26,9 +38,13 @@ function stubShell({ hasMore = false, outline }: { hasMore?: boolean; outline?: 
       invoke: (cmd: string, args?: Record<string, unknown>) => {
         ops.push({ op: "invoke", cmd, args });
         if (cmd === "session_outline") return Promise.resolve(outline ?? null);
+        if (cmd === "session_call" && args?.kind === "repo_file_changes") {
+          return Promise.resolve(changes ?? { result: [], is_git_repo: true });
+        }
+        if (cmd === "session_call") return Promise.resolve({ result: [] });
         if (cmd === "session_open") {
           return Promise.resolve({
-            frames: [
+            frames: frames ?? [
               { type: "user-input", data: { content: b64encode("帮我修 bug") }, timestamp: 1, seq: 1 },
               {
                 type: "task-running",
@@ -437,5 +453,114 @@ describe("聊天视图", () => {
     stubShell();
     render(<ChatView meta={META} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+  });
+
+  it("空态:items 空且非 running 给欢迎信息;本地版主句含 mono workdir,chat 版另一套文案", async () => {
+    stubShell({ frames: [] });
+    const { unmount } = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText(/开始新任务/)).toBeTruthy());
+    expect(screen.getByText("/p/a")).toBeTruthy(); // 主句内嵌 workdir
+    expect(screen.getByText(/描述你想做的事/)).toBeTruthy();
+    expect(screen.queryByText("开始一段新会话")).toBeNull();
+    unmount();
+
+    stubShell({ frames: [] });
+    render(<ChatView meta={{ ...META, kind: "chat", workdir: "" }} />);
+    await waitFor(() => expect(screen.getByText("开始一段新会话")).toBeTruthy());
+    expect(screen.getByText(/记录想法、讨论方案/)).toBeTruthy();
+    expect(screen.queryByText(/开始新任务/)).toBeNull();
+  });
+
+  it("空态只在真空会话出现:有回放内容时不渲染欢迎信息", async () => {
+    stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.queryByText(/开始新任务/)).toBeNull();
+    expect(screen.queryByText(/描述你想做的事/)).toBeNull();
+  });
+
+  it("头部 ⋯ 菜单:重命名触发标题输入态;归档发 session_patch(archived)", async () => {
+    const { ops } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getByRole("menu")).toBeTruthy();
+    await userEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
+    expect(screen.queryByRole("menu")).toBeNull(); // 选中即收
+    const input = screen.getByRole("textbox", { name: "会话标题" });
+    fireEvent.keyDown(input, { key: "Escape" }); // 放弃改名,不发 patch
+
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "归档" }));
+    const patches = ops.filter((o) => o.cmd === "session_patch");
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.args).toEqual({ id: "s1", patch: { archived: true } });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("头部 ⋯ 菜单:已归档会话给「取消归档」,patch archived:false", async () => {
+    const { ops } = stubShell();
+    render(<ChatView meta={{ ...META, archived: true }} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "取消归档" }));
+    const patch = ops.find((o) => o.cmd === "session_patch");
+    expect(patch?.args).toEqual({ id: "s1", patch: { archived: false } });
+  });
+
+  it("头部 ⋯ 菜单删除二段确认:首点只变「确认删除?」,再点才经 onDeleted 通知", async () => {
+    stubShell();
+    const onDeleted = vi.fn();
+    render(<ChatView meta={META} onDeleted={onDeleted} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+    expect(onDeleted).not.toHaveBeenCalled(); // 首点只进确认态
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "确认删除?" }));
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // 确认态不粘滞:重开菜单回到普通「删除」
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getByRole("menuitem", { name: "删除" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "确认删除?" })).toBeNull();
+  });
+
+  it("改动徽标:轮末拉 repo_file_changes 计数;点文件钮直达「改动」页;§7 徽标带拖拽属性", async () => {
+    const { ops, emit } = stubShell({ changes: { result: [{ path: "src/a.ts", status: "M" }], is_git_repo: true } });
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const header = document.querySelector("[data-view-header]") as HTMLElement;
+    expect(header.querySelector(".indicator-item")).toBeNull(); // 轮末前无徽标
+    const changesCalls = () =>
+      ops.filter((o) => o.cmd === "session_call" && (o.args?.kind as string) === "repo_file_changes").length;
+    expect(changesCalls()).toBe(0);
+
+    emit("frames:s1", [{ type: "task-ended", timestamp: 6, seq: 6 }]);
+    await waitFor(() => expect(within(header).getByText("1")).toBeTruthy());
+    expect(changesCalls()).toBe(1);
+
+    // turnEnded 是轮次级状态:下一轮开始复位,轮末边沿每轮都触发重拉
+    emit("frames:s1", [{ type: "task-started", timestamp: 7, seq: 7 }]);
+    await waitFor(() => expect(changesCalls()).toBe(1)); // 运行中不拉
+    emit("frames:s1", [{ type: "task-ended", timestamp: 8, seq: 8 }]);
+    await waitFor(() => expect(changesCalls()).toBe(2));
+    // §7:indicator 壳与徽标是头部非交互子节点,必须带拖拽属性;按钮不带
+    expect(header.querySelector(".indicator")?.hasAttribute("data-tauri-drag-region")).toBe(true);
+    expect(header.querySelector(".indicator-item")?.hasAttribute("data-tauri-drag-region")).toBe(true);
+    for (const btn of header.querySelectorAll("button")) {
+      expect(btn.hasAttribute("data-tauri-drag-region")).toBe(false);
+    }
+
+    // 徽标存在时点文件钮:抽屉直达「改动」页,改动列表直出
+    await userEvent.click(within(header).getByRole("button", { name: "会话文件" }));
+    const tab = await screen.findByRole("tab", { name: /改动/ });
+    expect(tab.className).toContain("tab-active");
+    expect(await screen.findByRole("button", { name: /a\.ts/ })).toBeTruthy();
   });
 });

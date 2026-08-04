@@ -8,7 +8,7 @@
 // - 「加载更早」前插保位记**元素**,提交后 layoutEffect 对齐回原视口位。
 // 大纲跳转:锚(data-user-seq)不在 DOM 时循环 loadEarlier 补页——用
 // effect 驱动(每页提交后重查),不赌 React 提交时序;上限重试防死循环。
-import { FolderOpen, X } from "lucide-react";
+import { Ellipsis, FolderOpen, X } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -16,6 +16,8 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -23,7 +25,7 @@ import {
 import { useApprovalHotkeys } from "@/app/shortcuts";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
-import { repoReveal } from "@/lib/ipc/repo";
+import { repoChanges, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
@@ -50,7 +52,16 @@ const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1
 // 整体卸载重挂,记忆只能存在模块级(旧 UI chat.tsx 同款设计,理由随迁)。
 const scrollMemo = new Map<string, { anchor: number; offset: number; pinned: boolean }>();
 
-export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: number }) {
+export function ChatView({
+  meta,
+  epoch = 0,
+  onDeleted,
+}: {
+  meta: SessionMeta;
+  epoch?: number;
+  /** ⋯ 菜单二段确认后的删除动作:通知 App 走与侧栏同一套删除流程 */
+  onDeleted?: () => void;
+}) {
   const { t } = useI18n();
   const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier } = useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
@@ -260,6 +271,30 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
     setEditingTitle(false);
   }, [meta.id]);
 
+  // ==== 头部 ⋯ 菜单(重命名/归档/删除):受控 dropdown,焦点移出即收;
+  // 删除走二段确认(首点变「确认删除?」,再点才经 onDeleted 通知 App)。
+  // Esc 就地拦截并阻断冒泡——不能落进全局审批链(esc = 不可逆拒绝),
+  // 手法与 Composer 两个 picker 一致。 ====
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const closeMenu = () => {
+    setMenuOpen(false);
+    setConfirmDelete(false);
+  };
+  const onMenuBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) closeMenu();
+  };
+  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !menuOpen) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu();
+  };
+  useEffect(() => {
+    // 切会话收起菜单(确认态属于上一个会话)
+    closeMenu();
+  }, [meta.id]);
+
   // ==== 子代理会话回放浮层(D2):工具卡「查看子会话」入口打开,只读 ====
   const [childId, setChildId] = useState<string | null>(null);
   useEffect(() => {
@@ -335,6 +370,28 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
     if (state.turnEnded && !prevTurnEnded.current) setChangesToken((n) => n + 1);
     prevTurnEnded.current = state.turnEnded;
   }, [state.turnEnded]);
+  // 改动数徽标:轮末(changesToken 边沿)拉一次计数;浏览器模式 repoChanges
+  // 自身降级空值,失败静默归零(徽标是提示,不是错误面)。徽标 >0 时点
+  // 文件钮直达抽屉「改动」页。
+  const [changesCount, setChangesCount] = useState(0);
+  useEffect(() => {
+    setChangesCount(0); // 徽标属于会话,切走清零
+  }, [meta.id]);
+  useEffect(() => {
+    if (changesToken === 0) return;
+    let alive = true;
+    repoChanges(meta.id).then(
+      (r) => {
+        if (alive) setChangesCount(r.changes.length);
+      },
+      () => {
+        if (alive) setChangesCount(0);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [changesToken, meta.id]);
   const dragDepth = useRef(0);
   const composerRef = useRef(composer);
   composerRef.current = composer;
@@ -371,6 +428,13 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [meta.id],
   );
+
+  // ==== 空态(旧 chat.tsx 同款信息设计:logo + 主句 + 副句):items 空且
+  // 非 running 才算空;chat 会话(无 workdir)与本地任务两版文案。本地版
+  // 主句内嵌 mono workdir——模板留 {dir} 占位,渲染时拆开插 span。 ====
+  const empty = state.items.length === 0 && !state.running;
+  const emptyChat = !meta.workdir;
+  const [emptyTitlePre, emptyTitlePost] = t("chat.empty.taskTitle").split("{dir}");
 
   return (
     <main
@@ -432,15 +496,86 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          aria-label={t("files.label")}
-          title={t("files.label")}
-          className="btn btn-ghost btn-square btn-sm text-base-content/60"
-          onClick={() => setDrawerOpen((v) => !v)}
+        {/* §7:indicator 壳与徽标是头部非交互子节点,必须各自带拖拽属性 */}
+        <div data-tauri-drag-region="" className={changesCount > 0 ? "indicator" : undefined}>
+          {changesCount > 0 && (
+            <span data-tauri-drag-region="" className="indicator-item badge badge-primary badge-xs">
+              {changesCount}
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label={t("files.label")}
+            title={t("files.label")}
+            className="btn btn-ghost btn-square btn-sm text-base-content/60"
+            onClick={() => setDrawerOpen((v) => !v)}
+          >
+            <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
+          </button>
+        </div>
+        <div
+          className={`dropdown dropdown-end ${menuOpen ? "dropdown-open" : ""}`}
+          onBlur={onMenuBlur}
+          onKeyDown={onMenuKeyDown}
         >
-          <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
-        </button>
+          <button
+            type="button"
+            aria-label={t("chat.menu.label")}
+            title={t("chat.menu.label")}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            className="btn btn-ghost btn-square btn-sm text-base-content/60"
+            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
+          >
+            <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
+          </button>
+          {menuOpen && (
+            <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 rounded-box bg-base-100 p-2 shadow-sm">
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    startRename();
+                  }}
+                >
+                  {t("chat.menu.rename")}
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    void sessionPatch(meta.id, { archived: !meta.archived }).catch(() => {});
+                  }}
+                >
+                  {meta.archived ? t("chat.menu.unarchive") : t("chat.menu.archive")}
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={confirmDelete ? "text-error" : ""}
+                  onClick={() => {
+                    // 危险动作二段确认:首点只变文案,再点才执行(同 CloudTaskView 停止钮)
+                    if (!confirmDelete) {
+                      setConfirmDelete(true);
+                      return;
+                    }
+                    closeMenu();
+                    onDeleted?.();
+                  }}
+                >
+                  {confirmDelete ? t("chat.menu.deleteConfirm") : t("chat.menu.delete")}
+                </button>
+              </li>
+            </ul>
+          )}
+        </div>
       </header>
 
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
@@ -452,6 +587,25 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
         </div>
       )}
 
+      {empty ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
+          <img src="/logo.png" alt="" aria-hidden className="h-13 w-13 rounded-2xl shadow-sm" />
+          <p className="max-w-md text-center text-[15px] font-bold">
+            {emptyChat ? (
+              t("chat.empty.chatTitle")
+            ) : (
+              <>
+                {emptyTitlePre}
+                <span className="font-mono text-[13px] whitespace-nowrap">{meta.workdir}</span>
+                {emptyTitlePost}
+              </>
+            )}
+          </p>
+          <p className="max-w-md text-center text-xs leading-relaxed text-base-content/60">
+            {emptyChat ? t("chat.empty.chatDetail") : t("chat.empty.taskDetail")}
+          </p>
+        </div>
+      ) : (
       <div
         ref={scrollRef}
         data-chat-log=""
@@ -484,6 +638,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
           />
         </div>
       </div>
+      )}
 
       {/* 大纲挂在视图根(高度恒定的参照物),不挂日志视口:下方任务面板/
           排队条长高会压矮视口,居中点列跟着跳 */}
@@ -496,7 +651,12 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
         </div>
       </footer>
       {drawerOpen && (
-        <FilesDrawer sessionId={meta.id} onClose={() => setDrawerOpen(false)} refreshToken={changesToken} />
+        <FilesDrawer
+          sessionId={meta.id}
+          onClose={() => setDrawerOpen(false)}
+          refreshToken={changesToken}
+          initialTab={changesCount > 0 ? "changes" : "files"}
+        />
       )}
       {childId && <ChildSessionModal id={childId} workdir={meta.workdir} onClose={() => setChildId(null)} />}
     </main>

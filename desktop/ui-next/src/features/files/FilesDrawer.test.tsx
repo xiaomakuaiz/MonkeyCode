@@ -188,6 +188,21 @@ describe("文件抽屉", () => {
     expect(screen.getByRole("tab", { name: "文件" })).toBeTruthy();
   });
 
+  it("initialTab=changes:打开即落在「改动」页(徽标直达),文件树不拉根目录", async () => {
+    const calls = stubShell({
+      list: { "": [] },
+      changes: { result: [{ path: "src/a.ts", status: "M" }], is_git_repo: true },
+    });
+    render(<FilesDrawer sessionId="s1" onClose={() => {}} initialTab="changes" />);
+
+    const row = await screen.findByRole("button", { name: /a\.ts/ }); // 改动列表直出
+    expect(row.textContent).toContain("修改");
+    expect(screen.getByRole("tab", { name: /改动/ }).className).toContain("tab-active");
+    expect(screen.getByRole("tab", { name: "文件" }).className).not.toContain("tab-active");
+    // 树未挂载:根目录列表不必拉
+    expect(calls.filter((c) => c.kind === "repo_file_list")).toHaveLength(0);
+  });
+
   it("refreshToken 自增(轮次结束)重拉改动列表", async () => {
     const calls = stubShell({ list: { "": [] } });
     const { rerender } = render(<FilesDrawer sessionId="s1" onClose={() => {}} refreshToken={0} />);

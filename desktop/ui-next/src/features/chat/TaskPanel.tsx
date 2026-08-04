@@ -13,6 +13,22 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
   const done = entries.filter((e) => e.status === "completed").length;
   const current =
     entries.find((e) => e.status === "in_progress") ?? entries.find((e) => e.status === "pending");
+  // 依赖提示(上游 todo_update 携带 id/depends_on 时):id → 序号,blocked
+  // 缺省按「有未完成依赖」本地推导(旧 taskPanel.tsx 同款)
+  const byId = new Map(entries.map((e, i) => [e.id ?? "", { idx: i + 1, entry: e }]));
+  const unfinishedDeps = (e: PlanEntry) =>
+    (e.depends_on ?? []).filter((d) => byId.get(d)?.entry.status !== "completed");
+  const isBlocked = (e: PlanEntry) =>
+    e.status !== "completed" && (e.blocked ?? unfinishedDeps(e).length > 0);
+  const depHint = (e: PlanEntry) => {
+    const names = unfinishedDeps(e)
+      .map((d) => byId.get(d))
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      .map((x) => `#${x.idx}`);
+    return names.length ? t("chat.plan.waitDeps", { list: names.join(" ") }) : null;
+  };
+  // 有任何依赖关系时全员编号,「等 #N」才有落点
+  const numbered = entries.some((e) => e.depends_on?.length);
 
   return (
     <div
@@ -42,28 +58,38 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
       </button>
       <div className="collapse-content px-3">
         <ul className="flex max-h-44 flex-col gap-1 overflow-x-hidden overflow-y-auto pb-1 text-xs">
-          {entries.map((e, i) => (
-            <li key={e.id ?? i} className="flex items-start gap-2">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-xs mt-px shrink-0"
-                checked={e.status === "completed"}
-                readOnly
-                aria-label={e.content}
-              />
-              <span
-                className={
-                  e.status === "completed"
-                    ? "line-through opacity-50"
-                    : e.status === "in_progress"
-                      ? "font-medium text-primary"
-                      : ""
-                }
-              >
-                {e.content}
-              </span>
-            </li>
-          ))}
+          {entries.map((e, i) => {
+            const blocked = isBlocked(e);
+            const hint = depHint(e);
+            return (
+              <li key={e.id ?? i} className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs mt-px shrink-0"
+                  checked={e.status === "completed"}
+                  readOnly
+                  aria-label={e.content}
+                />
+                {numbered && (
+                  <span className="shrink-0 text-base-content/40 tabular-nums">#{i + 1}</span>
+                )}
+                <span
+                  className={
+                    e.status === "completed"
+                      ? "line-through opacity-50"
+                      : blocked
+                        ? "opacity-60" // blocked 行降色(比 completed 略实,旧 t4/t5 层级)
+                        : e.status === "in_progress"
+                          ? "font-medium text-primary"
+                          : ""
+                  }
+                >
+                  {e.content}
+                  {hint && <span className="ml-1.5 text-base-content/60">· {hint}</span>}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

@@ -134,7 +134,15 @@ function SpaceRail({
   );
 }
 
-function MainArea({ current, epoch }: { current: SessionMeta | null; epoch: number }) {
+function MainArea({
+  current,
+  epoch,
+  onDelete,
+}: {
+  current: SessionMeta | null;
+  epoch: number;
+  onDelete: (meta: SessionMeta) => void;
+}) {
   const { t } = useI18n();
   const [info, setInfo] = useState<HostInfo | null>(null);
   useEffect(() => {
@@ -147,7 +155,7 @@ function MainArea({ current, epoch }: { current: SessionMeta | null; epoch: numb
     };
   }, []);
 
-  if (current) return <ChatView meta={current} epoch={epoch} />;
+  if (current) return <ChatView meta={current} epoch={epoch} onDeleted={() => onDelete(current)} />;
 
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-base-100">
@@ -347,6 +355,18 @@ export function App() {
     setCreating(null);
   };
 
+  /** 删除会话(侧栏右键与 ChatView ⋯ 菜单共用一套):composer 留档随会话
+   *  清除,删的是当前会话则撤选中,最后重拉列表。 */
+  const removeSession = (meta: SessionMeta) => {
+    dropStash(meta.id); // 会话没了,composer 留档随之清除
+    void sessionDelete(meta.id)
+      .catch(() => {})
+      .then(() => {
+        if (currentIdRef.current === meta.id) setCurrentId(null);
+        refresh();
+      });
+  };
+
   const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
 
   // 新建弹窗的最近目录:非 chat、未归档(会话与项目两级),按最近活跃排,项目 key 去重
@@ -401,15 +421,7 @@ export function App() {
                 .catch(() => {})
                 .then(refresh);
             },
-            onDelete: (meta) => {
-              dropStash(meta.id); // 会话没了,composer 留档随之清除
-              void sessionDelete(meta.id)
-                .catch(() => {})
-                .then(() => {
-                  if (currentId === meta.id) setCurrentId(null);
-                  refresh();
-                });
-            },
+            onDelete: removeSession,
             onToggleArchive: (meta) => {
               void sessionPatch(meta.id, { archived: !meta.archived })
                 .catch(() => {})
@@ -440,7 +452,7 @@ export function App() {
         ) : space === "cloud" && cloudTask ? (
           <CloudTaskView key={cloudTask.id} task={cloudTask} onTasksChanged={() => setCloudReload((n) => n + 1)} />
         ) : (
-          <MainArea current={space === "cloud" ? null : current} epoch={epoch} />
+          <MainArea current={space === "cloud" ? null : current} epoch={epoch} onDelete={removeSession} />
         )}
       </div>
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭 */}
