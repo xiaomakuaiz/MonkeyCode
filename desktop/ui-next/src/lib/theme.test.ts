@@ -21,21 +21,21 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("主题偏好", () => {
-  it("缺省、清单外脏数据和不可读存储都回落浅色", () => {
-    expect(readTheme()).toBe("light");
+  it("缺省、清单外脏数据和不可读存储都回落品牌主题", () => {
+    expect(readTheme()).toBe("monkeycode");
     values.set("mc.theme", "dark");
     expect(readTheme()).toBe("dark");
     values.set("mc.theme", "dracula");
     expect(readTheme()).toBe("dracula");
-    values.set("mc.theme", "midnight"); // 不是 daisyUI 主题名
-    expect(readTheme()).toBe("light");
+    values.set("mc.theme", "midnight"); // 不在清单
+    expect(readTheme()).toBe("monkeycode");
     vi.stubGlobal("localStorage", {
       getItem: () => {
         throw new Error("storage disabled");
       },
       setItem: vi.fn(),
     });
-    expect(readTheme()).toBe("light");
+    expect(readTheme()).toBe("monkeycode");
   });
 
   it("切换写盘并显式落根节点属性", () => {
@@ -61,7 +61,7 @@ describe("主题偏好", () => {
   it("启动矫正脏值并落属性;存储不可写时仍应用本次主题", () => {
     values.set("mc.theme", "已卸载的主题");
     applyStoredTheme();
-    expect(root.dataset.theme).toBe("light");
+    expect(root.dataset.theme).toBe("monkeycode");
 
     vi.stubGlobal("localStorage", {
       getItem: () => null,
@@ -75,15 +75,15 @@ describe("主题偏好", () => {
 });
 
 describe("THEMES 清单与 app.css 对表", () => {
-  it("@plugin daisyui 的 themes 与 THEMES 完全一致", () => {
+  it("内置 themes 列表 + 自定义主题块 name 与 THEMES 完全一致", () => {
     const css = readFileSync(fileURLToPath(new URL("../styles/app.css", import.meta.url)), "utf-8");
     const block = /@plugin "daisyui"\s*\{([^}]*)\}/.exec(css);
     expect(block, "app.css 缺 @plugin daisyui 块").toBeTruthy();
-    const inCss = (/themes:\s*([^;]+);/.exec(block?.[1] ?? "")?.[1] ?? "")
+    const builtin = (/themes:\s*([^;]+);/.exec(block?.[1] ?? "")?.[1] ?? "")
       .split(",")
       .map((s) => s.trim().split(/\s+/)[0] ?? "")
-      .filter(Boolean)
-      .sort();
-    expect(inCss).toEqual([...THEMES].sort());
+      .filter(Boolean);
+    const custom = [...css.matchAll(/@plugin "daisyui\/theme"\s*\{[^}]*?name:\s*"([^"]+)"/g)].map((m) => m[1] ?? "");
+    expect([...custom, ...builtin].sort()).toEqual([...THEMES].sort());
   });
 });

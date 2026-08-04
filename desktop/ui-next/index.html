@@ -13,8 +13,9 @@
          (oklch(100% 0 0) / oklch(25.33% 0.016 252.42)),升级 daisyUI 时需重对,
          scripts/check_theme_tokens.py 盯着这两个值(切换后接管本文件)。
          其余 33 套主题的首帧底色走下方脚本的 mc.themeBg 缓存(内联样式盖过这里)。 */
-      html, body { background: #ffffff; }
-      html[data-theme="dark"], html[data-theme="dark"] body { background: #1d232a; }
+      html, body { background: #fcfdfc; }
+      html[data-theme="dark"], html[data-theme="dark"] body,
+      html[data-theme="monkeycode-dark"], html[data-theme="monkeycode-dark"] body { background: #171e2b; }
     </style>
     <script>
       /* 同步执行,先于首帧落属性:<script type="module"> 是 defer 的,main.tsx 里的
@@ -25,11 +26,11 @@
          内联到 html 上,让非 light/dark 主题的首帧底色也正确。
          键名与回落规则跟 src/lib/theme.ts 一致(同样的检查器盯着)。 */
       try {
-        document.documentElement.dataset.theme = localStorage.getItem("mc.theme") || "light";
+        document.documentElement.dataset.theme = localStorage.getItem("mc.theme") || "monkeycode";
         var mcThemeBg = localStorage.getItem("mc.themeBg");
         if (mcThemeBg) document.documentElement.style.background = mcThemeBg;
       } catch (e) {
-        document.documentElement.dataset.theme = "light"; /* 存储不可读:按浅色走,与 readTheme 的回落一致 */
+        document.documentElement.dataset.theme = "monkeycode"; /* 存储不可读:按浅色走,与 readTheme 的回落一致 */
       }
     </script>
   </head>

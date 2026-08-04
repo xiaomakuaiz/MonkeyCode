@@ -7,8 +7,10 @@
 const THEME_KEY = "mc.theme";
 const THEME_BG_KEY = "mc.themeBg";
 
-/** 与 styles/app.css 的 @plugin daisyui themes 清单一致(有测试对表)。 */
+/** 与 styles/app.css 的主题声明一致(@plugin daisyui 的 themes 列表 +
+ *  @plugin "daisyui/theme" 自定义块的 name;有测试对表)。品牌两套在前。 */
 export const THEMES = [
+  "monkeycode", "monkeycode-dark",
   "light", "dark", "abyss", "acid", "aqua", "autumn", "black", "bumblebee",
   "business", "caramellatte", "cmyk", "coffee", "corporate", "cupcake",
   "cyberpunk", "dim", "dracula", "emerald", "fantasy", "forest", "garden",
@@ -26,9 +28,9 @@ function isTheme(value: string | null): value is Theme {
 export function readTheme(): Theme {
   try {
     const raw = localStorage.getItem(THEME_KEY);
-    return isTheme(raw) ? raw : "light";
+    return isTheme(raw) ? raw : "monkeycode";
   } catch {
-    return "light";
+    return "monkeycode";
   }
 }
 

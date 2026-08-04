@@ -2,6 +2,7 @@
 // daisyUI 原生形态:menu(嵌套 details 折叠)、dropdown 行操作、status 状态点、
 // badge 计数、input 搜索。项目拖拽排序用 HTML5 draggable(落点计算在
 // lib/util/projects::reorderKeys,纯函数可测)。
+import { Search } from "lucide-react";
 import { useState, type DragEvent } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -350,12 +351,9 @@ export function Sidebar({
   };
 
   return (
-    <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col gap-2 overflow-y-auto bg-base-200 p-2">
+    <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col gap-2 overflow-y-auto border-e border-base-300 bg-base-200 p-2">
       <label className="input input-sm w-full">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" className="shrink-0 opacity-50" aria-hidden>
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
+        <Search size={13} strokeWidth={2} className="shrink-0 opacity-50" aria-hidden />
         <input
           type="search"
           aria-label={t("sidebar.search")}

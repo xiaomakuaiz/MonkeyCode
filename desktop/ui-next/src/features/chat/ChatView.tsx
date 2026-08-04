@@ -4,6 +4,7 @@
 // scrollHeight 差值补偿 scrollTop,视口纹丝不动。
 // 大纲跳转:锚(data-user-seq)不在 DOM 时循环 loadEarlier 补页——用
 // effect 驱动(每页提交后重查),不赌 React 提交时序;上限重试防死循环。
+import { FolderOpen } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -272,9 +273,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
           className="btn btn-ghost btn-square btn-sm text-base-content/60"
           onClick={() => setDrawerOpen((v) => !v)}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
-            <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h9A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z" />
-          </svg>
+          <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
         </button>
         {state.usage && state.usage.size > 0 && (
           <span

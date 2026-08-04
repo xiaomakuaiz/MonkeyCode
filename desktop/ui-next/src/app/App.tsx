@@ -7,6 +7,7 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
+import { Cloud, FolderGit2, MessagesSquare, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
@@ -42,11 +43,11 @@ import { noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/li
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
-const SPACE_ICONS: Record<Space, string> = {
-  // 简笔图形占位:P9 前统一换成正式 icon 集
-  local: "M3 5h18v12H3zM3 20h18",
-  cloud: "M7 17a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 9a4 4 0 0 1-1 7.9z",
-  chat: "M4 5h16v10H9l-5 4z",
+// 统一图标族:lucide(一致的描边宽度与圆角语言)
+const SPACE_ICONS: Record<Space, typeof FolderGit2> = {
+  local: FolderGit2,
+  cloud: Cloud,
+  chat: MessagesSquare,
 };
 
 const NOTICE_TONE: Record<NoticeKind, string> = {
@@ -91,9 +92,10 @@ function SpaceRail({
               className={`btn btn-square btn-ghost btn-sm ${space === s ? "btn-active text-primary" : "text-base-content/60"}`}
               onClick={() => onChange(s)}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
-                <path d={SPACE_ICONS[s]} />
-              </svg>
+              {(() => {
+                const Icon = SPACE_ICONS[s];
+                return <Icon size={18} strokeWidth={1.75} aria-hidden />;
+              })()}
             </button>
           </div>
         ))}
@@ -106,10 +108,7 @@ function SpaceRail({
           className="btn btn-square btn-ghost btn-sm text-base-content/60"
           onClick={onOpenSettings}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
-            <circle cx="12" cy="12" r="3.2" />
-            <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
-          </svg>
+          <Settings size={18} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
     </nav>
@@ -132,18 +131,17 @@ function MainArea({ current, epoch }: { current: SessionMeta | null; epoch: numb
   if (current) return <ChatView meta={current} epoch={epoch} />;
 
   return (
-    <main className="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-6">
-      <div className="card w-96 border border-base-300 bg-base-100 shadow-sm">
-        <div className="card-body gap-2">
-          <h1 className="card-title text-base">{t("main.welcome.title")}</h1>
-          <p className="text-sm text-base-content/70">{t("main.welcome.detail")}</p>
-          {info && (
-            <p className="text-xs text-base-content/50">
-              {t("main.shellInfo", { version: info.version, engine: info.engine_version ?? t("main.engineNotReady") })}
-            </p>
-          )}
-        </div>
+    <main className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 bg-base-100 p-6">
+      <img src="/logo.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" aria-hidden />
+      <div className="flex flex-col items-center gap-1.5 text-center">
+        <h1 className="text-lg font-bold tracking-tight">{t("main.welcome.title")}</h1>
+        <p className="max-w-sm text-sm leading-relaxed text-base-content/60">{t("main.welcome.detail")}</p>
       </div>
+      {info && (
+        <p className="font-mono text-[11px] text-base-content/35 tabular-nums">
+          {t("main.shellInfo", { version: info.version, engine: info.engine_version ?? t("main.engineNotReady") })}
+        </p>
+      )}
     </main>
   );
 }
