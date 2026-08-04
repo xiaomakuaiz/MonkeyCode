@@ -40,19 +40,23 @@ function paste(el: Editable) {
   }, legacy);
 }
 
-interface Item {
+export interface MenuItem {
   label: string;
   run: () => void;
+  /** 危险动作红字 */
+  danger?: boolean;
+  /** 二段确认:第一次点换成此文案,再点才执行 */
+  confirm?: string;
 }
 
-function buildItems(e: MouseEvent): Item[] {
+function buildItems(e: MouseEvent): MenuItem[] {
   const field = editableTarget(e.target instanceof Element ? e.target : null);
   if (field) {
     const sel = fieldSelection(field);
     const writable = !field.readOnly && !field.disabled;
     // 密码框与系统菜单一致:选区内容不外流(无剪切/复制)
     const secret = field instanceof HTMLInputElement && field.type === "password";
-    const items: Item[] = [];
+    const items: MenuItem[] = [];
     if (sel && !secret) {
       if (writable)
         items.push({
@@ -84,10 +88,9 @@ function closeMenu() {
   cleanup?.();
 }
 
-/** 在右键位置弹文本操作菜单;无可操作项(纯 chrome 区域)则什么都不弹。 */
-export function openTextContextMenu(e: MouseEvent): void {
+/** 在任意位置弹命令式菜单(行右键等场景与文本菜单共用同一套机制)。 */
+export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void {
   closeMenu();
-  const items = buildItems(e);
   if (!items.length) return;
 
   const backdrop = document.createElement("div");
@@ -99,9 +102,17 @@ export function openTextContextMenu(e: MouseEvent): void {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = it.label;
+    if (it.danger) btn.classList.add("text-error");
     // mousedown 默认会把焦点从输入框抢走,选区一丢 execCommand 就没得操作了
     btn.addEventListener("mousedown", (ev) => ev.preventDefault());
+    let armed = !it.confirm;
     btn.addEventListener("click", () => {
+      // 危险动作二段确认:第一次点只换文案,菜单不关
+      if (!armed) {
+        armed = true;
+        btn.textContent = it.confirm ?? it.label;
+        return;
+      }
       closeMenu();
       it.run();
     });
@@ -131,6 +142,11 @@ export function openTextContextMenu(e: MouseEvent): void {
   document.body.append(backdrop, menu);
   // 先挂载量出尺寸再定位:贴视口边缘时往回收
   const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(0, Math.min(e.clientX, window.innerWidth - rect.width - 8))}px`;
-  menu.style.top = `${Math.max(0, Math.min(e.clientY, window.innerHeight - rect.height - 8))}px`;
+  menu.style.left = `${Math.max(0, Math.min(pos.x, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(0, Math.min(pos.y, window.innerHeight - rect.height - 8))}px`;
+}
+
+/** 在右键位置弹文本操作菜单;无可操作项(纯 chrome 区域)则什么都不弹。 */
+export function openTextContextMenu(e: MouseEvent): void {
+  openMenu({ x: e.clientX, y: e.clientY }, buildItems(e));
 }

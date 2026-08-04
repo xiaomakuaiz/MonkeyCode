@@ -51,3 +51,22 @@ export function rememberLastTaskModel(model: string): void {
     // 只丢持久化
   }
 }
+
+/** 侧栏折叠段开合态("1"/"0" 取值 = 旧 UI 契约):归档会话 / 归档项目 / 云端历史。 */
+export type FoldKey = "mc.archivedOpen" | "mc.projectArchiveOpen" | "mc.cloudHistoryOpen";
+
+export function readFold(key: FoldKey): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeFold(key: FoldKey, open: boolean): void {
+  try {
+    localStorage.setItem(key, open ? "1" : "0");
+  } catch {
+    // 只丢持久化
+  }
+}
