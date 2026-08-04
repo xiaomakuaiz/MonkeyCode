@@ -58,6 +58,28 @@ function useWindowBlurred(): boolean {
 
 const CAPTION_GLYPH = { strokeWidth: 1.1, stroke: "currentColor", fill: "none" } as const;
 
+/** 品牌字后的小徽标。文案与含义由产品定,这里只保证它跟着品牌走。 */
+const BRAND_BADGE = "work";
+
+/** 品牌组合(可选 logo + 字标 + 徽标),侧栏头与 Windows 标题栏共用。
+ *  每个可见子节点自带 data-tauri-drag-region(LAYOUT.md §7);logo 指针穿透给父级。 */
+export function Brand({ logo = false }: { logo?: boolean }) {
+  return (
+    <>
+      {logo && <img src="/logo.png" alt="" draggable={false} className="pointer-events-none h-4 w-4 shrink-0 rounded" />}
+      <span data-tauri-drag-region="" className="shrink-0 text-xs font-bold tracking-tight text-base-content/80">
+        MonkeyCode
+      </span>
+      <span
+        data-tauri-drag-region=""
+        className="shrink-0 rounded bg-primary/10 px-1.5 text-[10px] leading-4 font-bold tracking-wide text-primary"
+      >
+        {BRAND_BADGE}
+      </span>
+    </>
+  );
+}
+
 export function TitleBar() {
   const { t } = useI18n();
   const maximized = useMaximized();
@@ -69,10 +91,8 @@ export function TitleBar() {
     >
       {/* 左侧分段与内容区各列同宽同色(w-rail/w-side 令牌),竖分隔线贯通 */}
       <div data-tauri-drag-region="" className="flex w-rail items-center justify-center bg-base-300" />
-      <div data-tauri-drag-region="" className="flex w-side items-center bg-base-200 px-3">
-        <span data-tauri-drag-region="" className="text-xs font-semibold text-base-content/60">
-          MonkeyCode
-        </span>
+      <div data-tauri-drag-region="" className="flex w-side items-center gap-1.5 bg-base-200 px-3">
+        <Brand logo />
       </div>
       <div data-tauri-drag-region="" className="flex-1 bg-base-100" />
       <div className="flex bg-base-100">
@@ -156,7 +176,7 @@ export function MacWindowControls({ compact = false }: { compact?: boolean } = {
     <div
       data-tauri-drag-region=""
       data-blurred={blurred || undefined}
-      className={`group flex items-center gap-2 ${compact ? "h-full px-3" : "px-3 py-4"}`}
+      className={`group flex items-center ${compact ? "h-full gap-1 px-1.5" : "gap-2 px-3 py-4"}`}
     >
       {MAC_LIGHTS.map((light) => (
         <button

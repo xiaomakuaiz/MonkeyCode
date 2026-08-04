@@ -6,6 +6,7 @@ import { Inbox, MoreHorizontal, Plus, Search, SearchX } from "lucide-react";
 import { useState, type DragEvent } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
+import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { useI18n } from "@/lib/i18n";
 import type { SessionMeta } from "@/lib/ipc/sessions";
@@ -357,10 +358,9 @@ export function Sidebar({
   return (
     <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col border-e border-base-300 bg-base-200">
       {/* 列头部:与 rail 角落/主区视图头部同一 h-11 基线;空白处可拖拽窗口 */}
-      <div data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-3">
-        <span data-tauri-drag-region="" className="min-w-0 flex-1 truncate text-xs font-semibold text-base-content/60">
-          MonkeyCode
-        </span>
+      <div data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-1.5 border-b border-base-300 px-3">
+        <Brand logo />
+        <span data-tauri-drag-region="" className="min-w-0 flex-1" />
         <button
           type="button"
           aria-label={t("sidebar.newTask")}
