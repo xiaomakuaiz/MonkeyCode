@@ -162,6 +162,17 @@ function EnvSection({
 }
 
 export function SettingsView({ onClose }: { onClose: () => void }) {
+  // 桌面客户端惯例:Esc 离开设置视图(capture 消费,不落到下层快捷键)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
   const { t } = useI18n();
   const [section, setSection] = useState<Section>("general");
   const [cfg, setCfg] = useState<DesktopConfig | null>(null);

@@ -1,4 +1,5 @@
-// 新建任务:daisyUI modal。契约(与壳一致):
+// 新建任务:主区整页视图(桌面客户端向导页,非网页式弹窗;组件名保留
+// NewTaskModal 以稳住既有引用面)。契约(与壳一致):
 // - 本地会话:workdir 必填;默认目录(本机 ~/MonkeyCode / WSL 家目录基座下的
 //   MonkeyCode)允许静默创建(createDir);其他目录不存在时壳报「…目录不存在…」
 //   (desktop/src/driver/session.rs / wsl.rs 的文案契约,壳侧单测钉死),就地
@@ -12,7 +13,7 @@
 //   运行环境过滤(lib/util/workdir);目录预填 = 过滤后首项,无则默认目录
 // - 模型记忆 mc.lastTaskModel(本地/对话共用);旧工程无 lastDir 持久化键,
 //   不发明新键
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -158,13 +159,34 @@ export function NewTaskModal({
     }
   };
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
   if (!open) return null;
   const recents = (recentDirs ?? []).filter((p) => workdirMatchesEnv(p, kernelEnv, isWindowsShell())).slice(0, 6);
   return (
-    <dialog open className="modal modal-open">
-      <div className="modal-box max-w-sm">
-        <h2 className="mb-3 text-sm font-semibold">{t("create.title")}</h2>
-        <div className="flex flex-col gap-3">
+    <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-base-100">
+      <header data-view-header="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
+        <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">{t("create.title")}</h1>
+        <button
+          type="button"
+          aria-label={t("create.cancel")}
+          className="btn btn-ghost btn-square btn-sm"
+          onClick={onClose}
+        >
+          <X size={16} strokeWidth={1.75} aria-hidden />
+        </button>
+      </header>
+      <div className="mx-auto w-full max-w-xl p-6">
+        <div className="flex flex-col gap-4">
           <div role="tablist" aria-label={t("create.title")} className="tabs-box tabs tabs-sm w-fit">
             {(["local", "chat", "cloud"] as const).map((k) => (
               <button
@@ -309,20 +331,19 @@ export function NewTaskModal({
               {error}
             </div>
           ) : null}
+          {kind !== "cloud" && (
+            <div className="mt-1 flex items-center justify-end gap-2">
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
+                {t("create.cancel")}
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void submit()}>
+                {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
+                {t("create.submit")}
+              </button>
+            </div>
+          )}
         </div>
-        {kind !== "cloud" && (
-        <div className="modal-action">
-          <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
-            {t("create.cancel")}
-          </button>
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void submit()}>
-            {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
-            {t("create.submit")}
-          </button>
-        </div>
-        )}
       </div>
-      <div className="modal-backdrop" onClick={onClose} />
-    </dialog>
+    </main>
   );
 }

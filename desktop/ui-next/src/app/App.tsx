@@ -17,7 +17,7 @@ import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { Sidebar } from "@/features/sidebar/Sidebar";
-import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
+import { MacTitleBar, TitleBar } from "@/features/titlebar/TitleBar";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import {
   hostInfo,
@@ -30,7 +30,7 @@ import {
 } from "@/lib/ipc/host";
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
 import { engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
-import type { CloudTask, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
+import type { CloudTask } from "@/lib/ipc/cloudtasks";
 import {
   modelsList,
   onSessionEvent,
@@ -66,18 +66,19 @@ function SpaceRail({
   space,
   waiting,
   onChange,
-  onOpenSettings,
+  settingsOpen,
+  onToggleSettings,
 }: {
   space: Space;
   waiting: number;
   onChange: (s: Space) => void;
-  onOpenSettings: () => void;
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
 }) {
   const { t } = useI18n();
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat") };
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
-      {isMacShell() ? <MacWindowControls /> : <div data-tauri-drag-region="" className="h-9 w-full shrink-0" />}
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
         {(["local", "cloud", "chat"] as const).map((s) => (
           <div key={s} className={s === "local" && waiting > 0 ? "indicator" : undefined}>
@@ -107,9 +108,12 @@ function SpaceRail({
         <button
           type="button"
           aria-label={t("rail.settings")}
+          aria-pressed={settingsOpen}
           data-tip={t("rail.settings")}
-          className="tooltip tooltip-right flex size-11 cursor-pointer items-center justify-center rounded-box text-base-content/60 transition-colors duration-150 hover:bg-base-content/10 hover:text-base-content"
-          onClick={onOpenSettings}
+          className={`tooltip tooltip-right flex size-11 cursor-pointer items-center justify-center rounded-box transition-colors duration-150 ${
+            settingsOpen ? "bg-primary/10 text-primary" : "text-base-content/60 hover:bg-base-content/10 hover:text-base-content"
+          }`}
+          onClick={onToggleSettings}
         >
           <Settings size={18} strokeWidth={1.75} aria-hidden />
         </button>
@@ -174,6 +178,9 @@ export function App() {
   const setSpace = (next: Space) => {
     setSpaceState(next);
     writeSpace(next);
+    // 桌面客户端心智:点导航永远切走当前覆盖视图(设置/新建),不会"没反应"
+    setSettingsOpen(false);
+    setCreating(false);
   };
 
   /** 摘掉某会话的提醒与侧栏 attention(打开它即视为已读)。 */
@@ -311,6 +318,8 @@ export function App() {
     setCurrentId(meta.id);
     writeLastSession(meta.id);
     dismissSession(meta.id);
+    setSettingsOpen(false);
+    setCreating(false);
   };
 
   const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
@@ -333,10 +342,10 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col text-base-content">
-      {isWindowsShell() && <TitleBar />}
+      {isWindowsShell() ? <TitleBar /> : isMacShell() ? <MacTitleBar /> : null}
       <EngineBanner />
       <div className="flex min-h-0 flex-1">
-        <SpaceRail space={space} waiting={waiting} onChange={setSpace} onOpenSettings={() => setSettingsOpen(true)} />
+        <SpaceRail space={space} waiting={waiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(false); setSettingsOpen((v) => !v); }} />
         <Sidebar
           space={space}
           sessions={sessions}
@@ -353,7 +362,10 @@ export function App() {
           }}
           actions={{
             onSelect: select,
-            onNewTask: () => setCreating(true),
+            onNewTask: () => {
+              setSettingsOpen(false);
+              setCreating(true);
+            },
             onDelete: (meta) => {
               void sessionDelete(meta.id)
                 .catch(() => {})
@@ -371,6 +383,23 @@ export function App() {
         />
         {settingsOpen ? (
           <SettingsView onClose={() => setSettingsOpen(false)} />
+        ) : creating ? (
+          <NewTaskModal
+            open
+            recentDirs={recentDirs}
+            onClose={() => setCreating(false)}
+            onCreated={(meta) => {
+              refresh();
+              select(meta);
+              if (meta.kind === "chat") setSpace("chat");
+              else setSpace("local");
+            }}
+            onCloudCreated={(task) => {
+              setSpace("cloud");
+              setCloudTask(task);
+              setCloudReload((n) => n + 1);
+            }}
+          />
         ) : space === "cloud" && cloudTask ? (
           <CloudTaskView key={cloudTask.id} task={cloudTask} onTasksChanged={() => setCloudReload((n) => n + 1)} />
         ) : (
@@ -402,22 +431,6 @@ export function App() {
         </div>
       )}
       <DownloadsDock />
-      <NewTaskModal
-        recentDirs={recentDirs}
-        open={creating}
-        onClose={() => setCreating(false)}
-        onCreated={(meta) => {
-          refresh();
-          select(meta);
-          if (meta.kind === "chat") setSpace("chat");
-          else setSpace("local");
-        }}
-        onCloudCreated={(task: CloudTaskDetail) => {
-          setSpace("cloud");
-          setCloudTask(task);
-          setCloudReload((n) => n + 1);
-        }}
-      />
     </div>
   );
 }

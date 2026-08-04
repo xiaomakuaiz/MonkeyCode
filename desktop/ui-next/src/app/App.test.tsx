@@ -38,16 +38,18 @@ describe("壳骨架(P1)", () => {
     expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
   });
 
-  it("mac 壳:红绿灯替身在导航 rail 内,无 Windows 三键", () => {
+  it("mac 壳:标题带承载红绿灯(桌面 chrome),无 Windows 三键", () => {
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: { invoke: () => Promise.resolve(false) },
       event: { listen: () => Promise.resolve(() => {}) },
     };
     vi.stubGlobal("navigator", { ...window.navigator, userAgent: "Macintosh; Intel Mac OS X 10_15_7" });
     render(<App />);
-    const rail = screen.getByRole("navigation", { name: "空间导航" });
     const zoom = screen.getByRole("button", { name: "缩放" });
-    expect(rail.contains(zoom)).toBe(true);
+    const band = document.querySelector("[data-window-titlebar]");
+    expect(band?.contains(zoom)).toBe(true);
+    // rail 不再承载红绿灯,导航语义纯粹
+    expect(screen.getByRole("navigation", { name: "空间导航" }).contains(zoom)).toBe(false);
     expect(screen.queryByRole("button", { name: "最大化" })).toBeNull();
   });
 });
