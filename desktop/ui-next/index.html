@@ -35,6 +35,40 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      /* 启动故障可见化:壳内 devtools 未必打得开,任何未捕获异常/未处理
+         rejection 直接画到屏幕上(否则就是一块无从下手的白屏)。
+         正常运行零成本;React 挂上后的运行期错误也会兜住。 */
+      (function () {
+        var shown = false;
+        function show(kind, msg, extra) {
+          try {
+            var box = document.getElementById("mc-boot-error");
+            if (!box) {
+              box = document.createElement("pre");
+              box.id = "mc-boot-error";
+              box.style.cssText =
+                "position:fixed;left:8px;right:8px;bottom:8px;max-height:45vh;overflow:auto;" +
+                "margin:0;padding:10px 12px;border-radius:8px;z-index:99999;" +
+                "background:#3b0d0d;color:#ffd7d7;font:12px/1.5 monospace;white-space:pre-wrap";
+              document.body.appendChild(box);
+            }
+            if (!shown) {
+              box.textContent = "[MonkeyCode 启动异常] 请把以下内容发给开发者:\n";
+              shown = true;
+            }
+            box.textContent += "\n" + kind + ": " + msg + (extra ? "\n" + extra : "") + "\n";
+          } catch (_) {}
+        }
+        window.addEventListener("error", function (e) {
+          show("error", (e && e.message) || String(e), e && e.error && e.error.stack);
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e && e.reason;
+          show("unhandledrejection", (r && (r.message || r)) || String(r), r && r.stack);
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
