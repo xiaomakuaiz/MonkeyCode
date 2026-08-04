@@ -190,24 +190,3 @@ export function MacWindowControls({ compact = false }: { compact?: boolean } = {
   );
 }
 
-/** mac 标题带:桌面客户端的窗体 chrome——红绿灯 + 品牌名 + 全带可拖拽,
- *  分段与内容区各列同宽同色(w-rail/w-side 令牌),与 Windows 版同构。 */
-export function MacTitleBar() {
-  return (
-    <header
-      data-tauri-drag-region=""
-      data-window-titlebar=""
-      className="flex h-9 shrink-0 items-stretch select-none"
-    >
-      <div data-tauri-drag-region="" className="flex w-rail items-stretch bg-base-300">
-        <MacWindowControls compact />
-      </div>
-      <div data-tauri-drag-region="" className="flex w-side items-center bg-base-200 px-3">
-        <span data-tauri-drag-region="" className="text-xs font-semibold text-base-content/60">
-          MonkeyCode
-        </span>
-      </div>
-      <div data-tauri-drag-region="" className="flex-1 bg-base-100" />
-    </header>
-  );
-}

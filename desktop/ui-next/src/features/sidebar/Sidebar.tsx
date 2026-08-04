@@ -2,7 +2,7 @@
 // daisyUI 原生形态:menu(嵌套 details 折叠)、dropdown 行操作、status 状态点、
 // badge 计数、input 搜索。项目拖拽排序用 HTML5 draggable(落点计算在
 // lib/util/projects::reorderKeys,纯函数可测)。
-import { Inbox, MoreHorizontal, Search, SearchX } from "lucide-react";
+import { Inbox, MoreHorizontal, Plus, Search, SearchX } from "lucide-react";
 import { useState, type DragEvent } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -355,7 +355,23 @@ export function Sidebar({
   };
 
   return (
-    <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col gap-2 overflow-y-auto border-e border-base-300 bg-base-200 p-2">
+    <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col border-e border-base-300 bg-base-200">
+      {/* 列头部:与 rail 角落/主区视图头部同一 h-11 基线;空白处可拖拽窗口 */}
+      <div data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-3">
+        <span data-tauri-drag-region="" className="min-w-0 flex-1 truncate text-xs font-semibold text-base-content/60">
+          MonkeyCode
+        </span>
+        <button
+          type="button"
+          aria-label={t("sidebar.newTask")}
+          title={t("sidebar.newTask")}
+          className="btn btn-primary btn-square btn-xs"
+          onClick={actions.onNewTask}
+        >
+          <Plus size={14} strokeWidth={2} aria-hidden />
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
       <label className="input input-sm w-full">
         <Search size={14} strokeWidth={1.75} className="shrink-0 opacity-50" aria-hidden />
         <input
@@ -366,12 +382,9 @@ export function Sidebar({
           onChange={(e) => setQuery(e.target.value)}
         />
       </label>
-      <button type="button" className="btn btn-primary btn-sm btn-block" onClick={actions.onNewTask}>
-        {t("sidebar.newTask")}
-      </button>
-      {/* 新建按钮与列表之间留一口呼吸空间 */}
       <div className="mt-1 min-h-0 flex-1">{body()}</div>
       <UpdateFooter />
+      </div>
     </aside>
   );
 }

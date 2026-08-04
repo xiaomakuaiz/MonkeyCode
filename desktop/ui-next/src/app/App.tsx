@@ -17,7 +17,7 @@ import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { Sidebar } from "@/features/sidebar/Sidebar";
-import { MacTitleBar, TitleBar } from "@/features/titlebar/TitleBar";
+import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import {
   hostInfo,
@@ -79,6 +79,15 @@ function SpaceRail({
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat") };
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
+      {/* 头部基线:mac 红绿灯待在 chrome 角落(h-11,与各列头部同高);
+          其余环境同高空位,保证三列头部线对齐 */}
+      {isMacShell() ? (
+        <div data-tauri-drag-region="" className="flex h-11 w-full shrink-0 items-center">
+          <MacWindowControls compact />
+        </div>
+      ) : (
+        !isWindowsShell() && <div className="h-11 w-full shrink-0" />
+      )}
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
         {(["local", "cloud", "chat"] as const).map((s) => (
           <div key={s} className={s === "local" && waiting > 0 ? "indicator" : undefined}>
@@ -138,7 +147,9 @@ function MainArea({ current, epoch }: { current: SessionMeta | null; epoch: numb
   if (current) return <ChatView meta={current} epoch={epoch} />;
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 bg-base-100 p-6">
+    <main className="flex min-w-0 flex-1 flex-col bg-base-100">
+      <div data-tauri-drag-region="" className="h-11 shrink-0 border-b border-base-300" />
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-6">
       <img src="/logo.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" aria-hidden />
       <div className="flex flex-col items-center gap-1.5 text-center">
         <h1 className="text-lg font-bold tracking-tight">{t("main.welcome.title")}</h1>
@@ -149,6 +160,7 @@ function MainArea({ current, epoch }: { current: SessionMeta | null; epoch: numb
           {t("main.shellInfo", { version: info.version, engine: info.engine_version ?? t("main.engineNotReady") })}
         </p>
       )}
+      </div>
     </main>
   );
 }
@@ -342,7 +354,7 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col text-base-content">
-      {isWindowsShell() ? <TitleBar /> : isMacShell() ? <MacTitleBar /> : null}
+      {isWindowsShell() && <TitleBar />}
       <EngineBanner />
       <div className="flex min-h-0 flex-1">
         <SpaceRail space={space} waiting={waiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(false); setSettingsOpen((v) => !v); }} />
