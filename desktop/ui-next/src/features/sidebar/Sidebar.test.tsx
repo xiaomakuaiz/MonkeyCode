@@ -1,6 +1,7 @@
-// 侧栏:壳布局(h-11 品牌头/搜索/滚动列表)+ 旧 UI 信息布局(两行式行、
+// 侧栏:壳布局(h-13 品牌头/滚动列表)+ 旧 UI 信息布局(两行式行、
 // 状态尾注、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
-// 交互:行右键菜单、行内重命名、组头快捷新建、折叠契约键、搜索强制展开。
+// 交互:行右键菜单、行内重命名、组头快捷新建、折叠契约键。
+// (搜索行按用户指令暂撤,回归时补测:query 过滤 + 全折叠段强制展开)
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -74,27 +75,6 @@ describe("侧栏(local 空间)", () => {
     await userEvent.click(screen.getByText("已归档任务 · 1"));
     expect(section.open).toBe(true);
     expect(JSON.parse(localStorage.getItem("mc.sessionArchivesOpen") ?? "[]")).toContain("/p/beta");
-  });
-
-  it("搜索过滤;无结果空态;清空按钮复位", async () => {
-    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    await userEvent.type(screen.getByRole("searchbox", { name: "搜索会话" }), "登录");
-    expect(screen.getByText("修复登录")).toBeTruthy();
-    expect(screen.queryByText("重构侧栏")).toBeNull();
-    await userEvent.type(screen.getByRole("searchbox", { name: "搜索会话" }), "zzz");
-    expect(screen.getByText("没有匹配的任务")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "清空搜索" }));
-    expect((screen.getByRole("searchbox", { name: "搜索会话" }) as HTMLInputElement).value).toBe("");
-    expect(screen.getByText("重构侧栏")).toBeTruthy();
-  });
-
-  it("搜索非空强制展开折叠组(不写盘)", async () => {
-    localStorage.setItem("mc.collapsedGroups", JSON.stringify(["/p/alpha"]));
-    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    expect(detailsOf("alpha").open).toBe(false);
-    await userEvent.type(screen.getByRole("searchbox", { name: "搜索会话" }), "登录");
-    expect(detailsOf("alpha").open).toBe(true);
-    expect(localStorage.getItem("mc.collapsedGroups")).toBe(JSON.stringify(["/p/alpha"]));
   });
 
   it("行右键菜单:归档直接触发;删除二段确认", async () => {

@@ -7,7 +7,7 @@
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
 //   input 搜索、btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认);组头 hover 快捷「+」。
-import { Inbox, MessagesSquare, Plus, RefreshCw, Search, SearchX, X } from "lucide-react";
+import { Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -116,7 +116,7 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
   return (
     <li>
       <a
-        className={`flex items-center gap-2 transition-colors duration-150 ${meta.id === p.currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
+        className={`flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${meta.id === p.currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
         data-attention={attention ? "" : undefined}
         title={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${t("sidebar.row.hint")}`}
         onClick={() => p.actions.onSelect(meta)}
@@ -148,7 +148,6 @@ function rows(list: SessionMeta[], p: RowPlumbing) {
 function ProjectDetails({
   group,
   p,
-  forceOpen,
   collapsed,
   onToggleCollapsed,
   archOpen,
@@ -160,8 +159,6 @@ function ProjectDetails({
 }: {
   group: ProjectGroup;
   p: RowPlumbing;
-  /** 搜索非空:强制展开且不写盘 */
-  forceOpen: boolean;
   collapsed: boolean;
   onToggleCollapsed: (key: string, open: boolean) => void;
   archOpen: boolean;
@@ -188,11 +185,8 @@ function ProjectDetails({
   return (
     <li>
       <details
-        open={forceOpen || !collapsed}
-        onToggle={(e) => {
-          if (forceOpen) return;
-          onToggleCollapsed(group.key, (e.target as HTMLDetailsElement).open);
-        }}
+        open={!collapsed}
+        onToggle={(e) => onToggleCollapsed(group.key, (e.target as HTMLDetailsElement).open)}
       >
         <summary
           className={`group ${dropTarget ? "border-t-2 border-primary" : ""}`}
@@ -233,19 +227,18 @@ function ProjectDetails({
             </button>
           )}
         </summary>
-        <ul>
+        <ul className="min-w-0 before:hidden">
           {rows(group.sessions, p)}
           {group.archivedSessions.length > 0 && (
             <li>
-              <details open={forceOpen || archOpen} onToggle={(e) => {
-                if (forceOpen) return;
+              <details open={archOpen} onToggle={(e) => {
                 const open = (e.target as HTMLDetailsElement).open;
                 if (open !== archOpen) onToggleArchOpen(group.key);
               }}>
                 <summary className="text-xs text-base-content/50">
                   {t("sidebar.archivedTasks", { n: String(group.archivedSessions.length) })}
                 </summary>
-                <ul>{rows(group.archivedSessions, p)}</ul>
+                <ul className="min-w-0 before:hidden">{rows(group.archivedSessions, p)}</ul>
               </details>
             </li>
           )}
@@ -259,28 +252,25 @@ function ProjectDetails({
 function FoldSection({
   label,
   foldKey,
-  forceOpen,
   children,
 }: {
   label: string;
   foldKey: "mc.archivedOpen" | "mc.projectArchiveOpen";
-  forceOpen: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState<boolean>(() => readFold(foldKey));
   return (
     <li>
       <details
-        open={forceOpen || open}
+        open={open}
         onToggle={(e) => {
-          if (forceOpen) return;
           const next = (e.target as HTMLDetailsElement).open;
           setOpen(next);
           writeFold(foldKey, next);
         }}
       >
         <summary className="text-xs text-base-content/50">{label}</summary>
-        <ul>{children}</ul>
+        <ul className="min-w-0 before:hidden">{children}</ul>
       </details>
     </li>
   );
@@ -320,7 +310,6 @@ export function Sidebar({
   };
 }) {
   const { t } = useI18n();
-  const [query, setQuery] = useState("");
   const [order, setOrder] = useState<string[]>(readProjectOrder);
   const [archivedProjects, setArchivedProjects] = useState<Set<string>>(readArchivedProjects);
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsedGroups);
@@ -328,11 +317,6 @@ export function Sidebar({
   const [draggedKey, setDraggedKey] = useState<string | null>(null);
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
-
-  const q = query.trim().toLowerCase();
-  const forceOpen = q !== "";
-  const matches = (m: SessionMeta) =>
-    !q || m.title.toLowerCase().includes(q) || (m.summary ?? "").toLowerCase().includes(q) || m.workdir.toLowerCase().includes(q);
 
   const p: RowPlumbing = {
     currentId,
@@ -381,21 +365,19 @@ export function Sidebar({
           onSelect={(task) => cloud?.onSelect(task)}
           reloadKey={cloud?.reloadKey ?? 0}
           onDeleted={cloud?.onDeleted}
-          query={q}
         />
       );
     }
 
-    const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat")).filter(matches);
+    const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat"));
     if (pool.length === 0) {
-      const empty = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat")).length === 0;
       const chat = space === "chat";
-      const EmptyIcon = empty ? (chat ? MessagesSquare : Inbox) : SearchX;
+      const EmptyIcon = chat ? MessagesSquare : Inbox;
       return (
         <EmptySlate
           icon={<EmptyIcon size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />}
-          title={empty ? t(chat ? "sidebar.empty.chat.title" : "sidebar.empty.local.title") : t(chat ? "sidebar.noResults.chat.title" : "sidebar.noResults.local.title")}
-          detail={empty ? t(chat ? "sidebar.empty.chat.detail" : "sidebar.empty.local.detail") : t(chat ? "sidebar.noResults.chat.detail" : "sidebar.noResults.local.detail")}
+          title={t(chat ? "sidebar.empty.chat.title" : "sidebar.empty.local.title")}
+          detail={t(chat ? "sidebar.empty.chat.detail" : "sidebar.empty.local.detail")}
         />
       );
     }
@@ -407,7 +389,7 @@ export function Sidebar({
         <ul className="menu menu-sm w-full p-0">
           {rows(active, p)}
           {archived.length > 0 && (
-            <FoldSection label={t("sidebar.archivedChats", { n: String(archived.length) })} foldKey="mc.archivedOpen" forceOpen={forceOpen}>
+            <FoldSection label={t("sidebar.archivedChats", { n: String(archived.length) })} foldKey="mc.archivedOpen">
               {rows(archived, p)}
             </FoldSection>
           )}
@@ -440,7 +422,6 @@ export function Sidebar({
             key={group.key}
             group={group}
             p={p}
-            forceOpen={forceOpen}
             collapsed={collapsed.has(group.key)}
             onToggleCollapsed={toggleCollapsed}
             archOpen={sessionArchOpen.has(group.key)}
@@ -455,14 +436,12 @@ export function Sidebar({
           <FoldSection
             label={t("sidebar.archivedProjects", { n: String(grouped.archivedProjects.length) })}
             foldKey="mc.projectArchiveOpen"
-            forceOpen={forceOpen}
           >
             {grouped.archivedProjects.map((group) => (
               <ProjectDetails
                 key={group.key}
                 group={group}
                 p={p}
-                forceOpen={forceOpen}
                 collapsed={collapsed.has(group.key)}
                 onToggleCollapsed={toggleCollapsed}
                 archOpen={sessionArchOpen.has(group.key)}
@@ -479,8 +458,8 @@ export function Sidebar({
 
   return (
     <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col border-e border-base-300 bg-base-200">
-      {/* 列头部:与 rail 角落/主区视图头部同一 h-11 基线;空白处可拖拽窗口 */}
-      <div data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-1.5 border-b border-base-300 px-3">
+      {/* 列头部:与 rail 角落/主区视图头部同一 h-13(52px)基线;空白处可拖拽窗口 */}
+      <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 px-3">
         <Brand logo />
         <span data-tauri-drag-region="" className="min-w-0 flex-1" />
         {space === "cloud" && cloud?.onRefresh && (
@@ -504,30 +483,8 @@ export function Sidebar({
           <Plus size={14} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      {/* 四段式(LAYOUT.md):头部固定 → 搜索固定 → 列表 = 唯一滚动区 → footer 钉底 */}
-      <div className="shrink-0 p-2 pb-1">
-        <label className="input input-sm w-full">
-          <Search size={14} strokeWidth={1.75} className="shrink-0 opacity-50" aria-hidden />
-          <input
-            type="search"
-            aria-label={t("sidebar.search")}
-            placeholder={space === "chat" ? t("sidebar.search") : t("sidebar.searchTasks")}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {query !== "" && (
-            <button
-              type="button"
-              aria-label={t("sidebar.clearSearch")}
-              className="btn btn-ghost btn-square btn-xs shrink-0"
-              onClick={() => setQuery("")}
-            >
-              <X size={12} strokeWidth={1.75} aria-hidden />
-            </button>
-          )}
-        </label>
-      </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 pt-1">{body()}</div>
+      {/* 三段式(LAYOUT.md):头部固定 → 列表 = 唯一滚动区 → footer 钉底 */}
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">{body()}</div>
       <div className="shrink-0 empty:hidden">
         <UpdateFooter />
       </div>

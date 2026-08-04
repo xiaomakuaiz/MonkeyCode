@@ -12,7 +12,8 @@
 5. **角落瞬态**:后台会话提醒 toast、全局下载 dock(右下)。
 
 ## 2. 头部基线
-- 三列各自长出 **h-11** 头部,同高对齐成一条贯通线(border-b border-base-300)。
+- 三列各自长出 **h-13(52px)** 头部,同高对齐成一条贯通线(border-b border-base-300);
+  两行文字(标题+副标题)在 44px 里太挤,52px 是定稿高度(2026-08-04)。
 - rail 顶 = 窗控角落(mac)或同高空位;侧栏头 = 品牌名 + ＋新建(云端空间
   另有刷新钮);主区头 = 当前视图提供(欢迎页为空头带)。
 - 拖拽区分布在各头部空白处(data-tauri-drag-region;按钮与可双击标题除外)。
@@ -47,13 +48,14 @@
 - 横向滚动只允许出现在**专用滚动区**:代码块(pre)、diff/代码预览、markdown
   表格包裹层(.md-scroll)、xterm。
 
-## 6. 侧栏内部结构(四段式;信息布局参考旧 UI,组件一律 daisyUI)
+## 6. 侧栏内部结构(三段式;信息布局参考旧 UI,组件一律 daisyUI)
 ```
-头部 h-11(固定):品牌 + ＋新建(云端加刷新)
-搜索行(固定):input;query 非空出清空钮;placeholder 按空间(会话/项目或任务)
+头部 h-13(固定):品牌 + ＋新建(云端加刷新)
 列表(flex-1,唯一滚动区,纵滚横截):menu menu-sm + details 折叠
 footer(固定钉底):更新提示等常驻条,永不随列表滚动
 ```
+> 搜索行已撤(用户指令 2026-08-04「搜索先去掉」);回归时恢复 input 行 +
+> query 过滤 + 全折叠段强制展开(CloudTaskList 仍保留 query prop)。
 
 ### 6.1 行信息布局(参考旧 UI;载体 = menu 的 li>a)
 - 本地行两行式:标题行(标题 + 状态尾注)+ 引擎摘要行(text-xs /50,缺席
@@ -78,8 +80,9 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
 - 折叠态持久化(旧 UI 契约键):mc.collapsedGroups / mc.sessionArchivesOpen
   (JSON string[])、mc.archivedOpen / mc.projectArchiveOpen /
   mc.cloudHistoryOpen("1"/"0",prefs.readFold/writeFold)。
-- **搜索非空 → 全部折叠段强制展开**(命中不被藏;云端未拉过的组顺势懒拉),
-  强制展开不写盘。
+- (搜索回归时)query 非空 → 全部折叠段强制展开、不写盘;云端未拉过的组
+  顺势懒拉。
+- menu 嵌套缩进竖线(li ul::before)按用户指令隐藏:嵌套 ul 加 before:hidden。
 
 ## 7. 拖拽区铁律(mac/Windows 自绘 chrome)
 - Tauri 按**事件目标自身**是否带 `data-tauri-drag-region` 判定,**不继承**:

@@ -225,7 +225,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
         </div>
       )}
 
-      <header data-view-header="" data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
+      <header data-view-header="" data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-2 border-b border-base-300 px-4">
         <div data-tauri-drag-region="" className="min-w-0 flex-1">
           {editingTitle ? (
             <input

@@ -167,7 +167,7 @@ function TaskRow({
   return (
     <li>
       <a
-        className={`flex min-h-8 items-center gap-2 transition-colors duration-150 ${task.id === currentId ? "menu-active" : ""}`}
+        className={`flex min-h-8 min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${task.id === currentId ? "menu-active" : ""}`}
         title={`${label}\n${st.text}\n${t("sidebar.row.hint")}`}
         onClick={() => onSelect(task)}
         onContextMenu={(e: MouseEvent) => {
@@ -310,7 +310,7 @@ export function CloudTaskList({
     const state = groupTasks[key];
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
-      <ul>
+      <ul className="min-w-0 before:hidden">
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
@@ -376,7 +376,7 @@ export function CloudTaskList({
             }}
           >
             <summary className="text-xs text-base-content/50">{t("cloud.list.history", { n: String(feed.history.length) })}</summary>
-            <ul>
+            <ul className="min-w-0 before:hidden">
               {historyRows.map((task) => (
                 <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
               ))}
