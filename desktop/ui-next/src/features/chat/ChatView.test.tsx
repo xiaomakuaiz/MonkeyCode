@@ -192,6 +192,20 @@ describe("聊天视图", () => {
     expect(screen.queryByText("正在修复登录页闪退")).toBeNull();
   });
 
+  it("D12 头部副标题:无摘要时 local 会话显 workdir 末段(title=全路径),chat 会话显「独立会话」", async () => {
+    stubShell();
+    const { unmount } = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const tail = screen.getByText("a"); // META.workdir = "/p/a" 的末段
+    expect(tail.getAttribute("title")).toBe("/p/a");
+    unmount();
+    stubShell();
+    render(<ChatView meta={{ ...META, kind: "chat", workdir: "" }} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.getByText("独立会话")).toBeTruthy();
+    expect(screen.queryByText("a")).toBeNull(); // chat 会话不显 workdir
+  });
+
   it("任务面板:plan 帧非空时钉在 composer 上方,收起态一行摘要", async () => {
     const { emit } = stubShell();
     render(<ChatView meta={META} />);

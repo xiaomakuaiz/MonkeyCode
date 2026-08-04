@@ -3,6 +3,7 @@
 // 上传走 REST mc_file_upload、下载走全局下载 store(startDownload,内含
 // dl-progress 先监听后命令的铁律;目录由服务端打成 zip)。
 // 控制流懒建 + call() 懒重连:连不上时不无限拨号刷屏,操作时再试。
+import { CornerUpLeft, Download, File, Folder, FolderOpen, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { connectCloudControl, WAKE_CALL_TIMEOUT_MS, type CloudControl } from "@/lib/cloud/control";
@@ -136,8 +137,14 @@ export function CloudFiles({
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-base-content/50">
           /{["workspace", dir].filter(Boolean).join("/")}
         </span>
-        <button type="button" className="btn btn-ghost btn-xs" onClick={() => list(dir)}>
-          {t("cloud.files.refresh")}
+        <button
+          type="button"
+          aria-label={t("cloud.files.refresh")}
+          title={t("cloud.files.refresh")}
+          className="btn btn-ghost btn-square btn-xs"
+          onClick={() => list(dir)}
+        >
+          <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
         </button>
         {vmId && (
           <>
@@ -161,7 +168,7 @@ export function CloudFiles({
         )}
         {onClose && (
           <button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={t("cloud.files.close")} onClick={onClose}>
-            ✕
+            <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         )}
       </header>
@@ -182,28 +189,29 @@ export function CloudFiles({
             {dir && (
               <li>
                 <button type="button" onClick={() => setDir(parent)}>
-                  <span aria-hidden>↩</span>
+                  <CornerUpLeft size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                   {t("cloud.files.up")}
                 </button>
               </li>
             )}
-            {files.length === 0 && !dir && (
-              <li className="px-3 py-6 text-center text-xs text-base-content/40">{t("cloud.files.empty")}</li>
-            )}
-            {files.length === 0 && dir && (
-              <li className="px-3 py-6 text-center text-xs text-base-content/40">{t("cloud.files.empty")}</li>
+            {files.length === 0 && (
+              // 空态统一形态:图标 + 标题档,居中
+              <li className="pointer-events-none flex flex-col items-center gap-1.5 px-3 py-8 text-center">
+                <FolderOpen size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+                <span className="text-sm font-semibold">{t("cloud.files.empty")}</span>
+              </li>
             )}
             {files.map((f) => (
               <li key={f.path}>
                 <div className="group flex items-center gap-2">
                   {isDir(f) ? (
-                    <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-start" onClick={() => setDir(f.path)}>
-                      <span aria-hidden>📁</span>
+                    <button type="button" className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-start" onClick={() => setDir(f.path)}>
+                      <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                       <span className="min-w-0 flex-1 truncate">{f.name}</span>
                     </button>
                   ) : (
                     <span className="flex min-w-0 flex-1 items-center gap-2">
-                      <span aria-hidden>📄</span>
+                      <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
                       <span className="min-w-0 flex-1 truncate">{f.name}</span>
                       <span className="font-mono text-[10px] text-base-content/40 tabular-nums">{fmtSize(f.size)}</span>
                     </span>
@@ -211,10 +219,12 @@ export function CloudFiles({
                   {vmId && (
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
+                      aria-label={t("cloud.files.download")}
+                      title={t("cloud.files.download")}
+                      className="btn btn-ghost btn-square btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
                       onClick={() => void download(f)}
                     >
-                      {t("cloud.files.download")}
+                      <Download size={14} strokeWidth={1.75} aria-hidden />
                     </button>
                   )}
                 </div>

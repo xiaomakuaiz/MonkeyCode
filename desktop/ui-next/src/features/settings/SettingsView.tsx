@@ -65,7 +65,7 @@ function GeneralSection() {
 
   return (
     <section aria-label={t("settings.nav.general")} className="flex max-w-md flex-col gap-3">
-      <fieldset className="fieldset">
+      <fieldset className="fieldset gap-1.5">
         <legend className="fieldset-legend">{t("settings.appearance.theme")}</legend>
         <select
           className="select select-sm w-full"
@@ -84,7 +84,7 @@ function GeneralSection() {
           ))}
         </select>
       </fieldset>
-      <fieldset className="fieldset">
+      <fieldset className="fieldset gap-1.5">
         <legend className="fieldset-legend">{t("settings.appearance.language")}</legend>
         <select
           className="select select-sm w-full"
@@ -100,7 +100,7 @@ function GeneralSection() {
         </select>
       </fieldset>
       {inDesktopShell() && (
-        <fieldset className="fieldset">
+        <fieldset className="fieldset gap-1.5">
           <legend className="fieldset-legend">{t("settings.general.sound")}</legend>
           <label className="label cursor-pointer justify-start gap-3">
             <input
@@ -134,7 +134,7 @@ function EnvSection({
   const missing = draft.kernelEnv.startsWith("wsl:") && !distros.includes(draft.kernelEnv.slice(4));
   return (
     <section aria-label={t("settings.nav.env")} className="flex max-w-md flex-col gap-3">
-      <fieldset className="fieldset">
+      <fieldset className="fieldset gap-1.5">
         <legend className="fieldset-legend">{t("settings.env.kernel")}</legend>
         <select
           className="select select-sm w-full"
@@ -280,8 +280,8 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-base-100">
-      <header className="flex shrink-0 items-center gap-2 border-b border-base-300 px-4 py-2">
-        <h1 className="text-base font-bold">{t("settings.title")}</h1>
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
+        <h1 className="text-sm font-semibold">{t("settings.title")}</h1>
         <span className="flex-1" />
         <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
           {t("settings.back")}
@@ -292,9 +292,10 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
           <ul className="menu w-full gap-0.5 p-0">
             {items.map((it) => (
               <li key={it.id}>
+                {/* 当前项激活态统一 bg-primary/10 text-primary(与 rail/侧栏同语言) */}
                 <button
                   type="button"
-                  className={section === it.id ? "menu-active" : ""}
+                  className={`transition-colors duration-150 ${section === it.id ? "bg-primary/10 text-primary" : ""}`}
                   aria-current={section === it.id ? "page" : undefined}
                   onClick={() => setSection(it.id)}
                 >
@@ -305,9 +306,13 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
           </ul>
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">{body()}</div>
+          {/* 内容列居中收窄:阅读宽度稳定,分区排版不随窗宽漂移 */}
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">{body()}</div>
+          </div>
+          {/* 保存条:毛玻璃底贴底 */}
           {dirty && (
-            <div className="flex shrink-0 items-center gap-2 border-t border-base-300 bg-base-200 px-4 py-2">
+            <div className="flex shrink-0 items-center gap-2 border-t border-base-300 bg-base-100/90 px-4 py-2 backdrop-blur">
               <span className="text-xs text-base-content/70">{t("settings.save.dirty")}</span>
               {saveError && (
                 <span role="alert" className="min-w-0 truncate text-xs text-error" title={saveError}>

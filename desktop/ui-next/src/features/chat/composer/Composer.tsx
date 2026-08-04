@@ -4,6 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
+import { CircleStop, Paperclip, SendHorizontal, X } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -226,10 +227,10 @@ export function Composer({
           <button
             type="button"
             aria-label={t("chat.dismiss")}
-            className="btn btn-ghost btn-xs"
+            className="btn btn-ghost btn-square btn-xs"
             onClick={ctl.dismissError}
           >
-            ✕
+            <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
       )}
@@ -242,15 +243,16 @@ export function Composer({
           <button
             type="button"
             aria-label={t("chat.queuedCancel")}
-            className="btn btn-ghost btn-xs"
+            className="btn btn-ghost btn-square btn-xs"
             onClick={ctl.clearQueued}
           >
-            ✕
+            <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
       )}
 
-      <div className="relative flex flex-col rounded-box border border-base-300 bg-base-100">
+      {/* 聚焦时边界强调:focus-within 转品牌色描边 */}
+      <div className="relative flex flex-col rounded-box border border-base-300 bg-base-100 transition-colors duration-150 focus-within:border-primary/60">
         {slashOpen && (
           <ul
             role="listbox"
@@ -286,13 +288,20 @@ export function Composer({
           </ul>
         )}
 
+        {/* 运行条:一行紧凑态——spinner + 文案 + 停止 icon 按钮 */}
         {state.running && (
-          <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2 text-xs">
-            <span className="loading loading-spinner loading-xs" aria-hidden />
+          <div className="flex items-center gap-2 border-b border-base-300 px-3 py-1.5 text-xs">
+            <span className="loading loading-spinner loading-xs text-primary" aria-hidden />
             <span className="font-semibold">{runningLabel}</span>
             <span className="flex-1" />
-            <button type="button" className="btn btn-outline btn-error btn-xs" onClick={ctl.stop}>
-              {t("chat.stop")}
+            <button
+              type="button"
+              aria-label={t("chat.stop")}
+              title={t("chat.stop")}
+              className="btn btn-ghost btn-square btn-xs text-error"
+              onClick={ctl.stop}
+            >
+              <CircleStop size={16} strokeWidth={1.75} aria-hidden />
             </button>
           </div>
         )}
@@ -305,8 +314,8 @@ export function Composer({
                 <span className="max-w-40 truncate">{u.name}</span>
                 {u.pct >= 0 && <span className="tabular-nums opacity-60">{u.pct}%</span>}
                 {u.cancel && (
-                  <button type="button" aria-label={t("chat.uploadCancel")} onClick={u.cancel}>
-                    ✕
+                  <button type="button" aria-label={t("chat.uploadCancel")} className="cursor-pointer" onClick={u.cancel}>
+                    <X size={12} strokeWidth={1.75} aria-hidden />
                   </button>
                 )}
               </span>
@@ -314,8 +323,8 @@ export function Composer({
             {ctl.atts.map((a, i) => (
               <span key={a.path} title={a.path} className="badge badge-ghost h-auto gap-1.5 py-1.5 text-xs">
                 <span className="max-w-40 truncate">{a.name}</span>
-                <button type="button" aria-label={t("chat.attachRemove")} onClick={() => ctl.removeAtt(i)}>
-                  ✕
+                <button type="button" aria-label={t("chat.attachRemove")} className="cursor-pointer" onClick={() => ctl.removeAtt(i)}>
+                  <X size={12} strokeWidth={1.75} aria-hidden />
                 </button>
               </span>
             ))}
@@ -427,20 +436,22 @@ export function Composer({
 
           <button
             type="button"
+            aria-label={t("chat.attach")}
             title={t("chat.attachTip")}
-            className="btn btn-ghost btn-xs shrink-0 font-normal text-base-content/60"
+            className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60"
             onClick={attach}
           >
-            {t("chat.attach")}
+            <Paperclip size={15} strokeWidth={1.75} aria-hidden />
           </button>
           <button
             type="button"
+            aria-label={t("chat.send")}
             title={t("chat.sendTip")}
-            className="btn btn-primary btn-sm shrink-0"
+            className="btn btn-primary btn-square btn-sm shrink-0"
             disabled={!ctl.draft.trim() && ctl.atts.length === 0}
             onClick={submit}
           >
-            {t("chat.send")}
+            <SendHorizontal size={16} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
       </div>

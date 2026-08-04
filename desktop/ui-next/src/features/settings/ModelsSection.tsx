@@ -69,7 +69,7 @@ export function ModelsSection({
             </div>
             {open && (
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-base-300 p-3">
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.name")}</legend>
                   <input
                     className="input input-sm w-full"
@@ -78,7 +78,7 @@ export function ModelsSection({
                     onChange={(e) => patch(i, { name: e.target.value })}
                   />
                 </fieldset>
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.provider")}</legend>
                   <select
                     className="select select-sm w-full"
@@ -101,7 +101,7 @@ export function ModelsSection({
                     onChange={(e) => patch(i, { base_url: e.target.value })}
                   />
                 </fieldset>
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.apiKey")}</legend>
                   <input
                     className="input input-sm w-full font-mono text-xs"
@@ -112,7 +112,7 @@ export function ModelsSection({
                     onChange={(e) => patch(i, { api_key: e.target.value })}
                   />
                 </fieldset>
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.model")}</legend>
                   <input
                     className="input input-sm w-full font-mono text-xs"
@@ -121,7 +121,7 @@ export function ModelsSection({
                     onChange={(e) => patch(i, { model: e.target.value })}
                   />
                 </fieldset>
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.think")}</legend>
                   {/* 缺省("")= 产品默认「低」;off 才是关闭——契约同壳/内核 */}
                   <select

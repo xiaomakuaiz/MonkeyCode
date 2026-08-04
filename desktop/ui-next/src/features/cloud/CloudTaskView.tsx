@@ -7,6 +7,7 @@
 // 提问大纲:数据 = REST 提问索引(全量目录)+ 已回放窗口的用户消息按时间锚
 // 合并(lib/cloud/outline),渲染复用本地 OutlineNav;跳转目标未加载时经
 // loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
+import { CircleStop, Files, SendHorizontal, SquareTerminal, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { LogList } from "@/features/chat/LogList";
@@ -184,21 +185,24 @@ export function CloudTaskView({
         </h1>
         <span className={`badge badge-soft badge-sm ${STATUS_BADGE[h.taskStatus] ?? "badge-ghost"}`}>{statusLabel}</span>
         <span className="badge badge-ghost badge-sm">{t("cloud.view.badge")}</span>
+        {/* 开合态统一 bg-primary/10 text-primary(与 rail/侧栏同语言) */}
         <button
           type="button"
-          className={`btn btn-ghost btn-xs ${filesOpen ? "btn-active" : ""}`}
+          className={`btn btn-ghost btn-xs ${filesOpen ? "bg-primary/10 text-primary" : ""}`}
           disabled={!h.vmId}
           title={h.vmId ? undefined : t("cloud.view.filesPending")}
           onClick={() => setFilesOpen((o) => !o)}
         >
+          <Files size={14} strokeWidth={1.75} aria-hidden />
           {t("cloud.view.filesOpen")}
         </button>
         {h.vmId && !h.ended && (
           <button
             type="button"
-            className={`btn btn-ghost btn-xs ${termOpen ? "btn-active" : ""}`}
+            className={`btn btn-ghost btn-xs ${termOpen ? "bg-primary/10 text-primary" : ""}`}
             onClick={() => setTermOpen((o) => !o)}
           >
+            <SquareTerminal size={14} strokeWidth={1.75} aria-hidden />
             {termOpen ? t("cloud.view.terminalClose") : t("cloud.view.terminalOpen")}
           </button>
         )}
@@ -286,7 +290,7 @@ export function CloudTaskView({
                   style={{ color: "var(--termTx2)" }}
                   onClick={() => setTermOpen(false)}
                 >
-                  ✕
+                  <X size={14} strokeWidth={1.75} aria-hidden />
                 </button>
               </div>
               <div className="min-h-0 flex-1">
@@ -304,12 +308,19 @@ export function CloudTaskView({
             </div>
           )}
 
+          {/* 运行条:一行紧凑态——spinner + 文案 + 停止 icon 按钮(与本地 composer 同语言) */}
           {h.running && (
             <div role="status" className="flex items-center gap-2 text-xs text-base-content/60">
               <span className="loading loading-dots loading-xs" aria-hidden />
               <span className="flex-1">{t("cloud.view.running")}</span>
-              <button type="button" className="btn btn-ghost btn-xs" title={t("cloud.view.cancelRun")} onClick={h.cancelRun}>
-                {t("chat.stop")}
+              <button
+                type="button"
+                aria-label={t("chat.stop")}
+                className="btn btn-ghost btn-square btn-xs text-error"
+                title={t("cloud.view.cancelRun")}
+                onClick={h.cancelRun}
+              >
+                <CircleStop size={16} strokeWidth={1.75} aria-hidden />
               </button>
             </div>
           )}
@@ -327,7 +338,7 @@ export function CloudTaskView({
             <div className="flex items-end gap-2">
               <textarea
                 aria-label={t("chat.composer")}
-                className="textarea min-h-10 w-full resize-none text-sm"
+                className="textarea min-h-10 w-full resize-none text-sm transition-colors duration-150 focus:border-primary/60 focus:outline-none"
                 rows={2}
                 placeholder={pending ? t("cloud.view.composerPending") : t("cloud.view.composerPlaceholder")}
                 value={h.input}
@@ -335,8 +346,15 @@ export function CloudTaskView({
                 onKeyDown={onKeyDown}
                 disabled={pending}
               />
-              <button type="button" className="btn btn-primary btn-sm" disabled={pending || !h.input.trim()} onClick={send}>
-                {t("chat.send")}
+              <button
+                type="button"
+                aria-label={t("chat.send")}
+                title={t("chat.sendTip")}
+                className="btn btn-primary btn-square btn-sm"
+                disabled={pending || !h.input.trim()}
+                onClick={send}
+              >
+                <SendHorizontal size={16} strokeWidth={1.75} aria-hidden />
               </button>
             </div>
           )}

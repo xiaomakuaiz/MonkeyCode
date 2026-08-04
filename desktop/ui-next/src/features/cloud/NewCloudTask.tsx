@@ -93,7 +93,7 @@ export function NewCloudTask({
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-base font-bold">{t("cloud.new.title")}</h2>
+      <h2 className="text-sm font-semibold">{t("cloud.new.title")}</h2>
 
       {loadErr && (
         <div role="alert" className="alert alert-error alert-soft py-1.5 text-xs">

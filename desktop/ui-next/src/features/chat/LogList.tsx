@@ -3,6 +3,8 @@
 // key = itemKey(state, i)——"加载更早"前插时 keyBase 左移,已渲染项不重挂载。
 // 审批锚定:perm 带 toolCallId 且流里有同 id 工具卡时,按钮行嵌进那张卡
 // (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
+import { Sparkles } from "lucide-react";
+
 import { Markdown } from "@/components/markdown/Markdown";
 import { useI18n } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
@@ -34,9 +36,10 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   const { t } = useI18n();
   const summary = item.text.split("\n").find((l) => l.trim()) ?? "";
   return (
-    <details className="collapse-arrow collapse rounded-box border border-base-300 bg-base-200/50">
+    // 思考块刻意弱化:虚线边 + 半透明面,视觉上退到消息流之后
+    <details className="collapse-arrow collapse rounded-box border border-dashed border-base-300 bg-base-200/50">
       <summary className="collapse-title min-h-0 py-2 text-xs text-base-content/60">
-        <span aria-hidden>✦ </span>
+        <Sparkles size={12} strokeWidth={1.75} aria-hidden className="me-1.5 inline-block align-[-1px]" />
         {t("chat.thought")}
         <span className="ml-2 opacity-70">{summary.slice(0, 80)}</span>
       </summary>
@@ -108,21 +111,30 @@ export function LogList({
   // 工具卡自身的 run/ok/fail 流转代言(types.ts::PermItem.toolCallId 契约)
   const toolIds = new Set<string>();
   for (const it of state.items) if (it.kind === "tool" && it.tcId) toolIds.add(it.tcId);
+  const isHidden = (it: ChatItem) => it.kind === "perm" && !!it.toolCallId && toolIds.has(it.toolCallId);
+  // 条目节奏差:相邻工具卡收紧(6px),消息块之间放宽(16px)。以包裹层
+  // margin 实现(隐藏占位 display:none 不吃 margin),直接子元素仍与
+  // items 一一对应——结构契约不变
+  let prevVisible: ChatItem | null = null;
   return (
-    <div className="flex flex-col gap-3">
-      {state.items.map((item, i) =>
-        item.kind === "perm" && item.toolCallId && toolIds.has(item.toolCallId) ? (
-          <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />
-        ) : (
+    <div className="flex flex-col">
+      {state.items.map((item, i) => {
+        if (isHidden(item) && item.kind === "perm") {
+          return <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />;
+        }
+        const compact = prevVisible !== null && prevVisible.kind === "tool" && item.kind === "tool";
+        const gapClass = prevVisible === null ? "" : compact ? " mt-1.5" : " mt-4";
+        prevVisible = item;
+        return (
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
           // (包裹层是块级时 align-self 无效,居中丢失)
-          <div key={itemKey(state, i)} className="flex flex-col">
+          <div key={itemKey(state, i)} className={`flex flex-col${gapClass}`}>
             {renderItem(item, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession)}
           </div>
-        ),
-      )}
+        );
+      })}
       {state.running && state.streamKind === "" && (
-        <span className="loading loading-dots loading-sm text-base-content/40" aria-hidden />
+        <span className="loading loading-dots loading-sm mt-3 text-base-content/40" aria-hidden />
       )}
     </div>
   );

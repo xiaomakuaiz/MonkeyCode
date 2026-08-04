@@ -80,10 +80,11 @@ describe("工具卡", () => {
     expect(screen.getByText("Compiling crate…")).toBeTruthy();
   });
 
-  it("内嵌审批:⏸ 顶掉状态点 + 卡底按钮行", () => {
+  it("内嵌审批:暂停图标顶掉状态点 + 卡底按钮行", () => {
     const perm: PermItem = { kind: "perm", id: "p1", title: "npm test", tool: "Bash", state: "open", toolCallId: "t1" };
-    render(<ToolCard item={{ ...BASE, status: "run" }} perm={perm} sessionId="s1" />);
-    expect(screen.getByText("⏸")).toBeTruthy();
+    const { container } = render(<ToolCard item={{ ...BASE, status: "run" }} perm={perm} sessionId="s1" />);
+    expect(container.querySelector("svg.text-warning")).toBeTruthy(); // 暂停图标
+    expect(container.querySelector(".status")).toBeNull(); // 状态点被顶掉
     expect(screen.getByText("需要确认")).toBeTruthy();
     expect(screen.getByRole("button", { name: "允许" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();

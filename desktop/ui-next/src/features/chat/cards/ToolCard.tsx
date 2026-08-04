@@ -1,6 +1,8 @@
 // 工具卡:状态点 + 标题 + 耗时;详情 collapse(入参/结果,mono 摘要);
 // 子代理进度窗(只显尾部若干条,完整过程在子会话);失败外显 out 首行;
 // report_findings 走结构化发现列表;锚定的待决审批内嵌卡底(独立大卡不渲染)。
+import { Pause } from "lucide-react";
+
 import { MarkdownInline } from "@/components/markdown/Markdown";
 import { useI18n } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
@@ -86,10 +88,10 @@ export function ToolCard({
   const output = clip(toolResultText(item.rawOutput, item.content));
   const showDetail = item.status !== "run" && (input !== "" || output !== "");
   return (
-    <div className="card card-border border-base-300 bg-base-100" data-tool-id={item.tcId}>
+    <div className="overflow-hidden rounded-box border border-base-300 bg-base-100" data-tool-id={item.tcId}>
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
         {perm ? (
-          <span aria-hidden className="text-warning">⏸</span>
+          <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-warning" />
         ) : (
           <span aria-hidden className={`status ${statusTone(item.status)}`} />
         )}

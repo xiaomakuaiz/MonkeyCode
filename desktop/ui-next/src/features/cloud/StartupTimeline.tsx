@@ -1,6 +1,8 @@
 // 云端任务启动时间线(task.status = pending):虚拟机准备是以分钟计的过程,
 // 按 virtualmachine.conditions 展开成时间线——已完成打勾、当前项转圈(可带
 // 进度条)、失败项红点带原因。状态语义与移动端 starting 分支同源。
+import { Check } from "lucide-react";
+
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { CloudTaskDetail, VmCondition } from "@/lib/ipc/cloudtasks";
 
@@ -64,11 +66,7 @@ function StepRow({ step }: { step: StartupStep }) {
   return (
     <li className="flex items-start gap-2">
       <span className="flex h-5 w-4 shrink-0 items-center justify-center">
-        {step.state === "done" && (
-          <span aria-hidden className="text-xs text-success">
-            ✓
-          </span>
-        )}
+        {step.state === "done" && <Check size={14} strokeWidth={1.75} aria-hidden className="text-success" />}
         {step.state === "active" && <span className="loading loading-spinner loading-xs text-primary" aria-hidden />}
         {step.state === "failed" && <span aria-hidden className="status status-error" />}
       </span>
@@ -117,9 +115,9 @@ export function StartupTimeline({ meta }: { meta: CloudTaskDetail | null }) {
         })
       : t("cloud.startup.preparing");
   return (
-    <div role="status" className="card card-border w-full max-w-md border-base-300 bg-base-100">
+    <div role="status" className="w-full max-w-md rounded-box border border-base-300 bg-base-100">
       <div className="flex flex-col gap-3 p-5">
-        <div className={`text-sm font-bold ${failed ? "text-error" : ""}`}>{title}</div>
+        <div className={`text-sm font-semibold ${failed ? "text-error" : ""}`}>{title}</div>
         <ul className="flex flex-col gap-2">
           {steps.length === 0 ? (
             <StepRow step={{ type: "Scheduled", state: "active", message: t("cloud.startup.queued") }} />

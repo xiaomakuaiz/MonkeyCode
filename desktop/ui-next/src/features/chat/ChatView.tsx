@@ -4,7 +4,7 @@
 // scrollHeight 差值补偿 scrollTop,视口纹丝不动。
 // 大纲跳转:锚(data-user-seq)不在 DOM 时循环 loadEarlier 补页——用
 // effect 驱动(每页提交后重查),不赌 React 提交时序;上限重试防死循环。
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, X } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -259,9 +259,17 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
               </span>
             </h1>
           )}
-          {meta.summary && (
+          {/* 副标题:有摘要显摘要;无摘要时 chat 会话标「独立会话」、其余
+              显 workdir 末段(mono,悬停看全路径)——一眼可辨会话归属 */}
+          {meta.summary ? (
             <p className="truncate text-[11px] leading-tight text-base-content/50">{meta.summary}</p>
-          )}
+          ) : meta.kind === "chat" ? (
+            <p className="truncate text-[11px] leading-tight text-base-content/45">{t("chat.header.standalone")}</p>
+          ) : meta.workdir ? (
+            <p title={meta.workdir} className="truncate font-mono text-[11px] leading-tight text-base-content/45">
+              {meta.workdir.split(/[\\/]/).filter(Boolean).pop() ?? meta.workdir}
+            </p>
+          ) : null}
         </div>
         {conn && !conn.connected && (
           <span className="badge badge-warning badge-soft badge-sm">{conn.text}</span>
@@ -349,7 +357,7 @@ function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void })
             className="btn btn-ghost btn-square btn-xs"
             onClick={onClose}
           >
-            ✕
+            <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">

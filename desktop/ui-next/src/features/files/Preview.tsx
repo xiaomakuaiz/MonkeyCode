@@ -2,6 +2,8 @@
 // (loading/error/ready),ready 再按模式分流——文件(空/二进制占位、
 // 代码高亮)与 diff(空 diff 占位、unified diff 渲染)。超限文件在壳侧
 // 以 {error} 拒绝,走 error 态外显原因。
+import { X } from "lucide-react";
+
 import { useI18n } from "@/lib/i18n";
 import { CodeView } from "./CodeView";
 import { DiffView } from "./DiffView";
@@ -33,7 +35,7 @@ export function Preview({ model, status, onClose }: { model: PreviewModel; statu
           onClick={onClose}
           className="btn btn-ghost btn-square btn-xs shrink-0"
         >
-          ✕
+          <X size={14} strokeWidth={1.75} aria-hidden />
         </button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">

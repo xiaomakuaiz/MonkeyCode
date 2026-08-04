@@ -1,6 +1,8 @@
 // 改动列表:状态徽标 + 文件名 + 目录 + 可选 +N/-N,点击 → diff 预览。
 // 本地 repo_file_changes 只给 {path, status},additions/deletions 是云端
 // 超集字段——有则展示,无则整列缺席(不发明数据)。changes null = 加载中。
+import { FileDiff } from "lucide-react";
+
 import { useI18n } from "@/lib/i18n";
 import type { RepoChange } from "@/lib/ipc/repo";
 import { basename, statusMeta } from "./status";
@@ -29,7 +31,13 @@ export function Changes({
     );
   }
   if (changes.length === 0) {
-    return <p className="px-4 py-8 text-center text-xs text-base-content/50">{t("files.changes.empty")}</p>;
+    // 空态统一形态:图标 + 标题档,居中
+    return (
+      <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+        <FileDiff size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <div className="text-sm font-semibold">{t("files.changes.empty")}</div>
+      </div>
+    );
   }
   const sorted = [...changes].sort((a, b) => a.path.localeCompare(b.path));
   return (
@@ -45,7 +53,7 @@ export function Changes({
             type="button"
             title={c.path}
             onClick={() => onOpen(c.path)}
-            className={`flex w-full items-center gap-2 px-4 py-1 text-left text-xs ${
+            className={`flex w-full cursor-pointer items-center gap-2 px-4 py-1 text-left text-xs transition-colors duration-150 ${
               activePath === c.path ? "bg-base-200" : "hover:bg-base-200/60"
             }`}
           >

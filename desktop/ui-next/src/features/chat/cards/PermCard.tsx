@@ -2,6 +2,7 @@
 // 复用——同一套动作词汇与乐观回写只维护一份,两处渲染不漂移。
 // 答复后先本地乐观置态(按钮换成结果徽标),permission-resolved 帧随后
 // 带权威 outcome 回写 ChatState(归约层已处理);发送失败回滚可重点。
+import { Pause } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -106,10 +107,10 @@ export function PermCard({
     );
   }
   return (
-    <div role="alert" className="card card-border border-warning/50 bg-warning/5" data-perm-id={item.id}>
+    <div role="alert" className="rounded-box border border-warning/50 bg-warning/5" data-perm-id={item.id}>
       <div className="flex flex-col gap-2 p-3">
         <div className="flex items-center gap-2 text-xs font-semibold text-warning">
-          <span aria-hidden>⏸</span>
+          <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
           <span>{t("chat.perm.needConfirm")}</span>
           {item.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{item.tool}</span>}
         </div>

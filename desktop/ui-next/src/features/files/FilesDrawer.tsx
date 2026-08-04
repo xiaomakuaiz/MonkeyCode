@@ -10,6 +10,7 @@
 //   refreshToken 自增(调用方在 ChatState.turnEnded 时递增)则重拉。
 // - Esc(window capture):抽屉开着只管自己——预览开着先关预览,再一次
 //   才关抽屉;层级协调交调用方。
+import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -264,14 +265,19 @@ export function FilesDrawer({
         />
         <header className="flex shrink-0 items-center gap-2 border-b border-base-300 pl-2 pr-2">
           <div role="tablist" className="tabs tabs-border">
-            <button type="button" role="tab" className={`tab ${tab === "files" ? "tab-active" : ""}`} onClick={() => selectTab("files")}>
+            <button
+              type="button"
+              role="tab"
+              className={`tab transition-colors duration-150 ${tab === "files" ? "tab-active text-primary" : ""}`}
+              onClick={() => selectTab("files")}
+            >
               {t("files.tab.files")}
             </button>
             {isGitRepo && (
               <button
                 type="button"
                 role="tab"
-                className={`tab gap-1.5 ${tab === "changes" ? "tab-active" : ""}`}
+                className={`tab gap-1.5 transition-colors duration-150 ${tab === "changes" ? "tab-active text-primary" : ""}`}
                 onClick={() => selectTab("changes")}
               >
                 {t("files.tab.changes")}
@@ -286,7 +292,7 @@ export function FilesDrawer({
             onClick={onClose}
             className="btn btn-ghost btn-square btn-xs ml-auto"
           >
-            ✕
+            <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         </header>
         {changesErr && (

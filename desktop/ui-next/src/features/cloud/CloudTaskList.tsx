@@ -5,6 +5,7 @@
 // 列表重拉,删的是当前打开任务时经 onDeleted 让上层清空。
 // 导出组件与数据 hook,Sidebar 接线由 App 侧完成(本文件不触 features/sidebar)。
 // daisyUI 原生形态:menu + details 折叠 + status 状态点 + badge 计数。
+import { Cloud, MoreHorizontal } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -132,7 +133,7 @@ function RowMenu({ task, onDelete }: { task: CloudTask; onDelete: (task: CloudTa
         className="btn btn-ghost btn-square btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
         onBlur={() => setConfirming(false)}
       >
-        ⋯
+        <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
       </button>
       <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 shadow-md">
         <li>
@@ -172,8 +173,9 @@ function TaskRow({
   const { t } = useI18n();
   return (
     <li>
+      {/* 当前任务激活态统一 bg-primary/10 text-primary(与本地侧栏同语言) */}
       <a
-        className={`group flex items-center gap-2 ${task.id === currentId ? "menu-active" : ""}`}
+        className={`group flex min-h-8 items-center gap-2 transition-colors duration-150 ${task.id === currentId ? "bg-primary/10 text-primary" : ""}`}
         onClick={() => onSelect(task)}
       >
         <StatusDot status={task.status} />
@@ -219,7 +221,8 @@ function TaskGroup({
         }}
       >
         <summary title={label}>
-          <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+          {/* 项目分组头 = 微标签档(与本地侧栏同语言) */}
+          <span className="min-w-0 flex-1 truncate text-[11px] font-medium tracking-wider text-base-content/45 uppercase">{label}</span>
           {running > 0 && <span className="badge badge-primary badge-xs">{running}</span>}
         </summary>
         <ul>
@@ -312,10 +315,12 @@ export function CloudTaskList({
   }
 
   if (feed.tasks.length === 0 && projects.length === 0) {
+    // 空态统一形态:图标 + 标题档 + 辅助档,居中
     return (
-      <div className="flex flex-col items-center gap-1 px-3 py-8 text-center">
-        <div className="text-sm font-semibold text-base-content/55">{t("cloud.list.empty.title")}</div>
-        <div className="text-xs text-base-content/40">{t("cloud.list.empty.detail")}</div>
+      <div className="flex flex-col items-center gap-1.5 px-3 py-8 text-center">
+        <Cloud size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <div className="text-sm font-semibold">{t("cloud.list.empty.title")}</div>
+        <div className="text-xs text-base-content/60">{t("cloud.list.empty.detail")}</div>
       </div>
     );
   }
@@ -351,7 +356,7 @@ export function CloudTaskList({
       {feed.history.length > 0 && (
         <li>
           <details open={feed.active.length === 0 && projects.length === 0}>
-            <summary className="text-base-content/50">
+            <summary className="text-[11px] text-base-content/40">
               {t("cloud.list.history")}
               <span className="badge badge-ghost badge-xs">{feed.history.length}</span>
             </summary>

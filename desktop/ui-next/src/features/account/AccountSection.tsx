@@ -100,9 +100,9 @@ function BaizhiCard({
   };
 
   return (
-    <div className="card card-border bg-base-100">
-      <div className="card-body gap-2 p-4">
-        <h2 className="card-title text-sm">{t("account.baizhi.title")}</h2>
+    <div className="rounded-box border border-base-300 bg-base-100">
+      <div className="flex flex-col gap-2 p-4">
+        <h2 className="text-sm font-semibold">{t("account.baizhi.title")}</h2>
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-semibold">{profileName(status.profile) || t("account.loggedIn")}</span>
           <span className="truncate font-mono text-xs text-base-content/50">{status.host}</span>
@@ -187,9 +187,9 @@ function McCard({
   const userName = user?.name || user?.username || user?.email || t("account.loggedIn");
 
   return (
-    <div className="card card-border bg-base-100">
-      <div className="card-body gap-2 p-4">
-        <h2 className="card-title text-sm">{t("account.mc.title")}</h2>
+    <div className="rounded-box border border-base-300 bg-base-100">
+      <div className="flex flex-col gap-2 p-4">
+        <h2 className="text-sm font-semibold">{t("account.mc.title")}</h2>
         {!connected ? (
           <>
             <p className="text-xs text-base-content/60">{t("account.mc.notConnected")}</p>

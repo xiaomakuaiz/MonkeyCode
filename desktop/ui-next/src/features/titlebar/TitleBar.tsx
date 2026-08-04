@@ -79,7 +79,7 @@ export function TitleBar() {
         <button
           type="button"
           aria-label={t("titlebar.minimize")}
-          className="flex w-12 cursor-default items-center justify-center text-base-content/70 hover:bg-base-content/10"
+          className="flex w-12 cursor-default items-center justify-center text-base-content/70 transition-colors duration-150 hover:bg-base-content/10"
           onClick={windowMinimize}
         >
           <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
@@ -89,7 +89,7 @@ export function TitleBar() {
         <button
           type="button"
           aria-label={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
-          className="flex w-12 cursor-default items-center justify-center text-base-content/70 hover:bg-base-content/10"
+          className="flex w-12 cursor-default items-center justify-center text-base-content/70 transition-colors duration-150 hover:bg-base-content/10"
           onClick={windowToggleMaximize}
         >
           {maximized ? (
@@ -107,7 +107,7 @@ export function TitleBar() {
         <button
           type="button"
           aria-label={t("titlebar.close")}
-          className="flex w-12 cursor-default items-center justify-center text-base-content/70 hover:bg-caption-close hover:text-white"
+          className="flex w-12 cursor-default items-center justify-center text-base-content/70 transition-colors duration-150 hover:bg-caption-close hover:text-white"
           onClick={windowClose}
         >
           <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>

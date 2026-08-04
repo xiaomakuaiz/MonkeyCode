@@ -52,7 +52,7 @@ export function McpSection({
             </div>
             {open && (
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-base-300 p-3">
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.mcp.name")}</legend>
                   <input
                     className="input input-sm w-full font-mono text-xs"
@@ -61,7 +61,7 @@ export function McpSection({
                     onChange={(e) => patch(i, { name: e.target.value })}
                   />
                 </fieldset>
-                <fieldset className="fieldset">
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.mcp.type")}</legend>
                   <select
                     className="select select-sm w-full"
@@ -86,7 +86,7 @@ export function McpSection({
                   </fieldset>
                 ) : (
                   <>
-                    <fieldset className="fieldset">
+                    <fieldset className="fieldset gap-1.5">
                       <legend className="fieldset-legend">{t("settings.mcp.command")}</legend>
                       <input
                         className="input input-sm w-full font-mono text-xs"
@@ -96,7 +96,7 @@ export function McpSection({
                         onChange={(e) => patch(i, { command: e.target.value })}
                       />
                     </fieldset>
-                    <fieldset className="fieldset">
+                    <fieldset className="fieldset gap-1.5">
                       <legend className="fieldset-legend">{t("settings.mcp.args")}</legend>
                       <input
                         className="input input-sm w-full font-mono text-xs"

@@ -7,7 +7,7 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { Cloud, FolderGit2, MessagesSquare, Settings } from "lucide-react";
+import { Cloud, FolderGit2, MessagesSquare, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
@@ -84,12 +84,15 @@ function SpaceRail({
             {s === "local" && waiting > 0 && (
               <span className="indicator-item badge badge-warning badge-xs">{waiting}</span>
             )}
+            {/* 44px 命中区;激活态 = 品牌淡底色块;悬停 tooltip 替代原生 title */}
             <button
               type="button"
               aria-label={labels[s]}
               aria-pressed={space === s}
-              title={labels[s]}
-              className={`btn btn-square btn-ghost btn-sm ${space === s ? "btn-active text-primary" : "text-base-content/60"}`}
+              data-tip={labels[s]}
+              className={`tooltip tooltip-right flex size-11 cursor-pointer items-center justify-center rounded-box transition-colors duration-150 ${
+                space === s ? "bg-primary/10 text-primary" : "text-base-content/60 hover:bg-base-content/10 hover:text-base-content"
+              }`}
               onClick={() => onChange(s)}
             >
               {(() => {
@@ -104,8 +107,8 @@ function SpaceRail({
         <button
           type="button"
           aria-label={t("rail.settings")}
-          title={t("rail.settings")}
-          className="btn btn-square btn-ghost btn-sm text-base-content/60"
+          data-tip={t("rail.settings")}
+          className="tooltip tooltip-right flex size-11 cursor-pointer items-center justify-center rounded-box text-base-content/60 transition-colors duration-150 hover:bg-base-content/10 hover:text-base-content"
           onClick={onOpenSettings}
         >
           <Settings size={18} strokeWidth={1.75} aria-hidden />
@@ -381,7 +384,7 @@ export function App() {
             <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs shadow-md`}>
               <button
                 type="button"
-                className="max-w-64 min-w-0 cursor-pointer truncate text-left"
+                className="max-w-64 min-w-0 cursor-pointer truncate text-left hover:underline"
                 onClick={() => void openSessionById(n.sessionId)}
               >
                 {t(NOTICE_TEXT[n.kind], { title: n.title || t("notice.untitled") })}
@@ -389,10 +392,10 @@ export function App() {
               <button
                 type="button"
                 aria-label={t("notice.dismiss")}
-                className="btn btn-ghost btn-xs"
+                className="btn btn-ghost btn-square btn-xs"
                 onClick={() => setNotices((list) => list.filter((x) => x.sessionId !== n.sessionId))}
               >
-                ✕
+                <X size={14} strokeWidth={1.75} aria-hidden />
               </button>
             </div>
           ))}

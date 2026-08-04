@@ -178,6 +178,7 @@ export const zh = {
   "chat.child.title": "子代理会话",
   "chat.rename.label": "会话标题",
   "chat.rename.hint": "双击重命名",
+  "chat.header.standalone": "独立会话",
   "chat.findings.empty": "本轮审查未发现需要处理的问题",
   "chat.findings.confirmed": "已证实",
   "chat.findings.plausible": "疑似",

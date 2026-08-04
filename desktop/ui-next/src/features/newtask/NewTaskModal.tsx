@@ -12,6 +12,7 @@
 //   运行环境过滤(lib/util/workdir);目录预填 = 过滤后首项,无则默认目录
 // - 模型记忆 mc.lastTaskModel(本地/对话共用);旧工程无 lastDir 持久化键,
 //   不发明新键
+import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -162,7 +163,7 @@ export function NewTaskModal({
   return (
     <dialog open className="modal modal-open">
       <div className="modal-box max-w-sm">
-        <h2 className="mb-3 text-base font-bold">{t("create.title")}</h2>
+        <h2 className="mb-3 text-sm font-semibold">{t("create.title")}</h2>
         <div className="flex flex-col gap-3">
           <div role="tablist" aria-label={t("create.title")} className="tabs-box tabs tabs-sm w-fit">
             {(["local", "chat", "cloud"] as const).map((k) => (
@@ -171,7 +172,7 @@ export function NewTaskModal({
                 type="button"
                 role="tab"
                 aria-selected={kind === k}
-                className={`tab font-semibold ${kind === k ? "tab-active" : ""}`}
+                className={`tab font-semibold transition-colors duration-150 ${kind === k ? "tab-active text-primary" : ""}`}
                 onClick={() => setKind(k)}
               >
                 {k === "local" ? t("create.kind.local") : k === "chat" ? t("create.kind.chat") : t("create.kind.cloud")}
@@ -219,7 +220,7 @@ export function NewTaskModal({
                     aria-expanded={dirMenu}
                     onClick={() => setDirMenu(!dirMenu)}
                   >
-                    ▾
+                    <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
                   </button>
                 </div>
                 {dirMenu && (

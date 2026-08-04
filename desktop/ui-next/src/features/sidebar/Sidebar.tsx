@@ -2,7 +2,7 @@
 // daisyUI 原生形态:menu(嵌套 details 折叠)、dropdown 行操作、status 状态点、
 // badge 计数、input 搜索。项目拖拽排序用 HTML5 draggable(落点计算在
 // lib/util/projects::reorderKeys,纯函数可测)。
-import { Search } from "lucide-react";
+import { Inbox, MoreHorizontal, Search, SearchX } from "lucide-react";
 import { useState, type DragEvent } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -50,7 +50,7 @@ function RowMenu({ meta, actions }: { meta: SessionMeta; actions: SidebarActions
         className="btn btn-ghost btn-square btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
         onBlur={() => setConfirming(false)}
       >
-        ⋯
+        <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
       </button>
       <ul className="dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 shadow-md">
         <li>
@@ -94,8 +94,9 @@ function SessionRow({
 }) {
   return (
     <li>
+      {/* 当前会话激活态统一 bg-primary/10 text-primary(与 rail/设置导航同语言) */}
       <a
-        className={`group flex items-center gap-2 ${meta.id === currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
+        className={`group flex min-h-8 items-center gap-2 transition-colors duration-150 ${meta.id === currentId ? "bg-primary/10 text-primary" : ""}${attention ? " bg-warning/10" : ""}`}
         data-attention={attention ? "" : undefined}
         onClick={() => actions.onSelect(meta)}
       >
@@ -147,7 +148,8 @@ function ProjectDetails({
             drag?.onDropBefore(group.key);
           }}
         >
-          <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>
+          {/* 项目分组头 = 微标签档:小号、加宽字距、弱化 */}
+          <span className="min-w-0 flex-1 truncate text-[11px] font-medium tracking-wider text-base-content/45 uppercase">{group.name}</span>
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           <span
             className="dropdown dropdown-end"
@@ -162,7 +164,7 @@ function ProjectDetails({
               aria-label={t("sidebar.project.menu")}
               className="btn btn-ghost btn-square btn-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
             >
-              ⋯
+              <MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />
             </button>
             <ul className="dropdown-content menu menu-sm z-10 w-44 rounded-box border border-base-300 bg-base-100 shadow-md">
               <li>
@@ -180,7 +182,7 @@ function ProjectDetails({
           {group.archivedSessions.length > 0 && (
             <li>
               <details>
-                <summary className="text-base-content/50">
+                <summary className="text-[11px] text-base-content/40">
                   {t("sidebar.archived")}
                   <span className="badge badge-ghost badge-xs">{group.archivedSessions.length}</span>
                 </summary>
@@ -254,12 +256,14 @@ export function Sidebar({
     const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat")).filter(matches);
     if (pool.length === 0) {
       const empty = sessions.length === 0;
+      const EmptyIcon = empty ? Inbox : SearchX;
       return (
-        <div className="flex flex-col items-center gap-1 px-3 py-8 text-center">
-          <div className="text-sm font-semibold text-base-content/55">
+        <div className="flex flex-col items-center gap-1.5 px-3 py-8 text-center">
+          <EmptyIcon size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+          <div className="text-sm font-semibold">
             {empty ? t("sidebar.empty.title") : t("sidebar.noResults.title")}
           </div>
-          <div className="text-xs text-base-content/40">
+          <div className="text-xs text-base-content/60">
             {empty ? t("sidebar.empty.detail") : t("sidebar.noResults.detail")}
           </div>
         </div>
@@ -277,7 +281,7 @@ export function Sidebar({
           {archived.length > 0 && (
             <li>
               <details>
-                <summary className="text-base-content/50">
+                <summary className="text-[11px] text-base-content/40">
                   {t("sidebar.archived")}
                   <span className="badge badge-ghost badge-xs">{archived.length}</span>
                 </summary>
@@ -324,7 +328,7 @@ export function Sidebar({
         {grouped.archivedProjects.length > 0 && (
           <li>
             <details>
-              <summary className="text-base-content/50">
+              <summary className="text-[11px] text-base-content/40">
                 {t("sidebar.archivedProjects")}
                 <span className="badge badge-ghost badge-xs">{grouped.archivedProjects.length}</span>
               </summary>
@@ -353,7 +357,7 @@ export function Sidebar({
   return (
     <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col gap-2 overflow-y-auto border-e border-base-300 bg-base-200 p-2">
       <label className="input input-sm w-full">
-        <Search size={13} strokeWidth={2} className="shrink-0 opacity-50" aria-hidden />
+        <Search size={14} strokeWidth={1.75} className="shrink-0 opacity-50" aria-hidden />
         <input
           type="search"
           aria-label={t("sidebar.search")}
@@ -365,7 +369,8 @@ export function Sidebar({
       <button type="button" className="btn btn-primary btn-sm btn-block" onClick={actions.onNewTask}>
         {t("sidebar.newTask")}
       </button>
-      <div className="min-h-0 flex-1">{body()}</div>
+      {/* 新建按钮与列表之间留一口呼吸空间 */}
+      <div className="mt-1 min-h-0 flex-1">{body()}</div>
       <UpdateFooter />
     </aside>
   );

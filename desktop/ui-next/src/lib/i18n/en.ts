@@ -179,6 +179,7 @@ export const en: Record<MessageKey, string> = {
   "chat.child.title": "Subagent session",
   "chat.rename.label": "Session title",
   "chat.rename.hint": "Double-click to rename",
+  "chat.header.standalone": "Standalone chat",
   "chat.findings.empty": "Review found no issues to address",
   "chat.findings.confirmed": "Confirmed",
   "chat.findings.plausible": "Plausible",

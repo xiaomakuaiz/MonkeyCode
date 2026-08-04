@@ -193,9 +193,9 @@ describe("CloudTaskView", () => {
     const btn = await screen.findByRole("button", { name: "云端文件" });
     await waitFor(() => expect((btn as HTMLButtonElement).disabled).toBe(false)); // vmId 到位才可用
     await userEvent.click(btn);
-    expect(screen.getByText("刷新")).toBeTruthy(); // CloudFiles 头部已挂载
+    expect(screen.getByRole("button", { name: "刷新" })).toBeTruthy(); // CloudFiles 头部已挂载
     await userEvent.click(screen.getByRole("button", { name: "关闭" }));
-    expect(screen.queryByText("刷新")).toBeNull();
+    expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
   });
 
   it("云端文件:vmId 未就绪时按钮禁用", async () => {

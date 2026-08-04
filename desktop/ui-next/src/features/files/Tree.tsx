@@ -1,6 +1,7 @@
 // 文件树:目录懒加载(点开才拉子层),子项缓存 + 展开集合 + 目录粒度加载态
 // (骨架屏),缩进表达层级(每层 16px,动态 px 走内联样式)。已删除文件只
 // 属于「改动」页;这里只展示当前真实存在的文件,改动状态以徽标标注。
+import { ChevronRight, File, Files, Folder } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -103,13 +104,26 @@ export function Tree({
           type="button"
           title={en.path}
           onClick={() => (en.isDir ? toggleDir(en.path) : onOpenFile(en))}
-          className={`flex w-full items-center gap-2 py-1 pr-4 text-left text-xs ${
+          className={`flex w-full cursor-pointer items-center gap-2 py-1 pr-4 text-left text-xs transition-colors duration-150 ${
             activePath === en.path ? "bg-base-200" : "hover:bg-base-200/60"
           }`}
           style={{ paddingLeft: 8 + depth * 16 }}
         >
-          <span className="flex w-3 shrink-0 justify-center">{en.isDir && <Chevron open={open} />}</span>
-          {en.isDir ? <FolderIcon /> : <FileIcon />}
+          <span className="flex w-3 shrink-0 justify-center">
+            {en.isDir && (
+              <ChevronRight
+                size={12}
+                strokeWidth={1.75}
+                aria-hidden
+                className={`text-base-content/40 transition-transform ${open ? "rotate-90" : ""}`}
+              />
+            )}
+          </span>
+          {en.isDir ? (
+            <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+          ) : (
+            <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
+          )}
           <span className="min-w-0 flex-1 truncate">{en.name}</span>
           {meta ? (
             <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
@@ -125,9 +139,11 @@ export function Tree({
     if (items.length === 0) {
       rows.push(
         dir === "" ? (
-          <p key="empty-root" className="px-4 py-8 text-center text-xs text-base-content/50">
-            {t("files.tree.emptyRoot")}
-          </p>
+          // 空态统一形态:图标 + 标题档,居中
+          <div key="empty-root" className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+            <Files size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+            <div className="text-sm font-semibold">{t("files.tree.emptyRoot")}</div>
+          </div>
         ) : (
           <p key={`empty:${dir}`} className="py-1 text-xs text-base-content/40" style={{ paddingLeft: 28 + depth * 16 }}>
             {t("files.tree.empty")}
@@ -147,48 +163,5 @@ export function Tree({
       )}
       {renderDir("", 0)}
     </div>
-  );
-}
-
-function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="8"
-      height="8"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      className={`text-base-content/40 transition-transform ${open ? "rotate-90" : ""}`}
-      aria-hidden
-    >
-      <path d="m5 2 6 6-6 6" />
-    </svg>
-  );
-}
-
-function FolderIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 text-base-content/50" aria-hidden>
-      <path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12z" />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      className="shrink-0 text-base-content/40"
-      aria-hidden
-    >
-      <path d="M9 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.5z" />
-      <path d="M9 1.5v4h4" />
-    </svg>
   );
 }
