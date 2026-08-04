@@ -1,7 +1,11 @@
-// 聊天视图:header(标题+摘要+连接态)+ 消息流(贴底跟随/加载更早保位)+
-// 提问大纲(左缘点列,跳转补页)+ 任务面板 + 全功能 composer(P3d)。
-// 滚动策略:贴底时新内容自动跟随,用户上滚即解除;"加载更早"前插后按
-// scrollHeight 差值补偿 scrollTop,视口纹丝不动。
+// 聊天视图:header(标题+摘要+连接态)+ 消息流(贴底跟随/滚动记忆/加载
+// 更早保位)+ 提问大纲(左缘点列,跳转补页)+ 任务面板 + 全功能 composer。
+// 滚动策略(旧 UI chat.tsx 的滚动纪律移植):
+// - 贴底判定单向:scroll 事件只做「进入贴底 → 跟随」;解除跟随只认真实
+//   用户输入(wheel 上滚 / 右缘 mousedown 拖滚动条),程序滚动不误判;
+// - 会话滚动记忆:卸载/切会话写档「视口顶条目 + 条目内偏移 + pinned」,
+//   回来按锚点恢复(纯函数在 lib/util/scrollAnchor,几何可测);
+// - 「加载更早」前插保位记**元素**,提交后 layoutEffect 对齐回原视口位。
 // 大纲跳转:锚(data-user-seq)不在 DOM 时循环 loadEarlier 补页——用
 // effect 驱动(每页提交后重查),不赌 React 提交时序;上限重试防死循环。
 import { FolderOpen, X } from "lucide-react";
@@ -12,6 +16,8 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 
 import { useApprovalHotkeys } from "@/app/shortcuts";
@@ -21,6 +27,7 @@ import { repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
+import { anchorScrollTop, findAnchor } from "@/lib/util/scrollAnchor";
 import { createImeGuard } from "@/lib/util/slash";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
@@ -30,9 +37,18 @@ import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
 
-const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
+const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
+const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
+const RESTORE_POLLS = 15; // 锚点恢复的轮询校准次数(200ms 一次,3s 内收敛)
 const JUMP_MAX_PAGES = 80; // 大纲跳转补页上限(cursor 不前进/坏锚时不空转)
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
+
+// 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
+// 记「视口顶部的条目序号 + 条目内偏移」而非 scrollTop 像素:历史分批回放、
+// 工具结果合并进先前条目、折叠态重置都会改变上方内容高度,像素值会漂,
+// 锚点跟着条目走才对得上"看到哪了"。ChatView 本身会因设置页等视图切换
+// 整体卸载重挂,记忆只能存在模块级(旧 UI chat.tsx 同款设计,理由随迁)。
+const scrollMemo = new Map<string, { anchor: number; offset: number; pinned: boolean }>();
 
 export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: number }) {
   const { t } = useI18n();
@@ -40,34 +56,163 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
   useApprovalHotkeys(state, meta.id);
   const composer = useComposer(meta.id, state.running);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pinnedRef = useRef(true);
+  const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
+  // 待恢复的锚点;回放期间每批都重新对齐(上方内容变高也不漂),用户主动滚动后交还控制权
+  const restoreRef = useRef<{ anchor: number; offset: number } | null>(null);
+  const restoreTimer = useRef(0);
+  const restoreTicks = useRef(0);
+  const restoreRO = useRef<ResizeObserver | null>(null);
+  const saveTimer = useRef(0);
 
-  // 贴底跟随:items 变化后,若此前贴底则滚到底(useLayoutEffect 赶在绘制前)
-  useLayoutEffect(() => {
+  // 滚动容器 → 条目列:LogList 根节点恒为内容轨(firstElementChild)的
+  // 最后一个子元素,其 children 与 state.items 一一对应(LogList 结构契约)
+  const itemColOf = () => scrollRef.current?.firstElementChild?.lastElementChild ?? null;
+  // 各条目相对滚动内容的 top 序列(content 坐标,与当前 scrollTop 无关)
+  const itemTops = (el: HTMLElement): number[] => {
+    const col = itemColOf();
+    if (!col) return [];
+    const base = el.getBoundingClientRect().top - el.scrollTop;
+    return Array.from(col.children, (kid) => kid.getBoundingClientRect().top - base);
+  };
+
+  // 自动滚动:优先对齐待恢复锚点,否则贴底跟随。锚点条目还没回放出来时
+  // 先不动(停在已回放内容的开头),出来后逐批对齐
+  const align = () => {
     const el = scrollRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [state.items]);
+    if (!el) return;
+    const a = restoreRef.current;
+    if (a) {
+      const tops = itemTops(el);
+      if (a.anchor < tops.length) el.scrollTop = anchorScrollTop(tops, a.anchor, a.offset);
+    } else if (pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  };
 
+  // 恢复完成/用户接管:轮询与 RO 兜底一并解除,交还滚动控制权
+  const finishRestore = () => {
+    restoreRef.current = null;
+    window.clearInterval(restoreTimer.current);
+    restoreTimer.current = 0;
+    restoreRO.current?.disconnect();
+    restoreRO.current = null;
+  };
+
+  // 锚点恢复:立即对齐 + 200ms 轮询校准若干次——内容分批物化、渲染后布局
+  // 还会无事件地微调(实测 ~6px,RO 也抓不到这种再分配),对齐到位后只是
+  // 零修正的空转;另挂 ResizeObserver 监听内容列兜底(图片解码/字体加载
+  // 会把位置顶漂几 px,不经过 items 变化)。恢复结束二者一并解除。
+  const startRestore = (anchor: number, offset: number) => {
+    finishRestore();
+    restoreRef.current = { anchor, offset };
+    align();
+    restoreTicks.current = 0;
+    restoreTimer.current = window.setInterval(() => {
+      if (!restoreRef.current || ++restoreTicks.current > RESTORE_POLLS) {
+        finishRestore();
+        return;
+      }
+      align();
+    }, 200);
+    const col = itemColOf();
+    if (col && typeof ResizeObserver !== "undefined") {
+      restoreRO.current = new ResizeObserver(align);
+      restoreRO.current.observe(col);
+    }
+  };
+
+  // 写档当前位置。恢复进行中的程序滚动不写记忆:中途切走时锚点不能被
+  // 半成品覆盖;已脱离文档(卸载竞态)也不写,免得好档被零几何冲掉
+  const saveAnchor = () => {
+    const el = scrollRef.current;
+    if (!el || !el.isConnected || restoreRef.current) return;
+    const { anchor, offset } = findAnchor(itemTops(el), el.scrollTop);
+    scrollMemo.set(meta.id, { anchor, offset, pinned: pinnedRef.current });
+  };
+
+  // 会话切换/挂载:复位跟随状态并取出记忆位置(不显式复位的话 pinnedRef
+  // 会带着上一会话的值进入新会话);cleanup 时 DOM 仍在,写档旧会话位置,
+  // 并把旧会话的轮询定时器/RO 清干净
+  useLayoutEffect(() => {
+    const saved = scrollMemo.get(meta.id);
+    pinnedRef.current = saved ? saved.pinned : true; // 首次打开默认贴底
+    if (saved && !saved.pinned) startRestore(saved.anchor, saved.offset);
+    else {
+      restoreRef.current = null;
+      align();
+    }
+    return () => {
+      saveAnchor();
+      finishRestore();
+      window.clearTimeout(saveTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta.id]);
+
+  // items 变化后赶在绘制前对齐(锚点恢复或贴底跟随)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(align, [state.items, state.running]);
+
+  // scroll 事件只做「贴底 → 跟随」的单向判定,离底不在这里判:程序滚动
+  // 同样发 scroll 事件,回放中一批内容长高就会把跟随误判成用户离底(实测
+  // 卡在中途)。离底判定只认用户真实输入(onWheel 上滚/右缘 mousedown)
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_THRESHOLD;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) pinnedRef.current = true;
+    saveAnchor();
+    // 滚动停止后布局仍会微调一次(不发 scroll 事件),停稳后补一次写档
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(saveAnchor, 600);
   };
 
-  const onLoadEarlier = async () => {
+  // 用户主动介入即终止锚点恢复,交还滚动控制权;向上意图同时解除贴底跟随
+  const onLogWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
+    finishRestore();
+    if (e.deltaY < 0) pinnedRef.current = false; // 向上滚 = 离开底部去看历史
+  };
+  const onLogMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
+    finishRestore();
+    // 按在右缘滚动条带上 = 准备拖动定位,解除跟随(拖回底部经 scroll 事件重新贴上)
     const el = scrollRef.current;
-    const prevHeight = el?.scrollHeight ?? 0;
-    const prevTop = el?.scrollTop ?? 0;
-    await loadEarlier();
-    // 前插保位:新内容把 scrollHeight 撑高多少,scrollTop 就补多少
-    requestAnimationFrame(() => {
-      const now = scrollRef.current;
-      if (now) now.scrollTop = prevTop + (now.scrollHeight - prevHeight);
-    });
+    if (el && e.clientX > el.getBoundingClientRect().right - SCROLLBAR_EDGE) pinnedRef.current = false;
   };
 
-  // 发送被接受(发出或排队)即回到贴底跟随
+  // 「加载更早」的位置保持:前插会把所有条目往下推,记像素没用,记**元素**
+  // ——keyBase 稳定 key 保证 React 不会把既有条目换成新节点,前插提交后按
+  // 同一元素重新对齐,视口纹丝不动
+  const prependAnchor = useRef<{ node: Element; offset: number } | null>(null);
+  const onLoadEarlier = async () => {
+    pinnedRef.current = false;
+    const el = scrollRef.current;
+    const col = itemColOf();
+    if (el && col) {
+      const elTop = el.getBoundingClientRect().top;
+      for (const kid of Array.from(col.children)) {
+        const r = kid.getBoundingClientRect();
+        if (r.bottom > elTop) {
+          prependAnchor.current = { node: kid, offset: elTop - r.top };
+          break;
+        }
+      }
+    }
+    await loadEarlier();
+  };
+  // 用 layout effect:DOM 已更新但尚未绘制,这一帧就把位置纠回去,不闪
+  useLayoutEffect(() => {
+    const pa = prependAnchor.current;
+    if (!pa) return;
+    prependAnchor.current = null;
+    const col = itemColOf();
+    const idx = col ? Array.prototype.indexOf.call(col.children, pa.node) : -1;
+    if (idx >= 0) startRestore(idx, pa.offset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.items]);
+
+  // 发送被接受(发出或排队)即回到贴底跟随:这次发送本身就是回到当前轮次
+  // 的明确意图,立即结束锚点恢复并重新贴底
   const followBottom = () => {
+    finishRestore();
     pinnedRef.current = true;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -158,6 +303,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
     if (jumpSeq === null) return;
     const node = scrollRef.current?.querySelector<HTMLElement>(`[data-user-seq="${jumpSeq}"]`);
     if (node) {
+      finishRestore(); // 跳转接管滚动:进行中的锚点恢复轮询不许再拽回去
       pinnedRef.current = false;
       node.scrollIntoView?.({ block: "start" });
       setJumpSeq(null);
@@ -306,7 +452,14 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
         </div>
       )}
 
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3">
+      <div
+        ref={scrollRef}
+        data-chat-log=""
+        onScroll={onScroll}
+        onWheel={onLogWheel}
+        onMouseDown={onLogMouseDown}
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3"
+      >
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {hasMore && (
             <button type="button" className="btn btn-ghost btn-xs self-center" disabled={loadingEarlier} onClick={() => void onLoadEarlier()}>

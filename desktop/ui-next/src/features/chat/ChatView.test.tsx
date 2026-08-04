@@ -420,4 +420,22 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("更早的问题")).toBeTruthy());
     expect(ops.some((o) => o.cmd === "session_history")).toBe(true);
   });
+
+  // 滚动几何 jsdom 验不了(rect 全 0),可测部分在 lib/util/scrollAnchor.test;
+  // 这里只冒烟结构路径:wheel 上滚解除跟随 → 卸载写档 → 再挂载走锚点恢复
+  // (startRestore 轮询/RO 守卫)全程不炸,回放内容照常渲染
+  it("滚动记忆:上滚离底后卸载再挂载,恢复路径不炸且回放内容仍在", async () => {
+    stubShell();
+    const { unmount, container } = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const log = container.querySelector("[data-chat-log]") as HTMLElement;
+    expect(log).toBeTruthy();
+    fireEvent.wheel(log, { deltaY: -120 }); // 只有真实用户上滚才解除贴底跟随
+    fireEvent.mouseDown(log, { clientX: 0 }); // 左侧按下:不属于滚动条带,不应炸
+    unmount(); // 卸载 cleanup:旧会话写档 + 定时器清理
+
+    stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+  });
 });
