@@ -318,7 +318,7 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           {/* 内容列居中收窄:阅读宽度稳定,分区排版不随窗宽漂移 */}
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
             <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">{body()}</div>
           </div>
           {/* 保存条:毛玻璃底贴底 */}

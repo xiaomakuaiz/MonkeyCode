@@ -38,3 +38,10 @@
 - 设置/新建任务:视图级头部(标题+关闭)+ 居中内容列(max-w-2xl / max-w-xl);
   Esc 离开;点任何导航即切走(视图切换永远响应)。
 - 云端任务视图与会话视图同构。
+
+## 5. 滚动纪律
+- **列/视图级滚动容器只许纵滚**:凡 `overflow-y-auto` 必须搭 `overflow-x-hidden`
+  (CSS 规则:只写 overflow-y 时 overflow-x 会被计算为 auto,超宽内容即出横向
+  滚动条——侧栏横滚事故的根因)。超宽内容靠 truncate/min-w-0 链截断。
+- 横向滚动只允许出现在**专用滚动区**:代码块(pre)、diff/代码预览、markdown
+  表格包裹层(.md-scroll)、xterm。

@@ -179,7 +179,7 @@ export function CloudFiles({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-1">
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-1">
         {files === null ? (
           <div className="flex justify-center py-8">
             <span className="loading loading-spinner loading-sm text-base-content/40" aria-label={t("cloud.files.loading")} />

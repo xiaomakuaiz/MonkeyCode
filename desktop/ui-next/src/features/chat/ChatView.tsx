@@ -291,7 +291,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
         </div>
       )}
 
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3">
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {hasMore && (
             <button type="button" className="btn btn-ghost btn-xs self-center" disabled={loadingEarlier} onClick={() => void onLoadEarlier()}>
@@ -358,7 +358,7 @@ function ChildSessionModal({ id, onClose }: { id: string; onClose: () => void })
             <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
           <LogList state={state} sessionId={id} readonly />
         </div>
       </div>

@@ -240,8 +240,8 @@ export function FilesDrawer({
   const listDir = useCallback((dir: string) => repoListDir(sessionId, dir), [sessionId]);
 
   const listClass = preview
-    ? `min-h-0 shrink-0 overflow-y-auto py-1 max-h-[calc(100%-190px)] ${split > 0 ? "" : "h-[38%]"}`
-    : "min-h-0 flex-1 overflow-y-auto py-1";
+    ? `min-h-0 shrink-0 overflow-x-hidden overflow-y-auto py-1 max-h-[calc(100%-190px)] ${split > 0 ? "" : "h-[38%]"}`
+    : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1";
 
   // Windows 壳自绘标题栏(h-9)不入 z 层竞赛:抽屉整组(scrim + 面板)从
   // 标题栏下缘起,结构性避让——三键与拖拽区恒可点,scrim 也不压暗标题栏;

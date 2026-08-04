@@ -371,7 +371,7 @@ export function Sidebar({
           <Plus size={14} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto p-2">
       <label className="input input-sm w-full">
         <Search size={14} strokeWidth={1.75} className="shrink-0 opacity-50" aria-hidden />
         <input

@@ -257,7 +257,7 @@ export function Composer({
           <ul
             role="listbox"
             aria-label={t("chat.slash.label")}
-            className="menu absolute bottom-full left-2 z-20 mb-1 max-h-64 w-80 flex-nowrap overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+            className="menu absolute bottom-full left-2 z-20 mb-1 max-h-64 w-80 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
           >
             {list.length === 0 && (
               <li className="menu-disabled">
@@ -405,7 +405,7 @@ export function Composer({
                 <div className="fixed inset-0 z-10" onClick={() => setPicker(null)} />
                 <ul
                   aria-label={t("chat.model.label")}
-                  className="menu absolute right-0 bottom-full z-20 mb-1 max-h-72 w-64 flex-nowrap overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
+                  className="menu absolute right-0 bottom-full z-20 mb-1 max-h-72 w-64 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
                 >
                   {models.length === 0 && (
                     <li className="menu-disabled">

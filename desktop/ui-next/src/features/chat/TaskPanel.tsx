@@ -41,7 +41,7 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
         />
       </button>
       <div className="collapse-content px-3">
-        <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto pb-1 text-xs">
+        <ul className="flex max-h-44 flex-col gap-1 overflow-x-hidden overflow-y-auto pb-1 text-xs">
           {entries.map((e, i) => (
             <li key={e.id ?? i} className="flex items-start gap-2">
               <input
