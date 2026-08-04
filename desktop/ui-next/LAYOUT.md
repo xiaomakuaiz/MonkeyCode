@@ -12,10 +12,9 @@
 5. **角落瞬态**:后台会话提醒 toast、全局下载 dock(右下)。
 
 ## 2. 头部基线
-- rail 顶(mac 红绿灯角落)与主区头维持 **h-11** 基线(border-b border-base-300)。
-- **侧栏列例外**(旧 UI 设计基线):面板头 52px = 空间标题 + 计数副标题 +
-  强调色「+」(云端另有刷新钮),不参与 h-11 贯通线。
-- 品牌:Windows = 标题栏;mac/Linux = rail 顶 logo(31px)。
+- 三列各自长出 **h-11** 头部,同高对齐成一条贯通线(border-b border-base-300)。
+- rail 顶 = 窗控角落(mac)或同高空位;侧栏头 = 品牌名 + ＋新建(云端空间
+  另有刷新钮);主区头 = 当前视图提供(欢迎页为空头带)。
 - 拖拽区分布在各头部空白处(data-tauri-drag-region;按钮与可双击标题除外)。
 
 ## 3. 信息安放规则(每类信息只有一个法定位置)
@@ -48,34 +47,34 @@
 - 横向滚动只允许出现在**专用滚动区**:代码块(pre)、diff/代码预览、markdown
   表格包裹层(.md-scroll)、xterm。
 
-## 6. 侧栏内部结构(设计基线 = 旧 UI desktop/ui/src/sidebar.tsx,2026-08-04 用户指令)
+## 6. 侧栏内部结构(四段式;信息布局参考旧 UI,组件一律 daisyUI)
 ```
-面板头 52px(固定):空间标题 14px/bold + 计数副标题 10.5px/45%,右侧强调色「+」
-搜索框(固定):h-32 内嵌浅底圆角框,query 非空出清空钮
-列表(flex-1,唯一滚动区,纵滚横截,scrollbar-gutter stable)
-footer(固定钉底):更新卡片条等,永不随列表滚动
+头部 h-11(固定):品牌 + ＋新建(云端加刷新)
+搜索行(固定):input;query 非空出清空钮;placeholder 按空间(会话/项目或任务)
+列表(flex-1,唯一滚动区,纵滚横截):menu menu-sm + details 折叠
+footer(固定钉底):更新提示等常驻条,永不随列表滚动
 ```
 
-### 6.1 行解剖(34px 桌面密度;单位是设计资产,不算散落覆写)
-- 本地行两行式:标题行(12.5px + 状态尾注)+ 引擎摘要行(11px/45%,缺席不长);
-  对话行恒单行(主行 = 摘要‖标题);云端行单行(标题 + 状态尾注)。
-- 状态尾注 10.5px、maxW 60、tabular:要紧态着色(等待确认 warning/运行中
-  primary/运行出错 error),静默态低调(N 轮/可继续/尚未开始/已停止/已完成
-  取 55%/45% 灰阶);运行/出错另带 6px 状态点;**不展示时间**(用户定案)。
-- attention(D3 未读)= 状态点放大 7px + 光晕环,不做行底色。
-- 选中 = primary 9% 淡底 + 标题全亮;hover = base-content 5%。
-- **行菜单 = 右键唯一入口**(重命名/归档/删除;删除与终止走 confirm 二段),
-  行面无按钮;tooltip 给 标题/摘要/目录/「右键管理」。重命名 = 行原位 input
-  (Enter 提交/Esc·失焦取消)。
+### 6.1 行信息布局(参考旧 UI;载体 = menu 的 li>a)
+- 本地行两行式:标题行(标题 + 状态尾注)+ 引擎摘要行(text-xs /50,缺席
+  不长);对话行恒单行(主行 = 摘要‖标题);云端行单行(标题 + 状态尾注)。
+- 状态尾注(text-xs,max-w-16 截断,tabular):要紧态着色词(等待确认
+  warning / 运行中 primary / 运行出错 error),静默态低调(N 轮/可继续/
+  尚未开始/已停止/已完成,/50 与 /35 档);左端 status 状态点同色呼应。
+  **不展示时间**(用户定案)。
+- 选中 = menu-active;attention(D3 未读)= warning 状态点 + bg-warning/10
+  行淡底(功能性状态色,§8 白名单)。
+- **行菜单 = 右键**(lib/contextMenu,menu 皮相):重命名(行内 input,
+  Enter 提交/Esc·失焦取消)/归档/删除;删除与云端终止走 confirm 二段。
+  行 tooltip 给 标题/摘要/目录/「右键管理」。
 
-### 6.2 分组与折叠
-- 项目组头 34px:文件夹图标 13px + 名称 12.5px/semibold;小节头(已归档任务/
-  已归档项目/历史任务,带「 · N」计数)= 9px 旋转箭头 + 11.5px/medium 弱化。
-- 组头 hover 右侧浮现「+在此项目新建」;组头可右键(在此新建任务/归档项目);
-  HTML5 拖拽排序,落点画 2px primary 指示线。
-- 归档结构(旧 UI 同构):项目内「已归档任务 · N」小节;底部「已归档项目 · N」;
-  chat 底部「已归档会话 · N」。云端:「进行中」区 + 「项目」区(懒拉分组+快速
-  开始)+「历史任务 · N」小节。
+### 6.2 分组与折叠(daisyUI details 原生折叠)
+- 项目组头 = details summary:名称(text-xs font-medium /70)+ waiting
+  徽标 + hover 快捷「+在此项目新建」;组头可右键(在此新建任务/归档项目);
+  HTML5 拖拽排序,dragover 落点 border-t 指示线。
+- 归档结构(旧 UI 同构):项目内「已归档任务 · N」小节;底部「已归档项目
+  · N」;chat 底部「已归档会话 · N」。云端:「进行中」(menu-title 区标签)
+  →「历史任务 · N」小节 →「项目」区(懒拉分组 + 快速开始)。
 - 折叠态持久化(旧 UI 契约键):mc.collapsedGroups / mc.sessionArchivesOpen
   (JSON string[])、mc.archivedOpen / mc.projectArchiveOpen /
   mc.cloudHistoryOpen("1"/"0",prefs.readFold/writeFold)。
@@ -91,9 +90,8 @@ footer(固定钉底):更新卡片条等,永不随列表滚动
 - 新增头部时按本条自查;有 ChatView 结构测试可参照。
 
 ## 8. 阶段纪律:裸组件优先(用户指令,2026-08-04)
-> **侧栏例外**(同日用户指令"参考之前的 ui"):侧栏区(rail + 面板 + 云端列表)
-> 以旧 UI 设计语言为基线,其细分灰阶(t 系 → base-content 90/70/55/45/35)与
-> 精确几何是设计资产,不受本节"裸组件"限制;其余区域照旧。
+> 三层分治(同日教训):壳布局(本文件)/ 信息布局(可参考旧 UI)/ 组件
+> 实现(一律 daisyUI 官方形态)——"参考旧 UI"只作用于中间层。
 - 现阶段 daisyUI 组件一律用**官方文档形态**,不叠色彩/边线/阴影覆写
   (card 用 `card-border` 的 base-200 线;dropdown-content 用文档标准
   `menu bg-base-100 rounded-box shadow-sm`;激活态用 `menu-active/

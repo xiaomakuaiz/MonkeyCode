@@ -1,6 +1,6 @@
-// 侧栏(旧 UI 设计基线):面板头计数、两行式行 + 状态尾注、右键行菜单、
-// 行内重命名、项目组(hover 快捷新建/拖拽)、归档小节沉在组内与底部、
-// 折叠态契约键持久化、搜索强制展开。断言按 role/文本,不断类名。
+// 侧栏:壳布局(h-11 品牌头/搜索/滚动列表)+ 旧 UI 信息布局(两行式行、
+// 状态尾注、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
+// 交互:行右键菜单、行内重命名、组头快捷新建、折叠契约键、搜索强制展开。
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,40 +44,35 @@ function contextMenuOf(el: HTMLElement): HTMLElement {
   return document.body.lastElementChild as HTMLElement;
 }
 
-const rowOf = (text: string) => screen.getByText(text).closest('[role="button"]') as HTMLElement;
+const rowOf = (text: string) => screen.getByText(text).closest("a") as HTMLElement;
+const detailsOf = (text: string) => screen.getByText(text).closest("details") as HTMLDetailsElement;
 
 describe("侧栏(local 空间)", () => {
-  it("面板头:空间标题 + 项目/任务计数;新建按钮", async () => {
+  it("按项目分组(details 折叠):行可选中;两行式带摘要行;组头等待徽标", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
-    expect(screen.getByText("本地项目")).toBeTruthy();
-    expect(screen.getByText("2 个项目 · 2 个任务")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "新建任务" }));
-    expect(acts.onNewTask).toHaveBeenCalled();
-  });
-
-  it("按项目分组:行可选中;两行式带摘要行;状态尾注(等待确认着色/静默态给轮次)", async () => {
-    const acts = actions();
-    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
-    expect(screen.getByText("alpha")).toBeTruthy();
-    // 两行式:标题行 + 引擎摘要行
+    const alphaGroup = detailsOf("alpha");
+    expect(alphaGroup && within(alphaGroup).getByText("修复登录")).toBeTruthy();
+    // 两行式:标题行 + 引擎摘要行;组头 waiting_ask 计数徽标
     expect(within(rowOf("修复登录")).getByText("修复了闪退,补了用例")).toBeTruthy();
-    // 尾注:idle 有轮次给「N 轮」;waiting_ask 给「等待确认」
-    expect(within(rowOf("修复登录")).getByText("3 轮")).toBeTruthy();
-    expect(within(rowOf("重构侧栏")).getByText("等待确认")).toBeTruthy();
+    expect(within(alphaGroup).getByText("1")).toBeTruthy();
     await userEvent.click(screen.getByText("修复登录"));
     expect(acts.onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "修复登录" }));
   });
 
-  it("归档任务收进项目内「已归档任务」小节(默认收起,点开展示);chat 会话不出现在 local 空间", async () => {
+  it("状态尾注(旧 UI 信息布局):等待确认着色,静默态给轮次", () => {
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    expect(within(rowOf("重构侧栏")).getByText("等待确认")).toBeTruthy();
+    expect(within(rowOf("修复登录")).getByText("3 轮")).toBeTruthy();
+  });
+
+  it("归档任务收进项目内「已归档任务 · N」小节(默认收起,点开并落契约键);chat 会话不出现", async () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(screen.queryByText("问了个问题")).toBeNull();
-    // beta 项目只有归档任务:组头在,行默认不渲染
-    expect(screen.getByText("beta")).toBeTruthy();
-    expect(screen.queryByText("旧任务")).toBeNull();
+    const section = detailsOf("已归档任务 · 1");
+    expect(section.open).toBe(false);
     await userEvent.click(screen.getByText("已归档任务 · 1"));
-    expect(screen.getByText("旧任务")).toBeTruthy();
-    // 开合态落契约键(JSON string[])
+    expect(section.open).toBe(true);
     expect(JSON.parse(localStorage.getItem("mc.sessionArchivesOpen") ?? "[]")).toContain("/p/beta");
   });
 
@@ -93,12 +88,12 @@ describe("侧栏(local 空间)", () => {
     expect(screen.getByText("重构侧栏")).toBeTruthy();
   });
 
-  it("搜索非空强制展开折叠组(不写盘):命中不被折叠藏住", async () => {
+  it("搜索非空强制展开折叠组(不写盘)", async () => {
     localStorage.setItem("mc.collapsedGroups", JSON.stringify(["/p/alpha"]));
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    expect(screen.queryByText("修复登录")).toBeNull(); // 折叠中不渲染
+    expect(detailsOf("alpha").open).toBe(false);
     await userEvent.type(screen.getByRole("searchbox", { name: "搜索会话" }), "登录");
-    expect(screen.getByText("修复登录")).toBeTruthy();
+    expect(detailsOf("alpha").open).toBe(true);
     expect(localStorage.getItem("mc.collapsedGroups")).toBe(JSON.stringify(["/p/alpha"]));
   });
 
@@ -131,28 +126,32 @@ describe("侧栏(local 空间)", () => {
   it("项目组头:hover 快捷「在此项目新建任务」带项目目录回调", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
-    // alpha 在前(组按活跃度排序)
+    // alpha 组在前(组按活跃度排序)
     await userEvent.click(screen.getAllByRole("button", { name: "在此项目新建任务" })[0] as HTMLElement);
     expect(acts.onNewTaskIn).toHaveBeenCalledWith("/p/alpha");
   });
 
-  it("项目组头右键:在此新建任务 / 归档项目", async () => {
-    const acts = actions();
-    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
-    const header = screen.getByText("alpha").closest('[role="button"]') as HTMLElement;
-    const menu = contextMenuOf(header);
+  it("项目组头右键:在此新建任务 / 归档项目(沉入底部段并落契约键)", async () => {
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    const summary = screen.getByText("alpha").closest("summary") as HTMLElement;
+    const menu = contextMenuOf(summary);
     expect(within(menu).getByText("在此新建任务")).toBeTruthy();
     await userEvent.click(within(menu).getByText("归档项目"));
-    // 项目沉入底部「已归档项目 · 1」,并落契约键
     expect(screen.getByText("已归档项目 · 1")).toBeTruthy();
     expect(JSON.parse(localStorage.getItem("mc.archivedProjects") ?? "[]")).toContain("/p/alpha");
+  });
+
+  it("头部新建任务按钮", async () => {
+    const acts = actions();
+    render(<Sidebar space="local" sessions={[]} currentId={null} actions={acts} />);
+    await userEvent.click(screen.getByRole("button", { name: "新建任务" }));
+    expect(acts.onNewTask).toHaveBeenCalled();
   });
 });
 
 describe("侧栏(chat/cloud 空间)", () => {
-  it("chat 空间:面板头计数;平铺对话主行用摘要", () => {
+  it("chat 空间平铺对话,主行用摘要", () => {
     render(<Sidebar space="chat" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    expect(screen.getByText("1 个独立会话")).toBeTruthy();
     expect(screen.getByText("问了个问题")).toBeTruthy();
     expect(screen.queryByText("修复登录")).toBeNull();
   });
@@ -161,8 +160,7 @@ describe("侧栏(chat/cloud 空间)", () => {
     localStorage.setItem("mc.archivedOpen", "1");
     const withArchived = [...SESSIONS, meta({ id: "老对话", workdir: "/hidden/c2", kind: "chat", archived: true })];
     render(<Sidebar space="chat" sessions={withArchived} currentId={null} actions={actions()} />);
-    expect(screen.getByText("已归档会话 · 1")).toBeTruthy();
-    expect(screen.getByText("老对话")).toBeTruthy();
+    expect(detailsOf("已归档会话 · 1").open).toBe(true);
   });
 
   it("cloud 空间渲染云端任务列表(无数据时空态)", async () => {
@@ -172,7 +170,7 @@ describe("侧栏(chat/cloud 空间)", () => {
 });
 
 describe("后台提醒 attention(D3)", () => {
-  it("命中会话:行进入 attention 态;未命中不受影响", () => {
+  it("命中会话:行进入 attention 态(data-attention 在 <a> 上);未命中不受影响", () => {
     render(
       <Sidebar
         space="local"

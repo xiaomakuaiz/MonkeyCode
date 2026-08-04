@@ -30,7 +30,7 @@ function contextMenuOf(el: HTMLElement): HTMLElement {
   return document.body.lastElementChild as HTMLElement;
 }
 
-const rowOf = (text: string) => screen.getByText(text).closest('[role="button"]') as HTMLElement;
+const rowOf = (text: string) => screen.getByText(text).closest("a") as HTMLElement;
 
 describe("CloudTaskList", () => {
   it("进行中置顶(状态尾注「运行中」),历史收进「历史任务 · N」小节(默认收起);点击回调", async () => {
@@ -43,9 +43,11 @@ describe("CloudTaskList", () => {
     await screen.findByText("修复登录");
     expect(screen.getByText("进行中")).toBeTruthy();
     expect(within(rowOf("修复登录")).getByText("运行中")).toBeTruthy();
-    // 历史默认收起(未持久化过)
-    expect(screen.queryByText("旧任务甲")).toBeNull();
+    // 历史默认收起(未持久化过;details 形态,内容在 DOM 但段收合)
+    const history = screen.getByText("历史任务 · 2").closest("details") as HTMLDetailsElement;
+    expect(history.open).toBe(false);
     await userEvent.click(screen.getByText("历史任务 · 2"));
+    expect(history.open).toBe(true);
     expect(screen.getByText("旧任务甲")).toBeTruthy(); // title 缺省回退 summary
     expect(within(rowOf("旧任务乙")).getByText("运行出错")).toBeTruthy(); // 再回退 content;error 着色词
     expect(within(rowOf("旧任务甲")).getByText("已完成")).toBeTruthy();
@@ -59,7 +61,8 @@ describe("CloudTaskList", () => {
     localStorage.setItem("mc.cloudHistoryOpen", "1");
     stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
     render(<CloudTaskList currentId={null} onSelect={() => {}} />);
-    expect(await screen.findByText("旧任务甲")).toBeTruthy();
+    await screen.findByText("修复登录");
+    expect((screen.getByText("历史任务 · 2").closest("details") as HTMLDetailsElement).open).toBe(true);
   });
 
   it("空列表:空态文案", async () => {
@@ -180,13 +183,11 @@ describe("CloudTaskList", () => {
     await waitFor(() => expect(screen.queryByText("加载更多")).toBeNull()); // 4/4 载完
   });
 
-  it("query:过滤行并强制展开历史;计数经 onCounts 上报", async () => {
+  it("query:过滤行并强制展开历史", async () => {
     stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
-    const onCounts = vi.fn();
-    render(<CloudTaskList currentId={null} onSelect={() => {}} query="旧任务甲" onCounts={onCounts} />);
+    render(<CloudTaskList currentId={null} onSelect={() => {}} query="旧任务甲" />);
     await screen.findByText("旧任务甲"); // 历史被强制展开且命中
     expect(screen.queryByText("修复登录")).toBeNull();
     expect(screen.queryByText("旧任务乙")).toBeNull();
-    await waitFor(() => expect(onCounts).toHaveBeenCalledWith({ projects: 0, tasks: 3 }));
   });
 });
