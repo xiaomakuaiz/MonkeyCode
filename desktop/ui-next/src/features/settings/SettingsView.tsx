@@ -291,9 +291,9 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-base-100">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
-        <h1 className="text-sm font-semibold">{t("settings.title")}</h1>
-        <span className="flex-1" />
+      <header data-tauri-drag-region="" data-view-header="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
+        <h1 data-tauri-drag-region="" className="text-sm font-semibold">{t("settings.title")}</h1>
+        <span data-tauri-drag-region="" className="flex-1" />
         <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
           {t("settings.back")}
         </button>

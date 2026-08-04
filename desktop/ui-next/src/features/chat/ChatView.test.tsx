@@ -172,6 +172,21 @@ describe("聊天视图", () => {
     expect(ops.some((o) => o.cmd === "session_send" && (o.args?.ftype as string) === "user-input")).toBe(true);
   });
 
+  it("布局契约:头部非交互子节点全带拖拽属性;按钮与改名 span 不带", async () => {
+    stubShell();
+    render(<ChatView meta={META} epoch={0} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const header = document.querySelector("[data-view-header]") as HTMLElement;
+    expect(header.hasAttribute("data-tauri-drag-region")).toBe(true);
+    const h1 = header.querySelector("h1") as HTMLElement;
+    expect(h1.hasAttribute("data-tauri-drag-region")).toBe(true);
+    // 双击改名的文字 span 必须留在拖拽区之外(拖拽区双击=窗口最大化)
+    expect(h1.querySelector("span")?.hasAttribute("data-tauri-drag-region")).toBe(false);
+    for (const btn of header.querySelectorAll("button")) {
+      expect(btn.hasAttribute("data-tauri-drag-region")).toBe(false);
+    }
+  });
+
   it("卸载即 session_close(会话切换不漏连接)", async () => {
     const { ops } = stubShell();
     const { unmount } = render(<ChatView meta={META} />);

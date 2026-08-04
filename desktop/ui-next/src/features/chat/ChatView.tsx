@@ -226,7 +226,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
       )}
 
       <header data-view-header="" data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
-        <div className="min-w-0 flex-1">
+        <div data-tauri-drag-region="" className="min-w-0 flex-1">
           {editingTitle ? (
             <input
               autoFocus
@@ -251,7 +251,7 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
               }}
             />
           ) : (
-            <h1 className="truncate text-sm leading-tight font-semibold">
+            <h1 data-tauri-drag-region="" className="truncate text-sm leading-tight font-semibold">
               {/* 双击只挂在文字 span 上,且不带 data-tauri-drag-region:
                   Windows 壳把拖拽区双击吃成最大化,标题必须留在拖拽区之外 */}
               <span title={t("chat.rename.hint")} className="cursor-text" onDoubleClick={startRename}>
@@ -262,11 +262,11 @@ export function ChatView({ meta, epoch = 0 }: { meta: SessionMeta; epoch?: numbe
           {/* 副标题:有摘要显摘要;无摘要时 chat 会话标「独立会话」、其余
               显 workdir 末段(mono,悬停看全路径)——一眼可辨会话归属 */}
           {meta.summary ? (
-            <p className="truncate text-[11px] leading-tight text-base-content/50">{meta.summary}</p>
+            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/50">{meta.summary}</p>
           ) : meta.kind === "chat" ? (
-            <p className="truncate text-[11px] leading-tight text-base-content/45">{t("chat.header.standalone")}</p>
+            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/45">{t("chat.header.standalone")}</p>
           ) : meta.workdir ? (
-            <p title={meta.workdir} className="truncate font-mono text-[11px] leading-tight text-base-content/45">
+            <p data-tauri-drag-region="" title={meta.workdir} className="truncate font-mono text-[11px] leading-tight text-base-content/45">
               {meta.workdir.split(/[\\/]/).filter(Boolean).pop() ?? meta.workdir}
             </p>
           ) : null}

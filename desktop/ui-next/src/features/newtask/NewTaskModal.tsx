@@ -175,7 +175,7 @@ export function NewTaskModal({
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-base-100">
       <header data-view-header="" data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
-        <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">{t("create.title")}</h1>
+        <h1 data-tauri-drag-region="" className="min-w-0 flex-1 truncate text-sm font-semibold">{t("create.title")}</h1>
         <button
           type="button"
           aria-label={t("create.cancel")}

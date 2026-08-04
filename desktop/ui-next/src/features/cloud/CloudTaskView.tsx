@@ -179,12 +179,12 @@ export function CloudTaskView({
 
   return (
     <main className="relative flex min-w-0 flex-1 flex-col bg-base-100">
-      <header data-view-header="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
-        <h1 className="min-w-0 flex-1 truncate text-sm font-semibold" title={h.label}>
+      <header data-view-header="" data-tauri-drag-region="" className="flex h-11 shrink-0 items-center gap-2 border-b border-base-300 px-4">
+        <h1 data-tauri-drag-region="" className="min-w-0 flex-1 truncate text-sm font-semibold" title={h.label}>
           {h.label}
         </h1>
-        <span className={`badge badge-soft badge-sm ${STATUS_BADGE[h.taskStatus] ?? "badge-ghost"}`}>{statusLabel}</span>
-        <span className="badge badge-ghost badge-sm">{t("cloud.view.badge")}</span>
+        <span data-tauri-drag-region="" className={`badge badge-soft badge-sm ${STATUS_BADGE[h.taskStatus] ?? "badge-ghost"}`}>{statusLabel}</span>
+        <span data-tauri-drag-region="" className="badge badge-ghost badge-sm">{t("cloud.view.badge")}</span>
         {/* 开合态统一 bg-primary/10 text-primary(与 rail/侧栏同语言) */}
         <button
           type="button"
