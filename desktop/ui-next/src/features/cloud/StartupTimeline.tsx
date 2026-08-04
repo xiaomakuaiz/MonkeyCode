@@ -115,7 +115,7 @@ export function StartupTimeline({ meta }: { meta: CloudTaskDetail | null }) {
         })
       : t("cloud.startup.preparing");
   return (
-    <div role="status" className="w-full max-w-md rounded-box border border-base-300 bg-base-100">
+    <div role="status" className="card w-full max-w-md border border-base-300 bg-base-100">
       <div className="flex flex-col gap-3 p-5">
         <div className={`text-sm font-semibold ${failed ? "text-error" : ""}`}>{title}</div>
         <ul className="flex flex-col gap-2">

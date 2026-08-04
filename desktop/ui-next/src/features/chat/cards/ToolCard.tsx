@@ -88,7 +88,7 @@ export function ToolCard({
   const output = clip(toolResultText(item.rawOutput, item.content));
   const showDetail = item.status !== "run" && (input !== "" || output !== "");
   return (
-    <div className="overflow-hidden rounded-box border border-base-300 bg-base-100" data-tool-id={item.tcId}>
+    <div className="card overflow-hidden border border-base-300 bg-base-100" data-tool-id={item.tcId}>
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
         {perm ? (
           <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-warning" />
@@ -102,7 +102,7 @@ export function ToolCard({
         {item.childSessionId && onOpenChild && (
           <button
             type="button"
-            className="link link-primary shrink-0 text-xs font-semibold no-underline hover:underline"
+            className="link link-hover link-primary shrink-0 text-xs font-semibold"
             onClick={() => onOpenChild(item.childSessionId!)}
           >
             {t("chat.tool.childSession")}

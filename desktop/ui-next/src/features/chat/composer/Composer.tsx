@@ -236,7 +236,7 @@ export function Composer({
       )}
 
       {ctl.queued && (
-        <div className="flex items-center gap-2 rounded-box border border-base-300 bg-base-200 px-3 py-1.5 text-xs">
+        <div className="alert flex items-center gap-2 px-3 py-1.5 text-xs">
           <span className="badge badge-ghost badge-sm shrink-0">{t("chat.queued")}</span>
           <span className="min-w-0 flex-1 truncate font-medium">{ctl.queued}</span>
           <span className="shrink-0 text-base-content/50">{t("chat.queuedHint")}</span>

@@ -425,7 +425,7 @@ export function App() {
             <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs shadow-md`}>
               <button
                 type="button"
-                className="max-w-64 min-w-0 cursor-pointer truncate text-left hover:underline"
+                className="link link-hover max-w-64 min-w-0 truncate text-left"
                 onClick={() => void openSessionById(n.sessionId)}
               >
                 {t(NOTICE_TEXT[n.kind], { title: n.title || t("notice.untitled") })}

@@ -82,7 +82,7 @@ function renderItem(
     case "ask":
       return <AskCard item={item} sessionId={sessionId} sendFrame={sendFrame} readonly={readonly} />;
     case "sys":
-      return <div className="self-center rounded-full bg-base-200 px-3 py-0.5 text-[11px] text-base-content/50">{item.text}</div>;
+      return <div className="badge badge-ghost h-auto self-center px-3 py-0.5 text-[11px] text-base-content/50">{item.text}</div>;
   }
 }
 

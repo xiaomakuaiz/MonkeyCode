@@ -107,7 +107,7 @@ export function PermCard({
     );
   }
   return (
-    <div role="alert" className="rounded-box border border-warning/50 bg-warning/5" data-perm-id={item.id}>
+    <div role="alert" className="card border border-warning/50 bg-warning/5" data-perm-id={item.id}>
       <div className="flex flex-col gap-2 p-3">
         <div className="flex items-center gap-2 text-xs font-semibold text-warning">
           <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
