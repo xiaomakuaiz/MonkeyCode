@@ -431,8 +431,10 @@ export function Composer({
 
         {/* min-w-0:长模型名可收缩截断,不得把发送按钮挤出卡片。
             排布随旧 UI 口径:左端 = 模式 pill + 附件入口,右端 = 思考/模型/
-            用量/发送(输入侧元信息与动作) */}
-        <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
+            用量/发送(输入侧元信息与动作)。px-1 光学对齐:1px 边 + 4px +
+            btn-xs 内距 8px = 13px,首个按钮的**文字**左缘与 textarea 文字
+            (1px 边 + 12px 内距)重合——这排文字与输入文字/正文同一条竖线 */}
+        <div className="flex min-w-0 items-center gap-1 px-1 pb-1.5">
           <button
             type="button"
             title={t("chat.mode.tip")}
@@ -562,10 +564,14 @@ export function Composer({
               功能性状态色示警(旧 ContextRing 的设计,组件官方化) */}
           {usagePct !== null && state.usage && (
             <div
-              className="tooltip tooltip-top mx-1 shrink-0"
+              // tooltip-left:圆环贴视口右缘,tooltip-top 居中弹会被窗口裁掉半截
+              className="tooltip tooltip-left mx-1 shrink-0"
+              // 紧凑口径:百分比 + fmtK 缩写(精确 token 数没有决策价值,
+              // 长串数字把 tooltip 撑成一整行)
               data-tip={t("chat.usageTip", {
-                used: state.usage.used.toLocaleString(),
-                size: state.usage.size.toLocaleString(),
+                pct: usagePct,
+                used: fmtK(state.usage.used),
+                size: fmtK(state.usage.size),
               })}
             >
               <div

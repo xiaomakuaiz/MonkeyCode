@@ -482,7 +482,7 @@ describe("运行条 detail 与上下文用量", () => {
     await waitFor(() => expect(screen.getByText("第 1 轮 · 45.7k tokens")).toBeTruthy());
   });
 
-  it("上下文用量:radial-progress 语义 + tooltip 精确 tokens;>85% 示警", async () => {
+  it("上下文用量:radial-progress 语义 + tooltip 紧凑摘要(pct+fmtK);>85% 示警", async () => {
     const { emit } = stubShell();
     render(<ChatView meta={META} />);
     await ready();
@@ -497,6 +497,6 @@ describe("运行条 detail 与上下文用量", () => {
     ]);
     const bar = await screen.findByRole("progressbar", { name: "上下文用量" });
     expect(bar.getAttribute("aria-valuenow")).toBe("90");
-    expect(bar.closest("[data-tip]")?.getAttribute("data-tip")).toBe("上下文用量 180,000 / 200,000 tokens");
+    expect(bar.closest("[data-tip]")?.getAttribute("data-tip")).toBe("上下文 90% · 180k/200k");
   });
 });
