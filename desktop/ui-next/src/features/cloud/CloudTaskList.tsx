@@ -1,19 +1,20 @@
-// 侧栏云端空间的任务列表。信息布局参考旧 UI(进行中区 / 「历史任务 · N」
-// 小节 / 「项目」区懒拉分组 + 快速开始),组件一律 daisyUI 原生形态:
-// menu(menu-title 区标签、details 折叠)、status 状态点、loading。
-// 行 = 单行(安静行同构,定案 2026-08-04):标题 + 尾注(仅要紧态着色;
-// 终态无点无尾注,状态词进 tooltip);行菜单 = 右键
-// (终止任务仅运行中 / 删除,均二段确认)。历史开合态持久化
-// mc.cloudHistoryOpen(旧 UI 契约键);query 非空过滤并强制展开(未拉过
-// 的组顺势懒拉)。导出组件与数据 hook,Sidebar 接线由 App 侧完成。
-import { Cloud, Folder } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+// 侧栏云端空间的任务列表。呈现与交互与本地/对话列表同一套(listKit,
+// 用户定案 2026-08-05「统一风格和交互,不要做两套」,后续并入同 tab 的
+// 横向双 tab):进行中任务裸行置顶(同 chat 平铺行)→ 项目组(Folder
+// 区块标签)+「快速开始」组(Zap)→ 底部「历史任务」小节(History 图标、
+// 无计数)。行 = 安静行:12px 槽(静默给 Cloud 身份图标,要紧态彩点顶掉)
+// + 标题 + 尾注(仅要紧态着色,状态词进 tooltip);行菜单 = 右键(终止
+// 仅运行中 / 删除,均二段确认)。历史开合持久化 mc.cloudHistoryOpen(旧
+// UI 契约键);query 非空过滤并强制展开(未拉过的组顺势懒拉)。
+// 导出组件与数据 hook,Sidebar 接线由 App 侧完成。
+import { Cloud, Folder, History, Zap, type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { openMenu, type MenuItem } from "@/lib/contextMenu";
+import { GroupLabel, ListRow, SectionFold, StatusSlot } from "@/features/sidebar/listKit";
+import type { MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { mcProjects, mcTaskDelete, mcTasks, mcTaskStop, type CloudProject, type CloudTask } from "@/lib/ipc/cloudtasks";
-import { readFold, writeFold } from "@/lib/util/prefs";
 
 const PAGE_SIZE = 20;
 
@@ -135,23 +136,17 @@ function cloudState(status: string | undefined, t: T): { text: string; cls: stri
   }
 }
 
-function StatusDot({ status }: { status?: string }) {
-  if (status === "processing") return <span aria-hidden className="status status-primary animate-pulse" />;
-  if (status === "pending") return <span aria-hidden className="status status-warning animate-pulse" />;
-  if (status === "error") return <span aria-hidden className="status status-error" />;
-  // 终态行:状态槽只占位不显形(与本地行同构)
-  return <span aria-hidden className="status invisible" />;
-}
-
 function TaskRow({
   task,
   currentId,
+  indent,
   onSelect,
   onDelete,
   onStop,
 }: {
   task: CloudTask;
   currentId: string | null;
+  indent?: string;
   onSelect: (task: CloudTask) => void;
   onDelete: (task: CloudTask) => void;
   onStop: (task: CloudTask) => void;
@@ -162,27 +157,29 @@ function TaskRow({
   // tooltip 保留状态词:尾注被安静掉的终态在这里仍可查
   const stateWord = st?.text ?? (task.status === "finished" ? t("cloud.status.finished") : "");
   const running = ACTIVE.has(task.status ?? "");
+  const tone =
+    task.status === "processing"
+      ? "status-primary animate-pulse"
+      : task.status === "pending"
+        ? "status-warning animate-pulse"
+        : task.status === "error"
+          ? "status-error"
+          : null;
   const menuItems: MenuItem[] = [
     ...(running ? [{ label: t("cloud.view.stop"), confirm: t("cloud.view.stopConfirm"), danger: true, run: () => onStop(task) }] : []),
     { label: t("cloud.list.delete"), confirm: t("cloud.list.deleteConfirm"), danger: true, run: () => onDelete(task) },
   ];
   return (
-    <li>
-      <a
-        className={`flex min-h-8 min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${task.id === currentId ? "menu-active" : ""}`}
-        title={`${label}\n${stateWord ? `${stateWord}\n` : ""}${t("sidebar.row.hint")}`}
-        onClick={() => onSelect(task)}
-        onContextMenu={(e: MouseEvent) => {
-          e.preventDefault();
-          e.stopPropagation();
-          openMenu({ x: e.clientX, y: e.clientY }, menuItems);
-        }}
-      >
-        <StatusDot status={task.status} />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        {st && <span className={`max-w-16 shrink-0 truncate text-xs ${st.cls}`}>{st.text}</span>}
-      </a>
-    </li>
+    <ListRow
+      primary={label}
+      slot={<StatusSlot tone={tone} icon={Cloud} />}
+      trailing={st}
+      tooltip={`${label}\n${stateWord ? `${stateWord}\n` : ""}${t("sidebar.row.hint")}`}
+      indent={indent}
+      active={task.id === currentId}
+      onSelect={() => onSelect(task)}
+      menuItems={menuItems}
+    />
   );
 }
 
@@ -217,9 +214,8 @@ export function CloudTaskList({
   // 分组懒拉缓存(键 = 项目 id / QUICK_KEY);重拉键翻转即作废
   const [groupTasks, setGroupTasks] = useState<Record<string, GroupTasksState>>({});
   useEffect(() => setGroupTasks({}), [reloadKey]);
-  // 组开合;历史小节走旧 UI 契约键持久化
+  // 组开合(历史小节的契约键持久化在 SectionFold 内)
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
-  const [historyOpen, setHistoryOpen] = useState<boolean>(() => readFold("mc.cloudHistoryOpen"));
   // 行动作(删除/终止)失败原因,已格式化;新动作发起时清空
   const [actionErr, setActionErr] = useState("");
 
@@ -313,27 +309,27 @@ export function CloudTaskList({
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
       // 缩进进行内、行底满宽(与本地组同构,2026-08-05 定案):组内行 ps-6
-      <ul className="ms-0 min-w-0 ps-0 before:hidden [&>li>a]:ps-6">
+      <ul className="ms-0 min-w-0 ps-0 before:hidden">
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
           </li>
         )}
-        {state?.error && <li className="px-2 py-1 text-xs text-warning">{t("cloud.list.groupError", { reason: state.error })}</li>}
+        {state?.error && <li className="py-1 ps-6 pe-2 text-xs text-warning">{t("cloud.list.groupError", { reason: state.error })}</li>}
         {state?.tasks && rowsHit.length === 0 && (
-          <li className="px-2 py-1 text-xs text-base-content/40">{t("cloud.list.groupEmpty")}</li>
+          <li className="py-1 ps-6 pe-2 text-xs text-base-content/40">{t("cloud.list.groupEmpty")}</li>
         )}
         {rowsHit.map((task) => (
-          <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
+          <TaskRow key={task.id} task={task} currentId={currentId} indent="ps-6" onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
         ))}
       </ul>
     );
   };
 
-  const projectGroup = (key: string, name: string, projectId: string | null) => {
+  const projectGroup = (key: string, name: string, projectId: string | null, icon: LucideIcon) => {
     const isOpen = forceOpen || openGroups.has(key);
     return (
-    <li key={key} className="mt-1 first:mt-0">
+    <li key={key} className="mt-2 first:mt-0">
       <details
         open={isOpen}
         onToggle={(e) => {
@@ -350,12 +346,9 @@ export function CloudTaskList({
           if (open) loadGroup(key, projectId);
         }}
       >
-        {/* 区块标签形态(与本地组头同构):无图标、无折叠箭头,开合只靠点击组头 */}
+        {/* 区块标签形态(与本地组头同一件):无折叠箭头,开合只靠点击组头 */}
         <summary title={name} className="flex items-center after:hidden">
-          <Folder size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-base-content/50">
-            {name}
-          </span>
+          <GroupLabel icon={icon} name={name} />
         </summary>
         {groupBody(key)}
       </details>
@@ -365,52 +358,34 @@ export function CloudTaskList({
 
   return (
     <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
-      {activeRows.length > 0 && (
-        <>
-          <li className="menu-title">{t("cloud.list.active")}</li>
-          {activeRows.map((task) => (
-            <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
-          ))}
-        </>
-      )}
-      {historyRows.length > 0 && (
-        <li>
-          <details
-            open={forceOpen || historyOpen}
-            onToggle={(e) => {
-              if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
-              if (forceOpen) return;
-              const next = e.currentTarget.open;
-              if (next === historyOpen) return;
-              setHistoryOpen(next);
-              writeFold("mc.cloudHistoryOpen", next);
-            }}
-          >
-            <summary className="text-xs text-base-content/50">{t("cloud.list.history", { n: String(feed.history.length) })}</summary>
-            <ul className="min-w-0 before:hidden">
-              {historyRows.map((task) => (
-                <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
-              ))}
-              {feed.hasMore && (
-                <li>
-                  <button type="button" className="text-base-content/50" disabled={feed.loading} onClick={feed.loadMore}>
-                    {feed.loading && <span className="loading loading-spinner loading-xs" aria-hidden />}
-                    {t("cloud.list.loadMore")}
-                  </button>
-                </li>
-              )}
-            </ul>
-          </details>
-        </li>
-      )}
+      {/* 进行中任务裸行置顶(同 chat 平铺行,不设区标签):彩点/尾注已自带
+          「正在进行」语义,区标签反而多一层杂讯 */}
+      {activeRows.map((task) => (
+        <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
+      ))}
       {projects.length > 0 && (
         <>
-          <li className="menu-title">{t("cloud.list.projects")}</li>
           {projects.map((project) =>
-            projectGroup(project.id ?? "", project.name || project.full_name || t("cloud.list.untitledProject"), project.id ?? null),
+            projectGroup(project.id ?? "", project.name || project.full_name || t("cloud.list.untitledProject"), project.id ?? null, Folder),
           )}
-          {projectGroup(QUICK_KEY, t("cloud.list.quickStart"), null)}
+          {projectGroup(QUICK_KEY, t("cloud.list.quickStart"), null, Zap)}
         </>
+      )}
+      {/* 历史置底(与本地「已归档项目」同位同构):History 小节头、无计数 */}
+      {historyRows.length > 0 && (
+        <SectionFold label={t("cloud.list.history")} icon={History} foldKey="mc.cloudHistoryOpen" forceOpen={forceOpen}>
+          {historyRows.map((task) => (
+            <TaskRow key={task.id} task={task} currentId={currentId} indent="ps-6" onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
+          ))}
+          {feed.hasMore && (
+            <li>
+              <button type="button" className="ps-6 text-base-content/50" disabled={feed.loading} onClick={feed.loadMore}>
+                {feed.loading && <span className="loading loading-spinner loading-xs" aria-hidden />}
+                {t("cloud.list.loadMore")}
+              </button>
+            </li>
+          )}
+        </SectionFold>
       )}
       {actionErr && <li className="px-2 py-1 text-xs text-error">{actionErr}</li>}
       {feed.error && <li className="px-2 py-1 text-xs text-error">{t("cloud.list.error", { reason: feed.error })}</li>}

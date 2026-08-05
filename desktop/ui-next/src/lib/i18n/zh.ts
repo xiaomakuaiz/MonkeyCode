@@ -341,9 +341,7 @@ export const zh = {
   "engine.restartFailed": "重启失败:{reason}",
   "engine.logs": "日志",
 
-  "cloud.list.active": "进行中",
-  "cloud.list.projects": "项目",
-  "cloud.list.history": "历史任务 · {n}",
+  "cloud.list.history": "历史任务",
   "cloud.list.empty.title": "还没有云端项目或任务",
   "cloud.list.empty.detail": "从这里新建,或在网页和手机端派发任务。",
   "cloud.list.loadMore": "加载更多",

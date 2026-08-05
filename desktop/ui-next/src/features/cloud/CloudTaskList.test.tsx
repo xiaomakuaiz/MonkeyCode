@@ -1,5 +1,6 @@
-// 云端任务列表(旧 UI 设计基线):进行中区、历史任务小节(契约键持久化)、
-// 项目分组懒拉、行右键(终止/删除二段确认)、选择回调(假壳 invoke)。
+// 云端任务列表(与本地/对话列表同一套 listKit,不做两套):进行中裸行
+// 置顶、「历史任务」小节置底(契约键持久化、收起即卸载)、项目分组懒拉、
+// 行右键(终止/删除二段确认)、选择回调(假壳 invoke)。
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -33,7 +34,7 @@ function contextMenuOf(el: HTMLElement): HTMLElement {
 const rowOf = (text: string) => screen.getByText(text).closest("a") as HTMLElement;
 
 describe("CloudTaskList", () => {
-  it("进行中置顶(状态尾注「运行中」),历史收进「历史任务 · N」小节(默认收起);点击回调", async () => {
+  it("进行中裸行置顶(状态尾注「运行中」,无区标签),历史收进「历史任务」小节(默认收起、收起即卸载);点击回调", async () => {
     stubShell((cmd) => {
       if (cmd === "mc_tasks") return Promise.resolve({ tasks, page_info: { total: 3 } });
       return Promise.resolve({});
@@ -41,12 +42,14 @@ describe("CloudTaskList", () => {
     const onSelect = vi.fn();
     render(<CloudTaskList currentId={null} onSelect={onSelect} />);
     await screen.findByText("修复登录");
-    expect(screen.getByText("进行中")).toBeTruthy();
+    // 区标签已撤(listKit 统一版式):进行中行直接平铺
+    expect(screen.queryByText("进行中")).toBeNull();
     expect(within(rowOf("修复登录")).getByText("运行中")).toBeTruthy();
-    // 历史默认收起(未持久化过;details 形态,内容在 DOM 但段收合)
-    const history = screen.getByText("历史任务 · 2").closest("details") as HTMLDetailsElement;
+    // 历史默认收起(未持久化过);收起即卸载,行不在 DOM
+    const history = screen.getByText("历史任务").closest("details") as HTMLDetailsElement;
     expect(history.open).toBe(false);
-    await userEvent.click(screen.getByText("历史任务 · 2"));
+    expect(screen.queryByText("旧任务甲")).toBeNull();
+    await userEvent.click(screen.getByText("历史任务"));
     expect(history.open).toBe(true);
     expect(screen.getByText("旧任务甲")).toBeTruthy(); // title 缺省回退 summary
     expect(within(rowOf("旧任务乙")).getByText("运行出错")).toBeTruthy(); // 再回退 content;error 着色词
@@ -64,7 +67,7 @@ describe("CloudTaskList", () => {
     stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
     render(<CloudTaskList currentId={null} onSelect={() => {}} />);
     await screen.findByText("修复登录");
-    expect((screen.getByText("历史任务 · 2").closest("details") as HTMLDetailsElement).open).toBe(true);
+    expect((screen.getByText("历史任务").closest("details") as HTMLDetailsElement).open).toBe(true);
   });
 
   it("空列表:空态文案", async () => {
@@ -91,7 +94,7 @@ describe("CloudTaskList", () => {
     await screen.findByText("修复登录");
   });
 
-  it("项目分组:「项目」区出组头,展开按 project_id 懒拉;快速开始组按 quick_start 懒拉", async () => {
+  it("项目分组:组头区块标签,展开按 project_id 懒拉;快速开始组按 quick_start 懒拉", async () => {
     const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
     stubShell((cmd, args) => {
       calls.push({ cmd, args });
@@ -103,7 +106,8 @@ describe("CloudTaskList", () => {
     });
     render(<CloudTaskList currentId={null} onSelect={() => {}} />);
     await screen.findByText("支付服务");
-    expect(screen.getByText("项目")).toBeTruthy();
+    // 「项目」区标签已撤:组头(Folder 区块标签)直接排列
+    expect(screen.queryByText("项目")).toBeNull();
     expect(screen.queryByText("项目内任务")).toBeNull();
     await userEvent.click(screen.getByText("支付服务"));
     expect(await screen.findByText("项目内任务")).toBeTruthy();

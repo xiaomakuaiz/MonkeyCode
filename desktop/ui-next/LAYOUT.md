@@ -65,8 +65,8 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
 - **行一律单行**:状态槽 + 主文案(**摘要优先**,缺席回落标题;标题进
   tooltip)+ 状态尾注殿后;云端行同构(标题‖摘要 + 状态尾注)。
 - **安静行**:静默态(N 轮/可继续/未开始/已完成)**无尾注**,状态槽显
-  任务身份图标(本地 SquareTerminal / 对话 MessageSquare,/40;裸文字顶
-  行首太秃,2026-08-05 用户定案),轮次/终态词收进行 tooltip;要紧态
+  任务身份图标(本地 SquareTerminal / 对话 MessageSquare / 云端 Cloud,
+  /40;裸文字顶行首太秃,2026-08-05 用户定案),轮次/终态词收进行 tooltip;要紧态
   彩点顶掉图标 + 着色尾注(等待确认 warning / 运行中 primary / 运行出错
   error / 未读 attention warning)——槽位定宽 12px,活↔静切换不位移。
   **不展示时间**(用户定案)。
@@ -96,9 +96,15 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
   归档行;嵌套竖线仍隐藏;云端项目组同构(组 ul `[&>li>a]:ps-6`)。
 - **折叠段内容收起即卸载**(条件渲染,不靠 details 原生隐藏):部分
   webview 里 details 收起后嵌套 ul 残留占位空间(2026-08-05 用户报障)。
-- 归档结构(旧 UI 同构):项目内「已归档任务 · N」小节;底部「已归档项目
-  · N」;chat 底部「已归档会话 · N」。云端:「进行中」(menu-title 区标签)
-  →「历史任务 · N」小节 →「项目」区(懒拉分组 + 快速开始)。
+- **三列表一套件,不做两套**(用户定案 2026-08-05,后续三空间并入同一
+  tab 的横向双 tab):行/状态槽/区块标签/小节折叠收口在
+  features/sidebar/listKit(ListRow/StatusSlot/GroupLabel/SectionFold),
+  本地、对话、云端一律经它拼装,禁止各写一份行或组头。
+- 归档/历史结构:项目内「已归档任务」小节;底部「已归档项目」;chat 底部
+  「已归档会话」。云端与本地同构:进行中任务裸行置顶(同 chat 平铺行,
+  **区标签 menu-title 已撤**)→ 项目组(Folder)+「快速开始」组(Zap)→
+  底部「历史任务」小节(History 图标)。小节标签一律不带计数
+  (用户定案 2026-08-05)。
 - 折叠态持久化(旧 UI 契约键):mc.collapsedGroups / mc.sessionArchivesOpen
   (JSON string[])、mc.archivedOpen / mc.projectArchiveOpen /
   mc.cloudHistoryOpen("1"/"0",prefs.readFold/writeFold)。

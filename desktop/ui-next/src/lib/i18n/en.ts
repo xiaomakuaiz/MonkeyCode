@@ -342,9 +342,7 @@ export const en: Record<MessageKey, string> = {
   "engine.restartFailed": "Restart failed: {reason}",
   "engine.logs": "Logs",
 
-  "cloud.list.active": "In progress",
-  "cloud.list.projects": "Projects",
-  "cloud.list.history": "History · {n}",
+  "cloud.list.history": "History",
   "cloud.list.empty.title": "No cloud projects or tasks yet",
   "cloud.list.empty.detail": "Create one here, or dispatch tasks from the web and mobile apps.",
   "cloud.list.loadMore": "Load more",
