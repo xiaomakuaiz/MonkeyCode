@@ -1,16 +1,16 @@
 // 侧栏云端空间的任务列表。呈现与交互与本地/对话列表同一套(listKit,
 // 用户定案 2026-08-05「统一风格和交互,不要做两套」,后续并入同 tab 的
 // 横向双 tab):进行中任务裸行置顶(同 chat 平铺行)→ 项目组(Folder
-// 区块标签)+「快速开始」组(Zap)→ 底部「历史任务」小节(History 图标、
-// 无计数)。行 = 安静行:12px 槽(静默给 Cloud 身份图标,要紧态彩点顶掉)
-// + 标题 + 尾注(仅要紧态着色,状态词进 tooltip);行菜单 = 右键(终止
+// 区块标签)→ 底部「历史任务」小节(History 图标、无计数)。
+// 行 = 安静行:行首 12px Cloud 身份图标槽 + 标题 + 行尾要紧态状态点
+// (状态词进点 title/aria 与行 tooltip);行菜单 = 右键(终止
 // 仅运行中 / 删除,均二段确认)。历史开合持久化 mc.cloudHistoryOpen(旧
 // UI 契约键);query 非空过滤并强制展开(未拉过的组顺势懒拉)。
 // 导出组件与数据 hook,Sidebar 接线由 App 侧完成。
-import { Cloud, Folder, History, Zap, type LucideIcon } from "lucide-react";
+import { Cloud, Folder, History } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { GroupLabel, ListRow, SectionFold, StatusSlot } from "@/features/sidebar/listKit";
+import { GroupLabel, IconSlot, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import type { MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
@@ -19,9 +19,6 @@ import { mcProjects, mcTaskDelete, mcTasks, mcTaskStop, type CloudProject, type 
 const PAGE_SIZE = 20;
 
 const ACTIVE = new Set(["pending", "processing"]);
-
-/** 「快速开始」组(无项目的快速任务)在懒拉缓存里的键。 */
-const QUICK_KEY = "quick";
 
 export interface CloudTasksFeed {
   /** null = 首屏加载中 */
@@ -122,15 +119,16 @@ export function cloudTaskLabel(task: CloudTask, fallback: string): string {
 
 type T = ReturnType<typeof useI18n>["t"];
 
-/** 行状态尾注(安静行同构):仅要紧态给着色词,终态无尾注(状态词进 tooltip)。 */
-function cloudState(status: string | undefined, t: T): { text: string; cls: string } | null {
+/** 行尾状态点(安静行同构,用户定案 2026-08-05「文字换状态图标」):
+ * 仅要紧态给彩点,终态无点(状态词进点的 title/aria 与行 tooltip)。 */
+function cloudState(status: string | undefined, t: T): { tone: string; label: string } | null {
   switch (status) {
     case "pending":
-      return { text: t("cloud.status.pending"), cls: "text-warning" };
+      return { tone: "status-warning animate-pulse", label: t("cloud.status.pending") };
     case "processing":
-      return { text: t("cloud.status.processing"), cls: "text-primary" };
+      return { tone: "status-primary animate-pulse", label: t("cloud.status.processing") };
     case "error":
-      return { text: t("cloud.status.error"), cls: "text-error" };
+      return { tone: "status-error", label: t("cloud.status.error") };
     default:
       return null;
   }
@@ -154,17 +152,9 @@ function TaskRow({
   const { t } = useI18n();
   const label = cloudTaskLabel(task, t("cloud.list.untitled"));
   const st = cloudState(task.status, t);
-  // tooltip 保留状态词:尾注被安静掉的终态在这里仍可查
-  const stateWord = st?.text ?? (task.status === "finished" ? t("cloud.status.finished") : "");
+  // tooltip 保留状态词:点化/安静掉的状态在这里仍可查
+  const stateWord = st?.label ?? (task.status === "finished" ? t("cloud.status.finished") : "");
   const running = ACTIVE.has(task.status ?? "");
-  const tone =
-    task.status === "processing"
-      ? "status-primary animate-pulse"
-      : task.status === "pending"
-        ? "status-warning animate-pulse"
-        : task.status === "error"
-          ? "status-error"
-          : null;
   const menuItems: MenuItem[] = [
     ...(running ? [{ label: t("cloud.view.stop"), confirm: t("cloud.view.stopConfirm"), danger: true, run: () => onStop(task) }] : []),
     { label: t("cloud.list.delete"), confirm: t("cloud.list.deleteConfirm"), danger: true, run: () => onDelete(task) },
@@ -172,7 +162,7 @@ function TaskRow({
   return (
     <ListRow
       primary={label}
-      slot={<StatusSlot tone={tone} icon={Cloud} />}
+      slot={<IconSlot icon={Cloud} />}
       trailing={st}
       tooltip={`${label}\n${stateWord ? `${stateWord}\n` : ""}${t("sidebar.row.hint")}`}
       indent={indent}
@@ -211,7 +201,7 @@ export function CloudTaskList({
   const projects = useCloudProjects(reloadKey);
   const forceOpen = query !== "";
 
-  // 分组懒拉缓存(键 = 项目 id / QUICK_KEY);重拉键翻转即作废
+  // 分组懒拉缓存(键 = 项目 id);重拉键翻转即作废
   const [groupTasks, setGroupTasks] = useState<Record<string, GroupTasksState>>({});
   useEffect(() => setGroupTasks({}), [reloadKey]);
   // 组开合(历史小节的契约键持久化在 SectionFold 内)
@@ -220,13 +210,13 @@ export function CloudTaskList({
   const [actionErr, setActionErr] = useState("");
 
   const loadGroup = useCallback(
-    (key: string, projectId: string | null) => {
-      if (groupTasks[key]) return; // 拉过/在途
-      setGroupTasks((prev) => ({ ...prev, [key]: { loading: true } }));
-      mcTasks(1, PAGE_SIZE, "", projectId ? { projectId } : { quickStart: true })
-        .then((r) => setGroupTasks((prev) => ({ ...prev, [key]: { tasks: r.tasks ?? [] } })))
+    (projectId: string) => {
+      if (groupTasks[projectId]) return; // 拉过/在途
+      setGroupTasks((prev) => ({ ...prev, [projectId]: { loading: true } }));
+      mcTasks(1, PAGE_SIZE, "", { projectId })
+        .then((r) => setGroupTasks((prev) => ({ ...prev, [projectId]: { tasks: r.tasks ?? [] } })))
         .catch((e: unknown) =>
-          setGroupTasks((prev) => ({ ...prev, [key]: { error: e instanceof Error ? e.message : String(e) } })),
+          setGroupTasks((prev) => ({ ...prev, [projectId]: { error: e instanceof Error ? e.message : String(e) } })),
         );
     },
     [groupTasks],
@@ -235,8 +225,7 @@ export function CloudTaskList({
   // 搜索强制展开:未拉过的组顺势懒拉(命中不能藏在没拉过的组里)
   useEffect(() => {
     if (!forceOpen) return;
-    for (const project of projects) loadGroup(project.id ?? "", project.id ?? null);
-    if (projects.length > 0) loadGroup(QUICK_KEY, null);
+    for (const project of projects) loadGroup(project.id ?? "");
   }, [forceOpen, projects, loadGroup]);
 
   const handleDelete = (task: CloudTask) => {
@@ -326,10 +315,10 @@ export function CloudTaskList({
     );
   };
 
-  const projectGroup = (key: string, name: string, projectId: string | null, icon: LucideIcon) => {
-    const isOpen = forceOpen || openGroups.has(key);
+  const projectGroup = (projectId: string, name: string) => {
+    const isOpen = forceOpen || openGroups.has(projectId);
     return (
-    <li key={key} className="mt-2 first:mt-0">
+    <li key={projectId} className="mt-2 first:mt-0">
       <details
         open={isOpen}
         onToggle={(e) => {
@@ -337,20 +326,20 @@ export function CloudTaskList({
           if (forceOpen) return;
           const open = e.currentTarget.open;
           setOpenGroups((prev) => {
-            if (open === prev.has(key)) return prev;
+            if (open === prev.has(projectId)) return prev;
             const next = new Set(prev);
-            if (open) next.add(key);
-            else next.delete(key);
+            if (open) next.add(projectId);
+            else next.delete(projectId);
             return next;
           });
-          if (open) loadGroup(key, projectId);
+          if (open) loadGroup(projectId);
         }}
       >
         {/* 区块标签形态(与本地组头同一件):无折叠箭头,开合只靠点击组头 */}
         <summary title={name} className="flex items-center after:hidden">
-          <GroupLabel icon={icon} name={name} />
+          <GroupLabel icon={Folder} name={name} />
         </summary>
-        {groupBody(key)}
+        {groupBody(projectId)}
       </details>
     </li>
     );
@@ -363,13 +352,8 @@ export function CloudTaskList({
       {activeRows.map((task) => (
         <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
       ))}
-      {projects.length > 0 && (
-        <>
-          {projects.map((project) =>
-            projectGroup(project.id ?? "", project.name || project.full_name || t("cloud.list.untitledProject"), project.id ?? null, Folder),
-          )}
-          {projectGroup(QUICK_KEY, t("cloud.list.quickStart"), null, Zap)}
-        </>
+      {projects.map((project) =>
+        projectGroup(project.id ?? "", project.name || project.full_name || t("cloud.list.untitledProject")),
       )}
       {/* 历史置底(与本地「已归档项目」同位同构):History 小节头、无计数 */}
       {historyRows.length > 0 && (

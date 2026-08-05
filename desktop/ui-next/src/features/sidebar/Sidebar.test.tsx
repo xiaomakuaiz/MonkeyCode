@@ -1,5 +1,5 @@
 // 侧栏:壳布局(h-13 品牌头/滚动列表)+ 信息布局(单行摘要优先、安静行:
-// 尾注仅要紧态、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
+// 行尾状态点仅要紧态、归档小节)+ daisyUI 原生形态(menu/details/status/badge)。
 // 交互:行右键菜单、行内重命名、组头快捷新建、折叠契约键。
 // (搜索行按用户指令暂撤,回归时补测:query 过滤 + 全折叠段强制展开)
 import { fireEvent, render, screen, within } from "@testing-library/react";
@@ -72,10 +72,13 @@ describe("侧栏(local 空间)", () => {
     expect(screen.queryByText(/运行中/)).toBeNull(); // 无运行中则不出现
   });
 
-  it("状态尾注只给要紧态:等待确认着色;静默行无尾注,轮次收进 tooltip", () => {
+  it("行尾状态点只给要紧态(文字词不上行,词进点 aria);静默行无点,轮次收进 tooltip", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    expect(within(rowOf("重构侧栏")).getByText("等待确认")).toBeTruthy();
+    // 状态词换成状态点(用户定案 2026-08-05):行内不出现文字词
+    expect(within(rowOf("重构侧栏")).queryByText("等待确认")).toBeNull();
+    expect(within(rowOf("重构侧栏")).getByRole("img", { name: "等待确认" })).toBeTruthy();
     const quiet = rowOf("修复了闪退,补了用例");
+    expect(within(quiet).queryByRole("img")).toBeNull(); // 静默行无点
     expect(within(quiet).queryByText("3 轮")).toBeNull();
     expect(quiet.title).toContain("3 轮");
   });

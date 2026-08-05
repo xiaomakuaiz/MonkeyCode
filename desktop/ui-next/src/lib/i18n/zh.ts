@@ -60,6 +60,7 @@ export const zh = {
   "status.idle": "可继续",
   "status.notStarted": "尚未开始",
   "status.turns": "{n} 轮",
+  "status.attention": "有未读更新",
 
   "create.title": "新建任务",
   "create.workdir": "项目目录",
@@ -350,7 +351,6 @@ export const zh = {
   "cloud.list.retry": "重试",
   "cloud.list.untitled": "云端任务",
   "cloud.list.untitledProject": "未命名项目",
-  "cloud.list.quickStart": "快速开始",
   "cloud.list.refresh": "刷新云端任务",
   "cloud.list.delete": "删除任务",
   "cloud.list.deleteConfirm": "确认删除",

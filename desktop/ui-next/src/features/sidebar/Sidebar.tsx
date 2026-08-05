@@ -1,9 +1,9 @@
 // 侧栏:三空间(本地/云端/对话)+ 会话列表。
 // 分层约定(tasks/lessons.md 2026-08-04):
 // - 壳布局不动:h-13 品牌头(LAYOUT.md §2)→ 列表滚动区 → footer;
-// - 信息布局(用户定案 2026-08-04「区块标签+安静行」):行单行 = 状态槽
-//   (常驻占位,要紧态才显形)+ 摘要‖标题 + 尾注(仅要紧态着色词;静默行
-//   无点无尾注,轮次进 tooltip);组头 = 区块小标签(项目图标 + 原大小写
+// - 信息布局(用户定案 2026-08-04「区块标签+安静行」,08-05 状态点化):
+//   行单行 = 行首身份图标槽 + 摘要‖标题 + 行尾要紧态状态点(词进
+//   title/aria;静默行无点,轮次进 tooltip);组头 = 区块小标签(项目图标 + 原大小写
 //   名称,同名靠 tooltip 路径区分)+ 等待徽标 + 快捷「+」殿后;项目内「已归档任务
 //   · N」小节、底部「已归档项目 · N」;
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
@@ -14,7 +14,7 @@ import { Archive, Folder, Inbox, MessageSquare, MessagesSquare, Plus, RefreshCw,
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
-import { GroupLabel, ListRow, SectionFold, StatusSlot } from "@/features/sidebar/listKit";
+import { GroupLabel, IconSlot, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -48,26 +48,14 @@ export interface SidebarActions {
 
 type T = ReturnType<typeof useI18n>["t"];
 
-function SessionSlot({ meta, attention }: { meta: SessionMeta; attention?: boolean }) {
-  // 后台提醒未读(D3):终态也用警示色点出来,点开行即消
-  const tone = meta.waiting_ask
-    ? "status-warning animate-pulse"
-    : attention
-      ? "status-warning"
-      : meta.status === "running"
-        ? "status-primary animate-pulse"
-        : meta.status === "error"
-          ? "status-error"
-          : null;
-  // 静默行身份图标:本地任务 SquareTerminal / 对话 MessageSquare
-  return <StatusSlot tone={tone} icon={meta.kind === "chat" ? MessageSquare : SquareTerminal} />;
-}
-
-/** 行状态尾注(安静行定案):仅要紧态给着色词,静默态无尾注(轮次进 tooltip)。 */
-function rowTrailing(meta: SessionMeta, t: T): { text: string; cls: string } | null {
-  if (meta.waiting_ask) return { text: t("status.waitingAsk"), cls: "text-warning" };
-  if (meta.status === "running") return { text: t("status.running"), cls: "text-primary" };
-  if (meta.status === "error") return { text: t("status.error"), cls: "text-error" };
+/** 行尾状态点(用户定案 2026-08-05「文字换状态图标」):仅要紧态给彩点,
+ * 静默态无点(轮次进 tooltip);状态词进点的 title/aria。attention(D3
+ * 后台提醒未读)也在此:终态用警示点点出来,点开行即消。 */
+function rowTrailing(meta: SessionMeta, t: T, attention: boolean): { tone: string; label: string } | null {
+  if (meta.waiting_ask) return { tone: "status-warning animate-pulse", label: t("status.waitingAsk") };
+  if (attention) return { tone: "status-warning", label: t("status.attention") };
+  if (meta.status === "running") return { tone: "status-primary animate-pulse", label: t("status.running") };
+  if (meta.status === "error") return { tone: "status-error", label: t("status.error") };
   return null;
 }
 
@@ -114,7 +102,7 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
   const isChat = meta.kind === "chat";
   // 单行(用户定案):有摘要给摘要(随对话演进,比标题达意),缺席回落标题
   const primary = meta.summary || meta.title;
-  const trailing = rowTrailing(meta, t);
+  const trailing = rowTrailing(meta, t, attention);
   const turns = meta.turns > 0 ? t("status.turns", { n: String(Math.trunc(meta.turns)) }) : "";
   const menuItems: MenuItem[] = [
     { label: t("sidebar.row.rename"), run: () => p.onRenameStart(meta.id) },
@@ -124,9 +112,9 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
   return (
     <ListRow
       primary={primary}
-      slot={<SessionSlot meta={meta} attention={attention} />}
+      slot={<IconSlot icon={isChat ? MessageSquare : SquareTerminal} />}
       trailing={trailing}
-      tooltip={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
+      tooltip={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${trailing ? `${trailing.label}\n` : ""}${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
       indent={indent}
       active={meta.id === p.currentId}
       attention={attention}

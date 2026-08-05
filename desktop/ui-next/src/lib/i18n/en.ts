@@ -61,6 +61,7 @@ export const en: Record<MessageKey, string> = {
   "status.idle": "Resumable",
   "status.notStarted": "Not started",
   "status.turns": "{n} turns",
+  "status.attention": "Unread updates",
 
   "create.title": "New task",
   "create.workdir": "Project directory",
@@ -351,7 +352,6 @@ export const en: Record<MessageKey, string> = {
   "cloud.list.retry": "Retry",
   "cloud.list.untitled": "Cloud task",
   "cloud.list.untitledProject": "Untitled project",
-  "cloud.list.quickStart": "Quick start",
   "cloud.list.refresh": "Refresh cloud tasks",
   "cloud.list.delete": "Delete task",
   "cloud.list.deleteConfirm": "Confirm delete",

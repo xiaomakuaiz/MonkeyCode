@@ -1,8 +1,9 @@
 // 侧栏列表共用件:本地/对话/云端三列表同一套呈现与交互(用户定案
 // 2026-08-05「统一风格和交互,不要做两套」;后续三空间会并入同一 tab 的
 // 横向双 tab,先在组件层归一)。形态语汇 = LAYOUT.md §6.1/§6.2:
-// - ListRow 安静行:12px 状态槽(要紧态彩点顶掉身份图标)+ 单行主文案
-//   截断 + 要紧态着色尾注;右键 = 行菜单。
+// - ListRow 安静行:行首 12px 身份图标槽(不被状态顶掉,用户定案
+//   2026-08-05)+ 单行主文案截断 + 行尾要紧态状态点(点替代文字词,
+//   词进 title/aria);右键 = 行菜单。
 // - GroupLabel 区块标签:组头 12px 图标 + text-[11px] font-medium /50,
 //   放进 summary(flex 覆写、after:hidden 去尾箭头)。
 // - SectionFold 小节折叠:Archive 形小节头(10px 图标行首、无计数),
@@ -14,16 +15,13 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
 import { readFold, writeFold, type FoldKey } from "@/lib/util/prefs";
 
-/** 行首定宽 12px 槽,与组头图标同列:静默行给身份图标(裸文字顶行首
- * 太秃,用户定案 2026-08-05),要紧态彩点顶掉图标,活↔静切换不位移。 */
-export function StatusSlot({ tone, icon: Icon }: { tone: string | null; icon: LucideIcon }) {
+/** 行首定宽 12px 身份图标槽,与组头图标同列(裸文字顶行首太秃,用户
+ * 定案 2026-08-05);状态一律走行尾状态点,不顶掉身份图标(用户定案
+ * 2026-08-05)。 */
+export function IconSlot({ icon: Icon }: { icon: LucideIcon }) {
   return (
     <span aria-hidden className="flex w-3 shrink-0 justify-center">
-      {tone ? (
-        <span className={`status ${tone}`} />
-      ) : (
-        <Icon size={12} strokeWidth={1.75} className="text-base-content/40" />
-      )}
+      <Icon size={12} strokeWidth={1.75} className="text-base-content/40" />
     </span>
   );
 }
@@ -43,8 +41,9 @@ export function ListRow({
 }: {
   primary: string;
   slot: ReactNode;
-  /** 状态尾注:仅要紧态给着色词,静默行传 null(状态词进 tooltip) */
-  trailing?: { text: string; cls: string } | null;
+  /** 行尾状态点:仅要紧态给(tone = status-* 色 + 动效);状态词不上行
+   * (用户定案 2026-08-05「文字换状态图标」),进点的 title/aria-label */
+  trailing?: { tone: string; label: string } | null;
   tooltip: string;
   indent?: string;
   active?: boolean;
@@ -68,7 +67,9 @@ export function ListRow({
       >
         {slot}
         <span className="min-w-0 flex-1 truncate">{primary}</span>
-        {trailing && <span className={`max-w-16 shrink-0 truncate text-xs ${trailing.cls}`}>{trailing.text}</span>}
+        {trailing && (
+          <span role="img" aria-label={trailing.label} title={trailing.label} className={`status shrink-0 ${trailing.tone}`} />
+        )}
       </a>
     </li>
   );
