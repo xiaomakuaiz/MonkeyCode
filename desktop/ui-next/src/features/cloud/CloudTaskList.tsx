@@ -312,8 +312,8 @@ export function CloudTaskList({
     const state = groupTasks[key];
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
-      // 组内缩进 = 图标宽 12px/级(与本地组同构,2026-08-05 定案)
-      <ul className="ms-3 min-w-0 ps-0 before:hidden">
+      // 缩进进行内、行底满宽(与本地组同构,2026-08-05 定案):组内行 ps-6
+      <ul className="ms-0 min-w-0 ps-0 before:hidden [&>li>a]:ps-6">
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />

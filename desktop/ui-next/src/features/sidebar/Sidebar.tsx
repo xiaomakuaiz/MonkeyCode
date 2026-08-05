@@ -84,7 +84,7 @@ interface RowPlumbing {
   onRenameEnd: () => void;
 }
 
-function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
+function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; indent?: string }) {
   const { t } = useI18n();
   const attention = p.attentionIds?.has(meta.id) ?? false;
 
@@ -99,7 +99,7 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
     };
     return (
       <li>
-        <div className="min-h-8 p-1">
+        <div className={`min-h-8 p-1 ${indent ?? ""}`}>
           <input
             type="text"
             aria-label={t("sidebar.row.rename")}
@@ -128,7 +128,7 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
   return (
     <li>
       <a
-        className={`flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${meta.id === p.currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
+        className={`flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${indent ?? ""} ${meta.id === p.currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
         data-attention={attention ? "" : undefined}
         title={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
         onClick={() => p.actions.onSelect(meta)}
@@ -146,8 +146,10 @@ function SessionRow({ meta, p }: { meta: SessionMeta; p: RowPlumbing }) {
   );
 }
 
-function rows(list: SessionMeta[], p: RowPlumbing) {
-  return list.map((meta) => <SessionRow key={meta.id} meta={meta} p={p} />);
+/** indent:行内起始 padding 类(层级缩进进行内,行底满宽——嵌套 margin
+ * 会把 hover/选中底压窄错位,旧 UI 即行满宽 + padding 阶梯)。 */
+function rows(list: SessionMeta[], p: RowPlumbing, indent?: string) {
+  return list.map((meta) => <SessionRow key={meta.id} meta={meta} p={p} indent={indent} />);
 }
 
 /** 一个项目分组(daisyUI menu 的 details 折叠;含「已归档任务 · N」小节)。 */
@@ -239,11 +241,12 @@ function ProjectDetails({
             </button>
           )}
         </summary>
-        {/* 组内缩进阶梯:每级 = 图标宽 12px(ms-3 覆掉 menu 原生 1.5rem;
-            用户定案 2026-08-05 三次:图标大小即缩进长度,同级上下文字对齐,
-            状态槽/图标同为 12px 定宽槽);嵌套竖线仍隐藏 */}
-        <ul className="ms-3 min-w-0 ps-0 before:hidden">
-          {rows(group.sessions, p)}
+        {/* 缩进阶梯进行内(行底满宽,旧 UI 同款):嵌套 ul 一律拉平
+            (ms-0 ps-0,margin 缩进会把行底压窄错位);L1 行 ps-6、L2 行
+            ps-9(基准 item padding 12px,每级恰 = 图标宽 12px),行首标记
+            统一 12px 定宽槽 → 同级文字对齐、跨级阶梯均匀 */}
+        <ul className="ms-0 min-w-0 ps-0 before:hidden">
+          {rows(group.sessions, p, "ps-6")}
           {group.archivedSessions.length > 0 && (
             <li>
               <details open={archOpen} onToggle={(e) => {
@@ -251,7 +254,7 @@ function ProjectDetails({
                 if (open !== archOpen) onToggleArchOpen(group.key);
               }}>
                 {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
-                <summary className="flex items-center gap-2 text-[11px] text-base-content/40 after:hidden">
+                <summary className="flex items-center gap-2 ps-6 text-[11px] text-base-content/40 after:hidden">
                   <span className="flex w-3 shrink-0 justify-center" aria-hidden>
                     <Archive size={12} strokeWidth={1.75} />
                   </span>
@@ -259,7 +262,7 @@ function ProjectDetails({
                 </summary>
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
                     占位空间(用户报障),条件渲染釜底抽薪 */}
-                {archOpen && <ul className="ms-3 min-w-0 ps-0 before:hidden">{rows(group.archivedSessions, p)}</ul>}
+                {archOpen && <ul className="ms-0 min-w-0 ps-0 before:hidden">{rows(group.archivedSessions, p, "ps-9")}</ul>}
               </details>
             </li>
           )}
@@ -292,7 +295,7 @@ function FoldSection({
       >
         <summary className="text-xs text-base-content/50">{label}</summary>
         {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
-        {open && <ul className="ms-3 min-w-0 ps-0 before:hidden">{children}</ul>}
+        {open && <ul className="ms-0 min-w-0 ps-0 before:hidden">{children}</ul>}
       </details>
     </li>
   );
@@ -459,7 +462,7 @@ export function Sidebar({
           {rows(active, p)}
           {archived.length > 0 && (
             <FoldSection label={t("sidebar.archivedChats", { n: String(archived.length) })} foldKey="mc.archivedOpen">
-              {rows(archived, p)}
+              {rows(archived, p, "ps-6")}
             </FoldSection>
           )}
         </ul>
