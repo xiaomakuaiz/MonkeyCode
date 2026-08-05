@@ -333,7 +333,10 @@ export function Composer({
           (`.dropdown:not(...) .dropdown-content`),外层 dropdown 处于关态
           时会把嵌套在内的思考/模型菜单一并 display:none(思考菜单弹不出来
           的根因,修复经历见 tasks/lessons.md) */}
-      <div className="relative flex flex-col rounded-box border border-base-300 bg-base-100 shadow-sm transition-colors focus-within:border-base-content/25">
+      {/* -mx-2.5 光学对齐(旧 UI 出血 10px 随迁):textarea 自带 ~12px 内距,
+          硬边卡片与正文同宽会显得输入文字向右缩;向两侧出血后卡内文字
+          左缘与对话文字几乎重合,卡片略宽于正文列 */}
+      <div className="relative -mx-2.5 flex flex-col rounded-box border border-base-300 bg-base-100 shadow-sm transition-colors focus-within:border-base-content/25">
         {slashOpen && (
           <ul
             role="listbox"
@@ -500,9 +503,10 @@ export function Composer({
               // dropdown-content 换 div 外壳:过滤框/来源 tab 固定在顶,
               // 条目列表单独内滚(菜单长了不能把导航滚出视野)
               <div className="dropdown-content flex max-h-72 w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+                {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
+                    反而抢走键盘上下文(用户定案) */}
                 {showModelExtras && (
                   <input
-                    autoFocus
                     aria-label={t("chat.model.filter")}
                     placeholder={t("chat.model.filter")}
                     className="input input-xs mb-1 w-full shrink-0"
@@ -558,7 +562,7 @@ export function Composer({
               功能性状态色示警(旧 ContextRing 的设计,组件官方化) */}
           {usagePct !== null && state.usage && (
             <div
-              className="tooltip tooltip-top shrink-0"
+              className="tooltip tooltip-top mx-1 shrink-0"
               data-tip={t("chat.usageTip", {
                 used: state.usage.used.toLocaleString(),
                 size: state.usage.size.toLocaleString(),
