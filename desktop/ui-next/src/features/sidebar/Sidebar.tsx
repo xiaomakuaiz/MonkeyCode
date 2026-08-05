@@ -237,7 +237,11 @@ function ProjectDetails({
                 const open = (e.target as HTMLDetailsElement).open;
                 if (open !== archOpen) onToggleArchOpen(group.key);
               }}>
-                <summary className="text-xs text-base-content/50">
+                {/* 组内小节头:隐形状态槽对齐任务行文字(组内不缩进纪律下,
+                    层级感靠状态槽错位——顶到最左会和项目组头一个起跑线,
+                    读成平级,2026-08-05 用户报障);字号/字重都低于组头一档 */}
+                <summary className="flex items-center gap-2 text-[11px] text-base-content/40">
+                  <span aria-hidden className="status invisible" />
                   {t("sidebar.archivedTasks", { n: String(group.archivedSessions.length) })}
                 </summary>
                 <ul className="min-w-0 before:hidden">{rows(group.archivedSessions, p)}</ul>
