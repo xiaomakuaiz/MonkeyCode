@@ -34,7 +34,9 @@
       }
     </script>
   </head>
-  <body>
+  <!-- 全局关内核拼写检查/自动纠正:三个属性都按 HTML 语义向后代继承,
+       挂 body 一次覆盖所有输入框(WebKitGTK 默认开启,技术输入被画线改词) -->
+  <body spellcheck="false" autocorrect="off" autocapitalize="off">
     <div id="root"></div>
     <script>
       /* 启动故障可见化:壳内 devtools 未必打得开,任何未捕获异常/未处理
