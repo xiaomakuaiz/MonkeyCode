@@ -184,3 +184,18 @@ describe("后台提醒 attention(D3)", () => {
     expect(rowOf("问了个问题").dataset.attention).toBeDefined();
   });
 });
+
+describe("嵌套折叠互不串扰", () => {
+  it("开合「已归档任务」小节不连带折叠所在项目(React toggle 合成冒泡守卫)", async () => {
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    const sub = screen.getByText("已归档任务 · 1");
+    await userEvent.click(sub); // 展开小节
+    expect(screen.getByText("旧任务")).toBeTruthy();
+    await userEvent.click(sub); // 收起小节
+    // 项目组必须仍然展开(冒泡未守卫时会被连带折叠)
+    const project = screen.getByText("beta").closest("details") as HTMLDetailsElement;
+    expect(project.open).toBe(true);
+    // 小节自身已收起(收起即卸载)
+    expect(screen.queryByText("旧任务")).toBeNull();
+  });
+});

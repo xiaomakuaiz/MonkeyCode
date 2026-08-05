@@ -198,12 +198,18 @@ function ProjectDetails({
     <li className="mt-2 first:mt-0">
       <details
         open={!collapsed}
-        onToggle={(e) => onToggleCollapsed(group.key, (e.target as HTMLDetailsElement).open)}
+        onToggle={(e) => {
+          // ⚠️ React 把原生不冒泡的 toggle 做成合成冒泡:内层「已归档任务」
+          // details 的开合会冒到这里,不守卫 target 就会把项目一起折叠
+          // (2026-08-05 用户报障根因)
+          if (e.target !== e.currentTarget) return;
+          onToggleCollapsed(group.key, e.currentTarget.open);
+        }}
       >
         {/* 区块标签形态:summary 由 grid 覆写为 flex(名称伸展、徽标/＋殿后);
             原生折叠箭头整个去掉(用户定案 2026-08-04),开合只靠点击组头 */}
         <summary
-          className={`group flex items-center after:hidden ${dropTarget ? "border-t-2 border-primary" : ""}`}
+          className={`group flex items-center after:hidden ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
           title={[group.key, t("sidebar.project.hint"), drag ? t("sidebar.project.dragHint") : ""].filter(Boolean).join("\n")}
           draggable={!!drag}
           onDragStart={() => drag?.onDragStart(group.key)}
@@ -250,15 +256,17 @@ function ProjectDetails({
             ps-9(基准 item padding 12px,每级恰 = 图标宽 12px),行首标记
             统一 12px 定宽槽 → 同级文字对齐、跨级阶梯均匀 */}
         <ul className="ms-0 min-w-0 ps-0 before:hidden">
-          {rows(group.sessions, p, "ps-6")}
+          {rows(group.sessions, p, archivedProject ? "ps-9" : "ps-6")}
           {group.archivedSessions.length > 0 && (
             <li>
               <details open={archOpen} onToggle={(e) => {
-                const open = (e.target as HTMLDetailsElement).open;
-                if (open !== archOpen) onToggleArchOpen(group.key);
+                if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
+                if (e.currentTarget.open !== archOpen) onToggleArchOpen(group.key);
               }}>
                 {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
-                <summary className="flex items-center gap-2 ps-6 text-[11px] text-base-content/40 after:hidden">
+                <summary
+                  className={`flex items-center gap-2 ${archivedProject ? "ps-9" : "ps-6"} text-[11px] text-base-content/40 after:hidden`}
+                >
                   <span className="flex w-3 shrink-0 justify-center" aria-hidden>
                     <Archive size={12} strokeWidth={1.75} />
                   </span>
@@ -266,7 +274,11 @@ function ProjectDetails({
                 </summary>
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
                     占位空间(用户报障),条件渲染釜底抽薪 */}
-                {archOpen && <ul className="ms-0 min-w-0 ps-0 before:hidden">{rows(group.archivedSessions, p, "ps-9")}</ul>}
+                {archOpen && (
+                  <ul className="ms-0 min-w-0 ps-0 before:hidden">
+                    {rows(group.archivedSessions, p, archivedProject ? "ps-12" : "ps-9")}
+                  </ul>
+                )}
               </details>
             </li>
           )}
@@ -292,7 +304,8 @@ function FoldSection({
       <details
         open={open}
         onToggle={(e) => {
-          const next = (e.target as HTMLDetailsElement).open;
+          if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
+          const next = e.currentTarget.open;
           setOpen(next);
           writeFold(foldKey, next);
         }}

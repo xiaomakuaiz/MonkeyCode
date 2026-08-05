@@ -337,8 +337,9 @@ export function CloudTaskList({
       <details
         open={isOpen}
         onToggle={(e) => {
+          if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
           if (forceOpen) return;
-          const open = (e.target as HTMLDetailsElement).open;
+          const open = e.currentTarget.open;
           setOpenGroups((prev) => {
             if (open === prev.has(key)) return prev;
             const next = new Set(prev);
@@ -377,8 +378,9 @@ export function CloudTaskList({
           <details
             open={forceOpen || historyOpen}
             onToggle={(e) => {
+              if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
               if (forceOpen) return;
-              const next = (e.target as HTMLDetailsElement).open;
+              const next = e.currentTarget.open;
               if (next === historyOpen) return;
               setHistoryOpen(next);
               writeFold("mc.cloudHistoryOpen", next);
