@@ -1,5 +1,7 @@
 // 新建云端任务:三选器默认值、locked 禁选、提交契约(假壳 invoke)。
-import { render, screen } from "@testing-library/react";
+// 三选器为 composer 同款菜单(pickers.OptionMenu):触发器 button 文本 =
+// 当前选中项展示名,列表 list 与触发器同可及名(role 区分)。
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -43,14 +45,15 @@ describe("NewCloudTask", () => {
   it("默认值:免费档选基础模型、公共宿主、devbox 镜像;超档模型禁选", async () => {
     stubShell();
     render(<NewCloudTask onCreated={() => {}} />);
-    const model = await screen.findByLabelText<HTMLSelectElement>("模型");
-    expect(model.value).toBe("m-basic");
-    const lockedOption = [...model.options].find((o) => o.value === "m-ultra");
-    expect(lockedOption?.disabled).toBe(true);
-    expect(screen.getByLabelText<HTMLSelectElement>("宿主机").value).toBe("public_host");
-    expect(screen.getByLabelText<HTMLSelectElement>("镜像").value).toBe("i-devbox");
+    const model = await screen.findByRole("button", { name: "模型" });
+    expect(model.textContent).toContain("基础模型");
+    await userEvent.click(model);
+    const menu = screen.getByRole("list", { name: "模型" });
+    expect((within(menu).getByRole("button", { name: /旗舰模型/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "宿主机" }).textContent).toContain("公共宿主机");
+    expect(screen.getByRole("button", { name: "镜像" }).textContent).toContain("devbox");
     // 公共模型 → 宿主机锁定公共档
-    expect(screen.getByLabelText<HTMLSelectElement>("宿主机").disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "宿主机" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("私有模型解锁宿主机选择;提交带四要素;成功回调", async () => {
@@ -58,11 +61,12 @@ describe("NewCloudTask", () => {
     stubShell(created);
     const onCreated = vi.fn();
     render(<NewCloudTask onCreated={onCreated} />);
-    const model = await screen.findByLabelText<HTMLSelectElement>("模型");
-    await userEvent.selectOptions(model, "m-mine");
-    const host = screen.getByLabelText<HTMLSelectElement>("宿主机");
+    await userEvent.click(await screen.findByRole("button", { name: "模型" }));
+    await userEvent.click(within(screen.getByRole("list", { name: "模型" })).getByRole("button", { name: "my-model" }));
+    const host = screen.getByRole("button", { name: "宿主机" }) as HTMLButtonElement;
     expect(host.disabled).toBe(false);
-    await userEvent.selectOptions(host, "h-1");
+    await userEvent.click(host);
+    await userEvent.click(within(screen.getByRole("list", { name: "宿主机" })).getByRole("button", { name: "私有机" }));
     await userEvent.type(screen.getByLabelText("任务描述"), "给我修个 bug");
     await userEvent.click(screen.getByText("创建"));
     expect(created).toEqual([
@@ -74,7 +78,7 @@ describe("NewCloudTask", () => {
   it("空描述拦截外显", async () => {
     stubShell();
     render(<NewCloudTask onCreated={() => {}} />);
-    await screen.findByLabelText("模型");
+    await screen.findByRole("button", { name: "模型" });
     await userEvent.click(screen.getByText("创建"));
     expect((await screen.findByRole("alert")).textContent).toContain("请填写任务描述");
   });

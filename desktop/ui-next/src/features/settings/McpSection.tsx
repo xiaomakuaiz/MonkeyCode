@@ -1,6 +1,7 @@
 // MCP 服务器编辑:与模型列表同一套行内展开交互与脏状态(同一份草稿)。
 // 条目形态 = settingsForm.McpEntry(与内核 mcp.json 的 mcpServers 同构),
 // 表单外字段进 extra 随保存透传。
+import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -30,8 +31,16 @@ export function McpSection({
   };
 
   return (
-    <section aria-label={t("settings.nav.mcp")} className="flex max-w-2xl flex-col gap-2">
-      {draft.mcps.length === 0 && <p className="text-sm text-base-content/60">{t("settings.mcp.empty")}</p>}
+    <section aria-label={t("settings.nav.mcp")} className="flex flex-col gap-2">
+      {draft.mcps.length === 0 && (
+        <div className="flex flex-col items-center gap-3 rounded-box border border-dashed border-base-300 px-6 py-10">
+          <p className="text-center text-xs text-base-content/50">{t("settings.mcp.empty")}</p>
+          <button type="button" className="btn btn-sm" onClick={add}>
+            <Plus size={14} strokeWidth={2} aria-hidden />
+            {t("settings.mcp.add")}
+          </button>
+        </div>
+      )}
       {draft.mcps.map((m, i) => {
         const open = expanded === i;
         return (
@@ -127,9 +136,12 @@ export function McpSection({
           </div>
         );
       })}
-      <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
-        {t("settings.mcp.add")}
-      </button>
+      {draft.mcps.length > 0 && (
+        <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
+          <Plus size={14} strokeWidth={2} aria-hidden />
+          {t("settings.mcp.add")}
+        </button>
+      )}
     </section>
   );
 }

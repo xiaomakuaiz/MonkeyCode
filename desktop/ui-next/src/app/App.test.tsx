@@ -230,6 +230,8 @@ describe("在此项目新建任务(侧栏组头 → 新建视图预填目录)", 
     render(<App />);
     await waitFor(() => expect(shell.count("sessions_list")).toBeGreaterThanOrEqual(1));
     await userEvent.click(await screen.findByRole("button", { name: "在此项目新建任务" }));
+    // 目录输入框收进「最近目录」下拉(卡头句式触发器),取值前先展开
+    await userEvent.click(await screen.findByRole("button", { name: "最近目录" }));
     const dirInput = await screen.findByRole("textbox", { name: "项目目录" });
     expect((dirInput as HTMLInputElement).value).toBe("/proj/alpha");
   });

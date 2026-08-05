@@ -89,15 +89,28 @@ export function AboutSection() {
           : t("settings.about.check");
 
   return (
-    <section aria-label={t("settings.nav.about")} className="flex max-w-xl flex-col gap-4">
-      <div className="flex flex-col gap-0.5">
-        <span className="text-sm font-bold">{t("app.name")}</span>
-        <span className="font-mono text-xs text-base-content/60">
-          {t("settings.about.version", {
-            version: info?.version ?? "—",
-            engine: info?.engine_version ?? t("settings.about.engineNotReady"),
-          })}
-        </span>
+    <section aria-label={t("settings.nav.about")} className="flex flex-col gap-3">
+      {/* 应用卡:logo+版本在左,更新动作在右——版本信息与它的动作同一行归组 */}
+      <div className="flex items-center gap-4 rounded-box border border-base-300 p-4">
+        <img src="/logo.png" alt="" aria-hidden className="h-12 w-12 rounded-2xl shadow-sm" />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-sm font-bold">{t("app.name")}</span>
+          <span className="truncate font-mono text-xs text-base-content/60">
+            {t("settings.about.version", {
+              version: info?.version ?? "—",
+              engine: info?.engine_version ?? t("settings.about.engineNotReady"),
+            })}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={found ? "btn btn-primary btn-sm shrink-0" : "btn btn-sm shrink-0"}
+          disabled={busy}
+          onClick={() => void (found ? install() : check())}
+        >
+          {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
+          {updateLabel}
+        </button>
       </div>
       {msg && (
         <div
@@ -108,15 +121,6 @@ export function AboutSection() {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className={found ? "btn btn-primary btn-sm" : "btn btn-sm"}
-          disabled={busy}
-          onClick={() => void (found ? install() : check())}
-        >
-          {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
-          {updateLabel}
-        </button>
         <button type="button" className="btn btn-sm" onClick={() => void exportLog()}>
           {t("settings.about.exportLog")}
         </button>

@@ -4,7 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { ChevronDown, CircleAlert, CircleStop, Clock3, Paperclip, SendHorizontal, X } from "lucide-react";
+import { CircleAlert, CircleStop, Clock3, Paperclip, SendHorizontal, X } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -15,45 +15,21 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
-import { useI18n, type MessageKey } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { sessionSetMode, sessionSetModel, sessionSetThink } from "@/lib/ipc/controls";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
-import {
-  filterModels,
-  groupMemberSections,
-  modelDisplay,
-  modelDisplayByName,
-  modelMenuTabs,
-  shouldShowModelExtras,
-  stripSourceSuffix,
-  SOURCE_MONKEYCODE,
-} from "@/lib/models/modelMenu";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
-import { useDismiss } from "@/lib/util/useDismiss";
+import { ModelMenu, ThinkMenu } from "./pickers";
 import type { ComposerCtl } from "./useComposer";
 
 const MAX_TEXTAREA_PX = 160;
 
+// 模型/思考档下拉的形态与逻辑收口在 ./pickers(新建任务页共用同一组件);
 // 模型展示投影(短名/档位)统一走 lib/models/modelMenu(protocol/reduce.ts
 // 的 model_update 系统行是同一剥名口径,几处必须一致)。
-
-const THINK_LEVELS = ["off", "low", "medium", "high"] as const;
-const THINK_KEY: Record<string, MessageKey> = {
-  off: "chat.think.off",
-  low: "chat.think.low",
-  medium: "chat.think.medium",
-  high: "chat.think.high",
-};
-/** 档位副文案(旧 chat.tsx THINK_LEVELS 的 hint 随迁,词条走 i18n)。 */
-const THINK_HINT_KEY: Record<string, MessageKey> = {
-  off: "chat.think.hint.off",
-  low: "chat.think.hint.low",
-  medium: "chat.think.hint.medium",
-  high: "chat.think.hint.high",
-};
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -76,11 +52,6 @@ export function Composer({
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const imeRef = useRef(createImeGuard());
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [picker, setPicker] = useState<"model" | "think" | null>(null);
-  // 模型菜单的过滤词与来源 tab:null =「跟随当前模型的来源」渲染期派生,
-  // 仅用户点击才落具体值——models 异步晚到/刷新时不会停在错误来源
-  const [modelFilter, setModelFilter] = useState("");
-  const [modelTab, setModelTab] = useState<string | null>(null);
 
   // 模型清单一次拉取(锁定项禁选;浏览器模式为空,触发器仍显当前名)
   useEffect(() => {
@@ -143,70 +114,18 @@ export function Composer({
   const mode = state.permMode || meta.mode || "default";
   const yolo = mode === "yolo";
 
-  // 模型菜单派生(纯逻辑在 lib/models/modelMenu):过滤框在模型多时才有
-  // 意义;tab 行只要 ≥2 来源就恒显(它是来源间唯一导航);过滤在 tab 内;
-  // 会员 tab 按档位/付费/我的/团队分节,其余来源平铺
-  const showModelExtras = shouldShowModelExtras(models.length);
-  const modelTabs = modelMenuTabs(models);
-  const showModelTabs = modelTabs.length >= 2;
-  // 当前来源归一必须 `|| ""`:自定义的 tab key 是空串,`??` 会把它吞成会员
-  const currentSource = models.find((m) => m.name === currentModel)?.source || "";
-  const wantTab = modelTab ?? currentSource;
-  const activeModelTab = modelTabs.some((tab) => tab.key === wantTab) ? wantTab : (modelTabs[0]?.key ?? "");
-  const modelTabItems = filterModels(
-    models.filter((m) => (m.source || "") === activeModelTab),
-    modelFilter,
-  );
-  const memberSections = activeModelTab === SOURCE_MONKEYCODE ? groupMemberSections(modelTabItems) : null;
-
-  const openModelPicker = () => {
-    setModelFilter("");
-    setModelTab(null); // 打开时回到「跟随当前模型来源」
-    setPicker("model");
-  };
   const pickModel = (name: string) => {
-    setPicker(null);
     if (!name || name === currentModel) return;
     void sessionSetModel(sessionId, name).catch((e) => {
       ctl.notifyError(t("chat.model.failed", { reason: errText(e) }));
     });
   };
   const pickThink = (level: string) => {
-    setPicker(null);
     if (level === effThink) return;
     void sessionSetThink(sessionId, level).catch((e) => {
       ctl.notifyError(t("chat.think.failed", { reason: errText(e) }));
     });
   };
-  // 模型条目渲染收口:会员分节内省略档位徽标(节头已表达);locked 条目
-  // 灰态禁选,title 说明解锁路径;onPick 必须用原始 name(引擎寻址键)
-  const modelItemOf = (m: ModelInfo, noTier = false) => {
-    const d = modelDisplay(m);
-    return (
-      <li key={m.name} className={m.locked ? "menu-disabled" : ""}>
-        <button
-          type="button"
-          disabled={m.locked}
-          title={m.locked ? `${stripSourceSuffix(m.name)} · ${t("chat.model.locked")}` : stripSourceSuffix(m.name)}
-          aria-current={m.name === currentModel ? "true" : undefined}
-          className={`flex items-center gap-2 ${m.name === currentModel ? "menu-active" : ""}`}
-          onClick={() => pickModel(m.name)}
-        >
-          <span className="min-w-0 flex-1 truncate text-xs">{d.label}</span>
-          {!noTier && d.tier && <span className="badge badge-ghost badge-xs shrink-0">{d.tier}</span>}
-          {m.default && <span className="shrink-0 text-[10px] opacity-50">{t("chat.model.default")}</span>}
-        </button>
-      </li>
-    );
-  };
-  // 关闭胶水:外点(pointerdown)+ Esc(window capture,截断全局审批链)。
-  // 不用 onBlur:WebKitGTK 点按钮不移焦点,relatedTarget 恒 null 会误关
-  // (机制注释见 lib/util/useDismiss)
-  const thinkBoxRef = useRef<HTMLDivElement | null>(null);
-  const modelBoxRef = useRef<HTMLDivElement | null>(null);
-  const closePicker = () => setPicker(null);
-  useDismiss(picker === "think", thinkBoxRef, closePicker);
-  useDismiss(picker === "model", modelBoxRef, closePicker);
   // 权限模式可运行中热切(壳侧支持;yolo 切入时壳自动放行挂起审批)
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -459,110 +378,19 @@ export function Composer({
           </button>
           <span className="min-w-0 flex-1" />
 
-          <div ref={thinkBoxRef} className={`dropdown dropdown-top dropdown-end shrink-0 ${picker === "think" ? "dropdown-open" : ""}`}>
-            <button
-              type="button"
-              disabled={state.running}
-              title={state.running ? t("chat.switchWhileRunning") : t("chat.think.tip")}
-              className="btn btn-ghost btn-xs font-normal text-base-content/60 disabled:opacity-40"
-              onClick={() => setPicker(picker === "think" ? null : "think")}
-            >
-              {t("chat.think.trigger", { label: t(THINK_KEY[effThink] ?? "chat.think.low") })}
-              <ChevronDown size={12} strokeWidth={1.75} aria-hidden className="opacity-60" />
-            </button>
-            {picker === "think" && (
-                <ul
-                  aria-label={t("chat.think.label")}
-                  className="dropdown-content menu w-52 flex-nowrap [&_li]:flex-nowrap rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
-                >
-                  {THINK_LEVELS.map((level) => (
-                    <li key={level}>
-                      <button
-                        type="button"
-                        aria-current={level === effThink ? "true" : undefined}
-                        className={`flex flex-col items-start gap-0 ${level === effThink ? "menu-active" : ""}`}
-                        onClick={() => pickThink(level)}
-                      >
-                        <span className="text-xs">{t(THINK_KEY[level] ?? "chat.think.low")}</span>
-                        {/* 档位副文案:一句话讲清速度/深度取舍(旧 UI hint 随迁) */}
-                        <span className="text-[10px] opacity-60">{t(THINK_HINT_KEY[level] ?? "chat.think.hint.low")}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-            )}
-          </div>
-
-          <div ref={modelBoxRef} className={`dropdown dropdown-top dropdown-end min-w-0 shrink ${picker === "model" ? "dropdown-open" : ""}`}>
-            <button
-              type="button"
-              disabled={state.running}
-              title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
-              className="btn btn-ghost btn-xs max-w-52 font-normal text-base-content/60 disabled:opacity-40"
-              onClick={() => (picker === "model" ? setPicker(null) : openModelPicker())}
-            >
-              <span className="min-w-0 truncate">
-                {modelDisplayByName(models, currentModel).label || t("chat.model.label")}
-              </span>
-              <ChevronDown size={12} strokeWidth={1.75} aria-hidden className="shrink-0 opacity-60" />
-            </button>
-            {picker === "model" && (
-              // dropdown-content 换 div 外壳:过滤框/来源 tab 固定在顶,
-              // 条目列表单独内滚(菜单长了不能把导航滚出视野)
-              <div className="dropdown-content flex max-h-72 w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
-                {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
-                    反而抢走键盘上下文(用户定案) */}
-                {showModelExtras && (
-                  <input
-                    aria-label={t("chat.model.filter")}
-                    placeholder={t("chat.model.filter")}
-                    className="input input-xs mb-1 w-full shrink-0"
-                    value={modelFilter}
-                    onChange={(e) => setModelFilter(e.target.value)}
-                  />
-                )}
-                {showModelTabs && (
-                  <div role="tablist" aria-label={t("chat.model.sourceTabs")} className="tabs tabs-border tabs-xs shrink-0">
-                    {modelTabs.map((tab) => (
-                      <button
-                        key={tab.key}
-                        type="button"
-                        role="tab"
-                        aria-selected={tab.key === activeModelTab}
-                        className={`tab ${tab.key === activeModelTab ? "tab-active" : ""}`}
-                        onClick={() => setModelTab(tab.key)}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <ul
-                  aria-label={t("chat.model.label")}
-                  className="menu w-full flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
-                >
-                  {modelTabItems.length === 0 && (
-                    <li className="menu-disabled">
-                      <span className="text-xs">
-                        {models.length === 0 ? t("chat.model.empty") : t("chat.model.noMatch")}
-                      </span>
-                    </li>
-                  )}
-                  {/* 会员 tab:档位/付费/我的/团队分节,节头恒显(每节都承载
-                      语义,条目内省略档位徽标);其余来源平铺 */}
-                  {memberSections !== null
-                    ? memberSections.map((s) => [
-                        <li key={`${s.label}-title`} className="menu-title flex flex-row items-baseline gap-2">
-                          <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                          {s.badge && <span className="shrink-0 text-[10px] font-normal">{s.badge}</span>}
-                        </li>,
-                        ...s.items.map((m) => modelItemOf(m, true)),
-                      ])
-                    : modelTabItems.map((m) => modelItemOf(m))}
-                </ul>
-              </div>
-            )}
-          </div>
+          <ThinkMenu
+            current={effThink}
+            onPick={pickThink}
+            disabled={state.running}
+            title={state.running ? t("chat.switchWhileRunning") : t("chat.think.tip")}
+          />
+          <ModelMenu
+            models={models}
+            current={currentModel}
+            onPick={pickModel}
+            disabled={state.running}
+            title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
+          />
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端。
               形态:daisyUI radial-progress + tooltip(精确 tokens);>85% 用

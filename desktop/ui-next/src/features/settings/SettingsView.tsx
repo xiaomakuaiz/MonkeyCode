@@ -6,7 +6,8 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { useEffect, useMemo, useState } from "react";
+import { Brain, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n, type Locale } from "@/lib/i18n";
 import {
@@ -38,6 +39,19 @@ type Section = "general" | "account" | "models" | "mcp" | "env" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** 设置行:左侧名称+说明、右侧控件,行间分隔线成组——桌面设置页惯例。 */
+function SettingRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-6 px-4 py-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-sm font-medium">{label}</span>
+        {hint && <span className="text-xs leading-relaxed text-base-content/50">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 /** 通用:外观主题 / 语言 / 提示音(仅桌面壳)。 */
 function GeneralSection() {
   const { t, locale } = useI18n();
@@ -64,56 +78,52 @@ function GeneralSection() {
   };
 
   return (
-    <section aria-label={t("settings.nav.general")} className="flex max-w-md flex-col gap-3">
-      <fieldset className="fieldset gap-1.5">
-        <legend className="fieldset-legend">{t("settings.appearance.theme")}</legend>
-        <select
-          className="select select-sm w-full"
-          aria-label={t("settings.appearance.theme")}
-          value={theme}
-          onChange={(e) => {
-            const next = e.target.value as Theme;
-            setTheme(next);
-            setThemeState(next);
-          }}
-        >
-          {THEMES.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-      </fieldset>
-      <fieldset className="fieldset gap-1.5">
-        <legend className="fieldset-legend">{t("settings.appearance.language")}</legend>
-        <select
-          className="select select-sm w-full"
-          aria-label={t("settings.appearance.language")}
-          value={locale}
-          onChange={(e) => setLocale(e.target.value as Locale)}
-        >
-          {LOCALES.map((l) => (
-            <option key={l.value} value={l.value}>
-              {l.label}
-            </option>
-          ))}
-        </select>
-      </fieldset>
-      {inDesktopShell() && (
-        <fieldset className="fieldset gap-1.5">
-          <legend className="fieldset-legend">{t("settings.general.sound")}</legend>
-          <label className="label cursor-pointer justify-start gap-3">
+    <section aria-label={t("settings.nav.general")} className="flex flex-col gap-2">
+      <div className="divide-y divide-base-300 rounded-box border border-base-300">
+        <SettingRow label={t("settings.appearance.theme")}>
+          <select
+            className="select select-sm w-48 shrink-0"
+            aria-label={t("settings.appearance.theme")}
+            value={theme}
+            onChange={(e) => {
+              const next = e.target.value as Theme;
+              setTheme(next);
+              setThemeState(next);
+            }}
+          >
+            {THEMES.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+        <SettingRow label={t("settings.appearance.language")}>
+          <select
+            className="select select-sm w-48 shrink-0"
+            aria-label={t("settings.appearance.language")}
+            value={locale}
+            onChange={(e) => setLocale(e.target.value as Locale)}
+          >
+            {LOCALES.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+        {inDesktopShell() && (
+          <SettingRow label={t("settings.general.sound")} hint={t("settings.general.soundHint")}>
             <input
               type="checkbox"
-              className="toggle toggle-sm"
+              className="toggle toggle-sm shrink-0"
               aria-label={t("settings.general.sound")}
               checked={soundOn}
               onChange={(e) => pickSound(e.target.checked)}
             />
-            <span className="text-xs text-base-content/60">{t("settings.general.soundHint")}</span>
-          </label>
-        </fieldset>
-      )}
+          </SettingRow>
+        )}
+      </div>
       <p className="text-xs text-base-content/50">{t("settings.appearance.hint")}</p>
     </section>
   );
@@ -133,30 +143,30 @@ function EnvSection({
   // 记忆的发行版可能已被卸载:保留为可见项而不是静默改值
   const missing = draft.kernelEnv.startsWith("wsl:") && !distros.includes(draft.kernelEnv.slice(4));
   return (
-    <section aria-label={t("settings.nav.env")} className="flex max-w-md flex-col gap-3">
-      <fieldset className="fieldset gap-1.5">
-        <legend className="fieldset-legend">{t("settings.env.kernel")}</legend>
-        <select
-          className="select select-sm w-full"
-          aria-label={t("settings.env.kernel")}
-          value={draft.kernelEnv}
-          onChange={(e) => onDraft((d) => ({ ...d, kernelEnv: e.target.value }))}
-        >
-          <option value="">{t("settings.env.local")}</option>
-          {distros.map((d) => (
-            <option key={d} value={`wsl:${d}`}>
-              WSL · {d}
-            </option>
-          ))}
-          {missing && (
-            <option value={draft.kernelEnv}>
-              WSL · {draft.kernelEnv.slice(4)}
-              {t("settings.env.missing")}
-            </option>
-          )}
-        </select>
-        <p className="text-xs text-base-content/50">{t("settings.env.hint")}</p>
-      </fieldset>
+    <section aria-label={t("settings.nav.env")} className="flex flex-col gap-2">
+      <div className="rounded-box border border-base-300">
+        <SettingRow label={t("settings.env.kernel")} hint={t("settings.env.hint")}>
+          <select
+            className="select select-sm w-48 shrink-0"
+            aria-label={t("settings.env.kernel")}
+            value={draft.kernelEnv}
+            onChange={(e) => onDraft((d) => ({ ...d, kernelEnv: e.target.value }))}
+          >
+            <option value="">{t("settings.env.local")}</option>
+            {distros.map((d) => (
+              <option key={d} value={`wsl:${d}`}>
+                WSL · {d}
+              </option>
+            ))}
+            {missing && (
+              <option value={draft.kernelEnv}>
+                WSL · {draft.kernelEnv.slice(4)}
+                {t("settings.env.missing")}
+              </option>
+            )}
+          </select>
+        </SettingRow>
+      </div>
     </section>
   );
 }
@@ -251,14 +261,17 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const items: Array<{ id: Section; label: string }> = [
-    { id: "general", label: t("settings.nav.general") },
-    { id: "account", label: t("settings.nav.account") },
-    { id: "models", label: t("settings.nav.models") },
-    { id: "mcp", label: t("settings.nav.mcp") },
-    ...(isWindowsShell() ? [{ id: "env" as const, label: t("settings.nav.env") }] : []),
-    { id: "about", label: t("settings.nav.about") },
+  const items: Array<{ id: Section; label: string; desc: string; icon: LucideIcon }> = [
+    { id: "general", label: t("settings.nav.general"), desc: t("settings.desc.general"), icon: SlidersHorizontal },
+    { id: "account", label: t("settings.nav.account"), desc: t("settings.desc.account"), icon: UserRound },
+    { id: "models", label: t("settings.nav.models"), desc: t("settings.desc.models"), icon: Brain },
+    { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: Server },
+    ...(isWindowsShell()
+      ? [{ id: "env" as const, label: t("settings.nav.env"), desc: t("settings.desc.env"), icon: SquareTerminal }]
+      : []),
+    { id: "about", label: t("settings.nav.about"), desc: t("settings.desc.about"), icon: Info },
   ];
+  const active = items.find((it) => it.id === section);
 
   // 需要壳配置的分区在拿不到配置时的降级提示(浏览器只读 / 载入失败)
   const configGate = !inDesktopShell() ? (
@@ -299,16 +312,17 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
         </button>
       </header>
       <div className="flex min-h-0 flex-1">
-        <nav aria-label={t("settings.title")} className="w-40 shrink-0 border-r border-base-300 p-2">
+        <nav aria-label={t("settings.title")} className="w-44 shrink-0 border-r border-base-300 p-2">
           <ul className="menu w-full gap-0.5 p-0">
             {items.map((it) => (
               <li key={it.id}>
                 <button
                   type="button"
-                  className={`transition-colors duration-150 ${section === it.id ? "menu-active" : ""}`}
+                  className={`gap-2.5 transition-colors duration-150 ${section === it.id ? "menu-active" : ""}`}
                   aria-current={section === it.id ? "page" : undefined}
                   onClick={() => setSection(it.id)}
                 >
+                  <it.icon size={15} strokeWidth={1.75} aria-hidden className="text-base-content/60" />
                   {it.label}
                 </button>
               </li>
@@ -317,8 +331,15 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           {/* 内容列居中收窄:阅读宽度稳定,分区排版不随窗宽漂移 */}
-          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
-            <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">{body()}</div>
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5">
+            <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
+              {/* 分区头:大标题+一句话说明(对齐旧工程设置屏的标题层级) */}
+              <header className="flex flex-col gap-1">
+                <h2 className="text-xl font-bold">{active?.label}</h2>
+                <p className="text-xs text-base-content/60">{active?.desc}</p>
+              </header>
+              {body()}
+            </div>
           </div>
           {/* 保存条:结构线贴底 */}
           {dirty && (

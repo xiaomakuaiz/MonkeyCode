@@ -5,18 +5,21 @@
 // - 模型:会员档匹配的内置档 → 公共 → 任意;locked(超会员档)禁选;
 // - 宿主机:服务端 task_defaults 有效则用,否则公共宿主;公共模型强制公共宿主;
 // - 镜像:公共 devbox → is_default → 第一个。
+import { Cloud, SendHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
+
+import { OptionMenu } from "@/features/chat/composer/pickers";
 
 import {
   cloudHostLabel,
   cloudImageLabel,
-  cloudModelLabel,
+  groupCloudModels,
+  groupedCloudModelLabel,
   isPublicModel,
   pickDefaultCloudHost,
   pickDefaultCloudImage,
   pickDefaultCloudModel,
   usableCloudHosts,
-  usableCloudModels,
 } from "@/lib/cloud/options";
 import { useI18n } from "@/lib/i18n";
 import { mcTaskCreate, mcTaskOptions, type CloudTaskDetail, type McTaskOptions } from "@/lib/ipc/cloudtasks";
@@ -57,7 +60,14 @@ export function NewCloudTask({
     };
   }, []);
 
-  const models = options ? usableCloudModels(options.models, options.plan) : [];
+  // 模型按档位/来源分组(基础/专业/旗舰/付费/我的/团队,移植旧 UI 口径);
+  // 触发器展示「组名 / 组内名」,组内名已剥去与组头重复的档位前缀
+  const modelGroups = options ? groupCloudModels(options.models, options.plan) : [];
+  const selectedModel = modelGroups.flatMap((g) => g.models).find((m) => m.id === modelId);
+  const selectedGroup = modelGroups.find((g) => g.models.some((m) => m.id === modelId));
+  const modelTriggerLabel = selectedModel
+    ? [selectedGroup?.label, groupedCloudModelLabel(selectedModel)].filter(Boolean).join(" / ")
+    : undefined;
   const publicModel = options ? isPublicModel(options.models, modelId) : false;
   const hosts = options ? usableCloudHosts(options.hosts, publicModel) : [];
   const images = options?.images ?? [];
@@ -91,17 +101,24 @@ export function NewCloudTask({
     }
   };
 
+  // 形态契约:本组件渲染"输入卡内容"(说明行/描述/配置行/提交行),外层卡片
+  // 容器由宿主(NewTaskModal)提供;独立使用时无卡片也可成立(测试即如此)
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">{t("cloud.new.title")}</h2>
+    <div className="flex min-w-0 flex-col">
+      {/* 与本地页文件夹触发器同高(mt-2 + h-8):切页签卡头不跳动 */}
+      <div className="mx-2 mt-2 flex h-8 items-center gap-2 px-2 text-xs text-base-content/50">
+        <Cloud size={13} strokeWidth={1.75} aria-hidden />
+        {t("create.hint.cloud")}
+      </div>
 
       {loadErr && (
-        <div role="alert" className="alert alert-error alert-soft py-1.5 text-xs">
+        <div role="alert" className="mx-3 my-3 alert alert-error alert-soft py-1.5 text-xs">
           {t("cloud.new.optionsFailed", { reason: loadErr })}
         </div>
       )}
       {!options && !loadErr && (
-        <div className="flex items-center gap-2 py-4 text-xs text-base-content/50">
+        // min-h ≈ 描述区+工具行的高度:选项到达/页签切换时卡片不塌陷回弹
+        <div className="flex min-h-36 items-center justify-center gap-2 px-4 text-xs text-base-content/50">
           <span className="loading loading-spinner loading-xs" aria-hidden />
           {t("cloud.new.loading")}
         </div>
@@ -109,86 +126,71 @@ export function NewCloudTask({
 
       {options && (
         <>
-          <fieldset className="fieldset">
-            <legend className="fieldset-legend">{t("cloud.new.content")}</legend>
-            <textarea
-              className="textarea textarea-sm min-h-20 w-full text-sm"
-              aria-label={t("cloud.new.content")}
-              placeholder={t("cloud.new.contentPlaceholder")}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-            />
-          </fieldset>
-
-          <fieldset className="fieldset">
-            <legend className="fieldset-legend">{t("cloud.new.model")}</legend>
-            <select
-              className="select select-sm w-full"
-              aria-label={t("cloud.new.model")}
+          <textarea
+            className="textarea min-h-24 w-full resize-none border-0 bg-transparent px-4 text-sm leading-relaxed shadow-none focus:outline-none"
+            rows={4}
+            autoFocus
+            aria-label={t("cloud.new.content")}
+            placeholder={t("cloud.new.contentPlaceholder")}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+          />
+          {/* 工具行(与本地页同构):运行配置选择器在左,提交钮同行在右 */}
+          <div className="flex min-w-0 items-center gap-1 px-2.5 pb-2.5">
+            <OptionMenu
+              ariaLabel={t("cloud.new.model")}
               value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id} disabled={m.locked}>
-                  {cloudModelLabel(m)}
-                  {m.locked ? t("cloud.model.locked") : ""}
-                </option>
-              ))}
-            </select>
-          </fieldset>
-
-          <fieldset className="fieldset">
-            <legend className="fieldset-legend">{t("cloud.new.host")}</legend>
-            <select
-              className="select select-sm w-full"
-              aria-label={t("cloud.new.host")}
+              triggerLabel={modelTriggerLabel}
+              onPick={setModelId}
+              sections={modelGroups.map((g) => ({
+                key: g.key,
+                label: g.label,
+                badge: g.badge,
+                options: g.models.map((m) => ({
+                  value: m.id ?? "",
+                  label: groupedCloudModelLabel(m),
+                  disabled: m.locked,
+                })),
+              }))}
+            />
+            <OptionMenu
+              ariaLabel={t("cloud.new.host")}
               value={effectiveHostId}
-              onChange={(e) => setHostId(e.target.value)}
+              onPick={setHostId}
               disabled={publicModel}
-            >
-              {hosts.map((hostItem) => (
-                <option key={hostItem.id} value={hostItem.id}>
-                  {cloudHostLabel(hostItem)}
-                </option>
-              ))}
-            </select>
-          </fieldset>
-
-          <fieldset className="fieldset">
-            <legend className="fieldset-legend">{t("cloud.new.image")}</legend>
-            <select
-              className="select select-sm w-full"
-              aria-label={t("cloud.new.image")}
+              options={hosts.map((hostItem) => ({ value: hostItem.id ?? "", label: cloudHostLabel(hostItem) }))}
+            />
+            <OptionMenu
+              ariaLabel={t("cloud.new.image")}
               value={imageId}
-              onChange={(e) => setImageId(e.target.value)}
+              onPick={setImageId}
+              options={images.map((img) => ({ value: img.id ?? "", label: cloudImageLabel(img) }))}
+            />
+            <span className="min-w-0 flex-1" />
+            {onCancel && (
+              <button type="button" className="btn btn-ghost btn-sm shrink-0" onClick={onCancel}>
+                {t("cloud.new.cancel")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm shrink-0 gap-1.5"
+              disabled={busy}
+              onClick={() => void submit()}
             >
-              {images.map((img) => (
-                <option key={img.id} value={img.id}>
-                  {cloudImageLabel(img)}
-                </option>
-              ))}
-            </select>
-          </fieldset>
+              {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
+              {t("cloud.new.submit")}
+              {!busy && <SendHorizontal size={12} strokeWidth={2} aria-hidden />}
+            </button>
+          </div>
         </>
       )}
 
       {error && (
-        <div role="alert" className="alert alert-error alert-soft py-1.5 text-xs">
+        <div role="alert" className="mx-3 mb-3 alert alert-error alert-soft py-1.5 text-xs">
           {error}
         </div>
       )}
-
-      <div className="flex justify-end gap-2">
-        {onCancel && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
-            {t("cloud.new.cancel")}
-          </button>
-        )}
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy || !options} onClick={() => void submit()}>
-          {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
-          {t("cloud.new.submit")}
-        </button>
-      </div>
     </div>
   );
 }

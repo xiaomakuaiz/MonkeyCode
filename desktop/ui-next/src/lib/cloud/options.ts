@@ -73,6 +73,60 @@ export function usableCloudModels(models: McCloudModel[], plan?: string): McClou
     .sort(byWeightThenName);
 }
 
+/** 组内展示名:剥掉与组头重复的档位前缀(「基础模型 / xxx」→「xxx」);
+ * 剥空则回退整名。移植旧 UI groupedCloudModelLabel,前缀按当前语言比对。 */
+export function groupedCloudModelLabel(model: McCloudModel): string {
+  const label = cloudModelLabel(model);
+  for (const key of ["cloud.model.tier.basic", "cloud.model.tier.pro", "cloud.model.tier.ultra"] as const) {
+    const prefix = t(key);
+    if (!label.startsWith(prefix)) continue;
+    const nested = label.slice(prefix.length).match(/^\s*\/\s*(.+)$/)?.[1]?.trim();
+    return nested || label;
+  }
+  return label;
+}
+
+export interface McCloudModelGroup {
+  key: string;
+  label: string;
+  badge?: string;
+  models: McCloudModel[];
+}
+
+/** 模型分组(移植旧 UI groupCloudModels):内置三档(基础/专业/旗舰)→
+ * 付费 → 我的 → 各团队;空组不出。locked 条目留在组内灰态展示。 */
+export function groupCloudModels(models: McCloudModel[], plan?: string): McCloudModelGroup[] {
+  const supported = usableCloudModels(models, plan);
+  const builtin: McCloudModelGroup[] = (
+    [
+      { key: "monkeycode-basic", label: t("cloud.model.tier.basic"), badge: t("cloud.badge.free") },
+      { key: "monkeycode-pro", label: t("cloud.model.tier.pro"), badge: t("cloud.badge.proFree") },
+      { key: "monkeycode-ultra", label: t("cloud.model.tier.ultra"), badge: t("cloud.badge.ultraFree") },
+    ] as const
+  ).map((group) => ({
+    ...group,
+    models: supported.filter((model) => builtinName(model.model) === group.key),
+  }));
+
+  const paid = supported.filter((model) => model.owner?.type === "public" && !builtinName(model.model));
+  const personal = supported.filter((model) => model.owner?.type === "private" && !builtinName(model.model));
+  const teams = new Map<string, McCloudModelGroup>();
+  for (const model of supported.filter((item) => item.owner?.type === "team" && !builtinName(item.model))) {
+    const name = model.owner?.name || t("cloud.group.team");
+    const key = `${model.owner?.id || name}:${name}`;
+    const group = teams.get(key) || { key, label: name, models: [] };
+    group.models.push(model);
+    teams.set(key, group);
+  }
+
+  return [
+    ...builtin,
+    { key: "paid", label: t("cloud.group.paid"), badge: t("cloud.badge.credits"), models: paid },
+    { key: "private", label: t("cloud.group.mine"), models: personal },
+    ...teams.values(),
+  ].filter((group) => group.models.length > 0);
+}
+
 /** 默认模型:会员档匹配的内置档 weight 最高 → 公共模型 → 任意可用。
  * locked 条目只展示不参与默认值(宁空不默认选禁用项)。 */
 export function pickDefaultCloudModel(models: McCloudModel[], plan?: string): string {

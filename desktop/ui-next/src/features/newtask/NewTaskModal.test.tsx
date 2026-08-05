@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -35,20 +35,30 @@ function stubShell(overrides: Record<string, (args?: Record<string, unknown>) =>
   return calls;
 }
 
+/** 目录输入框收进「最近目录」下拉(卡头句式触发器)后,取值/改值前先展开。 */
+async function openDirMenu() {
+  await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
+  return screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+}
+
 describe("新建任务", () => {
   it("默认本地模式:目录预填 ~/MonkeyCode,模型取默认且锁定项禁选", async () => {
     stubShell();
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
-    await waitFor(() => expect((screen.getByRole("combobox", { name: "模型" }) as HTMLSelectElement).value).toBe("gpt-5"));
-    expect((screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement).value).toBe("~/MonkeyCode");
-    expect((screen.getByRole("option", { name: "locked-pro" }) as HTMLOptionElement).disabled).toBe(true);
+    // 模型/思考档是 composer 同款菜单触发器(pickers.ModelMenu):文本即当前模型
+    await waitFor(() => expect(screen.getByRole("button", { name: "模型" }).textContent).toContain("gpt-5"));
+    const input = await openDirMenu();
+    expect(input.value).toBe("~/MonkeyCode");
+    await userEvent.click(screen.getByRole("button", { name: "模型" }));
+    const menu = screen.getByRole("list", { name: "切换模型" });
+    expect((within(menu).getByRole("button", { name: /locked-pro/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("本地 + 默认目录:createDir=true、think 缺省空串;创建成功回调并记忆模型", async () => {
     const calls = stubShell();
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
-    await waitFor(() => expect((screen.getByRole("combobox", { name: "模型" }) as HTMLSelectElement).value).toBe("gpt-5"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "模型" }).textContent).toContain("gpt-5"));
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     const create = calls.find((c) => c.cmd === "session_create");
@@ -61,6 +71,7 @@ describe("新建任务", () => {
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
     await userEvent.click(screen.getByRole("tab", { name: "本地会话" }));
+    expect(screen.queryByRole("button", { name: "最近目录" })).toBeNull();
     expect(screen.queryByRole("textbox", { name: "项目目录" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
@@ -71,7 +82,7 @@ describe("新建任务", () => {
   it("本地模式清空目录:前端拦截并提示,不发命令", async () => {
     const calls = stubShell();
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
-    await userEvent.clear(screen.getByRole("textbox", { name: "项目目录" }));
+    await userEvent.clear(await openDirMenu());
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     expect(screen.getByRole("alert").textContent).toContain("请先选择项目目录");
     expect(calls.some((c) => c.cmd === "session_create")).toBe(false);
@@ -96,7 +107,7 @@ describe("新建任务", () => {
     });
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
-    const input = screen.getByRole("textbox", { name: "项目目录" });
+    const input = await openDirMenu();
     await userEvent.clear(input);
     await userEvent.type(input, "/x/y");
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
@@ -148,7 +159,8 @@ describe("新建任务", () => {
     const calls = stubShell();
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: "思考深度" }), "high");
+    await userEvent.click(screen.getByRole("button", { name: "思考深度" }));
+    await userEvent.click(within(screen.getByRole("list", { name: "思考深度" })).getByRole("button", { name: /高/ }));
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(calls.find((c) => c.cmd === "session_create")?.args).toMatchObject({ think: "high" });
@@ -164,16 +176,15 @@ describe("新建任务", () => {
         recentDirs={["/a/proj", "/b/proj", "\\\\wsl$\\Ubuntu\\home\\u\\proj"]}
       />,
     );
-    const input = screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+    const input = await openDirMenu();
     await waitFor(() => expect(input.value).toBe("/a/proj"));
-    await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
     const menu = screen.getByRole("list", { name: "最近目录" });
     expect(menu.textContent).toContain("/a/proj");
     expect(menu.textContent).toContain("/b/proj");
     expect(menu.textContent).not.toContain("wsl$");
     await userEvent.click(screen.getByRole("button", { name: "/b/proj" }));
-    expect(input.value).toBe("/b/proj");
     expect(screen.queryByRole("list", { name: "最近目录" })).toBeNull();
+    expect((await openDirMenu()).value).toBe("/b/proj");
   });
 
   it("选择其他文件夹…:走系统目录选择并回填", async () => {
@@ -181,9 +192,9 @@ describe("新建任务", () => {
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
     await userEvent.click(screen.getByRole("button", { name: "选择其他文件夹…" }));
-    await waitFor(() =>
-      expect((screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement).value).toBe("/picked/dir"),
-    );
+    // 回填后卡头句式触发器展示所选目录(title 露全路径)
+    await waitFor(() => expect(screen.getByTitle("/picked/dir")).toBeDefined());
+    expect((await openDirMenu()).value).toBe("/picked/dir");
     expect(calls.some((c) => c.cmd === "plugin:dialog|open")).toBe(true);
   });
 
@@ -194,7 +205,7 @@ describe("新建任务", () => {
     });
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
-    const input = screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+    const input = await openDirMenu();
     await waitFor(() => expect(input.value).toBe("\\\\wsl$\\Ubuntu\\home\\u\\MonkeyCode"));
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
@@ -212,9 +223,8 @@ describe("新建任务", () => {
     render(
       <NewTaskModal open onClose={() => {}} onCreated={() => {}} recentDirs={["/home/u/proj", "C:\\dev\\proj", "relative\\x"]} />,
     );
-    const input = screen.getByRole("textbox", { name: "项目目录" }) as HTMLInputElement;
+    const input = await openDirMenu();
     await waitFor(() => expect(input.value).toBe("/home/u/proj"));
-    await userEvent.click(screen.getByRole("button", { name: "最近目录" }));
     const menu = screen.getByRole("list", { name: "最近目录" });
     expect(menu.textContent).toContain("/home/u/proj");
     expect(menu.textContent).toContain("C:\\dev\\proj");

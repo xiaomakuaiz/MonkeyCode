@@ -2,6 +2,7 @@
 // 表单只呈现核心字段(名称/协议/接口地址/API Key/模型标识/思考深度);
 // 高级字段(context_window/max_output/vision)与同步标记(source/locked/owner)
 // 留在草稿对象里随保存透传,不因编辑丢失。
+import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -36,8 +37,16 @@ export function ModelsSection({
   };
 
   return (
-    <section aria-label={t("settings.nav.models")} className="flex max-w-2xl flex-col gap-2">
-      {draft.models.length === 0 && <p className="text-sm text-base-content/60">{t("settings.models.empty")}</p>}
+    <section aria-label={t("settings.nav.models")} className="flex flex-col gap-2">
+      {draft.models.length === 0 && (
+        <div className="flex flex-col items-center gap-3 rounded-box border border-dashed border-base-300 px-6 py-10">
+          <p className="text-center text-xs text-base-content/50">{t("settings.models.empty")}</p>
+          <button type="button" className="btn btn-sm" onClick={add}>
+            <Plus size={14} strokeWidth={2} aria-hidden />
+            {t("settings.models.add")}
+          </button>
+        </div>
+      )}
       {draft.models.map((m, i) => {
         const open = expanded === i;
         return (
@@ -145,9 +154,12 @@ export function ModelsSection({
           </div>
         );
       })}
-      <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
-        {t("settings.models.add")}
-      </button>
+      {draft.models.length > 0 && (
+        <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
+          <Plus size={14} strokeWidth={2} aria-hidden />
+          {t("settings.models.add")}
+        </button>
+      )}
     </section>
   );
 }
