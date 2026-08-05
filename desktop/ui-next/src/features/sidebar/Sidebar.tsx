@@ -228,8 +228,10 @@ function ProjectDetails({
             </button>
           )}
         </summary>
-        {/* 组内不缩进:层级感靠组间留白 + 行内状态槽的天然错位,不靠嵌套缩进 */}
-        <ul className="ms-0 min-w-0 ps-0 before:hidden">
+        {/* 组内层级 = daisyUI menu 嵌套列表的原生缩进(旧 UI 的缩进阶梯,
+            2026-08-05 用户定案回归:项目头 → 任务行进一级 → 归档小节同任务
+            行 → 归档行再进一级);只隐藏嵌套竖线(before:hidden,既有指令) */}
+        <ul className="min-w-0 before:hidden">
           {rows(group.sessions, p)}
           {group.archivedSessions.length > 0 && (
             <li>
@@ -237,11 +239,7 @@ function ProjectDetails({
                 const open = (e.target as HTMLDetailsElement).open;
                 if (open !== archOpen) onToggleArchOpen(group.key);
               }}>
-                {/* 组内小节头:隐形状态槽对齐任务行文字(组内不缩进纪律下,
-                    层级感靠状态槽错位——顶到最左会和项目组头一个起跑线,
-                    读成平级,2026-08-05 用户报障);字号/字重都低于组头一档 */}
-                <summary className="flex items-center gap-2 text-[11px] text-base-content/40">
-                  <span aria-hidden className="status invisible" />
+                <summary className="text-[11px] text-base-content/40">
                   {t("sidebar.archivedTasks", { n: String(group.archivedSessions.length) })}
                 </summary>
                 <ul className="min-w-0 before:hidden">{rows(group.archivedSessions, p)}</ul>

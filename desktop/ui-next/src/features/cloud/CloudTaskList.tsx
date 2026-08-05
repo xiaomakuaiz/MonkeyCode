@@ -312,8 +312,8 @@ export function CloudTaskList({
     const state = groupTasks[key];
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
-      // 组内不缩进(与本地组同构):层级感靠组间留白,不靠嵌套缩进
-      <ul className="ms-0 min-w-0 ps-0 before:hidden">
+      // 组内层级 = menu 原生嵌套缩进(与本地组同构,2026-08-05 回归旧 UI 阶梯)
+      <ul className="min-w-0 before:hidden">
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
