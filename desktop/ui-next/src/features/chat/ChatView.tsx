@@ -619,10 +619,13 @@ export function ChatView({
       </header>
 
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
-          以内嵌条挂在 header 之下,恢复即消 */}
+          以内嵌条挂在 header 之下,恢复即消。形态 = 「header 的延长线」:
+          同 px-4 内距(文字与标题同一竖线)、同 border-b 分隔线、微量
+          warning 底,不用 alert 横幅(环境态是低声耳语,不是警报);
+          文案由壳带来(恢复中/恢复失败),warning 点保持状态中立 */}
       {conn && !conn.connected && (
-        <div role="status" className="alert alert-warning alert-soft shrink-0 rounded-none py-1.5 text-xs">
-          <span aria-hidden className="status status-warning status-xs animate-pulse" />
+        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-base-300 bg-warning/5 px-4 py-1.5 text-xs text-base-content/70">
+          <span aria-hidden className="status status-warning status-sm animate-pulse shrink-0" />
           <span className="min-w-0 flex-1 truncate" title={conn.text}>{conn.text}</span>
         </div>
       )}

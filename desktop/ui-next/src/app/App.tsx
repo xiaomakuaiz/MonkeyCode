@@ -7,7 +7,7 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { Cloud, FolderGit2, MessagesSquare, Settings, X } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleHelp, Cloud, FolderGit2, MessagesSquare, SendHorizontal, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
@@ -56,6 +56,14 @@ const NOTICE_TONE: Record<NoticeKind, string> = {
   done: "alert-success",
   error: "alert-error",
   queued: "alert-success",
+};
+
+/** kind → 语义图标(与 composer 反馈条同一套视觉语言:14px lucide)。 */
+const NOTICE_ICON: Record<NoticeKind, typeof CircleHelp> = {
+  ask: CircleHelp,
+  done: CircleCheck,
+  error: CircleAlert,
+  queued: SendHorizontal,
 };
 
 const NOTICE_TEXT: Record<NoticeKind, MessageKey> = {
@@ -458,8 +466,11 @@ export function App() {
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭 */}
       {notices.length > 0 && (
         <div className="toast toast-top toast-end z-50 mt-9" aria-label={t("notice.label")}>
-          {notices.map((n) => (
-            <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs`}>
+          {notices.map((n) => {
+            const Icon = NOTICE_ICON[n.kind];
+            return (
+            <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs shadow-sm`}>
+              <Icon size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
               <button
                 type="button"
                 className="link link-hover max-w-64 min-w-0 truncate text-left"
@@ -476,7 +487,8 @@ export function App() {
                 <X size={14} strokeWidth={1.75} aria-hidden />
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <DownloadsDock />

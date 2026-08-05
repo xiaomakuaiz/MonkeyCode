@@ -4,7 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { ChevronDown, CircleStop, Paperclip, SendHorizontal, X } from "lucide-react";
+import { ChevronDown, CircleAlert, CircleStop, Clock3, Paperclip, SendHorizontal, X } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -297,8 +297,11 @@ export function Composer({
 
   return (
     <div className="flex flex-col gap-2">
+      {/* composer 域的两条瞬态反馈,统一形态:soft 底 + 14px 语义图标 +
+          truncate 正文 + 右端关闭;-mx-2.5 与输入卡同出血,左右缘对齐 */}
       {ctl.error && (
-        <div role="alert" className="alert alert-error px-3 py-1.5 text-xs">
+        <div role="alert" className="alert alert-error alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
+          <CircleAlert size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">{ctl.error}</span>
           <button
             type="button"
@@ -312,9 +315,10 @@ export function Composer({
       )}
 
       {ctl.queued && (
-        <div className="alert flex items-center gap-2 px-3 py-1.5 text-xs">
-          <span className="badge badge-ghost badge-sm shrink-0">{t("chat.queued")}</span>
-          <span className="min-w-0 flex-1 truncate font-medium">{ctl.queued}</span>
+        <div className="alert alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
+          <Clock3 size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+          <span className="shrink-0 font-medium">{t("chat.queued")}</span>
+          <span className="min-w-0 flex-1 truncate">{ctl.queued}</span>
           <span className="shrink-0 text-base-content/50">{t("chat.queuedHint")}</span>
           <button
             type="button"
