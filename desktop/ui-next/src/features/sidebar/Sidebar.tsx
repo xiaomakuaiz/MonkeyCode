@@ -9,10 +9,12 @@
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
+// 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
 import { Archive, Folder, Inbox, MessageSquare, MessagesSquare, Plus, RefreshCw, SquareTerminal } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
+import { GroupLabel, ListRow, SectionFold, StatusSlot } from "@/features/sidebar/listKit";
 import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -32,7 +34,7 @@ import {
   writeSessionArchivesOpen,
   type ProjectGroup,
 } from "@/lib/util/projects";
-import { readFold, writeFold, type Space } from "@/lib/util/prefs";
+import type { Space } from "@/lib/util/prefs";
 
 export interface SidebarActions {
   onSelect: (meta: SessionMeta) => void;
@@ -46,7 +48,7 @@ export interface SidebarActions {
 
 type T = ReturnType<typeof useI18n>["t"];
 
-function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean }) {
+function SessionSlot({ meta, attention }: { meta: SessionMeta; attention?: boolean }) {
   // 后台提醒未读(D3):终态也用警示色点出来,点开行即消
   const tone = meta.waiting_ask
     ? "status-warning animate-pulse"
@@ -57,18 +59,8 @@ function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean
         : meta.status === "error"
           ? "status-error"
           : null;
-  // 定宽 12px 槽与组头图标同列;静默行给任务身份图标(裸文字顶行首太秃,
-  // 用户定案 2026-08-05),要紧态彩点顶掉图标(工具卡 ⏸ 顶点同模式)
-  const Icon = meta.kind === "chat" ? MessageSquare : SquareTerminal;
-  return (
-    <span aria-hidden className="flex w-3 shrink-0 justify-center">
-      {tone ? (
-        <span className={`status ${tone}`} />
-      ) : (
-        <Icon size={12} strokeWidth={1.75} className="text-base-content/40" />
-      )}
-    </span>
-  );
+  // 静默行身份图标:本地任务 SquareTerminal / 对话 MessageSquare
+  return <StatusSlot tone={tone} icon={meta.kind === "chat" ? MessageSquare : SquareTerminal} />;
 }
 
 /** 行状态尾注(安静行定案):仅要紧态给着色词,静默态无尾注(轮次进 tooltip)。 */
@@ -130,23 +122,17 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
     { label: t("sidebar.row.delete"), confirm: t("sidebar.row.deleteConfirm"), danger: true, run: () => p.actions.onDelete(meta) },
   ];
   return (
-    <li>
-      <a
-        className={`flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${indent ?? ""} ${meta.id === p.currentId ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
-        data-attention={attention ? "" : undefined}
-        title={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
-        onClick={() => p.actions.onSelect(meta)}
-        onContextMenu={(e: MouseEvent) => {
-          e.preventDefault();
-          e.stopPropagation();
-          openMenu({ x: e.clientX, y: e.clientY }, menuItems);
-        }}
-      >
-        <StatusDot meta={meta} attention={attention} />
-        <span className="min-w-0 flex-1 truncate">{primary}</span>
-        {trailing && <span className={`max-w-16 shrink-0 truncate text-xs ${trailing.cls}`}>{trailing.text}</span>}
-      </a>
-    </li>
+    <ListRow
+      primary={primary}
+      slot={<SessionSlot meta={meta} attention={attention} />}
+      trailing={trailing}
+      tooltip={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
+      indent={indent}
+      active={meta.id === p.currentId}
+      attention={attention}
+      onSelect={() => p.actions.onSelect(meta)}
+      menuItems={menuItems}
+    />
   );
 }
 
@@ -229,10 +215,7 @@ function ProjectDetails({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
         >
-          <Folder size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-base-content/50">
-            {group.name}
-          </span>
+          <GroupLabel icon={Folder} name={group.name} />
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           {/* 快捷钮常驻占位、hover 只切可见性:插入式显隐会挤动项目名,鼠标一进一出就抖 */}
           {!archivedProject && (
@@ -283,41 +266,6 @@ function ProjectDetails({
             </li>
           )}
         </ul>
-      </details>
-    </li>
-  );
-}
-
-/** 底部折叠段(已归档项目/已归档会话):开合态走旧 UI 契约键。 */
-function FoldSection({
-  label,
-  foldKey,
-  children,
-}: {
-  label: string;
-  foldKey: "mc.archivedOpen" | "mc.projectArchiveOpen";
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState<boolean>(() => readFold(foldKey));
-  return (
-    <li>
-      <details
-        open={open}
-        onToggle={(e) => {
-          if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
-          const next = e.currentTarget.open;
-          setOpen(next);
-          writeFold(foldKey, next);
-        }}
-      >
-        {/* 与项目内归档小节同构:Archive 图标行首(裸放 flex 行,同 Folder)、
-            去 menu 默认尾箭头 */}
-        <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
-          <Archive size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-        </summary>
-        {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
-        {open && <ul className="ms-0 min-w-0 ps-0 before:hidden">{children}</ul>}
       </details>
     </li>
   );
@@ -483,9 +431,9 @@ export function Sidebar({
         <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
           {rows(active, p)}
           {archived.length > 0 && (
-            <FoldSection label={t("sidebar.archivedChats")} foldKey="mc.archivedOpen">
+            <SectionFold label={t("sidebar.archivedChats")} foldKey="mc.archivedOpen">
               {rows(archived, p, "ps-6")}
-            </FoldSection>
+            </SectionFold>
           )}
         </ul>
       );
@@ -527,7 +475,7 @@ export function Sidebar({
           />
         ))}
         {grouped.archivedProjects.length > 0 && (
-          <FoldSection
+          <SectionFold
             label={t("sidebar.archivedProjects")}
             foldKey="mc.projectArchiveOpen"
           >
@@ -544,7 +492,7 @@ export function Sidebar({
                 archivedProject
               />
             ))}
-          </FoldSection>
+          </SectionFold>
         )}
       </ul>
     );
