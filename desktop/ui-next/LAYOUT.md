@@ -103,6 +103,9 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
   也是 `column wrap`**(2026-08-04 溢出事故根因:只改顶层 ul 管不到行,
   嵌套行照样冲出行底)。列表级 menu 一律
   `w-full flex-nowrap [&_li]:flex-nowrap`,行内文字走 min-w-0+truncate 链。
+  **浮层菜单(dropdown-content / contextMenu)同样适用**——定宽(w-64 等)
+  替代 w-full,`[&_li]:flex-nowrap` 一个都不能少(2026-08-05 大纲面板
+  时间被长摘要挤出即此因,行尾元素消失 = 先查这条)。
 
 ## 7. 拖拽区铁律(mac/Windows 自绘 chrome)
 - Tauri 按**事件目标自身**是否带 `data-tauri-drag-region` 判定,**不继承**:

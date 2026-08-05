@@ -261,7 +261,7 @@ export function NewTaskModal({
                 {dirMenu && (
                     <ul
                       aria-label={t("create.recentDirs")}
-                      className="dropdown-content menu max-h-56 w-full flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+                      className="dropdown-content menu max-h-56 w-full flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
                     >
                       {recents.map((p) => (
                         <li key={p}>

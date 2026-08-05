@@ -126,7 +126,7 @@ export function OutlineNav({
         {open && (
           <ul
             ref={panelRef}
-            className="dropdown-content menu max-h-[70vh] w-64 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+            className="dropdown-content menu max-h-[70vh] w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
           >
             {entries.map((e) => (
               <li key={e.seq}>

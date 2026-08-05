@@ -570,7 +570,7 @@ export function ChatView({
             <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
           </button>
           {menuOpen && (
-            <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 rounded-box bg-base-100 p-2 shadow-sm">
+            <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
               <li role="none">
                 <button
                   type="button"

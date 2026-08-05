@@ -339,7 +339,7 @@ export function Composer({
           <ul
             role="listbox"
             aria-label={t("chat.slash.label")}
-            className="dropdown-content menu max-h-64 w-80 flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+            className="dropdown-content menu max-h-64 w-80 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
           >
             {list.length === 0 && (
               <li className="menu-disabled">
@@ -456,7 +456,7 @@ export function Composer({
             {picker === "think" && (
                 <ul
                   aria-label={t("chat.think.label")}
-                  className="dropdown-content menu w-52 rounded-box bg-base-100 p-2 shadow-sm"
+                  className="dropdown-content menu w-52 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm"
                 >
                   {THINK_LEVELS.map((level) => (
                     <li key={level}>
@@ -522,7 +522,7 @@ export function Composer({
                 )}
                 <ul
                   aria-label={t("chat.model.label")}
-                  className="menu w-full flex-nowrap overflow-x-hidden overflow-y-auto p-0"
+                  className="menu w-full flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
                 >
                   {modelTabItems.length === 0 && (
                     <li className="menu-disabled">
