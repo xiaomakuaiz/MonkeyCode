@@ -64,10 +64,11 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
 载体 = menu 的 li>a)
 - **行一律单行**:状态槽 + 主文案(**摘要优先**,缺席回落标题;标题进
   tooltip)+ 状态尾注殿后;云端行同构(标题‖摘要 + 状态尾注)。
-- **安静行**:静默态(N 轮/可继续/未开始/已完成)**无点无尾注**——状态槽
-  常驻 invisible 占位(活↔静切换不位移,合 §6.2 hover 铁律),轮次/终态
-  词收进行 tooltip;要紧态才显形:彩点 + 着色尾注(等待确认 warning /
-  运行中 primary / 运行出错 error / 未读 attention warning)。
+- **安静行**:静默态(N 轮/可继续/未开始/已完成)**无尾注**,状态槽显
+  任务身份图标(本地 SquareTerminal / 对话 MessageSquare,/40;裸文字顶
+  行首太秃,2026-08-05 用户定案),轮次/终态词收进行 tooltip;要紧态
+  彩点顶掉图标 + 着色尾注(等待确认 warning / 运行中 primary / 运行出错
+  error / 未读 attention warning)——槽位定宽 12px,活↔静切换不位移。
   **不展示时间**(用户定案)。
 - 选中 = menu-active;attention(D3 未读)= warning 状态点 + bg-warning/10
   行淡底(功能性状态色,§8 白名单)。

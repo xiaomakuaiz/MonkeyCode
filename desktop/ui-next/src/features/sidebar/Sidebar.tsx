@@ -9,7 +9,7 @@
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
-import { Archive, Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
+import { Archive, Folder, Inbox, MessageSquare, MessagesSquare, Plus, RefreshCw, SquareTerminal } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -47,8 +47,7 @@ export interface SidebarActions {
 type T = ReturnType<typeof useI18n>["t"];
 
 function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean }) {
-  // 后台提醒未读(D3):终态也用警示色点出来,点开行即消;
-  // 静默行:状态槽只占位不显形(活↔静切换不位移;一眼只看到标题)
+  // 后台提醒未读(D3):终态也用警示色点出来,点开行即消
   const tone = meta.waiting_ask
     ? "status-warning animate-pulse"
     : attention
@@ -57,12 +56,17 @@ function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean
         ? "status-primary animate-pulse"
         : meta.status === "error"
           ? "status-error"
-          : "invisible";
+          : null;
+  // 定宽 12px 槽与组头图标同列;静默行给任务身份图标(裸文字顶行首太秃,
+  // 用户定案 2026-08-05),要紧态彩点顶掉图标(工具卡 ⏸ 顶点同模式)
+  const Icon = meta.kind === "chat" ? MessageSquare : SquareTerminal;
   return (
-    // 定宽 12px 槽 = 与组头图标同列宽:缩进阶梯单位统一成「图标宽」,
-    // 同级行文字(任务行 ↔ 归档小节头)才对得齐(用户定案 2026-08-05)
     <span aria-hidden className="flex w-3 shrink-0 justify-center">
-      <span className={`status ${tone}`} />
+      {tone ? (
+        <span className={`status ${tone}`} />
+      ) : (
+        <Icon size={12} strokeWidth={1.75} className="text-base-content/40" />
+      )}
     </span>
   );
 }
