@@ -9,7 +9,7 @@
 // - 组件一律 daisyUI 原生形态:menu(details 折叠)、status 状态点、badge、
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
-import { Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
+import { Archive, Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList } from "@/features/cloud/CloudTaskList";
@@ -47,13 +47,24 @@ export interface SidebarActions {
 type T = ReturnType<typeof useI18n>["t"];
 
 function StatusDot({ meta, attention }: { meta: SessionMeta; attention?: boolean }) {
-  if (meta.waiting_ask) return <span aria-hidden className="status status-warning animate-pulse" />;
-  // 后台提醒未读(D3):终态也用警示色点出来,点开行即消
-  if (attention) return <span aria-hidden className="status status-warning" />;
-  if (meta.status === "running") return <span aria-hidden className="status status-primary animate-pulse" />;
-  if (meta.status === "error") return <span aria-hidden className="status status-error" />;
+  // 后台提醒未读(D3):终态也用警示色点出来,点开行即消;
   // 静默行:状态槽只占位不显形(活↔静切换不位移;一眼只看到标题)
-  return <span aria-hidden className="status invisible" />;
+  const tone = meta.waiting_ask
+    ? "status-warning animate-pulse"
+    : attention
+      ? "status-warning"
+      : meta.status === "running"
+        ? "status-primary animate-pulse"
+        : meta.status === "error"
+          ? "status-error"
+          : "invisible";
+  return (
+    // 定宽 12px 槽 = 与组头图标同列宽:缩进阶梯单位统一成「图标宽」,
+    // 同级行文字(任务行 ↔ 归档小节头)才对得齐(用户定案 2026-08-05)
+    <span aria-hidden className="flex w-3 shrink-0 justify-center">
+      <span className={`status ${tone}`} />
+    </span>
+  );
 }
 
 /** 行状态尾注(安静行定案):仅要紧态给着色词,静默态无尾注(轮次进 tooltip)。 */
@@ -228,10 +239,10 @@ function ProjectDetails({
             </button>
           )}
         </summary>
-        {/* 组内层级 = daisyUI menu 嵌套列表的原生缩进(旧 UI 的缩进阶梯,
-            2026-08-05 用户定案回归:项目头 → 任务行进一级 → 归档小节同任务
-            行 → 归档行再进一级);只隐藏嵌套竖线(before:hidden,既有指令) */}
-        <ul className="min-w-0 before:hidden">
+        {/* 组内缩进阶梯:每级 = 图标宽 12px(ms-3 覆掉 menu 原生 1.5rem;
+            用户定案 2026-08-05 三次:图标大小即缩进长度,同级上下文字对齐,
+            状态槽/图标同为 12px 定宽槽);嵌套竖线仍隐藏 */}
+        <ul className="ms-3 min-w-0 ps-0 before:hidden">
           {rows(group.sessions, p)}
           {group.archivedSessions.length > 0 && (
             <li>
@@ -239,10 +250,16 @@ function ProjectDetails({
                 const open = (e.target as HTMLDetailsElement).open;
                 if (open !== archOpen) onToggleArchOpen(group.key);
               }}>
-                <summary className="text-[11px] text-base-content/40">
+                {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
+                <summary className="flex items-center gap-2 text-[11px] text-base-content/40 after:hidden">
+                  <span className="flex w-3 shrink-0 justify-center" aria-hidden>
+                    <Archive size={12} strokeWidth={1.75} />
+                  </span>
                   {t("sidebar.archivedTasks", { n: String(group.archivedSessions.length) })}
                 </summary>
-                <ul className="min-w-0 before:hidden">{rows(group.archivedSessions, p)}</ul>
+                {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
+                    占位空间(用户报障),条件渲染釜底抽薪 */}
+                {archOpen && <ul className="ms-3 min-w-0 ps-0 before:hidden">{rows(group.archivedSessions, p)}</ul>}
               </details>
             </li>
           )}
@@ -274,7 +291,8 @@ function FoldSection({
         }}
       >
         <summary className="text-xs text-base-content/50">{label}</summary>
-        <ul className="min-w-0 before:hidden">{children}</ul>
+        {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
+        {open && <ul className="ms-3 min-w-0 ps-0 before:hidden">{children}</ul>}
       </details>
     </li>
   );
