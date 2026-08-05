@@ -267,9 +267,9 @@ function ProjectDetails({
                 <summary
                   className={`flex items-center gap-2 ${archivedProject ? "ps-9" : "ps-6"} text-[11px] text-base-content/40 after:hidden`}
                 >
-                  <span className="flex w-3 shrink-0 justify-center" aria-hidden>
-                    <Archive size={12} strokeWidth={1.75} />
-                  </span>
+                  {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
+                      定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
+                  <Archive size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
                   {t("sidebar.archivedTasks", { n: String(group.archivedSessions.length) })}
                 </summary>
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
@@ -310,11 +310,10 @@ function FoldSection({
           writeFold(foldKey, next);
         }}
       >
-        {/* 与项目内归档小节同构:Archive 图标行首、去 menu 默认尾箭头 */}
+        {/* 与项目内归档小节同构:Archive 图标行首(裸放 flex 行,同 Folder)、
+            去 menu 默认尾箭头 */}
         <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
-          <span className="flex w-3 shrink-0 justify-center" aria-hidden>
-            <Archive size={12} strokeWidth={1.75} />
-          </span>
+          <Archive size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
           {label}
         </summary>
         {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
