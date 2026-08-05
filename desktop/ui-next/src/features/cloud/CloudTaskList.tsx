@@ -318,7 +318,7 @@ export function CloudTaskList({
   const projectGroup = (projectId: string, name: string) => {
     const isOpen = forceOpen || openGroups.has(projectId);
     return (
-    <li key={projectId} className="mt-2 first:mt-0">
+    <li key={projectId} className="mt-1 first:mt-0">
       <details
         open={isOpen}
         onToggle={(e) => {

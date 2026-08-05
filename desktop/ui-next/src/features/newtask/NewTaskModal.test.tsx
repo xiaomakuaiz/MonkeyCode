@@ -60,7 +60,7 @@ describe("新建任务", () => {
     const calls = stubShell();
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
-    await userEvent.click(screen.getByRole("tab", { name: "普通对话" }));
+    await userEvent.click(screen.getByRole("tab", { name: "本地会话" }));
     expect(screen.queryByRole("textbox", { name: "项目目录" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());

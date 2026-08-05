@@ -239,7 +239,7 @@ describe("聊天视图", () => {
     stubShell();
     render(<ChatView meta={{ ...META, kind: "chat", workdir: "" }} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    expect(screen.getByText("独立会话")).toBeTruthy();
+    expect(screen.getByText("本地会话")).toBeTruthy();
     expect(screen.queryByText("a")).toBeNull(); // chat 会话不显 workdir
   });
 

@@ -169,7 +169,8 @@ function ProjectDetails({
     },
   ];
   return (
-    <li className="mt-2 first:mt-0">
+    // 组间距 mt-1(用户定案 2026-08-05:mt-2 太散)
+    <li className="mt-1 first:mt-0">
       <details
         open={!collapsed}
         onToggle={(e) => {

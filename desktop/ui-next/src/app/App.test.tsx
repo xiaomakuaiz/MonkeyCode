@@ -155,7 +155,7 @@ describe("D3 后台会话提醒", () => {
     await waitFor(() =>
       expect(shell.calls.some((c) => c.cmd === "session_open" && c.args?.id === "c1")).toBe(true),
     );
-    expect(screen.getByRole("button", { name: "对话" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "本地会话" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByText("「闲聊会话」等待审批")).toBeNull(); // 打开即消
   });
 
@@ -220,7 +220,7 @@ describe("D8 列表增量与意图跳转", () => {
     await waitFor(() =>
       expect(shell.calls.some((c) => c.cmd === "session_open" && c.args?.id === "c1")).toBe(true),
     );
-    expect(screen.getByRole("button", { name: "对话" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "本地会话" }).getAttribute("aria-pressed")).toBe("true");
   });
 });
 

@@ -64,8 +64,8 @@ describe("侧栏(local 空间)", () => {
 
   it("概览块:空间标题 + 描述 + 统计(归档不计;等待确认仅 >0 时着色出现)", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    expect(screen.getByText("本地会话")).toBeTruthy();
-    expect(screen.getByText("按项目组织的本地 Agent 任务")).toBeTruthy();
+    expect(screen.getByText("本地任务")).toBeTruthy();
+    expect(screen.getByText("按本地项目组织的 Agent 任务")).toBeTruthy();
     expect(screen.getByText("1 项目")).toBeTruthy(); // beta 只剩归档任务,不计
     expect(screen.getByText("2 任务")).toBeTruthy();
     expect(screen.getByText("1 等待确认")).toBeTruthy();
