@@ -4,7 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { CircleStop, Paperclip, SendHorizontal, X } from "lucide-react";
+import { ChevronDown, CircleStop, Paperclip, SendHorizontal, X } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -12,7 +12,6 @@ import {
   useState,
   type ClipboardEvent,
   type CSSProperties,
-  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
@@ -33,6 +32,7 @@ import {
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
+import { useDismiss } from "@/lib/util/useDismiss";
 import type { ComposerCtl } from "./useComposer";
 
 const MAX_TEXTAREA_PX = 160;
@@ -199,17 +199,14 @@ export function Composer({
       </li>
     );
   };
-  // dropdown 容器的关闭胶水:焦点移出即收起(官方 dropdown 的外点关闭语义);
-  // Esc 就地拦截并阻断冒泡——不能让这一下落进全局审批链(esc = 不可逆拒绝)
-  const onPickerBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPicker(null);
-  };
-  const onPickerKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape" || picker === null) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setPicker(null);
-  };
+  // 关闭胶水:外点(pointerdown)+ Esc(window capture,截断全局审批链)。
+  // 不用 onBlur:WebKitGTK 点按钮不移焦点,relatedTarget 恒 null 会误关
+  // (机制注释见 lib/util/useDismiss)
+  const thinkBoxRef = useRef<HTMLDivElement | null>(null);
+  const modelBoxRef = useRef<HTMLDivElement | null>(null);
+  const closePicker = () => setPicker(null);
+  useDismiss(picker === "think", thinkBoxRef, closePicker);
+  useDismiss(picker === "model", modelBoxRef, closePicker);
   // 权限模式可运行中热切(壳侧支持;yolo 切入时壳自动放行挂起审批)
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -330,16 +327,18 @@ export function Composer({
         </div>
       )}
 
-      {/* 输入卡外框:结构线 + 默认底。斜杠面板挂 daisyUI dropdown 外壳
-          (受控 dropdown-open,焦点始终留在 textarea) */}
-      <div
-        className={`dropdown dropdown-top dropdown-start relative flex flex-col rounded-box border border-base-300 bg-base-100 ${slashOpen ? "dropdown-open" : ""}`}
-      >
+      {/* 输入卡外框:结构线 + 默认底,聚焦时边线加深。斜杠面板是卡内自绘
+          浮层(绝对定位,焦点始终留在 textarea)——**不得**给这层卡片挂
+          daisyUI dropdown 类:daisyUI 的隐藏规则是后代选择器
+          (`.dropdown:not(...) .dropdown-content`),外层 dropdown 处于关态
+          时会把嵌套在内的思考/模型菜单一并 display:none(思考菜单弹不出来
+          的根因,修复经历见 tasks/lessons.md) */}
+      <div className="relative flex flex-col rounded-box border border-base-300 bg-base-100 shadow-sm transition-colors focus-within:border-base-content/25">
         {slashOpen && (
           <ul
             role="listbox"
             aria-label={t("chat.slash.label")}
-            className="dropdown-content menu max-h-64 w-80 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+            className="menu absolute start-2 bottom-full z-50 mb-1 max-h-64 w-80 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
           >
             {list.length === 0 && (
               <li className="menu-disabled">
@@ -427,36 +426,44 @@ export function Composer({
           onPaste={onPaste}
         />
 
-        {/* min-w-0:长模型名可收缩截断,不得把发送按钮挤出卡片 */}
+        {/* min-w-0:长模型名可收缩截断,不得把发送按钮挤出卡片。
+            排布随旧 UI 口径:左端 = 模式 pill + 附件入口,右端 = 思考/模型/
+            用量/发送(输入侧元信息与动作) */}
         <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
           <button
             type="button"
             title={t("chat.mode.tip")}
-            className={`btn btn-xs ${yolo ? "btn-warning btn-soft" : "btn-ghost"}`}
+            className={`btn btn-xs ${yolo ? "btn-warning btn-soft" : "btn-ghost font-medium text-base-content/70"}`}
             onClick={toggleMode}
           >
             {yolo ? t("chat.mode.yolo") : t("chat.mode.default")}
           </button>
+          <button
+            type="button"
+            aria-label={t("chat.attach")}
+            title={t("chat.attachTip")}
+            className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60"
+            onClick={attach}
+          >
+            <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+          </button>
           <span className="min-w-0 flex-1" />
 
-          <div
-            className={`dropdown dropdown-top dropdown-end shrink-0 ${picker === "think" ? "dropdown-open" : ""}`}
-            onBlur={onPickerBlur}
-            onKeyDown={onPickerKeyDown}
-          >
+          <div ref={thinkBoxRef} className={`dropdown dropdown-top dropdown-end shrink-0 ${picker === "think" ? "dropdown-open" : ""}`}>
             <button
               type="button"
               disabled={state.running}
               title={state.running ? t("chat.switchWhileRunning") : t("chat.think.tip")}
-              className="btn btn-ghost btn-xs font-normal text-base-content/60"
+              className="btn btn-ghost btn-xs font-normal text-base-content/60 disabled:opacity-40"
               onClick={() => setPicker(picker === "think" ? null : "think")}
             >
               {t("chat.think.trigger", { label: t(THINK_KEY[effThink] ?? "chat.think.low") })}
+              <ChevronDown size={12} strokeWidth={1.75} aria-hidden className="opacity-60" />
             </button>
             {picker === "think" && (
                 <ul
                   aria-label={t("chat.think.label")}
-                  className="dropdown-content menu w-52 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm"
+                  className="dropdown-content menu w-52 flex-nowrap [&_li]:flex-nowrap rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
                 >
                   {THINK_LEVELS.map((level) => (
                     <li key={level}>
@@ -476,24 +483,23 @@ export function Composer({
             )}
           </div>
 
-          <div
-            className={`dropdown dropdown-top dropdown-end min-w-0 shrink ${picker === "model" ? "dropdown-open" : ""}`}
-            onBlur={onPickerBlur}
-            onKeyDown={onPickerKeyDown}
-          >
+          <div ref={modelBoxRef} className={`dropdown dropdown-top dropdown-end min-w-0 shrink ${picker === "model" ? "dropdown-open" : ""}`}>
             <button
               type="button"
               disabled={state.running}
               title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
-              className="btn btn-ghost btn-xs block max-w-52 truncate font-normal text-base-content/60"
+              className="btn btn-ghost btn-xs max-w-52 font-normal text-base-content/60 disabled:opacity-40"
               onClick={() => (picker === "model" ? setPicker(null) : openModelPicker())}
             >
-              {modelDisplayByName(models, currentModel).label || t("chat.model.label")}
+              <span className="min-w-0 truncate">
+                {modelDisplayByName(models, currentModel).label || t("chat.model.label")}
+              </span>
+              <ChevronDown size={12} strokeWidth={1.75} aria-hidden className="shrink-0 opacity-60" />
             </button>
             {picker === "model" && (
               // dropdown-content 换 div 外壳:过滤框/来源 tab 固定在顶,
               // 条目列表单独内滚(菜单长了不能把导航滚出视野)
-              <div className="dropdown-content flex max-h-72 w-64 flex-col overflow-hidden rounded-box bg-base-100 p-2 shadow-sm">
+              <div className="dropdown-content flex max-h-72 w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
                 {showModelExtras && (
                   <input
                     autoFocus
@@ -550,7 +556,6 @@ export function Composer({
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端。
               形态:daisyUI radial-progress + tooltip(精确 tokens);>85% 用
               功能性状态色示警(旧 ContextRing 的设计,组件官方化) */}
-          <span className="ms-auto" aria-hidden />
           {usagePct !== null && state.usage && (
             <div
               className="tooltip tooltip-top shrink-0"
@@ -568,15 +573,6 @@ export function Composer({
               />
             </div>
           )}
-          <button
-            type="button"
-            aria-label={t("chat.attach")}
-            title={t("chat.attachTip")}
-            className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60"
-            onClick={attach}
-          >
-            <Paperclip size={15} strokeWidth={1.75} aria-hidden />
-          </button>
           <button
             type="button"
             aria-label={t("chat.send")}

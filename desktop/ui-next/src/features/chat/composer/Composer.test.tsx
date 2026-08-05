@@ -290,6 +290,64 @@ describe("模型 / 思考深度 / 权限模式", () => {
   });
 });
 
+describe("picker 关闭胶水(WebKitGTK 焦点语义回归)", () => {
+  const MODELS: ModelInfo[] = [
+    { name: "m", default: true },
+    { name: "gpt-x@baizhi", default: false },
+  ];
+
+  it("焦点丢失(relatedTarget=null 的 focusout)不关菜单——壳内核点按钮不移焦点,blur 判外点必误关", async () => {
+    stubShell({ models: MODELS });
+    render(<ChatView meta={META} />);
+    await ready();
+    const trigger = screen.getByRole("button", { name: "m" });
+    await userEvent.click(trigger);
+    await screen.findByRole("list", { name: "切换模型" });
+    // WebKitGTK:mousedown 菜单内按钮时焦点直接清到 body,focusout 不带去向
+    fireEvent.blur(trigger, { relatedTarget: null });
+    expect(screen.getByRole("list", { name: "切换模型" })).toBeTruthy();
+  });
+
+  it("外点(pointerdown)关闭;菜单内 pointerdown 不关", async () => {
+    stubShell({ models: MODELS });
+    render(<ChatView meta={META} />);
+    const box = await ready();
+    await userEvent.click(screen.getByRole("button", { name: "思考·低" }));
+    const menu = await screen.findByRole("list", { name: "思考深度" });
+    fireEvent.pointerDown(menu); // 菜单内按下(还没 click)不许关——否则 click 落空
+    expect(screen.getByRole("list", { name: "思考深度" })).toBeTruthy();
+    fireEvent.pointerDown(box); // 点回输入框 = 外点
+    expect(screen.queryByRole("list", { name: "思考深度" })).toBeNull();
+  });
+
+  it("Esc 关闭菜单(window capture),不落到全局审批链", async () => {
+    const { ops, emit } = stubShell({ models: MODELS });
+    render(<ChatView meta={META} />);
+    await ready();
+    emit("frames:s1", [
+      { type: "permission-req", data: { id: "p1", title: "npm test", tool: "Bash" }, timestamp: 3, seq: 3 },
+    ]);
+    await waitFor(() => expect(screen.getByText("需要确认")).toBeTruthy());
+    await userEvent.click(screen.getByRole("button", { name: "思考·低" }));
+    await screen.findByRole("list", { name: "思考深度" });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("list", { name: "思考深度" })).toBeNull();
+    expect(sends(ops, "permission-resp")).toHaveLength(0); // esc = deny 不可逆,不能漏
+  });
+
+  it("结构守卫:思考/模型菜单不嵌进任何外层 dropdown(daisyUI 隐藏规则是后代选择器,外层关态会把内层菜单 display:none)", async () => {
+    stubShell({ models: MODELS });
+    render(<ChatView meta={META} />);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "思考·低" }));
+    const menu = await screen.findByRole("list", { name: "思考深度" });
+    const own = menu.closest(".dropdown");
+    expect(own?.classList.contains("dropdown-open")).toBe(true);
+    // 自己的 picker 容器之上不得再有 .dropdown 祖先(输入卡不许当 dropdown 用)
+    expect(own?.parentElement?.closest(".dropdown")).toBeNull();
+  });
+});
+
 describe("运行态 / 停止 / 排队", () => {
   it("运行条:思考中 + 停止(user-cancel 帧);工具执行中换文案", async () => {
     const { ops, emit } = stubShell();

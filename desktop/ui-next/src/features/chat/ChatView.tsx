@@ -12,14 +12,13 @@
 // rAF 节流的滚动跟踪算出(lib/util/scrollAnchor.outlineActiveSeq)。
 import { Ellipsis, FolderOpen, X } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type DragEvent,
-  type FocusEvent as ReactFocusEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -33,6 +32,7 @@ import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
 import { anchorScrollTop, findAnchor, outlineActiveSeq } from "@/lib/util/scrollAnchor";
 import { createImeGuard } from "@/lib/util/slash";
+import { useDismiss } from "@/lib/util/useDismiss";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
 import { LogList } from "./LogList";
@@ -67,6 +67,10 @@ export function ChatView({
   const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier, ensureLoaded } = useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
   const composer = useComposer(meta.id, state.running);
+  // 稳定引用:传给 memo 化 LogList 的回调、拖拽/原生落盘回调都经它取最新
+  // ctl,不随 composer 对象每渲染换新
+  const composerRef = useRef(composer);
+  composerRef.current = composer;
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
   // 待恢复的锚点;回放期间每批都重新对齐(上方内容变高也不漂),用户主动滚动后交还控制权
@@ -232,17 +236,25 @@ export function ChatView({
   };
 
   // markdown 工作区文件链接:判界(工作区外拒绝)→ repo_reveal 文件管理器
-  // 定位;失败走 composer 提示条(§3:会话内操作失败的法定位置)
-  const revealMarkdownLink = (path: string) => {
-    const rel = workspaceRelativePath(path, meta.workdir);
-    if (rel === null) {
-      composer.notifyError(t("chat.revealOutside"));
-      return;
-    }
-    void repoReveal(meta.id, rel).catch((e: unknown) => {
-      composer.notifyError(t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }));
-    });
-  };
+  // 定位;失败走 composer 提示条(§3:会话内操作失败的法定位置)。
+  // useCallback + 下面两个回读通道同理:LogList 已 memo,打字每敲一键
+  // ChatView 都重渲染,内联箭头函数会把整条消息流(每条 markdown 卡)
+  // 一起拖着重渲染——输入手感卡顿的根因
+  const revealMarkdownLink = useCallback(
+    (path: string) => {
+      const rel = workspaceRelativePath(path, meta.workdir);
+      if (rel === null) {
+        composerRef.current.notifyError(t("chat.revealOutside"));
+        return;
+      }
+      void repoReveal(meta.id, rel).catch((e: unknown) => {
+        composerRef.current.notifyError(t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }));
+      });
+    },
+    [meta.id, meta.workdir, t],
+  );
+  const uploadUrl = useCallback((p: string) => uploadFileURL(meta.id, p), [meta.id]);
+  const loadFullTool = useCallback((seq: number) => sessionFrame(meta.id, seq), [meta.id]);
 
   // ==== 标题重命名(D4):h1 双击进输入态。提交只发 sessionPatch,不乐观
   // 改 meta——壳广播 session-event,App 的列表 patch 回写 title 后新 meta
@@ -273,25 +285,19 @@ export function ChatView({
     setEditingTitle(false);
   }, [meta.id]);
 
-  // ==== 头部 ⋯ 菜单(重命名/归档/删除):受控 dropdown,焦点移出即收;
-  // 删除走二段确认(首点变「确认删除?」,再点才经 onDeleted 通知 App)。
-  // Esc 就地拦截并阻断冒泡——不能落进全局审批链(esc = 不可逆拒绝),
-  // 手法与 Composer 两个 picker 一致。 ====
+  // ==== 头部 ⋯ 菜单(重命名/归档/删除):受控 dropdown,外点/Esc 即收
+  // (pointerdown 判定,不吃 WebKitGTK 按钮不获焦的亏;Esc window capture
+  // 截断,不落进全局审批链——手法与 Composer 两个 picker 一致,见
+  // lib/util/useDismiss)。删除走二段确认(首点变「确认删除?」,再点才经
+  // onDeleted 通知 App)。 ====
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const menuBoxRef = useRef<HTMLDivElement | null>(null);
   const closeMenu = () => {
     setMenuOpen(false);
     setConfirmDelete(false);
   };
-  const onMenuBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) closeMenu();
-  };
-  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape" || !menuOpen) return;
-    e.preventDefault();
-    e.stopPropagation();
-    closeMenu();
-  };
+  useDismiss(menuOpen, menuBoxRef, closeMenu);
   useEffect(() => {
     // 切会话收起菜单(确认态属于上一个会话)
     closeMenu();
@@ -433,8 +439,6 @@ export function ChatView({
     };
   }, [changesToken, meta.id]);
   const dragDepth = useRef(0);
-  const composerRef = useRef(composer);
-  composerRef.current = composer;
   const onDragEnter = (e: DragEvent<HTMLElement>) => {
     if (![...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file")) return;
     e.preventDefault();
@@ -553,11 +557,7 @@ export function ChatView({
             <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
-        <div
-          className={`dropdown dropdown-end ${menuOpen ? "dropdown-open" : ""}`}
-          onBlur={onMenuBlur}
-          onKeyDown={onMenuKeyDown}
-        >
+        <div ref={menuBoxRef} className={`dropdown dropdown-end ${menuOpen ? "dropdown-open" : ""}`}>
           <button
             type="button"
             aria-label={t("chat.menu.label")}
@@ -671,10 +671,10 @@ export function ChatView({
             sessionId={meta.id}
             flashSeq={flashSeq ?? undefined}
             onOpenChildSession={setChildId}
-            uploadUrl={(p) => uploadFileURL(meta.id, p)}
+            uploadUrl={uploadUrl}
             onLocalLink={revealMarkdownLink}
             workdir={meta.workdir}
-            loadFullTool={(seq) => sessionFrame(meta.id, seq)}
+            loadFullTool={loadFullTool}
           />
         </div>
       </div>

@@ -4,7 +4,7 @@
 // 审批锚定:perm 带 toolCallId 且流里有同 id 工具卡时,按钮行嵌进那张卡
 // (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
 import { ChevronRight, File as FileIcon, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { Markdown } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
@@ -210,7 +210,10 @@ function renderItem(item: ChatItem, o: RenderOpts) {
   }
 }
 
-export function LogList({
+// memo:打字时 ChatView 每键重渲染(composer 草稿状态在那),消息流不能
+// 跟着整列重排(长会话逐键重渲染几百张 markdown 卡 = 输入卡顿)。前提是
+// 调用方传稳定引用回调(ChatView 侧 useCallback,见彼处注释)。
+export const LogList = memo(function LogList({
   state,
   sessionId,
   flashSeq,
@@ -413,4 +416,4 @@ export function LogList({
       )}
     </div>
   );
-}
+});
