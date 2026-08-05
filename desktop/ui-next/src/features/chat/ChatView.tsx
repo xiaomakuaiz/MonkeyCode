@@ -652,7 +652,10 @@ export function ChatView({
         onScroll={onScroll}
         onWheel={onLogWheel}
         onMouseDown={onLogMouseDown}
-        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3"
+        // scrollbar-gutter 两侧对称预留:经典滚动条(chrome.css 8px)只占
+        // 右侧时,内部居中列会整体左偏 4px,与页脚 composer 列(无滚动条,
+        // 真中线)对不齐——对称留槽让两列共享同一条中线
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 [scrollbar-gutter:stable_both-edges]"
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {hasMore && (
