@@ -70,20 +70,29 @@
 .md-code:hover [data-md-copy], .md-code [data-md-copy]:focus-visible { opacity: 1; }
 
 /* 代码高亮 token 配色:不用 hljs 官方主题 CSS(只分深浅两套,跟不上 35 套
- * daisyUI 主题)。以 base-content 为正文锚、语义色做点缀,随主题自适应;
+ * daisyUI 主题)。语义色给色相身份、base-content 掺混归一(oklab):
+ * 浅色主题把荧光压成墨色、深色主题把饱和提成粉彩,对比度由 base-content
+ * 兜底——语义色原色全强度直上会在激进主题(荧光/糖果系)里变成大色块
+ * (2026-08-05 用户报丑的根因)。关键字带字重,单色系主题也保区分度。
  * markdown 代码块与文件预览(CodeView)共用。 */
 .hljs { color: color-mix(in oklab, var(--color-base-content) 88%, var(--color-base-100)); }
 .hljs-comment, .hljs-quote { color: color-mix(in oklab, var(--color-base-content) 45%, var(--color-base-100)); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-doctag { color: var(--color-primary); }
-.hljs-string, .hljs-regexp, .hljs-addition { color: var(--color-success); }
+.hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-doctag {
+  color: color-mix(in oklab, var(--color-primary) 60%, var(--color-base-content));
+  font-weight: 600;
+}
+.hljs-string, .hljs-regexp, .hljs-addition { color: color-mix(in oklab, var(--color-success) 55%, var(--color-base-content)); }
 .hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet,
-.hljs-built_in, .hljs-variable, .hljs-template-variable { color: var(--color-secondary); }
-.hljs-title, .hljs-section, .hljs-type, .hljs-function { color: var(--color-accent); }
+.hljs-built_in, .hljs-variable, .hljs-template-variable { color: color-mix(in oklab, var(--color-secondary) 55%, var(--color-base-content)); }
+.hljs-title, .hljs-section, .hljs-type, .hljs-function { color: color-mix(in oklab, var(--color-accent) 55%, var(--color-base-content)); }
 .hljs-attr, .hljs-attribute, .hljs-name, .hljs-selector-id,
-.hljs-selector-class, .hljs-tag { color: var(--color-warning); }
+.hljs-selector-class, .hljs-tag { color: color-mix(in oklab, var(--color-warning) 50%, var(--color-base-content)); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
-.hljs-deletion { color: var(--color-error); background: color-mix(in oklab, var(--color-error) 10%, transparent); }
+.hljs-deletion {
+  color: color-mix(in oklab, var(--color-error) 60%, var(--color-base-content));
+  background: color-mix(in oklab, var(--color-error) 10%, transparent);
+}
 
 .md-scroll { max-width: 100%; margin: 0.8em 0; overflow-x: auto; overscroll-behavior-x: contain; }
 .md-scroll:focus-visible { outline: 2px solid color-mix(in oklab, var(--color-primary) 40%, transparent); outline-offset: 2px; }
