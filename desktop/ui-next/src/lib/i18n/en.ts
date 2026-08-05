@@ -192,7 +192,6 @@ export const en: Record<MessageKey, string> = {
   "chat.ask.submit": "Submit answers",
   "chat.ask.cancel": "Skip",
   "chat.ask.needAll": "Answer all questions first",
-  "chat.ask.answered": "Answered",
   "chat.ask.unanswered": "Not answered",
   "chat.ask.expired": "Question expired · not answered",
   "chat.tool.detail": "Tool details",

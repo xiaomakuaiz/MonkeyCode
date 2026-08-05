@@ -246,7 +246,7 @@ describe("LogList 上行管道注入(sendFrame)", () => {
     ]);
     // 乐观置态成立 = 走的确是注入 sender:本地 IPC 在非壳环境必 reject 回滚
     expect(screen.getByText("已允许")).toBeTruthy();
-    expect(screen.getByText("已回答")).toBeTruthy();
+    expect(screen.getByText("A").closest(".chat-end")).toBeTruthy(); // 答案按用户消息形态收卡
   });
 });
 

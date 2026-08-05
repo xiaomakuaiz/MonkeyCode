@@ -47,12 +47,15 @@ function UserBubble({
   const thumb = "block max-h-28 max-w-36 cursor-zoom-in rounded-box";
   return (
     <div
-      className={`group chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
+      className={`group chat chat-end relative rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
       data-user-seq={item.seq}
     >
-      {/* 时间在块顶(chat-header 官方槽):块可能很长,沉底会看不见 */}
-      <MessageTime timestamp={item.timestamp} className="chat-header" />
-      <div className="chat-bubble max-w-[85%] text-sm whitespace-pre-wrap select-text">
+      {/* 时间绝对定位在块顶空隙里(§6.2 允许的另一形态):不占流式高度,
+          消息节奏不因时间线变松 */}
+      <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 end-1" />
+      {/* 用户消息用 primary 着色(默认 chat-bubble 是 base-300 第三层底,
+          太淡;旧 UI 用户气泡同为强调色语义) */}
+      <div className="chat-bubble chat-bubble-primary max-w-[85%] text-sm whitespace-pre-wrap select-text">
         {body}
         {hasAtts && (
           <div className={`flex flex-wrap items-center gap-1.5 ${body ? "mt-2" : ""}`}>
@@ -152,27 +155,27 @@ function renderItem(item: ChatItem, o: RenderOpts) {
     case "user":
       return <UserBubble item={item} flash={item.seq !== undefined && item.seq === o.flashSeq} uploadUrl={o.uploadUrl} />;
     case "agent":
-      // 时间在块顶悬停显影:正文可能很长,沉底看不见(用户定案 2026-08-05)
+      // 时间绝对定位在块顶空隙(悬停显影,不占流式高度)
       return (
-        <div className="group flex flex-col">
-          <MessageTime timestamp={item.timestamp} className="self-start" />
+        <div className="group relative flex flex-col">
+          <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />
           <Markdown source={item.text} localImageUrl={o.uploadUrl} onLocalLink={o.onLocalLink} />
         </div>
       );
     case "thought":
-      // 与助手块同构:时间线在块上方(悬停块内即显影)
+      // 与助手块同构:时间线在块顶空隙
       return (
-        <div className="group flex flex-col">
-          <MessageTime timestamp={item.timestamp} className="self-start" />
+        <div className="group relative flex flex-col">
+          <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />
           <ThoughtBlock item={item} />
         </div>
       );
     case "tool":
       // 只读回放不递交锚定审批:工具卡不出内嵌按钮行,按 run/ok/fail 常态渲染。
-      // 时间线只在组首(非 joinPrev)卡上方——组中插时间行会撕开共享外框
+      // 时间线只在组首(非 joinPrev)卡顶空隙——组中插时间行会撕开共享外框
       return (
-        <div className="group flex flex-col">
-          {!o.joinPrev && <MessageTime timestamp={item.timestamp} className="self-start" />}
+        <div className="group relative flex flex-col">
+          {!o.joinPrev && <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />}
           <ToolCard
             item={item}
             perm={o.readonly ? undefined : o.anchors.get(item.tcId)}

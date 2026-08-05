@@ -75,9 +75,8 @@ describe("AI 提问卡", () => {
       ftype: "reply-question",
       payload: { request_id: "q1", answers_json: JSON.stringify({ "选哪个方案?": "方案 A" }), cancelled: false },
     });
-    // 乐观收卡:只读摘要
-    expect(screen.getByText("已回答")).toBeTruthy();
-    expect(screen.getByText("方案 A")).toBeTruthy();
+    // 乐观收卡:答案按用户消息形态靠右(chat-end 气泡)
+    expect(screen.getByText("方案 A").closest(".chat-end")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "提交回答" })).toBeNull();
   });
 
@@ -141,8 +140,7 @@ describe("AI 提问卡", () => {
       questions: [{ ...SINGLE.questions[0]!, answer: "方案 B" }],
     };
     render(<AskCard item={done} sessionId="s1" />);
-    expect(screen.getByText("已回答")).toBeTruthy();
-    expect(screen.getByText("方案 B")).toBeTruthy();
+    expect(screen.getByText("方案 B").closest(".chat-end")).toBeTruthy();
     expect(screen.queryByRole("radio")).toBeNull();
   });
 

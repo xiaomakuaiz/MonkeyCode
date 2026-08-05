@@ -191,7 +191,6 @@ export const zh = {
   "chat.ask.submit": "提交回答",
   "chat.ask.cancel": "跳过回答",
   "chat.ask.needAll": "请回答全部问题",
-  "chat.ask.answered": "已回答",
   "chat.ask.unanswered": "未回答",
   "chat.ask.expired": "提问已过期 · 未回答",
   "chat.tool.detail": "工具详情",

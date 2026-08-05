@@ -12,7 +12,9 @@ const CUSTOM_KEY = "__monkeycode_custom_answer__";
 
 type Answers = Record<string, string | string[]>;
 
-/** 已答/已跳过的只读摘要:问题 + 答案(无答案显"未回答")。 */
+/** 已答/已跳过的只读摘要。答案是用户说的话——按用户消息形态靠右渲染
+ * (chat-end 气泡,用户定案 2026-08-05),问题弱化居左;未答/跳过维持
+ * 弱化卡。 */
 function ReadonlyAsk({ item, local }: { item: AskItem; local: Answers | null }) {
   const { t } = useI18n();
   const answerOf = (q: AskQuestion): string => {
@@ -20,19 +22,36 @@ function ReadonlyAsk({ item, local }: { item: AskItem; local: Answers | null }) 
     return Array.isArray(a) ? a.join("、") : (a ?? "");
   };
   const answered = item.questions.some((q) => answerOf(q) !== "");
-  return (
-    <div role="status" className="card card-border bg-base-100">
-      <div className="flex flex-col gap-2 p-3 text-xs">
-        <span className={answered ? "badge badge-success badge-soft badge-xs" : "badge badge-ghost badge-xs"}>
-          {answered ? t("chat.ask.answered") : t("chat.ask.unanswered")}
-        </span>
-        {item.questions.map((q, qi) => (
-          <div key={qi} className="flex flex-col gap-0.5">
-            <span className="text-base-content/60">{q.question}</span>
-            <span className="font-medium whitespace-pre-wrap select-text">{answerOf(q) || t("chat.ask.unanswered")}</span>
-          </div>
-        ))}
+  if (!answered) {
+    return (
+      <div role="status" className="card card-border bg-base-100">
+        <div className="flex flex-col gap-2 p-3 text-xs">
+          <span className="badge badge-ghost badge-xs">{t("chat.ask.unanswered")}</span>
+          {item.questions.map((q, qi) => (
+            <span key={qi} className="text-base-content/60">
+              {q.question}
+            </span>
+          ))}
+        </div>
       </div>
+    );
+  }
+  return (
+    <div role="status" className="flex flex-col gap-1">
+      {item.questions.map((q, qi) => (
+        <div key={qi} className="flex flex-col gap-0.5">
+          <span className="self-start text-xs text-base-content/60">{q.question}</span>
+          {answerOf(q) ? (
+            <div className="chat chat-end">
+              <div className="chat-bubble chat-bubble-primary text-sm whitespace-pre-wrap select-text">
+                {answerOf(q)}
+              </div>
+            </div>
+          ) : (
+            <span className="text-xs text-base-content/50">{t("chat.ask.unanswered")}</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
