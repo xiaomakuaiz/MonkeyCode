@@ -83,9 +83,9 @@ describe("侧栏(local 空间)", () => {
   it("归档任务收进项目内「已归档任务 · N」小节(默认收起,点开并落契约键);chat 会话不出现", async () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(screen.queryByText("问了个问题")).toBeNull();
-    const section = detailsOf("已归档任务 · 1");
+    const section = detailsOf("已归档任务");
     expect(section.open).toBe(false);
-    await userEvent.click(screen.getByText("已归档任务 · 1"));
+    await userEvent.click(screen.getByText("已归档任务"));
     expect(section.open).toBe(true);
     expect(JSON.parse(localStorage.getItem("mc.sessionArchivesOpen") ?? "[]")).toContain("/p/beta");
   });
@@ -130,7 +130,7 @@ describe("侧栏(local 空间)", () => {
     const menu = contextMenuOf(summary);
     expect(within(menu).getByText("在此新建任务")).toBeTruthy();
     await userEvent.click(within(menu).getByText("归档项目"));
-    expect(screen.getByText("已归档项目 · 1")).toBeTruthy();
+    expect(screen.getByText("已归档项目")).toBeTruthy();
     expect(JSON.parse(localStorage.getItem("mc.archivedProjects") ?? "[]")).toContain("/p/alpha");
   });
 
@@ -153,7 +153,7 @@ describe("侧栏(chat/cloud 空间)", () => {
     localStorage.setItem("mc.archivedOpen", "1");
     const withArchived = [...SESSIONS, meta({ id: "老对话", workdir: "/hidden/c2", kind: "chat", archived: true })];
     render(<Sidebar space="chat" sessions={withArchived} currentId={null} actions={actions()} />);
-    expect(detailsOf("已归档会话 · 1").open).toBe(true);
+    expect(detailsOf("已归档会话").open).toBe(true);
   });
 
   it("cloud 空间渲染云端任务列表(无数据时空态)", async () => {
@@ -188,7 +188,7 @@ describe("后台提醒 attention(D3)", () => {
 describe("嵌套折叠互不串扰", () => {
   it("开合「已归档任务」小节不连带折叠所在项目(React toggle 合成冒泡守卫)", async () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
-    const sub = screen.getByText("已归档任务 · 1");
+    const sub = screen.getByText("已归档任务");
     await userEvent.click(sub); // 展开小节
     expect(screen.getByText("旧任务")).toBeTruthy();
     await userEvent.click(sub); // 收起小节

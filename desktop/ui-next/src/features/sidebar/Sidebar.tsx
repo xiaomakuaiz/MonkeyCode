@@ -269,8 +269,8 @@ function ProjectDetails({
                 >
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
-                  <Archive size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
-                  {t("sidebar.archivedTasks", { n: String(group.archivedSessions.length) })}
+                  <Archive size={12} strokeWidth={1.75} aria-hidden className="-mt-px shrink-0" />
+                  {t("sidebar.archivedTasks")}
                 </summary>
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
                     占位空间(用户报障),条件渲染釜底抽薪 */}
@@ -313,7 +313,7 @@ function FoldSection({
         {/* 与项目内归档小节同构:Archive 图标行首(裸放 flex 行,同 Folder)、
             去 menu 默认尾箭头 */}
         <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
-          <Archive size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+          <Archive size={12} strokeWidth={1.75} aria-hidden className="-mt-px shrink-0" />
           {label}
         </summary>
         {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
@@ -483,7 +483,7 @@ export function Sidebar({
         <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
           {rows(active, p)}
           {archived.length > 0 && (
-            <FoldSection label={t("sidebar.archivedChats", { n: String(archived.length) })} foldKey="mc.archivedOpen">
+            <FoldSection label={t("sidebar.archivedChats")} foldKey="mc.archivedOpen">
               {rows(archived, p, "ps-6")}
             </FoldSection>
           )}
@@ -528,7 +528,7 @@ export function Sidebar({
         ))}
         {grouped.archivedProjects.length > 0 && (
           <FoldSection
-            label={t("sidebar.archivedProjects", { n: String(grouped.archivedProjects.length) })}
+            label={t("sidebar.archivedProjects")}
             foldKey="mc.projectArchiveOpen"
           >
             {grouped.archivedProjects.map((group) => (
