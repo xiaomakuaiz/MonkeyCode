@@ -3,7 +3,7 @@
 // key = itemKey(state, i)——"加载更早"前插时 keyBase 左移,已渲染项不重挂载。
 // 审批锚定:perm 带 toolCallId 且流里有同 id 工具卡时,按钮行嵌进那张卡
 // (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
-import { File as FileIcon, Sparkles } from "lucide-react";
+import { ChevronRight, File as FileIcon, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 import { Markdown } from "@/components/markdown/Markdown";
@@ -19,25 +19,7 @@ import { thoughtMarkdown } from "@/lib/util/thoughtMarkdown";
 import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
 import { ToolCard } from "./cards/ToolCard";
-
-/** 消息时间:恒占位的行内 <time>,悬停所在消息块(group)时以透明度显影。
- * §6.2 hover 显隐铁律:元素常驻布局只切可见性,悬停不挤动周围内容
- * (旧 UI 的绝对定位浮标降级为行内呈现)。缺时间戳/坏值不渲染。 */
-function MessageTime({ timestamp, className = "" }: { timestamp?: number; className?: string }) {
-  if (timestamp === undefined || !Number.isFinite(timestamp)) return null;
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return null;
-  const hhmm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  return (
-    <time
-      dateTime={date.toISOString()}
-      title={date.toLocaleString()}
-      className={`text-[10px] text-base-content/40 opacity-0 transition-opacity select-none group-hover:opacity-100 ${className}`}
-    >
-      {hhmm}
-    </time>
-  );
-}
+import { MessageTime } from "./MessageTime";
 
 /** 用户气泡:正文 + 附件呈现(旧 UI logView 的信息布局)。附件两个来源互斥:
  * 本地会话走正文附件行约定(uploadUrl 回读工作区,点图看大图/点文件下载),
@@ -126,12 +108,21 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   const md = thoughtMarkdown(item.text);
   const summary = md.split("\n").find((l) => l.trim()) ?? "";
   return (
-    // 思考块走官方 collapse 形态;弱化收尾交给主题变量,不在组件上叠覆写
-    <details className="collapse-arrow collapse border border-base-300 bg-base-200">
-      <summary className="collapse-title min-h-0 py-2 text-xs text-base-content/60">
-        <Sparkles size={12} strokeWidth={1.75} aria-hidden className="me-1.5 inline-block align-[-1px]" />
-        {t("chat.thought")}
-        <span className="ml-2 opacity-70">{summary.slice(0, 80)}</span>
+    // 思考块走官方 collapse 形态(native details);展开指示与工具卡统一为
+    // 行尾 ChevronRight(open 态转 90°,弃 collapse-arrow 的另一套箭头语言,
+    // 用户定案 2026-08-05);时间与其他块一致 hover 显影(group 在 details 上)
+    <details className="group collapse border border-base-300 bg-base-200">
+      <summary className="collapse-title flex min-h-0 items-center gap-1.5 py-2 pe-3 text-xs text-base-content/60">
+        <Sparkles size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+        <span className="shrink-0">{t("chat.thought")}</span>
+        <span className="min-w-0 flex-1 truncate opacity-70">{summary.slice(0, 80)}</span>
+        <MessageTime timestamp={item.timestamp} className="shrink-0" />
+        <ChevronRight
+          size={12}
+          strokeWidth={1.75}
+          aria-hidden
+          className="shrink-0 text-base-content/40 transition-transform group-open:rotate-90"
+        />
       </summary>
       <div className="collapse-content border-s-2 border-base-300 text-xs">
         <Markdown source={md} className="opacity-80" />

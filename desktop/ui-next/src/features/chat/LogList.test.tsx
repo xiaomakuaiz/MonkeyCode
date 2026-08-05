@@ -295,3 +295,13 @@ describe("用户气泡附件呈现(附件行约定)", () => {
     expect(screen.getByRole("button", { name: "y.pdf" })).toBeTruthy();
   });
 });
+
+describe("思考块", () => {
+  it("带首片时间(hover 显影 <time>);展开指示与工具卡同语言(无 collapse-arrow)", () => {
+    const ts = new Date(2026, 7, 5, 9, 5).getTime();
+    const state = withItems([{ kind: "thought", text: "先看日志", timestamp: ts }]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    expect(container.querySelector("time")?.textContent).toBe("09:05");
+    expect(container.querySelector(".collapse-arrow")).toBeNull(); // 统一为行尾 chevron
+  });
+});

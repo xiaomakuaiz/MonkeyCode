@@ -96,14 +96,14 @@ function lastToolIndex(items: readonly ChatItem[], tcId: string): number {
 }
 
 /** 追加流式文本:streamKind 未断且末项同类则并入,否则新开一项。
- * timestamp 只记在 agent 项的首个分片上(正文气泡显示消息时间)。 */
+ * timestamp 只记在首个分片上(agent/thought 都要块级时间显影)。 */
 function appendStream(s: ChatState, kind: "agent" | "thought", text: string, timestamp?: number): ChatState {
   const items = s.items.slice();
   const last = items.at(-1);
   if (s.streamKind === kind && last && last.kind === kind) {
     items[items.length - 1] = { ...last, text: last.text + text };
   } else {
-    items.push({ kind, text, ...(kind === "agent" && timestamp !== undefined ? { timestamp } : {}) });
+    items.push({ kind, text, ...(timestamp !== undefined ? { timestamp } : {}) });
   }
   return { ...s, items, streamKind: kind };
 }
@@ -369,7 +369,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
     case "agent_message_chunk":
       return appendStream(s, "agent", toolContentText(u.content), timestamp);
     case "agent_thought_chunk":
-      return appendStream(s, "thought", toolContentText(u.content));
+      return appendStream(s, "thought", toolContentText(u.content), timestamp);
     case "tool_call": {
       // 云端 CLI 的"向用户提问"以 tool_call 形态出现,渲染为提问卡而非工具卡
       const askQs = isAskToolCall(u);
@@ -378,6 +378,7 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
         kind: "tool",
         tcId: u.toolCallId ?? "",
         title: u.title || u.kind || "工具调用",
+        ...(timestamp !== undefined ? { timestamp } : {}),
         ...(u.kind !== undefined ? { toolKind: u.kind } : {}),
         ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
         ...(u.rawOutput !== undefined ? { rawOutput: u.rawOutput } : {}),

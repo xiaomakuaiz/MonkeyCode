@@ -21,6 +21,7 @@ import { toolDetailFor, type ToolDetail } from "@/lib/tools/toolDetails";
 import { presentToolCall, toolDisplayName, type ToolTargetKind } from "@/lib/tools/toolLabels";
 import { FindingsCard, findingsReportFor } from "./FindingsCard";
 import { PermActions } from "./PermCard";
+import { MessageTime } from "../MessageTime";
 
 /** 进度滚动窗口:固定只展示最后几条,旧条目自然滚出。 */
 const FEED_WINDOW = 5;
@@ -232,9 +233,11 @@ export function ToolCard({
           </span>
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
         </span>
-        {/* 安静行:耗时 hover 显影(常驻占位只切透明度,§6.2 铁律) */}
+        {/* 安静行:时间/耗时 hover 显影(常驻占位只切透明度,§6.2 铁律)。
+            不挂 focus-within:点开详情后焦点留在行内,时间会粘住不退 */}
+        <MessageTime timestamp={item.timestamp} className="shrink-0" />
         {duration && (
-          <span className="font-mono text-base-content/40 tabular-nums opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <span className="font-mono text-base-content/40 tabular-nums opacity-0 transition-opacity group-hover:opacity-100">
             {duration}
           </span>
         )}

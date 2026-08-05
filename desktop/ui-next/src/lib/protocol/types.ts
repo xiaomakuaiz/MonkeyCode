@@ -138,6 +138,8 @@ export interface AgentItem {
 export interface ThoughtItem {
   kind: "thought";
   text: string;
+  /** 首个分片的帧时间(块级时间显影;流式续片不覆盖)。 */
+  timestamp?: number;
 }
 
 /** 工具调用卡。结构化字段(rawInput/rawOutput/content/locations/_meta)
@@ -147,6 +149,8 @@ export interface ToolItem {
   tcId: string;
   title: string;
   status: ToolStatus;
+  /** 开卡帧时间(块级时间显影;durationMs 另记耗时)。 */
+  timestamp?: number;
   /** 结果首行摘要(截 160 字符;失败时卡片外显) */
   out: string;
   /** 工具的完整结构化入参;卡片优先用它展示路径/命令/查询 */
