@@ -306,38 +306,47 @@ describe("思考块", () => {
   });
 });
 
-describe("长工具组折叠", () => {
-  const tools = (n: number): ChatItem[] =>
+describe("工具组聚合(摘要头 + 开合)", () => {
+  const tools = (n: number, runLast = false): ChatItem[] =>
     Array.from({ length: n }, (_, i) => ({
       kind: "tool" as const,
       tcId: `t${i + 1}`,
       title: "Bash",
-      status: "ok" as const,
+      status: runLast && i === n - 1 ? ("run" as const) : ("ok" as const),
       out: "",
       rawInput: { command: `step${i + 1}` },
     }));
 
-  it("≥6 张连续工具卡:默认显首 1 尾 3,中段收进「展开其余 N 步」", async () => {
-    const state = withItems(tools(7));
+  it("≥3 张终态组:默认收成摘要头「N 步 · 动作 ×N」;点开合", async () => {
+    const state = withItems(tools(4));
     const { container } = render(<LogList state={state} sessionId="s1" />);
     // 结构契约:包裹层仍与 items 一一对应
-    expect(container.firstElementChild?.children).toHaveLength(7);
-    expect(screen.getByText("step1")).toBeTruthy(); // 首
-    expect(screen.getByText("step5")).toBeTruthy(); // 尾 3
-    expect(screen.getByText("step7")).toBeTruthy();
-    expect(screen.queryByText("step2")).toBeNull(); // 中段折叠
-    expect(screen.queryByText("step4")).toBeNull();
+    expect(container.firstElementChild?.children).toHaveLength(4);
+    const header = screen.getByRole("button", { name: "工具调用组" });
+    expect(header.textContent).toContain("4 步");
+    expect(header.textContent).toContain("执行命令 ×4");
+    expect(screen.queryByText("step1")).toBeNull(); // 成员收起
 
-    await userEvent.click(screen.getByRole("button", { name: /展开其余 3 步/ }));
-    expect(screen.getByText("step2")).toBeTruthy();
+    await userEvent.click(header);
+    expect(screen.getByText("step1")).toBeTruthy();
     expect(screen.getByText("step4")).toBeTruthy();
-    expect(container.firstElementChild?.children).toHaveLength(7);
+    expect(container.firstElementChild?.children).toHaveLength(4);
+
+    await userEvent.click(screen.getByRole("button", { name: "工具调用组" }));
+    expect(screen.queryByText("step1")).toBeNull();
   });
 
-  it("5 张以内不折叠", () => {
-    render(<LogList state={withItems(tools(5))} sessionId="s1" />);
-    expect(screen.queryByRole("button", { name: /展开其余/ })).toBeNull();
-    expect(screen.getByText("step3")).toBeTruthy();
+  it("组内有运行中的卡:默认展开(当前动作要看得到)", () => {
+    render(<LogList state={withItems(tools(4, true))} sessionId="s1" />);
+    expect(screen.getByText("step4")).toBeTruthy(); // 运行中的那张可见
+    expect(screen.getByRole("button", { name: "工具调用组" })).toBeTruthy();
+  });
+
+  it("2 张不聚合(普通共享外框)", () => {
+    render(<LogList state={withItems(tools(2))} sessionId="s1" />);
+    expect(screen.queryByRole("button", { name: "工具调用组" })).toBeNull();
+    expect(screen.getByText("step1")).toBeTruthy();
+    expect(screen.getByText("step2")).toBeTruthy();
   });
 });
 

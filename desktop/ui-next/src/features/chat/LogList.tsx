@@ -15,6 +15,7 @@ import { isImagePath } from "@/lib/ipc/uploads";
 import { splitAttachments } from "@/lib/protocol/attLine";
 import { itemKey, permAnchors } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState, Frame, PermItem } from "@/lib/protocol/types";
+import { presentToolCall } from "@/lib/tools/toolLabels";
 import { thoughtMarkdown } from "@/lib/util/thoughtMarkdown";
 import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
@@ -241,10 +242,12 @@ export function LogList({
   /** 工具卡大字段回读通道(按帧 seq 取原帧);缺省只展示截断头部。 */
   loadFullTool?: (seq: number) => Promise<Frame>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // 长工具组折叠的展开记录(键 = 组首条目的 itemKey,keyBase 感知,前插
-  // 不漂移);仅内存,切会话重挂即复位
-  const [expandedStacks, setExpandedStacks] = useState<Set<number>>(new Set());
+  // 不漂移);仅内存,切会话重挂即复位。open/closed 双集合:用户手动开合
+  // 优先于「运行中默认展开、终态默认收起」的推导
+  const [openGroups, setOpenGroups] = useState<Set<number>>(new Set());
+  const [closedGroups, setClosedGroups] = useState<Set<number>>(new Set());
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
   // 工具卡自身的 run/ok/fail 流转代言(types.ts::PermItem.toolCallId 契约)
@@ -267,19 +270,21 @@ export function LogList({
     }
     return false;
   };
-  // 长工具组折叠(用户反馈 2026-08-05:连续调用组太长):同组可见工具卡
-  // ≥ FOLD_MIN 时默认只显首 FOLD_HEAD + 尾 FOLD_TAIL,中段收进「展开其余
-  // N 步」行;被折卡保 hidden 占位,DOM 仍与 items 一一对应。运行中新卡
-  // 追加在尾部,可见尾窗自然跟进
-  const FOLD_MIN = 6;
-  const FOLD_HEAD = 1;
-  const FOLD_TAIL = 3;
-  const stackInfo = new Map<number, { start: number; len: number; pos: number }>();
+  // 工具组聚合(用户定案 2026-08-05 二次:整串收一个块,头部给动作统计
+  // 「N 步 · 读取 ×3 · 写入 ×2」):同组可见工具卡 ≥ AGG_MIN 时聚合——
+  // 运行中/有待审批的组默认展开(要看得到当前动作与审批按钮),终态组
+  // 默认收起;点头部行开合(思考块同交互),用户手动开合优先于默认。
+  // 被收卡保 hidden 占位,DOM 仍与 items 一一对应
+  const AGG_MIN = 3;
+  const stackInfo = new Map<number, { start: number; len: number; pos: number; members: number[] }>();
   {
     let members: number[] = [];
     const flush = () => {
       const start = members[0];
-      if (start !== undefined) members.forEach((idx, pos) => stackInfo.set(idx, { start, len: members.length, pos }));
+      if (start !== undefined) {
+        const shared = members;
+        shared.forEach((idx, pos) => stackInfo.set(idx, { start, len: shared.length, pos, members: shared }));
+      }
       members = [];
     };
     state.items.forEach((it, i) => {
@@ -289,6 +294,24 @@ export function LogList({
     });
     flush();
   }
+  const groupActive = (members: number[]) =>
+    members.some((idx) => {
+      const it = state.items[idx];
+      return it?.kind === "tool" && (it.status === "run" || anchors.get(it.tcId)?.state === "open");
+    });
+  // 头部摘要:按动作词计数,保首现顺序,只列前三种
+  const groupSummary = (members: number[]) => {
+    const counts = new Map<string, number>();
+    for (const idx of members) {
+      const it = state.items[idx];
+      if (it?.kind !== "tool") continue;
+      const action = presentToolCall(it.title, it.rawInput, { locale, toolKind: it.toolKind, meta: it._meta }).action;
+      counts.set(action, (counts.get(action) ?? 0) + 1);
+    }
+    const parts = [...counts.entries()].slice(0, 3).map(([a, c]) => (c > 1 ? `${a} ×${c}` : a));
+    const more = counts.size > 3 ? " · …" : "";
+    return `${t("chat.tool.groupSteps", { n: members.length })} · ${parts.join(" · ")}${more}`;
+  };
 
   // 条目节奏:消息块之间放宽(16px);组内工具卡零距(共享外框)。以包裹层
   // margin 实现(隐藏占位 display:none 不吃 margin)——结构契约不变
@@ -307,27 +330,75 @@ export function LogList({
         const gapClass = prevVisible === null || joinPrev ? "" : " mt-4";
         prevVisible = item;
 
-        // 折叠中段:首个被折位渲染展开行(占该条目的包裹位),其余保占位
+        // 工具组聚合:组首渲染摘要头(+ 展开时的成员卡),其余成员在收起
+        // 态保 hidden 占位
         const stack = item.kind === "tool" ? stackInfo.get(i) : undefined;
-        if (stack && stack.len >= FOLD_MIN) {
+        if (stack && stack.len >= AGG_MIN) {
           const stackKey = itemKey(state, stack.start);
-          const folded = !expandedStacks.has(stackKey) && stack.pos >= FOLD_HEAD && stack.pos < stack.len - FOLD_TAIL;
-          if (folded) {
-            if (stack.pos !== FOLD_HEAD) return <div key={itemKey(state, i)} className="hidden" aria-hidden />;
-            const count = stack.len - FOLD_HEAD - FOLD_TAIL;
+          const expanded = closedGroups.has(stackKey)
+            ? false
+            : openGroups.has(stackKey) || groupActive(stack.members);
+          if (stack.pos > 0) {
+            if (!expanded) return <div key={itemKey(state, i)} className="hidden" aria-hidden />;
             return (
               <div key={itemKey(state, i)} className="flex flex-col">
-                <button
-                  type="button"
-                  className="flex cursor-pointer items-center justify-center gap-1 border-x border-t border-base-300 bg-base-100 px-3 py-1 text-[11px] text-base-content/50"
-                  onClick={() => setExpandedStacks((prev) => new Set(prev).add(stackKey))}
-                >
-                  <ChevronRight size={10} strokeWidth={1.75} aria-hidden className="rotate-90" />
-                  {t("chat.tool.foldExpand", { count })}
-                </button>
+                {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
               </div>
             );
           }
+          // 组首:摘要头(状态点 = 组内最要紧态;失败数着色外显)
+          const failCount = stack.members.filter((idx) => {
+            const it = state.items[idx];
+            return it?.kind === "tool" && it.status === "fail";
+          }).length;
+          const tone = groupActive(stack.members)
+            ? "status-primary animate-pulse"
+            : failCount > 0
+              ? "status-error"
+              : "status-success";
+          const toggle = () => {
+            if (expanded) {
+              setClosedGroups((prev) => new Set(prev).add(stackKey));
+              setOpenGroups((prev) => {
+                const next = new Set(prev);
+                next.delete(stackKey);
+                return next;
+              });
+            } else {
+              setOpenGroups((prev) => new Set(prev).add(stackKey));
+              setClosedGroups((prev) => {
+                const next = new Set(prev);
+                next.delete(stackKey);
+                return next;
+              });
+            }
+          };
+          return (
+            <div key={itemKey(state, i)} className={`group relative flex flex-col${gapClass}`}>
+              <MessageTime timestamp={item.kind === "tool" ? item.timestamp : undefined} className="absolute -top-3.5 start-0" />
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={t("chat.tool.groupLabel")}
+                className={`card card-border flex-row items-center gap-2 overflow-hidden bg-base-100 px-3 py-2 text-xs ${expanded ? "rounded-b-none border-b-0" : ""} cursor-pointer`}
+                onClick={toggle}
+              >
+                <span aria-hidden className={`status ${tone}`} />
+                <span className="min-w-0 flex-1 truncate text-start font-medium">{groupSummary(stack.members)}</span>
+                {failCount > 0 && (
+                  <span className="shrink-0 text-error">{t("chat.tool.groupFailed", { n: failCount })}</span>
+                )}
+                <ChevronRight
+                  size={12}
+                  strokeWidth={1.75}
+                  aria-hidden
+                  className={`shrink-0 text-base-content/40 transition-transform ${expanded ? "rotate-90" : ""}`}
+                />
+              </button>
+              {expanded &&
+                renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
+            </div>
+          );
         }
         return (
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
