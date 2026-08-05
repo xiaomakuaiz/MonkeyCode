@@ -4,8 +4,14 @@
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
+  /* scrollbar 本体默认白底:track 透明还不够,常驻滚道(overflow-y-scroll)
+   * 会在容器右缘露出白条(2026-08-05 用户报障) */
+  background: transparent;
 }
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
