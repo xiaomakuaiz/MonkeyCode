@@ -297,7 +297,13 @@ function FoldSection({
           writeFold(foldKey, next);
         }}
       >
-        <summary className="text-xs text-base-content/50">{label}</summary>
+        {/* 与项目内归档小节同构:Archive 图标行首、去 menu 默认尾箭头 */}
+        <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
+          <span className="flex w-3 shrink-0 justify-center" aria-hidden>
+            <Archive size={12} strokeWidth={1.75} />
+          </span>
+          {label}
+        </summary>
         {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
         {open && <ul className="ms-0 min-w-0 ps-0 before:hidden">{children}</ul>}
       </details>
