@@ -45,6 +45,11 @@
 - **列/视图级滚动容器只许纵滚**:凡 `overflow-y-auto` 必须搭 `overflow-x-hidden`
   (CSS 规则:只写 overflow-y 时 overflow-x 会被计算为 auto,超宽内容即出横向
   滚动条——侧栏横滚事故的根因)。超宽内容靠 truncate/min-w-0 链截断。
+- **内容量可变的纵滚容器用 `overflow-y-scroll` 常驻滚道**(2026-08-05 侧栏
+  展开抖动的根因):chrome.css 自定义了 `::-webkit-scrollbar`,WebKit/
+  Chromium 即放弃 overlay 滚条改经典布局型滚条(8px 挤占内容宽),auto 下
+  滚条随折叠开合出现/消失,整列内容横移抖动;track 透明,空滚道不可见。
+  (不用 `scrollbar-gutter: stable`:依赖 WebKitGTK 版本。)
 - 横向滚动只允许出现在**专用滚动区**:代码块(pre)、diff/代码预览、markdown
   表格包裹层(.md-scroll)、xterm。
 

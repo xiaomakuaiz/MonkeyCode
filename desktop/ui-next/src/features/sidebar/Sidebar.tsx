@@ -513,9 +513,11 @@ export function Sidebar({
           <Plus size={14} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      {/* 四段式(LAYOUT.md):头部固定 → 概览块固定 → 列表 = 唯一滚动区 → footer 钉底 */}
+      {/* 四段式(LAYOUT.md):头部固定 → 概览块固定 → 列表 = 唯一滚动区 → footer 钉底。
+          overflow-y 用 scroll 不用 auto:自定义 ::-webkit-scrollbar 后滚条挤占
+          布局,auto 的出现/消失会让整列内容横移抖动(§5) */}
       <Overview space={space} sessions={sessions} />
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">{body()}</div>
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-scroll p-2">{body()}</div>
       <div className="shrink-0 empty:hidden">
         <UpdateFooter />
       </div>
