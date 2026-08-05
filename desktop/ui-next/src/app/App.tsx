@@ -469,12 +469,22 @@ export function App() {
           {notices.map((n) => {
             const Icon = NOTICE_ICON[n.kind];
             return (
-            <div key={n.sessionId} role="alert" className={`alert ${NOTICE_TONE[n.kind]} alert-soft py-2 text-xs shadow-sm`}>
+            // 整条可点跳转(图标/留白同文字一个语义),文字按钮仍是无障碍
+            // 焦点位;关闭钮截断冒泡,不触发跳转
+            <div
+              key={n.sessionId}
+              role="alert"
+              className={`alert ${NOTICE_TONE[n.kind]} alert-soft cursor-pointer py-2 text-xs shadow-sm`}
+              onClick={() => void openSessionById(n.sessionId)}
+            >
               <Icon size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
               <button
                 type="button"
                 className="link link-hover max-w-64 min-w-0 truncate text-left"
-                onClick={() => void openSessionById(n.sessionId)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void openSessionById(n.sessionId);
+                }}
               >
                 {t(NOTICE_TEXT[n.kind], { title: n.title || t("notice.untitled") })}
               </button>
@@ -482,7 +492,10 @@ export function App() {
                 type="button"
                 aria-label={t("notice.dismiss")}
                 className="btn btn-ghost btn-square btn-xs"
-                onClick={() => setNotices((list) => list.filter((x) => x.sessionId !== n.sessionId))}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNotices((list) => list.filter((x) => x.sessionId !== n.sessionId));
+                }}
               >
                 <X size={14} strokeWidth={1.75} aria-hidden />
               </button>
