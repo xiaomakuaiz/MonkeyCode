@@ -197,6 +197,7 @@ export const en: Record<MessageKey, string> = {
   "chat.ask.expired": "Question expired · not answered",
   "chat.tool.detail": "Tool details",
   "chat.tool.detailOpen": "Show tool details",
+  "chat.tool.foldExpand": "Show {count} more steps",
   "chat.tool.detailClose": "Hide tool details",
   "chat.tool.emptyOutput": "(no command output)",
   "chat.tool.childSession": "View child session",

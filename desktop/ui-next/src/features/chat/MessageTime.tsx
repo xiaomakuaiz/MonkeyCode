@@ -1,6 +1,7 @@
-// 块级时间(用户气泡/助手正文/思考块/工具卡共用):HH:MM 悬停显影——
-// 恒占位只切透明度(§6.2 铁律不插布局),依赖最近的 `group` 祖先;
-// dateTime/title 保留完整时刻供无障碍与悬停查证。
+// 块级时间(用户气泡/助手正文/思考块/工具卡共用):HH:MM 常驻弱化显示。
+// 曾是 hover 显影(§6.2 铁律形态),但 WebKitGTK 的 :hover 在 DOM 变动后
+// 粘滞/失灵(耗时不退、details 上不触发),且用户诉求本就是「时间要看
+// 得到」——2026-08-05 定案改常驻;dateTime/title 保留完整时刻。
 export function MessageTime({ timestamp, className = "" }: { timestamp?: number; className?: string }) {
   if (timestamp === undefined || !Number.isFinite(timestamp)) return null;
   const date = new Date(timestamp);
@@ -10,7 +11,7 @@ export function MessageTime({ timestamp, className = "" }: { timestamp?: number;
     <time
       dateTime={date.toISOString()}
       title={date.toLocaleString()}
-      className={`text-[10px] text-base-content/40 opacity-0 transition-opacity select-none group-hover:opacity-100 ${className}`}
+      className={`text-[10px] text-base-content/40 tabular-nums select-none ${className}`}
     >
       {hhmm}
     </time>

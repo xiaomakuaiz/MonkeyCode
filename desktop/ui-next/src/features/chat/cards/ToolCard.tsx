@@ -212,7 +212,7 @@ export function ToolCard({
   const summary = agentResult && !canOpenChild && showAgentResult ? agentResult : "";
   return (
     <div
-      className={`card card-border group overflow-hidden bg-base-100 ${joinPrev ? "rounded-t-none" : ""} ${joinNext ? "rounded-b-none border-b-0" : ""}`}
+      className={`card card-border overflow-hidden bg-base-100 ${joinPrev ? "rounded-t-none" : ""} ${joinNext ? "rounded-b-none border-b-0" : ""}`}
       data-tool-id={item.tcId}
     >
       {/* 标题行 = 详情开关(思考块同款交互:点击展开/再点收起,用户定案
@@ -233,14 +233,10 @@ export function ToolCard({
           </span>
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
         </span>
-        {/* 安静行:时间/耗时 hover 显影(常驻占位只切透明度,§6.2 铁律)。
-            不挂 focus-within:点开详情后焦点留在行内,时间会粘住不退 */}
+        {/* 时间/耗时常驻弱化显示(hover 显影在 WebKitGTK 上粘滞/失灵,
+            2026-08-05 定案退役,详见 MessageTime 头注) */}
         <MessageTime timestamp={item.timestamp} className="shrink-0" />
-        {duration && (
-          <span className="font-mono text-base-content/40 tabular-nums opacity-0 transition-opacity group-hover:opacity-100">
-            {duration}
-          </span>
-        )}
+        {duration && <span className="shrink-0 font-mono text-base-content/40 tabular-nums">{duration}</span>}
         {item.childSessionId && onOpenChild && (
           <button
             type="button"

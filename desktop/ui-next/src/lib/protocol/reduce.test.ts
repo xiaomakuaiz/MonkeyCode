@@ -883,3 +883,28 @@ describe("大字段护栏标记透传", () => {
     expect(tool.out).toContain("前 1KB");
   });
 });
+
+describe("块级时间戳", () => {
+  it("思考首片与工具开卡都带帧时间(块级时间显影的数据面)", () => {
+    const s = reduceBatch(createChatState(), [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "想想" } } },
+        timestamp: 111,
+        seq: 1,
+      },
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Bash", rawInput: { command: "ls" } } },
+        timestamp: 222,
+        seq: 2,
+      },
+    ]);
+    const thought = s.items.find((it) => it.kind === "thought");
+    const tool = s.items.find((it) => it.kind === "tool");
+    expect(thought && "timestamp" in thought ? thought.timestamp : undefined).toBe(111);
+    expect(tool && "timestamp" in tool ? tool.timestamp : undefined).toBe(222);
+  });
+});

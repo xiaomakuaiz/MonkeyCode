@@ -47,10 +47,11 @@ function UserBubble({
   const thumb = "block max-h-28 max-w-36 cursor-zoom-in rounded-box";
   return (
     <div
-      className={`group chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
+      className={`chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
       data-user-seq={item.seq}
     >
-      <MessageTime timestamp={item.timestamp} className="chat-footer" />
+      {/* 时间在块顶(chat-header 官方槽):块可能很长,沉底会看不见 */}
+      <MessageTime timestamp={item.timestamp} className="chat-header" />
       <div className="chat-bubble max-w-[85%] text-sm whitespace-pre-wrap select-text">
         {body}
         {hasAtts && (
@@ -152,11 +153,11 @@ function renderItem(item: ChatItem, o: RenderOpts) {
     case "user":
       return <UserBubble item={item} flash={item.seq !== undefined && item.seq === o.flashSeq} uploadUrl={o.uploadUrl} />;
     case "agent":
-      // group 包裹:行内 <time> 悬停显影(恒占位只切透明度,见 MessageTime)
+      // 时间在块顶:助手正文可能很长,沉底会看不见(用户定案 2026-08-05)
       return (
-        <div className="group flex flex-col">
-          <Markdown source={item.text} localImageUrl={o.uploadUrl} onLocalLink={o.onLocalLink} />
+        <div className="flex flex-col">
           <MessageTime timestamp={item.timestamp} className="self-start" />
+          <Markdown source={item.text} localImageUrl={o.uploadUrl} onLocalLink={o.onLocalLink} />
         </div>
       );
     case "thought":
@@ -228,6 +229,10 @@ export function LogList({
   /** 工具卡大字段回读通道(按帧 seq 取原帧);缺省只展示截断头部。 */
   loadFullTool?: (seq: number) => Promise<Frame>;
 }) {
+  const { t } = useI18n();
+  // 长工具组折叠的展开记录(键 = 组首条目的 itemKey,keyBase 感知,前插
+  // 不漂移);仅内存,切会话重挂即复位
+  const [expandedStacks, setExpandedStacks] = useState<Set<number>>(new Set());
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
   // 工具卡自身的 run/ok/fail 流转代言(types.ts::PermItem.toolCallId 契约)
@@ -250,6 +255,29 @@ export function LogList({
     }
     return false;
   };
+  // 长工具组折叠(用户反馈 2026-08-05:连续调用组太长):同组可见工具卡
+  // ≥ FOLD_MIN 时默认只显首 FOLD_HEAD + 尾 FOLD_TAIL,中段收进「展开其余
+  // N 步」行;被折卡保 hidden 占位,DOM 仍与 items 一一对应。运行中新卡
+  // 追加在尾部,可见尾窗自然跟进
+  const FOLD_MIN = 6;
+  const FOLD_HEAD = 1;
+  const FOLD_TAIL = 3;
+  const stackInfo = new Map<number, { start: number; len: number; pos: number }>();
+  {
+    let members: number[] = [];
+    const flush = () => {
+      const start = members[0];
+      if (start !== undefined) members.forEach((idx, pos) => stackInfo.set(idx, { start, len: members.length, pos }));
+      members = [];
+    };
+    state.items.forEach((it, i) => {
+      if (hiddenAt(i)) return; // 隐藏占位不断组
+      if (it.kind === "tool") members.push(i);
+      else flush();
+    });
+    flush();
+  }
+
   // 条目节奏:消息块之间放宽(16px);组内工具卡零距(共享外框)。以包裹层
   // margin 实现(隐藏占位 display:none 不吃 margin)——结构契约不变
   let prevVisible: ChatItem | null = null;
@@ -266,6 +294,29 @@ export function LogList({
         const joinNext = item.kind === "tool" && nextVisibleIsTool(i);
         const gapClass = prevVisible === null || joinPrev ? "" : " mt-4";
         prevVisible = item;
+
+        // 折叠中段:首个被折位渲染展开行(占该条目的包裹位),其余保占位
+        const stack = item.kind === "tool" ? stackInfo.get(i) : undefined;
+        if (stack && stack.len >= FOLD_MIN) {
+          const stackKey = itemKey(state, stack.start);
+          const folded = !expandedStacks.has(stackKey) && stack.pos >= FOLD_HEAD && stack.pos < stack.len - FOLD_TAIL;
+          if (folded) {
+            if (stack.pos !== FOLD_HEAD) return <div key={itemKey(state, i)} className="hidden" aria-hidden />;
+            const count = stack.len - FOLD_HEAD - FOLD_TAIL;
+            return (
+              <div key={itemKey(state, i)} className="flex flex-col">
+                <button
+                  type="button"
+                  className="flex cursor-pointer items-center justify-center gap-1 border-x border-t border-base-300 bg-base-100 px-3 py-1 text-[11px] text-base-content/50"
+                  onClick={() => setExpandedStacks((prev) => new Set(prev).add(stackKey))}
+                >
+                  <ChevronRight size={10} strokeWidth={1.75} aria-hidden className="rotate-90" />
+                  {t("chat.tool.foldExpand", { count })}
+                </button>
+              </div>
+            );
+          }
+        }
         return (
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
           // (包裹层是块级时 align-self 无效,居中丢失)

@@ -305,3 +305,38 @@ describe("思考块", () => {
     expect(container.querySelector(".collapse-arrow")).toBeNull(); // 统一为行尾 chevron
   });
 });
+
+describe("长工具组折叠", () => {
+  const tools = (n: number): ChatItem[] =>
+    Array.from({ length: n }, (_, i) => ({
+      kind: "tool" as const,
+      tcId: `t${i + 1}`,
+      title: "Bash",
+      status: "ok" as const,
+      out: "",
+      rawInput: { command: `step${i + 1}` },
+    }));
+
+  it("≥6 张连续工具卡:默认显首 1 尾 3,中段收进「展开其余 N 步」", async () => {
+    const state = withItems(tools(7));
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    // 结构契约:包裹层仍与 items 一一对应
+    expect(container.firstElementChild?.children).toHaveLength(7);
+    expect(screen.getByText("step1")).toBeTruthy(); // 首
+    expect(screen.getByText("step5")).toBeTruthy(); // 尾 3
+    expect(screen.getByText("step7")).toBeTruthy();
+    expect(screen.queryByText("step2")).toBeNull(); // 中段折叠
+    expect(screen.queryByText("step4")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /展开其余 3 步/ }));
+    expect(screen.getByText("step2")).toBeTruthy();
+    expect(screen.getByText("step4")).toBeTruthy();
+    expect(container.firstElementChild?.children).toHaveLength(7);
+  });
+
+  it("5 张以内不折叠", () => {
+    render(<LogList state={withItems(tools(5))} sessionId="s1" />);
+    expect(screen.queryByRole("button", { name: /展开其余/ })).toBeNull();
+    expect(screen.getByText("step3")).toBeTruthy();
+  });
+});
