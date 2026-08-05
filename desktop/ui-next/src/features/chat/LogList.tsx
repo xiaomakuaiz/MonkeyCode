@@ -151,6 +151,9 @@ interface RenderOpts {
   onLocalLink?: (path: string) => void;
   workdir?: string;
   loadFullTool?: (seq: number) => Promise<Frame>;
+  /** 相邻工具卡共享外框(旧 tool-stack;LogList 按可见邻居计算)。 */
+  joinPrev?: boolean;
+  joinNext?: boolean;
 }
 
 function renderItem(item: ChatItem, o: RenderOpts) {
@@ -180,6 +183,8 @@ function renderItem(item: ChatItem, o: RenderOpts) {
           onLocalLink={o.onLocalLink}
           workdir={o.workdir}
           loadFullTool={o.loadFullTool}
+          joinPrev={o.joinPrev}
+          joinNext={o.joinNext}
         />
       );
     case "perm":
@@ -238,9 +243,24 @@ export function LogList({
   const toolIds = new Set<string>();
   for (const it of state.items) if (it.kind === "tool" && it.tcId) toolIds.add(it.tcId);
   const isHidden = (it: ChatItem) => it.kind === "perm" && !!it.toolCallId && toolIds.has(it.toolCallId);
-  // 条目节奏差:相邻工具卡收紧(6px),消息块之间放宽(16px)。以包裹层
-  // margin 实现(隐藏占位 display:none 不吃 margin),直接子元素仍与
-  // items 一一对应——结构契约不变
+  // 被合并的连续模型行(相邻同 tag 只渲最后一条,reduce 文案已是终值)
+  const mergedModelAt = (i: number) => {
+    const it = state.items[i];
+    const nx = state.items[i + 1];
+    return it?.kind === "sys" && it.tag === "model" && nx?.kind === "sys" && nx.tag === "model";
+  };
+  const hiddenAt = (i: number) => isHidden(state.items[i]!) || mergedModelAt(i);
+  // 相邻工具卡共享外框(旧 tool-stack):joinNext 要越过隐藏占位看下一个
+  // 可见条目;DOM 仍与 items 一一对应,合并靠边框塌陷不加包裹层
+  const nextVisibleIsTool = (i: number) => {
+    for (let j = i + 1; j < state.items.length; j++) {
+      if (hiddenAt(j)) continue;
+      return state.items[j]!.kind === "tool";
+    }
+    return false;
+  };
+  // 条目节奏:消息块之间放宽(16px);组内工具卡零距(共享外框)。以包裹层
+  // margin 实现(隐藏占位 display:none 不吃 margin)——结构契约不变
   let prevVisible: ChatItem | null = null;
   return (
     <div className="flex flex-col">
@@ -248,20 +268,18 @@ export function LogList({
         if (isHidden(item) && item.kind === "perm") {
           return <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />;
         }
-        // 连续模型切换属于一件系统事件:相邻同 tag 只渲最后一条(reduce 的
-        // 文案已是终值「模型已切换为 X」);被合并行保占位,结构契约不平移
-        const next = state.items[i + 1];
-        if (item.kind === "sys" && item.tag === "model" && next?.kind === "sys" && next.tag === "model") {
+        if (mergedModelAt(i)) {
           return <div key={itemKey(state, i)} className="hidden" aria-hidden />;
         }
-        const compact = prevVisible !== null && prevVisible.kind === "tool" && item.kind === "tool";
-        const gapClass = prevVisible === null ? "" : compact ? " mt-1.5" : " mt-4";
+        const joinPrev = item.kind === "tool" && prevVisible?.kind === "tool";
+        const joinNext = item.kind === "tool" && nextVisibleIsTool(i);
+        const gapClass = prevVisible === null || joinPrev ? "" : " mt-4";
         prevVisible = item;
         return (
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
           // (包裹层是块级时 align-self 无效,居中丢失)
           <div key={itemKey(state, i)} className={`flex flex-col${gapClass}`}>
-            {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool })}
+            {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev, joinNext })}
           </div>
         );
       })}

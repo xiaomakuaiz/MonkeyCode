@@ -1,9 +1,11 @@
 // 工具卡:状态点 + 「动作 + 目标」标题(lib/tools 语义层)+ 耗时;详情
-// collapse 按 toolDetailFor 分型(diff/command/text/json);大字段凭
-// _meta.mcSrc.seq 按需回读原帧补全;子代理进度窗(只显尾部若干条)与
-// 子会话入口缺席时的「查看结果」兜底;失败外显 out 首行;report_findings
-// 走结构化发现列表;锚定的待决审批内嵌卡底(独立大卡不渲染)。
-import { Pause } from "lucide-react";
+// 开关 = 标题行尾 chevron 图标钮(旧 UI 安静行设计:耗时/详情钮 hover 显影,
+// 常驻占位只切透明度,§6.2 铁律),详情 = 单一面板(diff 走 DiffView,
+// 其余单 pre,不再盒中盒);大字段凭 _meta.mcSrc.seq 按需回读原帧补全;
+// 相邻工具卡由 LogList 计算 joinPrev/joinNext 塌陷边框共享外框(旧
+// tool-stack 设计,DOM 仍与 items 一一对应不破结构契约);子代理进度窗、
+// 「查看结果」兜底、失败外显、findings、内嵌审批同前。
+import { ChevronRight, Pause } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
@@ -89,39 +91,27 @@ function FeedRow({ entry, workdir }: { entry: SubEntry; workdir?: string }) {
   );
 }
 
-/** 详情正文的等宽块:横滚只许出现在 pre/diff 区(§5),纵向 50vh 封顶。 */
-const PRE_CLASS =
-  "max-h-[50vh] overflow-x-auto overflow-y-auto rounded-box bg-base-200 p-2 font-mono break-all whitespace-pre-wrap select-text";
+/** 详情正文(单一面板内,容器管边框/底色/滚动,这里不再套盒):diff 复用
+ * FilesDrawer 的 DiffView 行模型;command 收进一个 pre(cwd 弱化行 +
+ * `$ 命令` + 空行 + 输出);text/json 单 pre。旧 UI 详情即单容器设计。 */
+const PRE_CLASS = "m-0 p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere select-text";
 
-/** 详情面板分型渲染:diff 复用 FilesDrawer 的 DiffView 行模型;command 走
- * `$ 命令`(+cwd 弱化行)+ 输出 pre;text/json 维持纯文本 pre。 */
 function DetailBody({ detail }: { detail: ToolDetail }) {
   const { t } = useI18n();
   if (detail.kind === "diff") {
-    return (
-      <div className="max-h-[50vh] overflow-auto rounded-box border border-base-300">
-        <DiffView text={detail.text} />
-      </div>
-    );
+    return <DiffView text={detail.text} />;
   }
   if (detail.kind === "command") {
     return (
-      <div className="flex flex-col gap-1">
-        {detail.command && (
-          <pre className={PRE_CLASS}>
-            <span aria-hidden className="text-base-content/40 select-none">
-              {"$ "}
-            </span>
-            {detail.command}
-            {detail.cwd && <span className="block text-base-content/40">{detail.cwd}</span>}
-          </pre>
-        )}
-        {detail.output ? (
-          <pre className={PRE_CLASS}>{detail.output}</pre>
-        ) : (
-          <div className="text-base-content/40">{t("chat.tool.emptyOutput")}</div>
-        )}
-      </div>
+      <pre className={PRE_CLASS}>
+        {detail.cwd && <span className="block text-base-content/40">{detail.cwd}</span>}
+        <span aria-hidden className="text-base-content/40 select-none">
+          {"$ "}
+        </span>
+        {detail.command}
+        {"\n\n"}
+        {detail.output || <span className="text-base-content/40">{t("chat.tool.emptyOutput")}</span>}
+      </pre>
     );
   }
   return <pre className={PRE_CLASS}>{detail.text}</pre>;
@@ -137,6 +127,8 @@ export function ToolCard({
   onLocalLink,
   workdir,
   loadFullTool,
+  joinPrev,
+  joinNext,
 }: {
   item: ToolItem;
   /** 锚定到本卡的待决审批(permAnchors 判定):⏸ 顶掉状态点 + 底部内嵌
@@ -156,6 +148,10 @@ export function ToolCard({
   /** 回读被截断的工具大字段原帧(壳侧物化超限截断,凭 _meta.mcSrc.seq);
    * 不传则只展示行内的截断头部 */
   loadFullTool?: (seq: number) => Promise<Frame>;
+  /** 相邻工具卡共享外框(旧 tool-stack):上邻是工具卡 → 顶角取直,自身
+   * border-t 兼作组内分隔线;下邻是工具卡 → 底角取直 + 去 border-b。 */
+  joinPrev?: boolean;
+  joinNext?: boolean;
 }) {
   const { t, locale } = useI18n();
   const [zoom, setZoom] = useState<string | null>(null);
@@ -214,7 +210,10 @@ export function ToolCard({
   const agentResult = agentFinished ? (fullResult || item.result || "").trim() : "";
   const summary = agentResult && !canOpenChild && showAgentResult ? agentResult : "";
   return (
-    <div className="card card-border overflow-hidden bg-base-100" data-tool-id={item.tcId}>
+    <div
+      className={`card card-border group overflow-hidden bg-base-100 ${joinPrev ? "rounded-t-none" : ""} ${joinNext ? "rounded-b-none border-b-0" : ""}`}
+      data-tool-id={item.tcId}
+    >
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
         {perm ? (
           <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-warning" />
@@ -227,7 +226,12 @@ export function ToolCard({
           </span>
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
         </span>
-        {duration && <span className="font-mono text-base-content/40 tabular-nums">{duration}</span>}
+        {/* 安静行:耗时/详情钮 hover 显影(常驻占位只切透明度,§6.2 铁律) */}
+        {duration && (
+          <span className="font-mono text-base-content/40 tabular-nums opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+            {duration}
+          </span>
+        )}
         {item.childSessionId && onOpenChild && (
           <button
             type="button"
@@ -244,6 +248,23 @@ export function ToolCard({
             onClick={() => setShowAgentResult((v) => !v)}
           >
             {showAgentResult ? t("chat.tool.hideResult") : t("chat.tool.showResult")}
+          </button>
+        )}
+        {detail && (
+          <button
+            type="button"
+            aria-label={detailOpen ? t("chat.tool.detailClose") : t("chat.tool.detailOpen")}
+            aria-expanded={detailOpen}
+            title={detailOpen ? t("chat.tool.detailClose") : t("chat.tool.detailOpen")}
+            className={`btn btn-ghost btn-square btn-xs shrink-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${detailOpen ? "opacity-100" : "opacity-0"}`}
+            onClick={() => setDetailOpen((v) => !v)}
+          >
+            <ChevronRight
+              size={12}
+              strokeWidth={1.75}
+              aria-hidden
+              className={`transition-transform ${detailOpen ? "rotate-90" : ""}`}
+            />
           </button>
         )}
       </div>
@@ -302,22 +323,15 @@ export function ToolCard({
             {t("chat.tool.loadingFull")}
           </div>
         ) : null)}
-      {detail && (
-        <details className="collapse-arrow collapse rounded-none border-t border-base-300" open={detailOpen}>
-          {/* 受控 details:preventDefault 掉原生切换,open 状态即回读触发器 */}
-          <summary
-            className="collapse-title min-h-0 px-3 py-1.5 text-xs text-base-content/50"
-            onClick={(e) => {
-              e.preventDefault();
-              setDetailOpen((v) => !v);
-            }}
-          >
-            {t("chat.tool.detail")}
-          </summary>
-          <div className="collapse-content flex flex-col text-xs">
-            <DetailBody detail={detail} />
-          </div>
-        </details>
+      {/* 详情 = 单一面板(旧 UI 设计):与状态点缩进对齐,一层边框容器统一
+          管滚动/底色,内部 diff 或单 pre,不再盒中盒 */}
+      {detailOpen && detail && (
+        <div
+          aria-label={t("chat.tool.detail")}
+          className="mx-3 mb-2 ms-6 max-h-[50vh] overflow-auto rounded-box border border-base-300 bg-base-200 text-xs"
+        >
+          <DetailBody detail={detail} />
+        </div>
       )}
       {perm && (
         <div className="flex flex-col gap-2 border-t border-base-300 px-3 py-2">

@@ -51,25 +51,31 @@ describe("工具卡", () => {
     expect(screen.getByRole("alert").textContent).toContain("exit 1: 找不到模块");
   });
 
-  it("详情面板 command 型:$ 命令 + cwd 弱化行 + 输出 pre", () => {
+  it("详情面板 command 型:单 pre 收纳 cwd 弱化行 + $ 命令 + 输出(点开关展开)", async () => {
     render(
       <ToolCard
         item={{ ...BASE, rawInput: { command: "npm test", cwd: "/repo" }, rawOutput: { stdout: "42 passed", stderr: "" } }}
         sessionId="s1"
       />,
     );
-    expect(screen.getByText("详情")).toBeTruthy();
-    const cmd = screen.getByText((_, el) => el?.tagName === "PRE" && (el.textContent ?? "").startsWith("$ npm test"));
-    expect(cmd.textContent).toContain("/repo"); // cwd 行跟在命令块里
-    expect(screen.getByText("42 passed")).toBeTruthy();
+    // 未展开时详情不入 DOM(单一面板按需渲染)
+    expect(screen.queryByLabelText("工具详情")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "展开工具详情" }));
+    const pre = screen.getByText((_, el) => el?.tagName === "PRE" && (el.textContent ?? "").includes("$ npm test"));
+    expect(pre.textContent).toContain("/repo"); // cwd 弱化行同在一个 pre
+    expect(pre.textContent).toContain("42 passed"); // 输出不再另起盒子
+    // 再点收起
+    await userEvent.click(screen.getByRole("button", { name: "收起工具详情" }));
+    expect(screen.queryByLabelText("工具详情")).toBeNull();
   });
 
-  it("详情面板 command 型输出为空:给 i18n 占位行", () => {
+  it("详情面板 command 型输出为空:给 i18n 占位行", async () => {
     render(<ToolCard item={{ ...BASE, rawOutput: { stdout: "", stderr: "" } }} sessionId="s1" />);
+    await userEvent.click(screen.getByRole("button", { name: "展开工具详情" }));
     expect(screen.getByText("(命令输出为空)")).toBeTruthy();
   });
 
-  it("详情面板 diff 型:Edit old/new 走 DiffView 行渲染(hunk + 增删行)", () => {
+  it("详情面板 diff 型:Edit old/new 走 DiffView 行渲染(hunk + 增删行)", async () => {
     render(
       <ToolCard
         item={{
@@ -83,7 +89,7 @@ describe("工具卡", () => {
         sessionId="s1"
       />,
     );
-    expect(screen.getByText("详情")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "展开工具详情" }));
     expect(screen.getByText("@@ -1,1 +1,1 @@")).toBeTruthy(); // hunk 行 → 走了 diff 解析而非纯文本
     expect(screen.getByText("const a = 1;")).toBeTruthy(); // 删除行
     expect(screen.getByText("const a = 2;")).toBeTruthy(); // 新增行
@@ -91,7 +97,7 @@ describe("工具卡", () => {
 
   it("运行中不出详情入口(终态才可回看入参/结果)", () => {
     render(<ToolCard item={{ ...BASE, status: "run", rawInput: { command: "x" } }} sessionId="s1" />);
-    expect(screen.queryByText("详情")).toBeNull();
+    expect(screen.queryByRole("button", { name: "展开工具详情" })).toBeNull();
   });
 
   it("详情展开时按 _meta.mcSrc.seq 回读原帧,全文顶掉截断头部", async () => {
@@ -110,12 +116,13 @@ describe("工具卡", () => {
         }}
       />,
     );
-    expect(screen.getByText("截断头部…")).toBeTruthy();
     expect(calls).toEqual([]); // 未展开不回读
-    await userEvent.click(screen.getByText("详情"));
+    await userEvent.click(screen.getByRole("button", { name: "展开工具详情" }));
     expect(calls).toEqual([7]);
-    expect(await screen.findByText("完整输出尾巴")).toBeTruthy();
-    expect(screen.queryByText("截断头部…")).toBeNull();
+    const pre = await screen.findByText(
+      (_, el) => el?.tagName === "PRE" && (el.textContent ?? "").includes("完整输出尾巴"),
+    );
+    expect(pre.textContent).not.toContain("截断头部…"); // 全文顶掉截断头部
   });
 
   it("回读失败:行内外显错误(role=alert,带原因)", async () => {
@@ -126,7 +133,7 @@ describe("工具卡", () => {
         loadFullTool={() => Promise.reject(new Error("网络断了"))}
       />,
     );
-    await userEvent.click(screen.getByText("详情"));
+    await userEvent.click(screen.getByRole("button", { name: "展开工具详情" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("完整内容取不回来了");
     expect(alert.textContent).toContain("网络断了");
