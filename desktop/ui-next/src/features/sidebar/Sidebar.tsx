@@ -270,7 +270,7 @@ function ProjectDetails({
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
                   <Archive size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
-                  {t("sidebar.archivedTasks")}
+                  <span className="min-w-0 flex-1 truncate">{t("sidebar.archivedTasks")}</span>
                 </summary>
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
                     占位空间(用户报障),条件渲染釜底抽薪 */}
@@ -314,7 +314,7 @@ function FoldSection({
             去 menu 默认尾箭头 */}
         <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
           <Archive size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
-          {label}
+          <span className="min-w-0 flex-1 truncate">{label}</span>
         </summary>
         {/* 收起即卸载(与项目内归档小节同因):防收起后残留占位空间 */}
         {open && <ul className="ms-0 min-w-0 ps-0 before:hidden">{children}</ul>}
