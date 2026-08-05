@@ -304,11 +304,9 @@ describe("标题行开合详情(思考块同款交互)", () => {
 });
 
 describe("块级时间", () => {
-  it("工具卡带开卡时间(hover 显影的 <time>,dateTime 语义)", () => {
+  it("消息时间不在卡内(在 LogList 的块上方时间线,见 LogList.test)", () => {
     const noon = new Date(2026, 7, 5, 14, 30).getTime();
     const { container } = render(<ToolCard item={{ ...BASE, timestamp: noon }} sessionId="s1" />);
-    const time = container.querySelector("time");
-    expect(time?.textContent).toBe("14:30");
-    expect(time?.getAttribute("dateTime")).toBeTruthy();
+    expect(container.querySelector("time")).toBeNull();
   });
 });

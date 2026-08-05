@@ -47,7 +47,7 @@ function UserBubble({
   const thumb = "block max-h-28 max-w-36 cursor-zoom-in rounded-box";
   return (
     <div
-      className={`chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
+      className={`group chat chat-end rounded-box ${flash ? "animate-[mc-flash_1s_ease]" : ""}`}
       data-user-seq={item.seq}
     >
       {/* 时间在块顶(chat-header 官方槽):块可能很长,沉底会看不见 */}
@@ -117,7 +117,6 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
         <Sparkles size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
         <span className="shrink-0">{t("chat.thought")}</span>
         <span className="min-w-0 flex-1 truncate opacity-70">{summary.slice(0, 80)}</span>
-        <MessageTime timestamp={item.timestamp} className="shrink-0" />
         <ChevronRight
           size={12}
           strokeWidth={1.75}
@@ -153,31 +152,41 @@ function renderItem(item: ChatItem, o: RenderOpts) {
     case "user":
       return <UserBubble item={item} flash={item.seq !== undefined && item.seq === o.flashSeq} uploadUrl={o.uploadUrl} />;
     case "agent":
-      // 时间在块顶:助手正文可能很长,沉底会看不见(用户定案 2026-08-05)
+      // 时间在块顶悬停显影:正文可能很长,沉底看不见(用户定案 2026-08-05)
       return (
-        <div className="flex flex-col">
+        <div className="group flex flex-col">
           <MessageTime timestamp={item.timestamp} className="self-start" />
           <Markdown source={item.text} localImageUrl={o.uploadUrl} onLocalLink={o.onLocalLink} />
         </div>
       );
     case "thought":
-      return <ThoughtBlock item={item} />;
-    case "tool":
-      // 只读回放不递交锚定审批:工具卡不出内嵌按钮行,按 run/ok/fail 常态渲染
+      // 与助手块同构:时间线在块上方(悬停块内即显影)
       return (
-        <ToolCard
-          item={item}
-          perm={o.readonly ? undefined : o.anchors.get(item.tcId)}
-          sessionId={o.sessionId}
-          sendFrame={o.sendFrame}
-          onOpenChild={o.onOpenChildSession}
-          uploadUrl={o.uploadUrl}
-          onLocalLink={o.onLocalLink}
-          workdir={o.workdir}
-          loadFullTool={o.loadFullTool}
-          joinPrev={o.joinPrev}
-          joinNext={o.joinNext}
-        />
+        <div className="group flex flex-col">
+          <MessageTime timestamp={item.timestamp} className="self-start" />
+          <ThoughtBlock item={item} />
+        </div>
+      );
+    case "tool":
+      // 只读回放不递交锚定审批:工具卡不出内嵌按钮行,按 run/ok/fail 常态渲染。
+      // 时间线只在组首(非 joinPrev)卡上方——组中插时间行会撕开共享外框
+      return (
+        <div className="group flex flex-col">
+          {!o.joinPrev && <MessageTime timestamp={item.timestamp} className="self-start" />}
+          <ToolCard
+            item={item}
+            perm={o.readonly ? undefined : o.anchors.get(item.tcId)}
+            sessionId={o.sessionId}
+            sendFrame={o.sendFrame}
+            onOpenChild={o.onOpenChildSession}
+            uploadUrl={o.uploadUrl}
+            onLocalLink={o.onLocalLink}
+            workdir={o.workdir}
+            loadFullTool={o.loadFullTool}
+            joinPrev={o.joinPrev}
+            joinNext={o.joinNext}
+          />
+        </div>
       );
     case "perm":
       return <PermCard item={item} sessionId={o.sessionId} sendFrame={o.sendFrame} readonly={o.readonly} />;

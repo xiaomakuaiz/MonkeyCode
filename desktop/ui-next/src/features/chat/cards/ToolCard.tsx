@@ -21,7 +21,6 @@ import { toolDetailFor, type ToolDetail } from "@/lib/tools/toolDetails";
 import { presentToolCall, toolDisplayName, type ToolTargetKind } from "@/lib/tools/toolLabels";
 import { FindingsCard, findingsReportFor } from "./FindingsCard";
 import { PermActions } from "./PermCard";
-import { MessageTime } from "../MessageTime";
 
 /** 进度滚动窗口:固定只展示最后几条,旧条目自然滚出。 */
 const FEED_WINDOW = 5;
@@ -233,10 +232,13 @@ export function ToolCard({
           </span>
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
         </span>
-        {/* 时间/耗时常驻弱化显示(hover 显影在 WebKitGTK 上粘滞/失灵,
-            2026-08-05 定案退役,详见 MessageTime 头注) */}
-        <MessageTime timestamp={item.timestamp} className="shrink-0" />
-        {duration && <span className="shrink-0 font-mono text-base-content/40 tabular-nums">{duration}</span>}
+        {/* 耗时悬停显影(group 在 LogList 的条目包裹层;消息时间在块上方,
+            不进本行);⚠️ 不挂 focus-within——粘滞根因,见 MessageTime 头注 */}
+        {duration && (
+          <span className="shrink-0 font-mono text-base-content/40 tabular-nums opacity-0 transition-opacity group-hover:opacity-100">
+            {duration}
+          </span>
+        )}
         {item.childSessionId && onOpenChild && (
           <button
             type="button"

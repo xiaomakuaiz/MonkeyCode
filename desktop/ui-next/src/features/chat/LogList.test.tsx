@@ -340,3 +340,17 @@ describe("长工具组折叠", () => {
     expect(screen.getByText("step3")).toBeTruthy();
   });
 });
+
+describe("块上方消息时间(悬停显影)", () => {
+  it("工具块:组首卡上方有时间线,组中卡不插时间(不撕共享外框)", () => {
+    const ts = new Date(2026, 7, 5, 14, 30).getTime();
+    const state = withItems([
+      { kind: "tool", tcId: "t1", title: "Bash", status: "ok", out: "", rawInput: { command: "a" }, timestamp: ts },
+      { kind: "tool", tcId: "t2", title: "Bash", status: "ok", out: "", rawInput: { command: "b" }, timestamp: ts + 60000 },
+    ]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    const times = container.querySelectorAll("time");
+    expect(times).toHaveLength(1); // 只有组首
+    expect(times[0]?.textContent).toBe("14:30");
+  });
+});
