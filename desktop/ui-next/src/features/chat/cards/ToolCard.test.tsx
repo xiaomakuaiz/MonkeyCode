@@ -278,3 +278,27 @@ describe("工具产出图片", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 });
+
+describe("标题行开合详情(思考块同款交互)", () => {
+  it("点标题行任意处展开,再点收起", async () => {
+    render(<ToolCard item={{ ...BASE, rawOutput: { stdout: "输出体", stderr: "" } }} sessionId="s1" />);
+    await userEvent.click(screen.getByText("执行命令")); // 行内动作词 = 行的一部分
+    expect(screen.getByLabelText("工具详情")).toBeTruthy();
+    await userEvent.click(screen.getByText("执行命令"));
+    expect(screen.queryByLabelText("工具详情")).toBeNull();
+  });
+
+  it("行内「查看子会话」点击不误触详情开关", async () => {
+    const opened: string[] = [];
+    render(
+      <ToolCard
+        item={{ ...BASE, childSessionId: "c1", rawOutput: { stdout: "输出体", stderr: "" } }}
+        sessionId="s1"
+        onOpenChild={(id) => opened.push(id)}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "查看子会话" }));
+    expect(opened).toEqual(["c1"]);
+    expect(screen.queryByLabelText("工具详情")).toBeNull();
+  });
+});

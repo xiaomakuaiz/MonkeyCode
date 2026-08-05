@@ -214,7 +214,13 @@ export function ToolCard({
       className={`card card-border group overflow-hidden bg-base-100 ${joinPrev ? "rounded-t-none" : ""} ${joinNext ? "rounded-b-none border-b-0" : ""}`}
       data-tool-id={item.tcId}
     >
-      <div className="flex items-center gap-2 px-3 py-2 text-xs">
+      {/* 标题行 = 详情开关(思考块同款交互:点击展开/再点收起,用户定案
+          2026-08-05);行内链接 stopPropagation 不触发切换;chevron 钮保留
+          为无障碍/键盘开关并兼作指示,常驻显示 */}
+      <div
+        className={`flex items-center gap-2 px-3 py-2 text-xs ${detail ? "cursor-pointer" : ""}`}
+        onClick={detail ? () => setDetailOpen((v) => !v) : undefined}
+      >
         {perm ? (
           <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-warning" />
         ) : (
@@ -226,7 +232,7 @@ export function ToolCard({
           </span>
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
         </span>
-        {/* 安静行:耗时/详情钮 hover 显影(常驻占位只切透明度,§6.2 铁律) */}
+        {/* 安静行:耗时 hover 显影(常驻占位只切透明度,§6.2 铁律) */}
         {duration && (
           <span className="font-mono text-base-content/40 tabular-nums opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
             {duration}
@@ -236,7 +242,10 @@ export function ToolCard({
           <button
             type="button"
             className="link link-hover link-primary shrink-0 text-xs font-semibold"
-            onClick={() => onOpenChild(item.childSessionId!)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenChild(item.childSessionId!);
+            }}
           >
             {t("chat.tool.childSession")}
           </button>
@@ -245,7 +254,10 @@ export function ToolCard({
           <button
             type="button"
             className="link link-hover shrink-0 text-xs font-semibold text-base-content/60"
-            onClick={() => setShowAgentResult((v) => !v)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAgentResult((v) => !v);
+            }}
           >
             {showAgentResult ? t("chat.tool.hideResult") : t("chat.tool.showResult")}
           </button>
@@ -256,14 +268,17 @@ export function ToolCard({
             aria-label={detailOpen ? t("chat.tool.detailClose") : t("chat.tool.detailOpen")}
             aria-expanded={detailOpen}
             title={detailOpen ? t("chat.tool.detailClose") : t("chat.tool.detailOpen")}
-            className={`btn btn-ghost btn-square btn-xs shrink-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${detailOpen ? "opacity-100" : "opacity-0"}`}
-            onClick={() => setDetailOpen((v) => !v)}
+            className="btn btn-ghost btn-square btn-xs shrink-0"
+            onClick={(e) => {
+              e.stopPropagation(); // 行开关已在容器上,不拦会一次点击切换两次
+              setDetailOpen((v) => !v);
+            }}
           >
             <ChevronRight
               size={12}
               strokeWidth={1.75}
               aria-hidden
-              className={`transition-transform ${detailOpen ? "rotate-90" : ""}`}
+              className={`text-base-content/40 transition-transform ${detailOpen ? "rotate-90" : ""}`}
             />
           </button>
         )}
