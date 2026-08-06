@@ -116,11 +116,16 @@ function BaizhiCard({
   status,
   onChanged,
   onResult,
+  autoSyncToken = 0,
 }: {
   status: BaizhiStatus;
   onChanged: () => Promise<void>;
   /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
   onResult?: (r: BaizhiSyncResult) => SyncApplied | undefined | void;
+  /** 登录真实事件的自动同步信号(宿主 bump;0 = 无,打开设置读到既有登录态
+   * 不触发)。卡在登录后才挂载,同步逻辑又在卡内,登录瞬间够不着——经
+   * token 延迟触发(旧 UI「登录成功即自动同步」用户拍板行为的 ui-next 版) */
+  autoSyncToken?: number;
 }) {
   const { t } = useI18n();
   const [syncing, setSyncing] = useState(false);
@@ -162,6 +167,14 @@ function BaizhiCard({
     }
   };
 
+  // 登录即自动同步:token 变化(含挂载时已非 0——refresh 与 bump 同批提交
+  // 时卡首挂载就带着新值)触发一次;sync 自带 syncing 态,不需再防抖
+  useEffect(() => {
+    if (autoSyncToken > 0) void sync();
+    // sync 每渲染新引用但行为稳定,只认 token 边沿
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSyncToken]);
+
   return (
     <AccountCard
       logo="/baizhi-logo.png"
@@ -193,6 +206,7 @@ function McCard({
   bridgeErr,
   onChanged,
   onResult,
+  autoSyncToken = 0,
 }: {
   status: McStatus | null;
   /** 百智云登录后自动桥接的失败信息(不阻断,卡内外显并留手动重试) */
@@ -200,6 +214,8 @@ function McCard({
   onChanged: () => Promise<void>;
   /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
   onResult?: (r: McModelsSyncResult) => SyncApplied | undefined | void;
+  /** 登录/桥接真实事件的自动同步信号(语义同 BaizhiCard.autoSyncToken) */
+  autoSyncToken?: number;
 }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState<"connect" | "disconnect" | "sync" | null>(null);
@@ -252,6 +268,13 @@ function McCard({
   const connected = !!status?.logged_in;
   const user = status?.user;
   const userName = user?.name || user?.username || user?.email || t("account.loggedIn");
+
+  // 登录/桥接即自动同步(语义同 BaizhiCard):connected 现值判断不进依赖
+  // ——桥接流程 refresh 先落(connected 翻真)再 bump,只认 token 边沿
+  useEffect(() => {
+    if (autoSyncToken > 0 && connected) void sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSyncToken]);
 
   if (!connected) {
     return (
@@ -367,21 +390,33 @@ export function AccountSection({
     if (inShell) void refresh();
   }, [inShell, refresh]);
 
-  /** 百智云真实登录事件:先刷出已登录形态,再尝试桥接 MonkeyCode
-   *  (同一账号的 OAuth,登录一次两边都通),桥接结果二次刷新。 */
+  // 登录真实事件的自动同步信号(0 = 无;只在下面两个登录回调里 bump,
+  // 打开设置读到既有登录态不触发)——「登录成功即自动同步」是旧 UI 用户
+  // 拍板行为,ui-next 首版漏迁(2026-08-06 用户报障:登录后模型/MCP 没
+  // 同步上,实为压根没触发)
+  const [bzSyncToken, setBzSyncToken] = useState(0);
+  const [mcSyncToken, setMcSyncToken] = useState(0);
+
+  /** 百智云真实登录事件:先刷出已登录形态并起百智云同步,再尝试桥接
+   *  MonkeyCode(同一账号的 OAuth,登录一次两边都通),桥接成功顺带起
+   *  会员模型同步。 */
   const onBaizhiLoggedIn = useCallback(async () => {
     setBridgeErr("");
     await refresh();
+    setBzSyncToken((n) => n + 1);
     try {
       await mcLogin();
+      await refresh();
+      setMcSyncToken((n) => n + 1);
     } catch (e) {
       if (alive.current) setBridgeErr(errMsg(e));
+      await refresh();
     }
-    await refresh();
   }, [refresh]);
 
   const onMcLoggedIn = useCallback(async () => {
     await refresh();
+    setMcSyncToken((n) => n + 1);
   }, [refresh]);
 
   if (!inShell) {
@@ -413,7 +448,7 @@ export function AccountSection({
           <div className="flex flex-col gap-1.5">
             <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.baizhi.title")}</h3>
             {bz?.logged_in ? (
-              <BaizhiCard status={bz} onChanged={refresh} onResult={onSyncResult} />
+              <BaizhiCard status={bz} onChanged={refresh} onResult={onSyncResult} autoSyncToken={bzSyncToken} />
             ) : (
               // MC 已连时不再给账密入口(重复登录只添乱);全未登录时给
               <BaizhiLoginCard>
@@ -430,7 +465,7 @@ export function AccountSection({
           {anyLoggedIn && (
             <div className="flex flex-col gap-1.5">
               <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.mc.title")}</h3>
-              <McCard status={mc} bridgeErr={bridgeErr} onChanged={refresh} onResult={onSyncResult} />
+              <McCard status={mc} bridgeErr={bridgeErr} onChanged={refresh} onResult={onSyncResult} autoSyncToken={mcSyncToken} />
             </div>
           )}
         </>

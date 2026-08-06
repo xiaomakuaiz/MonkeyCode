@@ -82,7 +82,7 @@ describe("账号分区:门与登录面板", () => {
     expect(await screen.findByText("用微信扫一扫登录")).toBeDefined();
   });
 
-  it("扫码 ok:刷新登录态并顺带桥接 MonkeyCode(mc_login)", async () => {
+  it("扫码 ok:刷新登录态、顺带桥接 MonkeyCode,且两路自动同步(登录即同步,不用手点)", async () => {
     let statusCalls = 0;
     let mcConnected = false;
     const { calls } = stubShell({
@@ -95,11 +95,17 @@ describe("账号分区:门与登录面板", () => {
         return { ok: true };
       },
       mc_usage: () => null,
+      baizhi_sync: () => ({ models: [{ name: "g", base_url: "https://g", api_key: "k", model: "g" }], mcp_servers: {}, key_created: false }),
+      mc_models_sync: () => ({ models: [{ name: "m", base_url: "https://m", api_key: "k", model: "m", source: "monkeycode" }] }),
     });
     render(<AccountSection />);
     expect(await screen.findByText("张三")).toBeDefined(); // 百智云卡已登录形态
     expect(await screen.findByText("云端用户")).toBeDefined(); // 桥接成功,MC 卡已连
     expect(calls.some((c) => c.cmd === "mc_login")).toBe(true);
+    // 登录真实事件自动起两路同步(旧 UI 用户拍板行为;打开设置读到既有
+    // 登录态不触发,由「已登录:同步按钮」用例的无自动同步前提反向钉住)
+    await waitFor(() => expect(calls.some((c) => c.cmd === "baizhi_sync")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "mc_models_sync")).toBe(true));
   });
 });
 
@@ -183,6 +189,7 @@ describe("MonkeyCode 账号密码登录入口", () => {
         return { ok: true };
       },
       mc_usage: () => null,
+      mc_models_sync: () => ({ models: [{ name: "m", base_url: "https://m", api_key: "k", model: "m", source: "monkeycode" }] }),
     });
     render(<AccountSection />);
     await userEvent.click(await screen.findByRole("button", { name: "使用 MonkeyCode 账号密码登录" }));
@@ -198,6 +205,8 @@ describe("MonkeyCode 账号密码登录入口", () => {
     expect(calls.find((c) => c.cmd === "mc_password_login")?.args).toEqual({ email: "a@b.c", password: "p w" });
     // MC 已连、百智云未登录:补百智云登录入口但不再给账密入口
     expect(screen.queryByRole("button", { name: "使用 MonkeyCode 账号密码登录" })).toBeNull();
+    // 账密直连同样是登录真实事件:会员模型自动同步
+    await waitFor(() => expect(calls.some((c) => c.cmd === "mc_models_sync")).toBe(true));
   });
 });
 
