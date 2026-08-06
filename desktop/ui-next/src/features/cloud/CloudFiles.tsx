@@ -1,11 +1,17 @@
 // 云端任务文件页:经控制流(Control WS 内核代理)浏览 VM 工作区
-// (repo_file_list,与 web 控制台 task-file-explorer 同一套 kind 与字段),
-// 上传走 REST mc_file_upload、下载走全局下载 store(startDownload,内含
-// dl-progress 先监听后命令的铁律;目录由服务端打成 zip)。
-// 控制流懒建 + call() 懒重连:连不上时不无限拨号刷屏,操作时再试。
+// (repo_file_list / repo_file_changes / repo_file_diff,与 web 控制台
+// task-file-explorer 同一套 kind 与字段),上传走 REST mc_file_upload、
+// 下载走全局下载 store(startDownload,内含 dl-progress 先监听后命令的
+// 铁律;目录由服务端打成 zip)。
+// 文件/变动双 tab 与本地 FilesDrawer 同构(Changes/Preview 组件直接复用,
+// additions/deletions 云端超集字段有则展示);变动挂载拉一次,刷新钮与
+// 上传落地后重拉。控制流懒建 + call() 懒重连:连不上时不无限拨号刷屏,
+// 操作时再试。
 import { CornerUpLeft, Download, File, Folder, FolderOpen, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Changes, type ChangeItem } from "@/features/files/Changes";
+import { Preview, type PreviewModel } from "@/features/files/Preview";
 import { connectCloudControl, WAKE_CALL_TIMEOUT_MS, type CloudControl } from "@/lib/cloud/control";
 import { useI18n } from "@/lib/i18n";
 import { mcFileUpload, pickSaveFile, readFileBase64 } from "@/lib/ipc/cloudtasks";
@@ -21,6 +27,8 @@ export interface CloudRepoFile {
 }
 
 const isDir = (f: CloudRepoFile) => f.entry_mode === 4 || f.entry_mode === 5;
+
+type Tab = "files" | "changes";
 
 const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 上传上限 10MB(对齐 web 控制台文件树)
 
@@ -48,12 +56,16 @@ export function CloudFiles({
   makeControl?: (taskId: string) => CloudControl;
 }) {
   const { t } = useI18n();
+  const [tab, setTab] = useState<Tab>("files");
   const [dir, setDir] = useState(""); // 当前目录(相对工作区;"" = 根)
   const [files, setFiles] = useState<CloudRepoFile[] | null>(null);
+  const [changes, setChanges] = useState<ChangeItem[] | null>(null); // null = 加载中
+  const [preview, setPreview] = useState<PreviewModel | null>(null); // diff 预览(变动 tab)
   const [err, setErr] = useState("");
   const [uploading, setUploading] = useState(false);
   const ctrlRef = useRef<CloudControl | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const reqRef = useRef(0); // 切文件/tab 时使旧异步 diff 结果失效
   const makeControlRef = useRef(makeControl);
   makeControlRef.current = makeControl;
 
@@ -99,6 +111,64 @@ export function CloudFiles({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir, taskId]);
 
+  // 变动列表:挂载即拉(tab 徽标计数要它;与列目录同一条 WS,无额外唤醒
+  // 成本),刷新钮/上传落地后重拉;失败降级空列表 + 错误条外显
+  const loadChanges = () => {
+    setChanges(null);
+    ensureCtrl()
+      .call<{ changes?: ChangeItem[] }>("repo_file_changes", {}, wakeOpts)
+      .then((r) => setChanges(r.changes ?? []))
+      .catch((e: unknown) => {
+        setChanges([]);
+        setErr(e instanceof Error ? e.message : String(e));
+      });
+  };
+  useEffect(() => {
+    loadChanges();
+    // 同上:依赖均稳定,taskId 变化时重拉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
+  const closePreview = () => {
+    reqRef.current++;
+    setPreview(null);
+  };
+
+  const selectTab = (next: Tab) => {
+    if (next === tab) return;
+    closePreview();
+    setTab(next);
+  };
+
+  const openDiff = (path: string) => {
+    const req = ++reqRef.current;
+    setPreview({ path, mode: "diff", state: "loading", text: "" });
+    ensureCtrl()
+      .call<{ diff?: string }>("repo_file_diff", { path, unified: true, context_lines: 20 }, wakeOpts)
+      .then((r) => {
+        if (req === reqRef.current) setPreview({ path, mode: "diff", state: "ready", text: r.diff ?? "" });
+      })
+      .catch((e: unknown) => {
+        if (req === reqRef.current) setPreview({ path, mode: "diff", state: "error", text: e instanceof Error ? e.message : String(e) });
+      });
+  };
+
+  // Esc(window capture):预览开着只关预览,消费即截断——CloudTaskView 在
+  // window 上还挂着「关整个面板」与审批热键。本组件是其子节点,effect 先于
+  // 父级注册,同为 capture 时先到先执行,截断才轮不到父级关面板
+  const previewOpenRef = useRef(false);
+  previewOpenRef.current = preview !== null;
+  useEffect(() => {
+    const onEsc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || !previewOpenRef.current) return;
+      e.stopImmediatePropagation();
+      reqRef.current++;
+      setPreview(null);
+    };
+    window.addEventListener("keydown", onEsc, true);
+    return () => window.removeEventListener("keydown", onEsc, true);
+  }, []);
+
   const download = async (f: CloudRepoFile) => {
     if (!vmId) return;
     const filename = isDir(f) ? f.name + ".zip" : f.name;
@@ -125,28 +195,57 @@ export function CloudFiles({
     } finally {
       setUploading(false);
       list(dir);
+      loadChanges(); // 上传即产生改动,变动列表同步刷新
     }
   };
 
   const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
 
+  // 预览打开后列表/预览上下分栏(与本地 FilesDrawer 同构,免拖拽版:
+  // 列表定比、预览吃剩余)
+  const listClass = preview
+    ? "min-h-0 h-[38%] max-h-[calc(100%-190px)] shrink-0 overflow-x-hidden overflow-y-auto p-1"
+    : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-1";
+
   return (
     <section aria-label={t("cloud.files.title")} className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-base-300 px-3">
-        <span className="text-sm font-semibold">{t("cloud.files.title")}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-base-content/50">
-          /{["workspace", dir].filter(Boolean).join("/")}
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-base-300 px-2">
+        {/* 文件/变动双 tab(与本地 FilesDrawer 同形态);变动带计数徽标 */}
+        <div role="tablist" className="tabs tabs-border shrink-0">
+          <button
+            type="button"
+            role="tab"
+            className={`tab transition-colors duration-150 ${tab === "files" ? "tab-active" : ""}`}
+            onClick={() => selectTab("files")}
+          >
+            {t("files.tab.files")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`tab gap-1.5 transition-colors duration-150 ${tab === "changes" ? "tab-active" : ""}`}
+            onClick={() => selectTab("changes")}
+          >
+            {t("files.tab.changes")}
+            {changes && changes.length > 0 && <span className="badge badge-soft badge-primary badge-xs">{changes.length}</span>}
+          </button>
+        </div>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-base-content/50">
+          {tab === "files" ? `/${["workspace", dir].filter(Boolean).join("/")}` : ""}
         </span>
         <button
           type="button"
           aria-label={t("cloud.files.refresh")}
           title={t("cloud.files.refresh")}
           className="btn btn-ghost btn-square btn-xs"
-          onClick={() => list(dir)}
+          onClick={() => {
+            list(dir);
+            loadChanges();
+          }}
         >
           <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
         </button>
-        {vmId && (
+        {vmId && tab === "files" && (
           <>
             <input
               ref={fileRef}
@@ -179,13 +278,18 @@ export function CloudFiles({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-1">
+      {tab === "changes" ? (
+        <div className={listClass}>
+          <Changes changes={changes} activePath={preview?.path ?? null} onOpen={openDiff} />
+        </div>
+      ) : (
+      <div className={listClass}>
         {files === null ? (
           <div className="flex justify-center py-8">
             <span className="loading loading-spinner loading-sm text-base-content/40" aria-label={t("cloud.files.loading")} />
           </div>
         ) : (
-          <ul className="menu menu-sm w-full p-0">
+          <ul className="menu w-full p-0">
             {dir && (
               <li>
                 <button type="button" onClick={() => setDir(parent)}>
@@ -234,6 +338,10 @@ export function CloudFiles({
           </ul>
         )}
       </div>
+      )}
+      {preview && (
+        <Preview model={preview} status={(changes ?? []).find((c) => c.path === preview.path)?.status} onClose={closePreview} />
+      )}
     </section>
   );
 }

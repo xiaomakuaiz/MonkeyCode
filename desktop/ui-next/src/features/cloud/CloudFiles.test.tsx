@@ -19,6 +19,12 @@ function fakeControl(): { ctl: CloudControl; calls: { kind: string; payload?: Re
   const ctl: CloudControl = {
     call<T>(kind: string, payload?: Record<string, unknown>): Promise<T> {
       calls.push({ kind, payload });
+      if (kind === "repo_file_changes") {
+        return Promise.resolve({ changes: [{ path: "src/main.ts", status: "M", additions: 3, deletions: 1 }] } as T);
+      }
+      if (kind === "repo_file_diff") {
+        return Promise.resolve({ diff: "@@ -1 +1 @@\n-old\n+new" } as T);
+      }
       const dir = (payload?.path as string) ?? "";
       return Promise.resolve({ files: byDir[dir] ?? [] } as T);
     },
@@ -57,6 +63,25 @@ describe("CloudFiles", () => {
     render(<CloudFiles taskId="t1" vmId="vm1" makeControl={() => bad} />);
     expect((await screen.findByRole("alert")).textContent).toContain("环境离线");
     expect(screen.getByText("上传文件")).toBeTruthy();
+  });
+
+  it("改动 tab:repo_file_changes 计数徽标,点条目拉 diff 预览", async () => {
+    const { ctl, calls } = fakeControl();
+    render(<CloudFiles taskId="t1" vmId="vm1" makeControl={() => ctl} />);
+    await screen.findByText("README.md");
+    // 徽标计数(挂载即拉,与列目录同一条 WS)
+    const tab = await screen.findByRole("tab", { name: /改动/ });
+    expect(tab.textContent).toContain("1");
+    await userEvent.click(tab);
+    // 改动条目 = basename + 目录 + 云端超集字段 +N/-N + 状态徽标
+    await screen.findByText("main.ts");
+    expect(screen.getByText("+3")).toBeTruthy();
+    expect(screen.getByText("-1")).toBeTruthy();
+    await userEvent.click(screen.getByText("main.ts"));
+    await screen.findByText("new"); // diff 预览落地(DiffView 的 +/- 记号与行文本分列)
+    expect(calls.some((c) => c.kind === "repo_file_diff" && c.payload?.path === "src/main.ts")).toBe(true);
+    // 改动 tab 不显示上传入口与路径条
+    expect(screen.queryByText("上传文件")).toBeNull();
   });
 
   it("fmtSize 可读格式", () => {
