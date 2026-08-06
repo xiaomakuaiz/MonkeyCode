@@ -438,7 +438,7 @@ export function App() {
           }}
         />
         {settingsOpen ? (
-          <SettingsView onClose={() => setSettingsOpen(false)} />
+          <SettingsView onClose={() => setSettingsOpen(false)} hasRunningTask={sessions.some((s) => s.status === "running")} />
         ) : creating ? (
           <NewTaskModal
             open

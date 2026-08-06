@@ -7,9 +7,10 @@
 //   桥接失败不阻断——MonkeyCode 卡保留手动「连接」入口;
 // - 断开 MonkeyCode 必须先吊销会员模型密钥再清会话(disconnectMc 收口,
 //   顺序由 lib 与本组件测试双重钉住);
-// - 同步(baizhi_sync / mc_models_sync)本期只做触发与结果提示,不落盘。
-//   与设置表单的深度联动(密钥复用 knownKeys、结果并入模型页)留接口:
-//   宿主可传 onSyncResult 接走原始结果,后续版本在 SettingsView 接线。
+// - 同步(baizhi_sync / mc_models_sync)结果经 onSyncResult 交
+//   SettingsView.applySync 并入草稿;干净表单+无任务在跑时那边自动保存,
+//   否则回退保存条——结果行按 autoSaved/blocked 说明白落到哪一步了
+//   (密钥复用 knownKeys 联动留后续版本)。
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -42,6 +43,25 @@ export function profileName(p?: Record<string, unknown>): string {
 }
 
 type Msg = { text: string; error?: boolean } | null;
+
+/** applySync 的回执:跳过名单 + 自动保存结论(blocked = 为何回退保存条)。 */
+export interface SyncApplied {
+  skipped: string[];
+  autoSaved: boolean;
+  blocked?: "dirty" | "busy";
+}
+
+type T = ReturnType<typeof useI18n>["t"];
+
+/** 同步结果行尾注:自动保存已生效 / 因何需要手动保存。applied 缺席
+ * (浏览器模式等没接宿主)退回中性的「保存后生效」。 */
+function syncOutcome(t: T, applied: SyncApplied | undefined | void): string {
+  if (!applied) return t("account.sync.manualSave");
+  if (applied.autoSaved) return t("account.sync.autoSaved");
+  if (applied.blocked === "dirty") return t("account.sync.blockedDirty");
+  if (applied.blocked === "busy") return t("account.sync.blockedBusy");
+  return t("account.sync.manualSave");
+}
 
 function MsgLine({ msg }: { msg: Msg }) {
   if (!msg) return null;
@@ -99,8 +119,8 @@ function BaizhiCard({
 }: {
   status: BaizhiStatus;
   onChanged: () => Promise<void>;
-  /** 同步结果交宿主并入设置草稿;返回跨组撞名的跳过名单(卡内外显) */
-  onResult?: (r: BaizhiSyncResult) => { skipped: string[] } | undefined | void;
+  /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
+  onResult?: (r: BaizhiSyncResult) => SyncApplied | undefined | void;
 }) {
   const { t } = useI18n();
   const [syncing, setSyncing] = useState(false);
@@ -121,6 +141,7 @@ function BaizhiCard({
             models: r.models.length,
             mcp: Object.keys(r.mcp_servers ?? {}).length,
           }) +
+          syncOutcome(t, applied) +
           notes +
           skipped,
       });
@@ -177,8 +198,8 @@ function McCard({
   /** 百智云登录后自动桥接的失败信息(不阻断,卡内外显并留手动重试) */
   bridgeErr: string;
   onChanged: () => Promise<void>;
-  /** 同步结果交宿主并入设置草稿;返回跨组撞名的跳过名单(卡内外显) */
-  onResult?: (r: McModelsSyncResult) => { skipped: string[] } | undefined | void;
+  /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
+  onResult?: (r: McModelsSyncResult) => SyncApplied | undefined | void;
 }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState<"connect" | "disconnect" | "sync" | null>(null);
@@ -220,7 +241,7 @@ function McCard({
       const applied = onResult?.(r);
       const notes = r.notes?.length ? ` ${r.notes.join("；")}` : "";
       const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join("、") })}` : "";
-      setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + notes + skipped });
+      setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + syncOutcome(t, applied) + notes + skipped });
     } catch (e) {
       setMsg({ text: errMsg(e), error: true });
     } finally {
@@ -310,8 +331,8 @@ function McCard({
 export function AccountSection({
   onSyncResult,
 }: {
-  /** 同步结果并入设置草稿(SettingsView.applySync);返回跨组撞名跳过名单 */
-  onSyncResult?: (r: BaizhiSyncResult | McModelsSyncResult) => { skipped: string[] } | undefined | void;
+  /** 同步结果并入设置草稿(SettingsView.applySync);回执含跳过名单与自动保存结论 */
+  onSyncResult?: (r: BaizhiSyncResult | McModelsSyncResult) => SyncApplied | undefined | void;
 } = {}) {
   const { t } = useI18n();
   const inShell = inDesktopShell();

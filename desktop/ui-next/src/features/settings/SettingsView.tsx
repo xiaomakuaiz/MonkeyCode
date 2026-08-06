@@ -22,7 +22,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
-import { AccountSection } from "@/features/account/AccountSection";
+import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
 import { AboutSection } from "./AboutSection";
 import { McpSection } from "./McpSection";
 import { ModelsSection } from "./ModelsSection";
@@ -175,7 +175,15 @@ function EnvSection({
   );
 }
 
-export function SettingsView({ onClose }: { onClose: () => void }) {
+export function SettingsView({
+  onClose,
+  hasRunningTask = false,
+}: {
+  onClose: () => void;
+  /** 有本地会话在跑(status==="running"):同步后不自动保存重启引擎,
+   * 隐式踹掉运行中的轮次不可接受;回退保存条由用户择机保存(旧 UI 同款口径) */
+  hasRunningTask?: boolean;
+}) {
   // 桌面客户端惯例:Esc 离开设置视图(capture 消费,不落到下层快捷键)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -228,16 +236,26 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     setSaveError("");
   };
 
-  // 账号页同步结果并入草稿(整组替换,纯逻辑在 settingsForm):不自动保存
-  // ——保存会重启引擎,这里看不到是否有任务在跑,交给保存条让用户择机确认;
-  // 跳过名单(跨组撞名先到先得)返回给账号卡就地外显。
+  // 账号页同步结果并入草稿(整组替换,纯逻辑在 settingsForm);跳过名单
+  // (跨组撞名先到先得)返回给账号卡就地外显。
+  // 自动保存决策(旧 UI settings.tsx autoSaveDecision 随迁,2026-08-06
+  // 用户报障"同步不自动保存了"即此回归):同步前表单干净且无任务在跑 →
+  // 直接走保存主路径,免手动点保存;脏表单(不能捎带用户没确认的修改)/
+  // 有任务在跑(保存重启引擎会踹掉运行轮次)→ 回退保存条,原因给卡片外显。
   // 基准取 ref 而非闭包:同步是"发请求→等数秒→回来再合并",登录顺带的
   // 双路同步(百智云+会员)先后到达,拿闭包里的旧草稿会把先到的一路抹掉
   const draftRef = useRef<SettingsDraft | null>(null);
   draftRef.current = draft;
-  const applySync = (r: BaizhiSyncResult | McModelsSyncResult): { skipped: string[] } | undefined => {
+  const cfgRef = useRef<DesktopConfig | null>(null);
+  cfgRef.current = cfg;
+  const savingRef = useRef(false);
+  savingRef.current = saving;
+  const applySync = (r: BaizhiSyncResult | McModelsSyncResult): SyncApplied | undefined => {
     let next = draftRef.current;
-    if (!next) return undefined;
+    const conf = cfgRef.current;
+    if (!next || !conf) return undefined;
+    // 脏判定必须在合并前(合并后恒脏);与保存条同一口径(载荷比较)
+    const wasDirty = !payloadEquals(buildPayload(conf, next), buildPayload(conf, draftFromConfig(conf)));
     const fromBaizhi = "mcp_servers" in r;
     const source = r.models[0]?.source || (fromBaizhi ? SOURCE_BAIZHI : SOURCE_MONKEYCODE);
     let skipped: string[] = [];
@@ -250,7 +268,12 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     draftRef.current = next;
     setDraft(next);
     setSaveError("");
-    return { skipped };
+    // 保存在途(双路同步第一路刚落地):不再起一次,留给保存条兜底
+    if (savingRef.current) return { skipped, autoSaved: false };
+    if (wasDirty) return { skipped, autoSaved: false, blocked: "dirty" };
+    if (hasRunningTask) return { skipped, autoSaved: false, blocked: "busy" };
+    void save(next);
+    return { skipped, autoSaved: true };
   };
 
   const draftErrText = (e: DraftError): string => {
@@ -268,25 +291,34 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const save = async () => {
-    if (!cfg || !draft || !payload) return;
-    const invalid = validateDraft(draft);
+  /** target:同步自动保存传入合并后的草稿(state 提交尚未落地,闭包里的
+   * draft 是旧值);保存条点击不传,存当前草稿。 */
+  const save = async (target?: SettingsDraft) => {
+    const conf = cfgRef.current;
+    const d = target ?? draft;
+    if (!conf || !d) return;
+    const invalid = validateDraft(d);
     if (invalid) {
       setSaveError(draftErrText(invalid));
       return;
     }
+    const p = buildPayload(conf, d);
     setSaving(true);
+    savingRef.current = true;
     setSaveError("");
     try {
-      await saveConfig(payload);
+      await saveConfig(p);
       // 保存即真值:壳按载荷写盘(壳自有偏好以磁盘合并,不在本类型内),
-      // 表单态重建为已保存形态,保存条随之收起;引擎重启由横幅外显
-      setCfg(payload);
-      setDraft(draftFromConfig(payload));
+      // 表单态重建为已保存形态,保存条随之收起;引擎重启由横幅外显。
+      // 在途期间草稿又变过(如双路同步第二路并入):保留更新的草稿只换
+      // 基线,不许把后到的合并结果盖回已保存形态
+      setCfg(p);
+      setDraft((cur) => (cur === d ? draftFromConfig(p) : cur));
     } catch (e) {
       setSaveError(errMsg(e)); // 壳的 Err 是中文,直接外显
     } finally {
       setSaving(false);
+      savingRef.current = false;
     }
   };
 

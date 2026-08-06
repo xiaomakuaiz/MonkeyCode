@@ -28,6 +28,8 @@ function stubShell(opts?: {
   sound?: boolean;
   distros?: string[];
   save?: () => Promise<unknown>;
+  /** 额外命令(账号分区的 baizhi/mc 系列等),优先于内置分支 */
+  extra?: Record<string, () => unknown>;
 }) {
   const calls: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
   const listeners: Record<string, (e: { payload: unknown }) => void> = {};
@@ -35,6 +37,7 @@ function stubShell(opts?: {
     core: {
       invoke: (cmd: string, args?: Record<string, unknown>) => {
         calls.push({ cmd, args });
+        if (opts?.extra && cmd in opts.extra) return Promise.resolve(opts.extra[cmd]!());
         switch (cmd) {
           case "get_config":
             return Promise.resolve(structuredClone(opts?.config ?? baseConfig));
@@ -240,6 +243,57 @@ describe("MCP 编辑(与模型同一份脏状态)", () => {
       fetch: { url: "https://mcp" },
       files: { command: "npx", args: ["-y", "srv"], env: { HOME: "/h" } },
     });
+  });
+});
+
+describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
+  // 账号分区已登录 + 会员同步返回一条模型
+  const syncExtra = () => ({
+    mc_status: () => ({ logged_in: true, user: { name: "李四" } }),
+    baizhi_status: () => ({ logged_in: false, host: "baizhi.cloud" }),
+    mc_models_sync: () => ({
+      models: [{ name: "member-m", base_url: "https://m", api_key: "k", model: "mm", source: "monkeycode" }],
+    }),
+  });
+  const syncMemberModels = async () => {
+    await userEvent.click(screen.getByRole("button", { name: "账号" }));
+    await userEvent.click(await screen.findByRole("button", { name: "同步会员模型" }));
+  };
+
+  it("干净表单+无任务在跑:同步后直接 save_config,提示「已自动保存」", async () => {
+    const { calls } = stubShell({ extra: syncExtra() });
+    render(<SettingsView onClose={() => {}} />);
+    await openModels(); // 等配置载入(基线就绪)再去账号页
+    await syncMemberModels();
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
+    expect((await screen.findByText(/已获取 1 个会员模型/)).textContent).toContain("已自动保存");
+    // 载荷含同步条目(落盘名带 @monkeycode 来源后缀)
+    const saved = calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig;
+    expect(saved.models.some((m) => m.name.startsWith("member-m@"))).toBe(true);
+  });
+
+  it("有任务在跑:不自动保存(重启引擎会踹掉任务),提示原因并留保存条", async () => {
+    const { calls } = stubShell({ extra: syncExtra() });
+    render(<SettingsView onClose={() => {}} hasRunningTask />);
+    await openModels();
+    await syncMemberModels();
+    expect((await screen.findByText(/已获取 1 个会员模型/)).textContent).toContain("有任务正在运行");
+    expect(calls.some((c) => c.cmd === "save_config")).toBe(false);
+    expect(screen.getByRole("button", { name: "保存" })).toBeDefined(); // 合并已入草稿,保存条兜底
+  });
+
+  it("脏表单:不自动保存(不捎带未确认的修改),提示原因", async () => {
+    const { calls } = stubShell({ extra: syncExtra() });
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    // 先弄脏表单
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    const name = screen.getByRole("textbox", { name: "名称" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "主力2");
+    await syncMemberModels();
+    expect((await screen.findByText(/已获取 1 个会员模型/)).textContent).toContain("未保存的修改");
+    expect(calls.some((c) => c.cmd === "save_config")).toBe(false);
   });
 });
 
