@@ -228,16 +228,20 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     expect(bar.value).toBe(1_500_000);
     expect(bar.max).toBe(3_000_000);
     expect(screen.getByText("剩余 1.5M / 3.0M")).toBeDefined();
-    expect(screen.getByText("积分 12")).toBeDefined();
+    // 积分改 stats 大数值卡:标题与数值分节点
+    expect(screen.getByText("积分")).toBeDefined();
+    expect(screen.getByText("12")).toBeDefined();
     expect(screen.getByText("已邀请 2 人")).toBeDefined();
-    expect(screen.getByText("https://mc.example/?ic=u1")).toBeDefined();
+    // 邀请链接收进复制按钮(title 露全链接),不再明文铺链接
+    expect(screen.getByTitle("https://mc.example/?ic=u1")).toBeDefined();
+    expect(screen.getByRole("button", { name: "复制邀请链接" })).toBeDefined();
 
     // 签到三态:可签 → 成功后刷新为「今日已签到」禁用;积分随重拉一起更新
     await userEvent.click(screen.getByRole("button", { name: "签到 +100" }));
     expect(calls.some((c) => c.cmd === "mc_checkin")).toBe(true);
     const done = (await screen.findByRole("button", { name: "今日已签到" })) as HTMLButtonElement;
     expect(done.disabled).toBe(true);
-    expect(screen.getByText("积分 112")).toBeDefined();
+    expect(screen.getByText("112")).toBeDefined();
   });
 
   it("签到失败(重复签到等业务提示):就地报错,按钮不进入已签态", async () => {
@@ -269,7 +273,7 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     render(<AccountSection />);
     await userEvent.click(await screen.findByRole("button", { name: "同步模型与 MCP" }));
     expect(calls.find((c) => c.cmd === "baizhi_sync")?.args).toEqual({ knownKeys: [] });
-    expect((await screen.findByText(/已获取 3 个模型、1 个 MCP 配置/)).textContent).toContain("暂不自动写入设置");
+    expect((await screen.findByText(/已获取 3 个模型、1 个 MCP 配置/)).textContent).toContain("保存后生效");
 
     await userEvent.click(screen.getByRole("button", { name: "同步会员模型" }));
     expect(calls.some((c) => c.cmd === "mc_models_sync")).toBe(true);

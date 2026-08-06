@@ -6,7 +6,11 @@
 // - MCP 表单 ⇄ mcpServers(与内核 mcp.json 同构):表单未呈现的字段
 //   (disabled 等)进 extra 原样往返,不因一次保存丢失。
 // - 表单外的顶层字段(mc_* / 壳自有偏好)从载入的配置原样透传(全量写回)。
+// - 同步并入(百智云/会员模型 → 草稿):整组替换 + 跨组撞名先到先得,
+//   移植旧工程 settingsConfig 同名函数,语义注释随迁。
+import type { BaizhiSyncedModel } from "@/lib/ipc/account";
 import type { DesktopConfig, HostModel } from "@/lib/ipc/config";
+import { modelSourceRank, sameModelName, stripSourceSuffix, SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
 
 // ---- MCP 编辑模型与序列化 ----
 
@@ -156,6 +160,103 @@ export function buildPayload(base: DesktopConfig, draft: SettingsDraft): Desktop
  *  JSON 串比较即语义比较;undefined 字段序列化时自然脱落,两侧一致。 */
 export function payloadEquals(a: DesktopConfig, b: DesktopConfig): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// ---- 同步并入(百智云/会员模型 → 草稿) ----
+
+const SOURCE_SUFFIX: Record<string, string> = {
+  [SOURCE_BAIZHI]: `@${SOURCE_BAIZHI}`,
+  [SOURCE_MONKEYCODE]: `@${SOURCE_MONKEYCODE}`,
+};
+
+/** 同步条目的落盘名 = 短名 + 来源后缀(展示层剥掉;重同步不叠加)。
+ * 会员条目再缀服务端配置 id:名字取自 remark(后台人起的备注),同一批里
+ * 重名很正常,只靠来源后缀两条还是同名 → 仍会丢掉一条。id 由条目自身决定,
+ * 不受同批其他条目影响,所以名字既唯一又不会因别的条目增删而改变。
+ * 百智云条目的 name 本就是模型 id(壳侧 sync),组内天然唯一,不必再缀。 */
+export function syncedName(name: string, source?: string, id?: string): string {
+  const base = stripSourceSuffix(name.trim()).trim();
+  const suffix = source ? SOURCE_SUFFIX[source] : undefined;
+  if (!base || !suffix) return base;
+  const entryId = source === SOURCE_MONKEYCODE ? (id?.trim() ?? "") : "";
+  return entryId ? `${base}${suffix}#${entryId}` : `${base}${suffix}`;
+}
+
+/** 同步来源组整组替换(模型与 MCP 共用语义):非本组条目原样保留,本组替换
+ * 为本次同步集合——下架的旧同步条目随之移除(重同步清理)。
+ * 跨组撞名一律先到先得:名称是引擎寻址键(会话/记忆按名引用),不同来源的
+ * 同名条目是不同通道甚至不同计费主体,同步是登录后自动发生的,绝不静默
+ * 换通道;后来者跳过,由调用方外显跳过名单(想换通道:删除原条目再重同步)。 */
+export function replaceSourceGroup<T extends { name: string; source?: string }>(
+  cur: T[],
+  synced: T[],
+  source: string,
+): T[] {
+  const kept = cur.filter((m) => m.name.trim() && m.source !== source);
+  const byName = new Map(kept.map((m) => [m.name.trim(), m]));
+  const keptNames = new Set(byName.keys());
+  for (const e of synced) {
+    const name = e.name.trim();
+    if (keptNames.has(name)) continue;
+    byName.set(name, e);
+  }
+  return [...byName.values()];
+}
+
+/** 展示/落盘的分组排序:组间按来源优先级(modelSourceRank 单一出处),
+ * 组内保持原相对顺序(稳定排序)。 */
+export function sortModelsBySource<T extends { source?: string }>(list: T[]): T[] {
+  return [...list].sort((a, b) => modelSourceRank(a.source) - modelSourceRank(b.source));
+}
+
+export interface SyncMergeResult {
+  draft: SettingsDraft;
+  /** 跨组撞名被跳过的条目(展示名,带 @source 的落盘名是实现细节) */
+  skipped: string[];
+}
+
+/** 同步模型并入草稿:整组替换 + 按来源重排;默认模型按名字重新定位——
+ * 被移除回退首个未锁条目,降档重同步后原默认可能变锁定同样让位(锁定条目
+ * 不物化,default 落它头上等于没有默认)。空集合不视为"清空该组"。 */
+export function mergeSyncedModels(
+  draft: SettingsDraft,
+  syncedModels: BaizhiSyncedModel[],
+  source: string,
+): SyncMergeResult | null {
+  if (!syncedModels.length) return null;
+  const defaultName = draft.models[draft.defaultIdx]?.name?.trim() ?? "";
+  const synced: HostModel[] = syncedModels.map((sm) => ({
+    name: syncedName(sm.name, source, sm.id),
+    provider: sm.provider,
+    base_url: sm.base_url,
+    api_key: sm.api_key,
+    model: sm.model,
+    context_window: sm.context_window,
+    max_output: sm.max_output,
+    think: sm.think,
+    vision: sm.vision,
+    source: sm.source,
+    locked: sm.locked,
+    owner: sm.owner,
+  }));
+  const outside = new Set(draft.models.filter((m) => m.source !== source && m.name.trim()).map((m) => m.name.trim()));
+  const skipped = synced.filter((m) => outside.has(m.name.trim())).map((m) => stripSourceSuffix(m.name.trim()));
+  const next = sortModelsBySource(replaceSourceGroup(draft.models, synced, source));
+  // 精确没中再按宽松口径找一次:加后缀前落盘的默认项记的是裸名,不这么兜
+  // 一次,升级后第一次同步会把默认模型悄悄挪到列表第一条
+  let di = next.findIndex((m) => m.name.trim() === defaultName);
+  if (di < 0) di = next.findIndex((m) => sameModelName(m.name, defaultName));
+  if (di < 0 || next[di]?.locked) di = next.findIndex((m) => !m.locked);
+  di = di >= 0 ? di : 0;
+  return { draft: { ...draft, models: next, defaultIdx: di }, skipped };
+}
+
+/** 同步 MCP 并入草稿(百智云):整组替换,空集不清组(如网关未开通则不触碰;
+ * 对齐模型语义)。同步条目已带 source=baizhi。 */
+export function mergeSyncedMcps(draft: SettingsDraft, servers: Record<string, unknown>): SettingsDraft {
+  const synced = serversToMcps(servers);
+  if (!synced.length) return draft;
+  return { ...draft, mcps: replaceSourceGroup(draft.mcps, synced, SOURCE_BAIZHI) };
 }
 
 // ---- 保存前校验(首个错误即返回,保存条外显) ----

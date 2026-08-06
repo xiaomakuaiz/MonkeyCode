@@ -1,7 +1,7 @@
 // MCP 服务器编辑:与模型列表同一套行内展开交互与脏状态(同一份草稿)。
 // 条目形态 = settingsForm.McpEntry(与内核 mcp.json 的 mcpServers 同构),
 // 表单外字段进 extra 随保存透传。
-import { Plus } from "lucide-react";
+import { ChevronDown, Plus } from "lucide-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -41,29 +41,46 @@ export function McpSection({
           </button>
         </div>
       )}
+      {/* 行形态与模型列表同款:一个 list 容器 + list-row(行级 hover,
+          左段整体是展开钮,动作与旋转箭头靠右) */}
+      {draft.mcps.length > 0 && (
+      <ul className="list divide-y divide-base-300 rounded-box border border-base-300 bg-base-100">
       {draft.mcps.map((m, i) => {
         const open = expanded === i;
         return (
-          <div
-            key={i}
-            className={`collapse collapse-arrow border border-base-300 bg-base-100 ${open ? "collapse-open" : "collapse-close"}`}
-          >
-            <div className="collapse-title flex items-center gap-2 py-1.5 ps-2">
+          <li key={i} className="flex flex-col">
+            {/* 整行是展开热区;删除截断冒泡,箭头恒在行尾(同模型行) */}
+            <div
+              className="group list-row cursor-pointer items-center gap-2 rounded-none px-4 py-2 transition-colors hover:bg-base-200/40"
+              onClick={() => setExpanded(open ? null : i)}
+            >
               <button
                 type="button"
                 aria-expanded={open}
-                className="btn btn-ghost btn-sm min-w-0 flex-1 justify-start gap-2 px-1 font-normal"
-                onClick={() => setExpanded(open ? null : i)}
+                className="list-col-grow flex min-w-0 cursor-pointer items-center gap-2 text-start"
               >
-                <span className="truncate font-semibold">{m.name.trim() || t("settings.models.unnamed")}</span>
+                <span className="truncate">{m.name.trim() || t("settings.models.unnamed")}</span>
                 <span className="badge badge-ghost badge-sm shrink-0">{m.type}</span>
               </button>
-              <button type="button" className="btn btn-ghost btn-xs shrink-0 text-error" onClick={() => remove(i)}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs shrink-0 text-base-content/40 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-error"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  remove(i);
+                }}
+              >
                 {t("settings.mcp.delete")}
               </button>
+              <ChevronDown
+                size={14}
+                strokeWidth={1.75}
+                aria-hidden
+                className={`shrink-0 text-base-content/40 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+              />
             </div>
             {open && (
-              <div className="collapse-content grid grid-cols-2 gap-x-3 gap-y-1">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-base-300 px-4 pt-2 pb-4">
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.mcp.name")}</legend>
                   <input
@@ -133,9 +150,11 @@ export function McpSection({
                 </fieldset>
               </div>
             )}
-          </div>
+          </li>
         );
       })}
+      </ul>
+      )}
       {draft.mcps.length > 0 && (
         <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
           <Plus size={14} strokeWidth={2} aria-hidden />

@@ -3,16 +3,20 @@
 // (include: src/**/*.test.tsx)——纯函数在 jsdom 里跑同样成立。
 import { describe, expect, it } from "vitest";
 
+import type { BaizhiSyncedModel } from "@/lib/ipc/account";
 import type { DesktopConfig } from "@/lib/ipc/config";
 import {
   buildPayload,
   draftFromConfig,
   mcpsToServers,
+  mergeSyncedMcps,
+  mergeSyncedModels,
   parseKV,
   payloadEquals,
   serversToMcps,
   validateDraft,
   type McpEntry,
+  type SettingsDraft,
 } from "./settingsForm";
 
 const model = (over: Partial<import("@/lib/ipc/config").HostModel> = {}) => ({
@@ -188,5 +192,72 @@ describe("validateDraft(保存前拦截,首错即返)", () => {
       kind: "mcpIncomplete",
       name: "fetch",
     });
+  });
+});
+
+describe("同步并入(mergeSyncedModels / mergeSyncedMcps)", () => {
+  const synced = (over: Partial<BaizhiSyncedModel> = {}): BaizhiSyncedModel => ({
+    name: "glm-5",
+    provider: "openai",
+    base_url: "https://gw",
+    api_key: "k",
+    model: "glm-5",
+    source: "baizhi",
+    ...over,
+  });
+  const draft = (models: ReturnType<typeof model>[], defaultIdx = 0): SettingsDraft => ({
+    models,
+    defaultIdx,
+    mcps: [],
+    kernelEnv: "",
+  });
+
+  it("落盘名加来源后缀(会员条目再缀配置 id);整组替换并按来源排序", () => {
+    const d = draft([model({ name: "手工" })]);
+    const r = mergeSyncedModels(
+      d,
+      [
+        synced({ name: "glm-5" }),
+        synced({ name: "旗舰", source: "monkeycode", id: "c1" }),
+      ],
+      "baizhi",
+    );
+    // 本次按 baizhi 组并入:monkeycode 条目也带后缀落名(以自身 source 计)
+    expect(r!.draft.models.map((m) => m.name)).toContain("glm-5@baizhi");
+    // 排序:同步组在前,手工条目恒尾
+    expect(r!.draft.models.at(-1)?.name).toBe("手工");
+    expect(r!.skipped).toEqual([]);
+  });
+
+  it("跨组撞名先到先得:后来者跳过并回报展示名", () => {
+    const d = draft([model({ name: "glm-5@baizhi", source: "monkeycode" })]);
+    const r = mergeSyncedModels(d, [synced()], "baizhi");
+    expect(r!.skipped).toEqual(["glm-5"]);
+    // 原（他组）条目保留,后来者未进列表(仍只有一条该名)
+    expect(r!.draft.models.filter((m) => m.name === "glm-5@baizhi")).toHaveLength(1);
+    expect(r!.draft.models[0]?.source).toBe("monkeycode");
+  });
+
+  it("默认模型按名字重定位;原默认被移除/变锁定则落首个未锁条目", () => {
+    const d = draft(
+      [
+        model({ name: "old@baizhi", source: "baizhi" }),
+        model({ name: "手工" }),
+      ],
+      0, // 默认 = old@baizhi(重同步后下架)
+    );
+    const r = mergeSyncedModels(d, [synced({ name: "new", locked: true }), synced({ name: "new2" })], "baizhi");
+    const next = r!.draft;
+    // old 下架,首个未锁条目接任默认(锁定条目不物化,不能当默认)
+    expect(next.models[next.defaultIdx]?.name).toBe("new2@baizhi");
+  });
+
+  it("空集合不清组;MCP 空集不触碰,非空整组替换(手工条目保留)", () => {
+    const d0 = draft([model({ name: "a@baizhi", source: "baizhi" })]);
+    expect(mergeSyncedModels(d0, [], "baizhi")).toBeNull();
+    const withMcp: SettingsDraft = { ...d0, mcps: [mcp({ name: "mine" }), mcp({ name: "old", source: "baizhi" })] };
+    expect(mergeSyncedMcps(withMcp, {}).mcps.map((m) => m.name)).toEqual(["mine", "old"]);
+    const merged = mergeSyncedMcps(withMcp, { toolkit: { url: "https://x", source: "baizhi" } });
+    expect(merged.mcps.map((m) => m.name).sort()).toEqual(["mine", "toolkit"]);
   });
 });

@@ -192,8 +192,9 @@ function SmsTab({ onLoggedIn }: { onLoggedIn: () => void }) {
   );
 }
 
-/** MonkeyCode 账号密码登录(不经百智云;壳内自动 PoW)。 */
-function PasswordForm({ onLoggedIn }: { onLoggedIn: () => void }) {
+/** MonkeyCode 账号密码登录(不经百智云;壳内自动 PoW)。导出给账号卡的
+ *  「未连接」态复用(百智云已登录但桥接不可用/不同账号的手动路径)。 */
+export function PasswordForm({ onLoggedIn }: { onLoggedIn: () => void }) {
   const { t } = useI18n();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -276,7 +277,11 @@ export function LoginPanel({
       <div className="flex max-w-sm flex-col gap-1">
         <p className="text-xs text-base-content/60">{t("account.pw.hint")}</p>
         <PasswordForm onLoggedIn={onMcLoggedIn} />
-        <button type="button" className="btn btn-link btn-xs self-start" onClick={() => setMode("wechat")}>
+        <button
+          type="button"
+          className="btn btn-link btn-xs self-start px-0 font-normal text-base-content/50 no-underline hover:text-base-content"
+          onClick={() => setMode("wechat")}
+        >
           {t("account.pw.back")}
         </button>
       </div>
@@ -308,7 +313,11 @@ export function LoginPanel({
       </div>
       {mode === "wechat" ? <WechatTab onLoggedIn={onBaizhiLoggedIn} /> : <SmsTab onLoggedIn={onBaizhiLoggedIn} />}
       {withPassword && (
-        <button type="button" className="btn btn-link btn-xs self-start" onClick={() => setMode("password")}>
+        <button
+          type="button"
+          className="btn btn-link btn-xs self-start px-0 font-normal text-base-content/50 no-underline hover:text-base-content"
+          onClick={() => setMode("password")}
+        >
           {t("account.pw.entry")}
         </button>
       )}

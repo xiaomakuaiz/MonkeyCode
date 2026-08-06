@@ -7,7 +7,7 @@
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
 import { Brain, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n, type Locale } from "@/lib/i18n";
 import {
@@ -26,9 +26,13 @@ import { AccountSection } from "@/features/account/AccountSection";
 import { AboutSection } from "./AboutSection";
 import { McpSection } from "./McpSection";
 import { ModelsSection } from "./ModelsSection";
+import type { BaizhiSyncResult, McModelsSyncResult } from "@/lib/ipc/account";
+import { SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
 import {
   buildPayload,
   draftFromConfig,
+  mergeSyncedMcps,
+  mergeSyncedModels,
   payloadEquals,
   validateDraft,
   type DraftError,
@@ -224,6 +228,31 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
     setSaveError("");
   };
 
+  // 账号页同步结果并入草稿(整组替换,纯逻辑在 settingsForm):不自动保存
+  // ——保存会重启引擎,这里看不到是否有任务在跑,交给保存条让用户择机确认;
+  // 跳过名单(跨组撞名先到先得)返回给账号卡就地外显。
+  // 基准取 ref 而非闭包:同步是"发请求→等数秒→回来再合并",登录顺带的
+  // 双路同步(百智云+会员)先后到达,拿闭包里的旧草稿会把先到的一路抹掉
+  const draftRef = useRef<SettingsDraft | null>(null);
+  draftRef.current = draft;
+  const applySync = (r: BaizhiSyncResult | McModelsSyncResult): { skipped: string[] } | undefined => {
+    let next = draftRef.current;
+    if (!next) return undefined;
+    const fromBaizhi = "mcp_servers" in r;
+    const source = r.models[0]?.source || (fromBaizhi ? SOURCE_BAIZHI : SOURCE_MONKEYCODE);
+    let skipped: string[] = [];
+    const merged = mergeSyncedModels(next, r.models, source);
+    if (merged) {
+      next = merged.draft;
+      skipped = merged.skipped;
+    }
+    if (fromBaizhi) next = mergeSyncedMcps(next, r.mcp_servers);
+    draftRef.current = next;
+    setDraft(next);
+    setSaveError("");
+    return { skipped };
+  };
+
   const draftErrText = (e: DraftError): string => {
     switch (e.kind) {
       case "modelName":
@@ -289,8 +318,9 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
       case "general":
         return <GeneralSection />;
       case "account":
-        // 账号分区不吃壳配置(登录态自查、浏览器降级自带),不走 configGate
-        return <AccountSection />;
+        // 账号分区不吃壳配置(登录态自查、浏览器降级自带),不走 configGate;
+        // 同步结果经 applySync 并入模型/MCP 草稿
+        return <AccountSection onSyncResult={applySync} />;
       case "models":
         return draft ? <ModelsSection draft={draft} onDraft={updateDraft} /> : configGate;
       case "mcp":

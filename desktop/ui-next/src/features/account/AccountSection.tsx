@@ -10,7 +10,7 @@
 // - 同步(baizhi_sync / mc_models_sync)本期只做触发与结果提示,不落盘。
 //   与设置表单的深度联动(密钥复用 knownKeys、结果并入模型页)留接口:
 //   宿主可传 onSyncResult 接走原始结果,后续版本在 SettingsView 接线。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import {
@@ -27,7 +27,7 @@ import {
   mcModelsSync,
 } from "@/lib/ipc/account";
 import { inDesktopShell } from "@/lib/ipc/ipc";
-import { LoginPanel } from "./LoginPanel";
+import { LoginPanel, PasswordForm } from "./LoginPanel";
 import { UsagePanel } from "./UsagePanel";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -52,6 +52,45 @@ function MsgLine({ msg }: { msg: Msg }) {
   );
 }
 
+/** 账号卡壳(旧 UI 设置屏同款形态):logo + 标题/状态徽标 + 副行在左,
+ *  动作钮靠右;扩展内容(用量面板/提示行)另起一行。 */
+function AccountCard({
+  logo,
+  title,
+  badge,
+  subtitle,
+  actions,
+  children,
+}: {
+  logo: string;
+  title: string;
+  badge?: ReactNode;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="card card-border bg-base-100">
+      <div className="flex flex-col gap-3 p-4">
+        <div className="flex items-center gap-3">
+          <img src={logo} alt="" aria-hidden draggable={false} className="h-9 w-9 shrink-0 rounded-lg" />
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-semibold">{title}</span>
+              {badge}
+            </div>
+            {subtitle && (
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-base-content/60">{subtitle}</div>
+            )}
+          </div>
+          {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /** 百智云账号卡(已登录形态)。 */
 function BaizhiCard({
   status,
@@ -60,7 +99,8 @@ function BaizhiCard({
 }: {
   status: BaizhiStatus;
   onChanged: () => Promise<void>;
-  onResult?: (r: BaizhiSyncResult) => void;
+  /** 同步结果交宿主并入设置草稿;返回跨组撞名的跳过名单(卡内外显) */
+  onResult?: (r: BaizhiSyncResult) => { skipped: string[] } | undefined | void;
 }) {
   const { t } = useI18n();
   const [syncing, setSyncing] = useState(false);
@@ -70,17 +110,19 @@ function BaizhiCard({
     setSyncing(true);
     setMsg(null);
     try {
-      // knownKeys 空:设置表单的密钥复用属于「并入表单」联动,与结果消费
-      // 一起留给后续版本(见文件头);壳会复用/新建网关密钥并在结果里说明
+      // knownKeys 空:密钥复用联动留给后续版本;壳会复用/新建网关密钥
       const r = await baizhiSync([]);
-      onResult?.(r);
+      const applied = onResult?.(r);
       const notes = r.notes?.length ? ` ${r.notes.join("；")}` : "";
+      const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join("、") })}` : "";
       setMsg({
         text:
           t("account.baizhi.syncDone", {
             models: r.models.length,
             mcp: Object.keys(r.mcp_servers ?? {}).length,
-          }) + notes,
+          }) +
+          notes +
+          skipped,
       });
     } catch (e) {
       setMsg({ text: errMsg(e), error: true });
@@ -100,25 +142,26 @@ function BaizhiCard({
   };
 
   return (
-    <div className="card card-border bg-base-100">
-      <div className="flex flex-col gap-2 p-4">
-        <h2 className="text-sm font-semibold">{t("account.baizhi.title")}</h2>
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-semibold">{profileName(status.profile) || t("account.loggedIn")}</span>
-          <span className="truncate font-mono text-xs text-base-content/50">{status.host}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn btn-primary btn-sm" disabled={syncing} onClick={() => void sync()}>
+    <AccountCard
+      logo="/baizhi-logo.png"
+      // 组头已表明「百智云账号」,卡头显登录身份,不再重复产品名
+      title={profileName(status.profile) || t("account.loggedIn")}
+      badge={<span className="badge badge-success badge-soft badge-xs shrink-0">{t("account.loggedIn")}</span>}
+      subtitle={<span className="truncate font-mono text-[11px] text-base-content/50">{status.host}</span>}
+      actions={
+        <>
+          <button type="button" className="btn btn-sm" disabled={syncing} onClick={() => void sync()}>
             {syncing && <span className="loading loading-spinner loading-xs" aria-hidden />}
             {syncing ? t("account.syncing") : t("account.baizhi.sync")}
           </button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logout()}>
+          <button type="button" className="btn btn-ghost btn-sm text-base-content/60" onClick={() => void logout()}>
             {t("account.baizhi.logout")}
           </button>
-        </div>
-        <MsgLine msg={msg} />
-      </div>
-    </div>
+        </>
+      }
+    >
+      <MsgLine msg={msg} />
+    </AccountCard>
   );
 }
 
@@ -134,11 +177,13 @@ function McCard({
   /** 百智云登录后自动桥接的失败信息(不阻断,卡内外显并留手动重试) */
   bridgeErr: string;
   onChanged: () => Promise<void>;
-  onResult?: (r: McModelsSyncResult) => void;
+  /** 同步结果交宿主并入设置草稿;返回跨组撞名的跳过名单(卡内外显) */
+  onResult?: (r: McModelsSyncResult) => { skipped: string[] } | undefined | void;
 }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState<"connect" | "disconnect" | "sync" | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
+  const [pwOpen, setPwOpen] = useState(false);
 
   const connect = async () => {
     setBusy("connect");
@@ -172,9 +217,10 @@ function McCard({
     setMsg(null);
     try {
       const r: McModelsSyncResult = await mcModelsSync();
-      onResult?.(r);
+      const applied = onResult?.(r);
       const notes = r.notes?.length ? ` ${r.notes.join("；")}` : "";
-      setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + notes });
+      const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join("、") })}` : "";
+      setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + notes + skipped });
     } catch (e) {
       setMsg({ text: errMsg(e), error: true });
     } finally {
@@ -186,64 +232,86 @@ function McCard({
   const user = status?.user;
   const userName = user?.name || user?.username || user?.email || t("account.loggedIn");
 
-  return (
-    <div className="card card-border bg-base-100">
-      <div className="flex flex-col gap-2 p-4">
-        <h2 className="text-sm font-semibold">{t("account.mc.title")}</h2>
-        {!connected ? (
-          <>
-            <p className="text-xs text-base-content/60">{t("account.mc.notConnected")}</p>
-            {bridgeErr && (
-              <span role="alert" className="text-xs text-error">
-                {t("account.mc.connectFailed", { message: bridgeErr })}
-              </span>
-            )}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={busy === "connect"}
-                onClick={() => void connect()}
-              >
-                {busy === "connect" && <span className="loading loading-spinner loading-xs" aria-hidden />}
-                {busy === "connect" ? t("account.mc.connecting") : t("account.mc.connect")}
-              </button>
-            </div>
-          </>
+  if (!connected) {
+    return (
+      <AccountCard
+        logo="/logo.png"
+        title={t("account.notConnected")}
+        subtitle={<span className="truncate">{t("account.mc.notConnected")}</span>}
+        actions={
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={busy === "connect"}
+            onClick={() => void connect()}
+          >
+            {busy === "connect" && <span className="loading loading-spinner loading-xs" aria-hidden />}
+            {busy === "connect" ? t("account.mc.connecting") : t("account.mc.connect")}
+          </button>
+        }
+      >
+        {bridgeErr && (
+          <span role="alert" className="text-xs text-error">
+            {t("account.mc.connectFailed", { message: bridgeErr })}
+          </span>
+        )}
+        {/* 账密登录:不经百智云的手动路径(桥接失败/私有化/换账号) */}
+        {pwOpen ? (
+          <div className="max-w-sm border-t border-base-300 pt-2">
+            <p className="pt-1 text-xs text-base-content/60">{t("account.pw.hint")}</p>
+            <PasswordForm onLoggedIn={() => void onChanged()} />
+          </div>
         ) : (
-          <>
-            <div className="flex items-center gap-2">
-              <span className="truncate text-sm font-semibold">{userName}</span>
-              <span className="truncate font-mono text-xs text-base-content/50">{status?.host}</span>
-            </div>
-            <UsagePanel userId={user?.id} />
-            <div className="flex flex-wrap items-center gap-2">
-              <button type="button" className="btn btn-sm" disabled={busy === "sync"} onClick={() => void sync()}>
-                {busy === "sync" && <span className="loading loading-spinner loading-xs" aria-hidden />}
-                {busy === "sync" ? t("account.syncing") : t("account.mc.sync")}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={busy === "disconnect"}
-                onClick={() => void disconnect()}
-              >
-                {busy === "disconnect" ? t("account.mc.disconnecting") : t("account.mc.disconnect")}
-              </button>
-            </div>
-          </>
+          <button
+            type="button"
+            className="btn btn-link btn-xs self-start px-0 font-normal text-base-content/50 no-underline hover:text-base-content"
+            onClick={() => setPwOpen(true)}
+          >
+            {t("account.pw.entry")}
+          </button>
         )}
         <MsgLine msg={msg} />
+      </AccountCard>
+    );
+  }
+  return (
+    <AccountCard
+      logo="/logo.png"
+      // 组头已表明「MonkeyCode 云端」,卡头显登录身份
+      title={userName}
+      badge={<span className="badge badge-success badge-soft badge-xs shrink-0">{t("account.loggedIn")}</span>}
+      subtitle={<span className="truncate font-mono text-[11px] text-base-content/50">{status?.host}</span>}
+      actions={
+        <>
+          <button type="button" className="btn btn-sm" disabled={busy === "sync"} onClick={() => void sync()}>
+            {busy === "sync" && <span className="loading loading-spinner loading-xs" aria-hidden />}
+            {busy === "sync" ? t("account.syncing") : t("account.mc.sync")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm text-base-content/60"
+            disabled={busy === "disconnect"}
+            onClick={() => void disconnect()}
+          >
+            {busy === "disconnect" ? t("account.mc.disconnecting") : t("account.mc.disconnect")}
+          </button>
+        </>
+      }
+    >
+      {/* 权益面板归卡内次级区块,分隔线切开身份行与权益块 */}
+      <div className="border-t border-base-300 pt-3">
+        <UsagePanel userId={user?.id} />
       </div>
-    </div>
+      <MsgLine msg={msg} />
+    </AccountCard>
   );
 }
 
 export function AccountSection({
   onSyncResult,
 }: {
-  /** 同步结果的外接口(留给设置表单联动;本期 SettingsView 不接线) */
-  onSyncResult?: (r: BaizhiSyncResult | McModelsSyncResult) => void;
+  /** 同步结果并入设置草稿(SettingsView.applySync);返回跨组撞名跳过名单 */
+  onSyncResult?: (r: BaizhiSyncResult | McModelsSyncResult) => { skipped: string[] } | undefined | void;
 } = {}) {
   const { t } = useI18n();
   const inShell = inDesktopShell();
@@ -318,21 +386,46 @@ export function AccountSection({
         </div>
       )}
       {!loaded && !statusErr && <span className="text-xs text-base-content/50">{t("account.loading")}</span>}
-      {loaded &&
-        (!anyLoggedIn ? (
-          <LoginPanel withPassword onBaizhiLoggedIn={() => void onBaizhiLoggedIn()} onMcLoggedIn={() => void onMcLoggedIn()} />
-        ) : (
-          <>
+      {loaded && (
+        <>
+          {/* 百智云组(主路径):已登录成账号卡,未登录成登录卡 */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.baizhi.title")}</h3>
             {bz?.logged_in ? (
               <BaizhiCard status={bz} onChanged={refresh} onResult={onSyncResult} />
             ) : (
-              // MonkeyCode 已连而百智云未登录(账密登录路径):补百智云登录
-              // 入口,但不再给账密入口(MC 已连,重复登录只添乱)
-              <LoginPanel withPassword={false} onBaizhiLoggedIn={() => void onBaizhiLoggedIn()} onMcLoggedIn={() => void onMcLoggedIn()} />
+              // MC 已连时不再给账密入口(重复登录只添乱);全未登录时给
+              <BaizhiLoginCard>
+                <LoginPanel
+                  withPassword={!mc?.logged_in}
+                  onBaizhiLoggedIn={() => void onBaizhiLoggedIn()}
+                  onMcLoggedIn={() => void onMcLoggedIn()}
+                />
+              </BaizhiLoginCard>
             )}
-            <McCard status={mc} bridgeErr={bridgeErr} onChanged={refresh} onResult={onSyncResult} />
-          </>
-        ))}
+          </div>
+          {/* MonkeyCode 组:任一登录后才出(全未登录时百智云登录顺带桥接,
+              不提前摆一张未连接卡分散主路径) */}
+          {anyLoggedIn && (
+            <div className="flex flex-col gap-1.5">
+              <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.mc.title")}</h3>
+              <McCard status={mc} bridgeErr={bridgeErr} onChanged={refresh} onResult={onSyncResult} />
+            </div>
+          )}
+        </>
+      )}
     </section>
+  );
+}
+
+/** 百智云未登录卡壳:纯卡片承载登录面板(组头已表明身份,卡内不再放头)。 */
+function BaizhiLoginCard({ children }: { children: ReactNode }) {
+  return (
+    <div className="card card-border bg-base-100">
+      {/* 登录面板居中:卡宽 > 面板宽,靠左会剩一大块死白 */}
+      <div className="p-4">
+        <div className="mx-auto w-full max-w-sm">{children}</div>
+      </div>
+    </div>
   );
 }
