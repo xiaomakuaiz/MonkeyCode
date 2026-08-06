@@ -43,7 +43,8 @@ function ReadonlyAsk({ item, local }: { item: AskItem; local: Answers | null }) 
           <span className="self-start text-xs text-base-content/60">{q.question}</span>
           {answerOf(q) ? (
             <div className="chat chat-end">
-              <div className="chat-bubble chat-bubble-primary text-sm whitespace-pre-wrap select-text">
+              {/* 与 LogList 用户气泡同款 primary 淡染(实色太鲜艳)+ 长串可断 */}
+              <div className="chat-bubble bg-primary/10 text-sm whitespace-pre-wrap wrap-anywhere select-text">
                 {answerOf(q)}
               </div>
             </div>

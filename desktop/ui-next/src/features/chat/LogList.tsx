@@ -54,9 +54,11 @@ function UserBubble({
       {/* 时间绝对定位在块顶空隙里(§6.2 允许的另一形态):不占流式高度,
           消息节奏不因时间线变松 */}
       <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 end-1" />
-      {/* 用户消息用 primary 着色(默认 chat-bubble 是 base-300 第三层底,
-          太淡;旧 UI 用户气泡同为强调色语义) */}
-      <div className="chat-bubble chat-bubble-primary max-w-[85%] text-sm whitespace-pre-wrap select-text">
+      {/* 用户消息 = primary 淡染(10%,与菜单选中态同语言):实色 primary 太
+          鲜艳(用户报障 2026-08-06),默认 base-300 又太淡,取中间档;文字保持
+          正文色。wrap-anywhere:长串无空格内容(URL/路径/token)必须可断,
+          否则从气泡右缘溢出(bubble 尾巴 background inherit,淡染一体生效) */}
+      <div className="chat-bubble max-w-[85%] bg-primary/10 text-sm whitespace-pre-wrap wrap-anywhere select-text">
         {body}
         {hasAtts && (
           <div className={`flex flex-wrap items-center gap-1.5 ${body ? "mt-2" : ""}`}>
