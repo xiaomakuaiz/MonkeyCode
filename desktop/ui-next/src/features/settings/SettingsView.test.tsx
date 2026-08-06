@@ -301,6 +301,8 @@ describe("提示音双向同步", () => {
   it("初值来自 sound_enabled;切换发 set_sound_enabled;壳广播回来盖一次", async () => {
     const { calls, listeners } = stubShell({ sound: false });
     render(<SettingsView onClose={() => {}} />);
+    // 初始分区是「账号」,先切到通用
+    await userEvent.click(screen.getByRole("button", { name: "通用" }));
     const toggle = () => screen.getByRole("checkbox", { name: "事件提示音" }) as HTMLInputElement;
     await waitFor(() => expect(toggle().checked).toBe(false));
 

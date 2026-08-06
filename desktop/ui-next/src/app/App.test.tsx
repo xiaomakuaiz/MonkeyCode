@@ -56,7 +56,8 @@ describe("设置入口(外观/语言/配置在 SettingsView,各有专测)", () =
   it("rail 齿轮打开设置页,关闭回到欢迎页", async () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByRole("combobox", { name: "外观主题" })).toBeTruthy();
+    // 设置页标志改认页头标题:初始分区已是「账号」(登录主路径),不再是通用
+    expect(screen.getByRole("heading", { name: "设置" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "返回" }));
     expect(screen.getByText("开始一个任务")).toBeTruthy();
   });
@@ -183,13 +184,13 @@ describe("D5 首启向导", () => {
   it("桌面壳模型清单为空:自动打开设置页;关闭后不再纠缠", async () => {
     const shell = stubShell({ models: [] });
     render(<App />);
-    expect(await screen.findByRole("combobox", { name: "外观主题" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "设置" })).toBeTruthy();
     const opens = shell.count("models_list");
     await userEvent.click(screen.getByRole("button", { name: "返回" }));
     expect(screen.getByText("开始一个任务")).toBeTruthy();
     await act(() => Promise.resolve());
     // 不循环:关闭后不再自动弹回,也不反复探测
-    expect(screen.queryByRole("combobox", { name: "外观主题" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "设置" })).toBeNull();
     expect(shell.count("models_list")).toBe(opens);
   });
 
@@ -197,7 +198,7 @@ describe("D5 首启向导", () => {
     stubShell({ models: [{ name: "m", default: true }] });
     render(<App />);
     await act(() => Promise.resolve());
-    expect(screen.queryByRole("combobox", { name: "外观主题" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "设置" })).toBeNull();
   });
 });
 

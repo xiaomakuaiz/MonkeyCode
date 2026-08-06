@@ -6,10 +6,10 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { Brain, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
+import { Brain, Check, ChevronDown, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { LOCALES, setLocale, useI18n, type Locale } from "@/lib/i18n";
+import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
 import {
   getConfig,
   getSoundEnabled,
@@ -22,6 +22,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
+import { useDismiss } from "@/lib/util/useDismiss";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
 import { AboutSection } from "./AboutSection";
 import { McpSection } from "./McpSection";
@@ -56,6 +57,73 @@ function SettingRow({ label, hint, children }: { label: string; hint?: string; c
   );
 }
 
+/** 主题条目色板(daisyUI 官方 theme picker 同款手法):data-theme 让子树
+ * 取该主题的变量,4 个色点(正文/主/次/强调)在该主题的 base-100 底上
+ * ——每个主题的性格一眼可辨,不用逐个切换试。 */
+function ThemeSwatch({ theme }: { theme: string }) {
+  return (
+    <span data-theme={theme} aria-hidden className="grid shrink-0 grid-cols-2 gap-0.5 rounded-md bg-base-100 p-1 shadow-sm">
+      <span className="size-1.5 rounded-full bg-base-content" />
+      <span className="size-1.5 rounded-full bg-primary" />
+      <span className="size-1.5 rounded-full bg-secondary" />
+      <span className="size-1.5 rounded-full bg-accent" />
+    </span>
+  );
+}
+
+/** 主题选择(用户定案 2026-08-06 参照 daisyUI 文档站形态):触发器 = 当前
+ * 主题色板 + 名称,菜单 = 全量主题列表(色板 + 名称 + 当前项对勾)。原生
+ * select 的 option 塞不进色板,只能一排裸名——「丑」的根源,故自绘。
+ * 点选即时换肤**不关**菜单(试玩几个再走,官方同款);外点/Esc/再点触发器关。
+ * 品牌主题恒居列表头两位(THEMES 序),显示中文名,其余原名。 */
+function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => void }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useDismiss(open, boxRef, () => setOpen(false));
+  const labelOf = (v: Theme) =>
+    v === "monkeycode" ? t("settings.appearance.themeLight") : v === "monkeycode-dark" ? t("settings.appearance.themeDark") : v;
+  return (
+    <div ref={boxRef} className={`dropdown dropdown-end shrink-0 ${open ? "dropdown-open" : ""}`}>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={t("settings.appearance.theme")}
+        className="btn btn-sm w-52 justify-start font-normal"
+        onClick={() => setOpen(!open)}
+      >
+        <ThemeSwatch theme={theme} />
+        <span className="min-w-0 flex-1 truncate text-start">{labelOf(theme)}</span>
+        <ChevronDown size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 text-base-content/50 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label={t("settings.appearance.theme")}
+          className="dropdown-content menu z-30 mt-1 max-h-80 w-52 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+        >
+          {THEMES.map((v) => (
+            <li key={v}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={v === theme}
+                className={`flex items-center gap-2 ${v === theme ? "menu-active" : ""}`}
+                onClick={() => onPick(v)}
+              >
+                <ThemeSwatch theme={v} />
+                <span className="min-w-0 flex-1 truncate text-xs">{labelOf(v)}</span>
+                {v === theme && <Check size={14} strokeWidth={2} aria-hidden className="shrink-0" />}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** 通用:外观主题 / 语言 / 提示音(仅桌面壳)。 */
 function GeneralSection() {
   const { t, locale } = useI18n();
@@ -81,40 +149,26 @@ function GeneralSection() {
     void setSoundEnabled(next).catch(() => setSoundOn(!next));
   };
 
+  const pickTheme = (next: Theme) => {
+    setTheme(next);
+    setThemeState(next);
+  };
+  const seg = (label: string, on: boolean, onClick: () => void) => (
+    <button key={label} type="button" className={`btn btn-sm join-item ${on ? "btn-active" : "text-base-content/60"}`} onClick={onClick}>
+      {label}
+    </button>
+  );
+
   return (
     <section aria-label={t("settings.nav.general")} className="flex flex-col gap-2">
       <div className="divide-y divide-base-300 rounded-box border border-base-300">
         <SettingRow label={t("settings.appearance.theme")}>
-          <select
-            className="select select-sm w-48 shrink-0"
-            aria-label={t("settings.appearance.theme")}
-            value={theme}
-            onChange={(e) => {
-              const next = e.target.value as Theme;
-              setTheme(next);
-              setThemeState(next);
-            }}
-          >
-            {THEMES.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+          <ThemePicker theme={theme} onPick={pickTheme} />
         </SettingRow>
         <SettingRow label={t("settings.appearance.language")}>
-          <select
-            className="select select-sm w-48 shrink-0"
-            aria-label={t("settings.appearance.language")}
-            value={locale}
-            onChange={(e) => setLocale(e.target.value as Locale)}
-          >
-            {LOCALES.map((l) => (
-              <option key={l.value} value={l.value}>
-                {l.label}
-              </option>
-            ))}
-          </select>
+          <div role="radiogroup" aria-label={t("settings.appearance.language")} className="join shrink-0">
+            {LOCALES.map((l) => seg(l.label, locale === l.value, () => setLocale(l.value)))}
+          </div>
         </SettingRow>
         {inDesktopShell() && (
           <SettingRow label={t("settings.general.sound")} hint={t("settings.general.soundHint")}>
@@ -196,7 +250,9 @@ export function SettingsView({
   }, [onClose]);
 
   const { t } = useI18n();
-  const [section, setSection] = useState<Section>("general");
+  // 初始落账号分区(旧 UI 同款,ui-next 首版漏迁 2026-08-06 用户报障):
+  // 「登录 → 同步」是主路径,新用户进设置第一眼要看到扫码登录
+  const [section, setSection] = useState<Section>("account");
   const [cfg, setCfg] = useState<DesktopConfig | null>(null);
   const [loadError, setLoadError] = useState("");
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
