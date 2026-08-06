@@ -6,7 +6,8 @@
 // (状态词进点 title/aria 与行 tooltip);行菜单 = 右键(终止
 // 仅运行中 / 删除,均二段确认)。历史开合持久化 mc.cloudHistoryOpen(旧
 // UI 契约键);query 非空过滤并强制展开(未拉过的组顺势懒拉)。
-// 导出组件与数据 hook,Sidebar 接线由 App 侧完成。
+// 数据 hook(useCloudTasks/useCloudProjects)由 Sidebar 顶层调用后注入
+// props——概览统计与列表共用同一份 feed,enabled 仅云端空间为真。
 import { Cloud, Folder, History } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -34,8 +35,10 @@ export interface CloudTasksFeed {
 }
 
 /** 云端任务列表数据源:分页合并,active/history 由状态派生。
- * reloadKey 变化触发整表重拉(App 在任务创建/终止后 bump)。 */
-export function useCloudTasks(reloadKey = 0): CloudTasksFeed {
+ * reloadKey 变化触发整表重拉(App 在任务创建/终止后 bump)。
+ * enabled=false 时不拉取(Sidebar 只在云端空间供数;数据跨空间切换留存,
+ * 重新进入云端经 enabled 翻转刷新)。 */
+export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
   const [tasks, setTasks] = useState<CloudTask[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -73,8 +76,9 @@ export function useCloudTasks(reloadKey = 0): CloudTasksFeed {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     void fetchPage(1, true);
-  }, [fetchPage, reloadKey]);
+  }, [fetchPage, reloadKey, enabled]);
 
   const loaded = tasks?.length ?? 0;
   const hasMore = total !== null ? loaded < total : loaded >= pageRef.current * PAGE_SIZE && loaded > 0;
@@ -94,10 +98,10 @@ export function useCloudTasks(reloadKey = 0): CloudTasksFeed {
 
 /** 项目列表(mc_projects;每项目捎带 ≤3 条运行中任务)。失败降级为空
  * (列表退回平铺形态,任务本身不受影响),但必须留痕便于诊断。 */
-export function useCloudProjects(reloadKey = 0): CloudProject[] {
+export function useCloudProjects(reloadKey = 0, enabled = true): CloudProject[] {
   const [projects, setProjects] = useState<CloudProject[]>([]);
   useEffect(() => {
-    if (!inDesktopShell()) return;
+    if (!inDesktopShell() || !enabled) return;
     let alive = true;
     mcProjects()
       .then((r) => {
@@ -109,7 +113,7 @@ export function useCloudProjects(reloadKey = 0): CloudProject[] {
     return () => {
       alive = false;
     };
-  }, [reloadKey]);
+  }, [reloadKey, enabled]);
   return projects;
 }
 
@@ -181,15 +185,21 @@ interface GroupTasksState {
 }
 
 export function CloudTaskList({
+  feed,
+  projects,
   currentId,
   onSelect,
   reloadKey = 0,
   onDeleted,
   query = "",
 }: {
+  /** 列表数据源(useCloudTasks;Sidebar 供数——概览统计与列表同一份) */
+  feed: CloudTasksFeed;
+  /** 项目列表(useCloudProjects;同上) */
+  projects: CloudProject[];
   currentId: string | null;
   onSelect: (task: CloudTask) => void;
-  /** App 在任务创建/终止后 bump,触发整表重拉 */
+  /** App 在任务创建/终止后 bump(feed 重拉在 hook 侧;这里作废分组缓存) */
   reloadKey?: number;
   /** 任务删除成功后回调(带任务 id);App 据此清空当前打开的同 id 视图 */
   onDeleted?: (id: string) => void;
@@ -197,8 +207,6 @@ export function CloudTaskList({
   query?: string;
 }) {
   const { t } = useI18n();
-  const feed = useCloudTasks(reloadKey);
-  const projects = useCloudProjects(reloadKey);
   const forceOpen = query !== "";
 
   // 分组懒拉缓存(键 = 项目 id);重拉键翻转即作废

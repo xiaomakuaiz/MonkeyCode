@@ -6,7 +6,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CloudTask } from "@/lib/ipc/cloudtasks";
-import { CloudTaskList } from "./CloudTaskList";
+import { CloudTaskList, useCloudProjects, useCloudTasks } from "./CloudTaskList";
+
+/** 数据注入随生产接线(Sidebar 顶层调 hook 供数):测试同构一个 Harness,
+ * hook 结果注入 props,断言口径不变。 */
+function Harness(props: Omit<Parameters<typeof CloudTaskList>[0], "feed" | "projects">) {
+  const feed = useCloudTasks(props.reloadKey ?? 0);
+  const projects = useCloudProjects(props.reloadKey ?? 0);
+  return <CloudTaskList {...props} feed={feed} projects={projects} />;
+}
 
 type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -40,7 +48,7 @@ describe("CloudTaskList", () => {
       return Promise.resolve({});
     });
     const onSelect = vi.fn();
-    render(<CloudTaskList currentId={null} onSelect={onSelect} />);
+    render(<Harness currentId={null} onSelect={onSelect} />);
     await screen.findByText("修复登录");
     // 区标签已撤(listKit 统一版式):进行中行直接平铺
     expect(screen.queryByText("进行中")).toBeNull();
@@ -66,7 +74,7 @@ describe("CloudTaskList", () => {
   it("mc.cloudHistoryOpen 预置 \"1\":历史直接展开", async () => {
     localStorage.setItem("mc.cloudHistoryOpen", "1");
     stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByText("修复登录");
     expect((screen.getByText("历史任务").closest("details") as HTMLDetailsElement).open).toBe(true);
   });
@@ -75,7 +83,7 @@ describe("CloudTaskList", () => {
     stubShell((cmd) =>
       cmd === "mc_tasks" ? Promise.resolve({ tasks: [], page_info: { total: 0 } }) : Promise.resolve({}),
     );
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByText("还没有云端项目或任务");
   });
 
@@ -88,7 +96,7 @@ describe("CloudTaskList", () => {
         ? Promise.reject(new Error("会话失效"))
         : Promise.resolve({ tasks, page_info: { total: 3 } });
     });
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByRole("alert");
     expect(screen.getByRole("alert").textContent).toContain("会话失效");
     await userEvent.click(screen.getByText("重试"));
@@ -104,7 +112,7 @@ describe("CloudTaskList", () => {
       if (args?.projectId === "p1") return Promise.resolve({ tasks: [{ id: "t1", title: "项目内任务", status: "finished" }] });
       return Promise.resolve({ tasks, page_info: { total: 3 } });
     });
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByText("支付服务");
     // 「项目」区标签已撤:组头(Folder 区块标签)直接排列
     expect(screen.queryByText("项目")).toBeNull();
@@ -125,7 +133,7 @@ describe("CloudTaskList", () => {
       return Promise.resolve({});
     });
     const onDeleted = vi.fn();
-    render(<CloudTaskList currentId={null} onSelect={() => {}} onDeleted={onDeleted} />);
+    render(<Harness currentId={null} onSelect={() => {}} onDeleted={onDeleted} />);
     await screen.findByText("修复登录");
     const menu = contextMenuOf(rowOf("修复登录"));
     await userEvent.click(within(menu).getByText("删除任务"));
@@ -141,7 +149,7 @@ describe("CloudTaskList", () => {
       if (cmd === "mc_task_delete") return Promise.reject(new Error("任务仍在运行"));
       return Promise.resolve({});
     });
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByText("修复登录");
     const menu = contextMenuOf(rowOf("修复登录"));
     await userEvent.click(within(menu).getByText("删除任务"));
@@ -158,7 +166,7 @@ describe("CloudTaskList", () => {
       if (cmd === "mc_task_stop") return Promise.resolve({ ok: true });
       return Promise.resolve({});
     });
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByText("修复登录");
     // 已完成行右键:没有终止项
     let menu = contextMenuOf(rowOf("旧任务甲"));
@@ -182,7 +190,7 @@ describe("CloudTaskList", () => {
         (args?.page as number) === 1 ? { tasks, page_info: { total: 4 } } : { tasks: page2, page_info: { total: 4 } },
       );
     });
-    render(<CloudTaskList currentId={null} onSelect={() => {}} />);
+    render(<Harness currentId={null} onSelect={() => {}} />);
     await screen.findByText("修复登录");
     await userEvent.click(screen.getByText("加载更多"));
     await screen.findByText("更早的");
@@ -191,7 +199,7 @@ describe("CloudTaskList", () => {
 
   it("query:过滤行并强制展开历史", async () => {
     stubShell((cmd) => (cmd === "mc_tasks" ? Promise.resolve({ tasks, page_info: { total: 3 } }) : Promise.resolve({})));
-    render(<CloudTaskList currentId={null} onSelect={() => {}} query="旧任务甲" />);
+    render(<Harness currentId={null} onSelect={() => {}} query="旧任务甲" />);
     await screen.findByText("旧任务甲"); // 历史被强制展开且命中
     expect(screen.queryByText("修复登录")).toBeNull();
     expect(screen.queryByText("旧任务乙")).toBeNull();

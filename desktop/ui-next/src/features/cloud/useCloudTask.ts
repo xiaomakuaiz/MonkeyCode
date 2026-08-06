@@ -51,6 +51,8 @@ export interface CloudTaskHandle {
   /** 操作失败/提示(视图横幅) */
   err: string;
   clearErr(): void;
+  /** 视图侧动作失败入同一错误通道(如删除任务被服务端拒绝) */
+  notifyErr(msg: string): void;
   /** 标题文案(task → meta 逐级回退) */
   label: string;
   taskStatus: string;
@@ -325,6 +327,7 @@ export function useCloudTask(
     idle,
     err,
     clearErr: () => setErr(""),
+    notifyErr: setErr,
     label,
     taskStatus,
     ended,

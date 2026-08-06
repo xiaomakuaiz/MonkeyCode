@@ -458,7 +458,15 @@ export function App() {
             }}
           />
         ) : space === "cloud" && cloudTask ? (
-          <CloudTaskView key={cloudTask.id} task={cloudTask} onTasksChanged={() => setCloudReload((n) => n + 1)} />
+          <CloudTaskView
+            key={cloudTask.id}
+            task={cloudTask}
+            onTasksChanged={() => setCloudReload((n) => n + 1)}
+            onDeleted={() => {
+              setCloudTask(null);
+              setCloudReload((n) => n + 1);
+            }}
+          />
         ) : (
           <MainArea current={space === "cloud" ? null : current} epoch={epoch} onDelete={removeSession} />
         )}

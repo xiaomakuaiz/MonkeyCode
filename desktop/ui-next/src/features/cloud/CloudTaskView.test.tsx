@@ -1,6 +1,9 @@
 // 云端任务详情冒烟:结束态 rounds 回放、启动态时间线、提问大纲(REST 索引
 // 合并 + 跳转补页)、云端文件面板、审批答复经 WS 上行(假壳 invoke;协议
 // 状态机的行为契约在 lib/cloud/stream.test.ts,这里只验编排与渲染)。
+// 形态与 ChatView 同构(LAYOUT §3/§4/§7):头部图标钮 + ⋯ 菜单(终止/删除
+// 二段确认)、状态徽标不进头部、拖拽属性逐节点、运行条入输入卡、结束态
+// LogList 只读。
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -62,7 +65,11 @@ describe("CloudTaskView", () => {
     expect(screen.getByTitle("— 本轮结束 —")).toBeTruthy();
     expect(screen.getByText(/只读回放/)).toBeTruthy();
     expect(screen.queryByLabelText("消息输入")).toBeNull(); // 结束态无 composer
-    expect(screen.queryByText("终止任务")).toBeNull(); // 结束态无停止按钮
+    expect(screen.queryByText("终止任务")).toBeNull(); // 终止收进 ⋯ 菜单,结束态连菜单项都没有
+    // ⋯ 菜单:结束态只剩删除(终止无意义)
+    await userEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    expect(screen.queryByText("终止任务")).toBeNull();
+    expect(screen.getByText("删除任务")).toBeTruthy();
   });
 
   it("启动态:整屏时间线,composer 禁用,停止按钮在", async () => {
@@ -83,8 +90,11 @@ describe("CloudTaskView", () => {
     expect(screen.getByText("30%")).toBeTruthy();
     const composer = screen.getByLabelText<HTMLTextAreaElement>("消息输入");
     expect(composer.disabled).toBe(true);
+    // 状态徽标已撤(LAYOUT §3:任务状态不进头部;启动态由整屏时间线表意)
+    expect(screen.queryByText("排队中")).toBeNull();
+    // 终止收进 ⋯ 菜单(危险动作不常驻头部)
+    await userEvent.click(screen.getByRole("button", { name: "任务操作" }));
     expect(screen.getByText("终止任务")).toBeTruthy();
-    expect(screen.getByText("排队中")).toBeTruthy(); // 状态徽标
   });
 
   it("加载更早:有游标才出现,点击往前翻一轮并前插", async () => {
@@ -284,5 +294,151 @@ describe("CloudTaskView", () => {
     // 未送达:乐观徽标回滚,按钮恢复可点
     await waitFor(() => expect(screen.getByRole("button", { name: "允许" })).toBeTruthy());
     expect(screen.queryByText("已允许")).toBeNull();
+  });
+
+  it("布局契约(§7):头部非交互子节点全带拖拽属性,动作全是图标钮,无状态徽标", async () => {
+    stubShell((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t9", status: "finished", title: "完结任务" });
+        case "mc_task_rounds":
+          return Promise.resolve({ frames: [], next_cursor: "", has_more: false });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t9", title: "完结任务", status: "finished" }} />);
+    await screen.findByText(/只读回放/);
+    const header = document.querySelector("[data-view-header]") as HTMLElement;
+    expect(header.hasAttribute("data-tauri-drag-region")).toBe(true);
+    const h1 = header.querySelector("h1") as HTMLElement;
+    expect(h1.hasAttribute("data-tauri-drag-region")).toBe(true); // 云端无双击改名,标题整体在拖拽区内
+    const sub = header.querySelector("p") as HTMLElement;
+    expect(sub.hasAttribute("data-tauri-drag-region")).toBe(true); // 副标题(回退「云端」身份词)
+    for (const btn of header.querySelectorAll("button")) {
+      expect(btn.hasAttribute("data-tauri-drag-region")).toBe(false);
+      expect(btn.classList.contains("btn-square")).toBe(true); // 视图动作 = 图标钮(LAYOUT §3)
+    }
+    expect(header.querySelector(".badge")).toBeNull(); // 状态徽标不进头部
+  });
+
+  it("⋯ 菜单删除:二段确认 → mc_task_delete → onDeleted;被拒时原因外显(结束态错误条)", async () => {
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    let rejectDelete = false;
+    stubShell((cmd, args) => {
+      calls.push({ cmd, args });
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t10", status: "finished" });
+        case "mc_task_rounds":
+          return Promise.resolve({ frames: [], next_cursor: "", has_more: false });
+        case "mc_task_delete":
+          return rejectDelete ? Promise.reject(new Error("虚拟机仍在线")) : Promise.resolve({ ok: true });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    const onDeleted = vi.fn();
+    const { unmount } = render(<CloudTaskView task={{ id: "t10", status: "finished" }} onDeleted={onDeleted} />);
+    await screen.findByText(/只读回放/);
+    await userEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    await userEvent.click(screen.getByText("删除任务"));
+    expect(calls.some((c) => c.cmd === "mc_task_delete")).toBe(false); // 一次点击不执行
+    await userEvent.click(screen.getByText("确认删除"));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "mc_task_delete" && c.args?.id === "t10")).toBe(true));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+    unmount();
+
+    // 被拒:结束态没有 composer,错误条独立渲染在 footer
+    rejectDelete = true;
+    render(<CloudTaskView task={{ id: "t10", status: "finished" }} />);
+    await screen.findByText(/只读回放/);
+    await userEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    await userEvent.click(screen.getByText("删除任务"));
+    await userEvent.click(screen.getByText("确认删除"));
+    await screen.findByText(/删除任务失败.*虚拟机仍在线/);
+  });
+
+  it("结束态无回放且无更早:空态 = logo + 主句 + 副句(与 ChatView 空态同构)", async () => {
+    stubShell((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t11", status: "finished" });
+        case "mc_task_rounds":
+          return Promise.resolve({ frames: [], next_cursor: "", has_more: false });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t11", status: "finished" }} />);
+    await screen.findByText("没有可回放的对话记录");
+    expect(screen.getByText(/需要继续这项工作/)).toBeTruthy();
+    expect(document.querySelector('img[src="/logo.png"]')).toBeTruthy();
+    expect(screen.queryByText("加载更早")).toBeNull(); // 无游标才整屏空态
+  });
+
+  it("结束态回放里的历史审批卡只读:不再渲染允许/拒绝按钮", async () => {
+    stubShell((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t12", status: "finished" });
+        case "mc_task_rounds":
+          return Promise.resolve({
+            frames: [{ type: "permission-req", seq: 1, data: { id: "p1", title: "npm test", tool: "Bash" } }],
+            next_cursor: "",
+            has_more: false,
+          });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t12", status: "finished" }} />);
+    await screen.findByText(/npm test/);
+    expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
+  });
+
+  it("运行中:运行条入输入卡(云端执行中),plan 帧钉 TaskPanel,⏎ 键盘审批经 WS 上行", async () => {
+    const wsSends: { text?: unknown }[] = [];
+    let wsPipe = "";
+    const listeners = stubShellWs((cmd, args) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t13", status: "processing" });
+        case "cloud_ws_open":
+          wsPipe = String(args?.pipe ?? "");
+          return Promise.resolve({});
+        case "cloud_ws_send":
+          wsSends.push(args ?? {});
+          return Promise.resolve({});
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t13", status: "processing" }} />);
+    await waitFor(() => expect(wsPipe).not.toBe(""));
+    const push = (frame: Record<string, unknown>) =>
+      listeners.get(`ws-msg:${wsPipe}`)?.({ payload: JSON.stringify(frame) });
+
+    push({ type: "task-started", seq: 1 });
+    const runLabel = await screen.findByText("云端执行中");
+    // 运行条在输入卡内(ComposerCard 外框),不是 footer 独立行
+    expect(runLabel.closest(".rounded-box")).toBeTruthy();
+
+    push({
+      type: "task-running",
+      kind: "acp_event",
+      seq: 2,
+      data: { update: { sessionUpdate: "plan", entries: [{ content: "步骤一", status: "in_progress" }] } },
+    });
+    await screen.findByText("任务 0/1"); // TaskPanel 钉在 composer 上方
+
+    push({ type: "permission-req", seq: 3, data: { id: "p1", title: "npm test", tool: "Bash" } });
+    await screen.findByRole("button", { name: "允许" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    await waitFor(() => expect(wsSends.length).toBeGreaterThan(0));
+    const frame = JSON.parse(String(wsSends[0]?.text)) as { type: string; data: string };
+    expect(frame.type).toBe("permission-resp");
+    expect(JSON.parse(b64decode(frame.data))).toMatchObject({ id: "p1", approved: true });
   });
 });

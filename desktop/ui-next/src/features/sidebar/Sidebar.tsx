@@ -13,7 +13,7 @@
 import { Archive, Folder, Inbox, MessageSquare, MessagesSquare, Plus, RefreshCw, SquareTerminal } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
-import { CloudTaskList } from "@/features/cloud/CloudTaskList";
+import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
 import { GroupLabel, IconSlot, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
@@ -261,9 +261,17 @@ function ProjectDetails({
 }
 
 /** 概览块(固定,品牌头之下、列表之上):空间标题 + 一句描述 + 统计。
- *  统计只给现况:总量低调,运行中/等待确认着色浮出(与行状态词同色语);
- *  云端统计数据在 CloudTaskList 内部,此处只给标题与描述。 */
-function Overview({ space, sessions }: { space: Space; sessions: SessionMeta[] }) {
+ *  统计只给现况:总量低调,运行中/等待确认(云端:排队中)着色浮出
+ *  (与行状态词同色语);云端 feed 由 Sidebar 注入,与列表同一份数据。 */
+function Overview({
+  space,
+  sessions,
+  cloud,
+}: {
+  space: Space;
+  sessions: SessionMeta[];
+  cloud?: { feed: CloudTasksFeed; projects: import("@/lib/ipc/cloudtasks").CloudProject[] };
+}) {
   const { t } = useI18n();
   const title = t(space === "cloud" ? "rail.cloud" : space === "chat" ? "rail.chat" : "rail.local");
   const desc = t(
@@ -283,6 +291,16 @@ function Overview({ space, sessions }: { space: Space; sessions: SessionMeta[] }
     stats.push({ text: t("sidebar.overview.tasks", { n: String(pool.length) }) });
   } else if (space === "chat") {
     stats.push({ text: t("sidebar.overview.chats", { n: String(pool.length) }) });
+  } else if (space === "cloud" && cloud && cloud.feed.tasks !== null) {
+    // 云端与本地同构:总量低调 + 要紧态着色;首屏加载中(tasks=null)不出
+    // 统计行,避免闪「0 项目/0 任务」。任务总数以服务端 total 为准(含未
+    // 加载的历史页);运行中/排队中取自已加载页(active 服务端置顶,首页全)
+    stats.push({ text: t("sidebar.overview.projects", { n: String(cloud.projects.length) }) });
+    stats.push({ text: t("sidebar.overview.tasks", { n: String(cloud.feed.total ?? cloud.feed.tasks.length) }) });
+    const running = cloud.feed.tasks.filter((x) => x.status === "processing").length;
+    const queued = cloud.feed.tasks.filter((x) => x.status === "pending").length;
+    if (running > 0) stats.push({ text: t("sidebar.overview.running", { n: String(running) }), cls: "text-primary" });
+    if (queued > 0) stats.push({ text: t("sidebar.overview.queued", { n: String(queued) }), cls: "text-warning" });
   }
   if (space !== "cloud") {
     const running = pool.filter((m) => m.status === "running").length;
@@ -349,6 +367,12 @@ export function Sidebar({
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
 
+  // 云端数据源(hook 无条件调用;非云端空间 enabled=false 不拉取):
+  // 概览统计与列表共用同一份 feed,重新进入云端经 enabled 翻转刷新
+  const cloudEnabled = space === "cloud";
+  const cloudFeed = useCloudTasks(cloud?.reloadKey ?? 0, cloudEnabled);
+  const cloudProjects = useCloudProjects(cloud?.reloadKey ?? 0, cloudEnabled);
+
   const p: RowPlumbing = {
     currentId,
     actions,
@@ -392,6 +416,8 @@ export function Sidebar({
     if (space === "cloud") {
       return (
         <CloudTaskList
+          feed={cloudFeed}
+          projects={cloudProjects}
           currentId={cloud?.currentId ?? null}
           onSelect={(task) => cloud?.onSelect(task)}
           reloadKey={cloud?.reloadKey ?? 0}
@@ -518,7 +544,7 @@ export function Sidebar({
           scrollbar-gutter 预留滚条槽位:滚条挤占布局,auto 下出现/消失会让
           整列内容横移抖动;常驻滚道(overflow-y-scroll)会在壳内露白条,
           gutter 只留空间不绘制,透容器底(§5) */}
-      <Overview space={space} sessions={sessions} />
+      <Overview space={space} sessions={sessions} cloud={{ feed: cloudFeed, projects: cloudProjects }} />
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 [scrollbar-gutter:stable]">{body()}</div>
       <div className="shrink-0 empty:hidden">
         <UpdateFooter />

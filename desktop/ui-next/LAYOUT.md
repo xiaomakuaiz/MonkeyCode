@@ -59,8 +59,10 @@
 ```
 头部 h-13(固定):品牌 + ＋新建(云端加刷新)
 概览块(固定,2026-08-04 用户定案):空间标题 + 一句描述 + 统计行
-  (本地 = N 项目/N 任务,chat = N 对话;运行中 primary/等待确认 warning
-   着色且仅 >0 时出现;云端数据在 CloudTaskList 内,只给标题+描述)
+  (本地 = N 项目/N 任务,chat = N 对话,云端 = N 项目/N 任务;运行中
+   primary/等待确认·排队中 warning 着色且仅 >0 时出现;云端 feed 由
+   Sidebar 注入(useCloudTasks/useCloudProjects,enabled=仅云端空间),
+   与列表同一份数据,首屏加载中不出统计行)
 列表(flex-1,唯一滚动区,纵滚横截):menu menu-sm + details 折叠
 footer(固定钉底):更新提示等常驻条,永不随列表滚动
 ```

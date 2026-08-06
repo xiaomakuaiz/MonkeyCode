@@ -10,7 +10,15 @@ import type { SessionMeta } from "@/lib/ipc/sessions";
 import type { SidebarActions } from "./Sidebar";
 import { Sidebar } from "./Sidebar";
 
-afterEach(() => localStorage.clear());
+afterEach(() => {
+  localStorage.clear();
+  delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+});
+
+/** 云端概览统计用的假壳(与 CloudTaskList.test 同法)。 */
+function stubShell(invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>) {
+  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+}
 
 const meta = (over: Partial<SessionMeta> & { id: string; workdir: string }): SessionMeta => ({
   title: over.id,
@@ -162,6 +170,40 @@ describe("侧栏(chat/cloud 空间)", () => {
   it("cloud 空间渲染云端任务列表(无数据时空态)", async () => {
     render(<Sidebar space="cloud" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(await screen.findByText("还没有云端项目或任务")).toBeTruthy();
+  });
+
+  it("cloud 概览统计与本地同构:N 项目/N 任务;运行中 primary、排队中 warning 着色(仅 >0)", async () => {
+    stubShell((cmd) => {
+      if (cmd === "mc_tasks")
+        return Promise.resolve({
+          tasks: [
+            { id: "a", title: "跑着的", status: "processing" },
+            { id: "b", title: "排队的", status: "pending" },
+            { id: "c", title: "完结的", status: "finished" },
+          ],
+          page_info: { total: 3 },
+        });
+      if (cmd === "mc_projects") return Promise.resolve({ projects: [{ id: "p1", name: "支付服务" }] });
+      return Promise.resolve({});
+    });
+    render(<Sidebar space="cloud" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    expect(await screen.findByText("1 项目")).toBeTruthy();
+    expect(screen.getByText("3 任务")).toBeTruthy(); // 总数以服务端 total 为准
+    expect(screen.getByText("1 运行中").className).toContain("text-primary");
+    expect(screen.getByText("1 排队中").className).toContain("text-warning");
+  });
+
+  it("cloud 概览:非要紧态不出彩字(全部已结束时只有总量)", async () => {
+    stubShell((cmd) => {
+      if (cmd === "mc_tasks")
+        return Promise.resolve({ tasks: [{ id: "c", title: "完结的", status: "finished" }], page_info: { total: 1 } });
+      if (cmd === "mc_projects") return Promise.resolve({ projects: [] });
+      return Promise.resolve({});
+    });
+    render(<Sidebar space="cloud" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    expect(await screen.findByText("1 任务")).toBeTruthy();
+    expect(screen.queryByText(/运行中/)).toBeNull();
+    expect(screen.queryByText(/排队中/)).toBeNull();
   });
 });
 

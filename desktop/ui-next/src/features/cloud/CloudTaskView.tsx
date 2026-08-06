@@ -1,38 +1,48 @@
 // 云端任务详情视图(纯视图层):回放/跟看/操作 monkeycode 云端任务。
 // 连接编排在 useCloudTask,协议状态机在 lib/cloud/stream;渲染复用本地
 // 会话的帧归约链(reduceBatch → LogList,云端帧与本地 Frame 同构)。
+// 形态与本地 ChatView 同构(LAYOUT §4「云端任务视图与会话视图同构」):
+// header(标题+副标题 / 图标钮 + ⋯ 菜单)→ 连接条(header 之下内嵌条)→
+// 消息流(居中 max-w-3xl,gutter 对称)→ TaskPanel + composer(输入卡)。
 // - pending:整屏启动时间线(StartupTimeline),此时必然还没有对话;
-// - processing:attach 跟看 + 简版输入 + 停止/中断;
-// - finished/error:REST rounds 只读回放,「加载更早」按 cursor 往前翻。
+// - processing:attach 跟看 + CloudComposer + 中断/终止;
+// - finished/error:REST rounds 只读回放(LogList readonly),「加载更早」按 cursor 往前翻。
 // 提问大纲:数据 = REST 提问索引(全量目录)+ 已回放窗口的用户消息按时间锚
 // 合并(lib/cloud/outline),渲染复用本地 OutlineNav;跳转目标未加载时经
 // loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
-import { CircleStop, Files, SendHorizontal, SquareTerminal, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Ellipsis, FolderOpen, SquareTerminal, X } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 
+import { useApprovalHotkeys } from "@/app/shortcuts";
+import { ErrorBar } from "@/features/chat/composer/composerKit";
 import { LogList } from "@/features/chat/LogList";
 import { OutlineNav, outlineEntriesOf } from "@/features/chat/OutlineNav";
-import { useI18n, type MessageKey } from "@/lib/i18n";
-import type { CloudTask } from "@/lib/ipc/cloudtasks";
+import { TaskPanel } from "@/features/chat/TaskPanel";
+import { useI18n } from "@/lib/i18n";
+import { mcTaskDelete, type CloudTask } from "@/lib/ipc/cloudtasks";
 import type { OutlineItem } from "@/lib/ipc/controls";
 import { cloudAnchorIndex, fetchCloudOutline, withCloudAnchors } from "@/lib/cloud/outline";
 import type { StreamStatus } from "@/lib/cloud/stream";
+import { useDismiss } from "@/lib/util/useDismiss";
+import { CloudComposer } from "./CloudComposer";
 import { CloudFiles } from "./CloudFiles";
 import { CloudTerminal } from "./CloudTerminal";
 import { StartupTimeline } from "./StartupTimeline";
 import { useCloudTask } from "./useCloudTask";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
+const SCROLLBAR_EDGE = 18; // 右缘滚动条带宽(mousedown 落点判定,与 ChatView 同值)
 const JUMP_MAX_PAGES = 80; // 大纲跳转补页上限(坏锚/游标不前进时不空转)
 const JUMP_STEP = 10; // 补页步长(轮/页;壳侧 mc_task_rounds 的 limit 上限)
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
-
-const STATUS_BADGE: Record<string, string> = {
-  pending: "badge-warning",
-  processing: "badge-primary",
-  error: "badge-error",
-  finished: "badge-ghost",
-};
 
 /** 连接状态 → 外显文案;健康态(已连接/本轮结束)返回 null 不渲染——
  * 常驻"已连接云端"是噪音,异常/过渡态才值得占一行。 */
@@ -56,18 +66,47 @@ function statusText(t: ReturnType<typeof useI18n>["t"], status: StreamStatus | n
 export function CloudTaskView({
   task,
   onTasksChanged,
+  onDeleted,
 }: {
   /** 侧栏/新建入口带进来的任务(至少含 id;详情异步补全)。
    * 契约:App 以 task.id 为 key 挂载本视图(id 在一次挂载内不变)。 */
   task: CloudTask;
   /** 状态变化(停止/结束)后让 App 刷新侧栏列表 */
   onTasksChanged?: () => void;
+  /** 视图内删除成功后回调:App 关闭本视图并刷新侧栏 */
+  onDeleted?: () => void;
 }) {
   const { t } = useI18n();
   const h = useCloudTask(task, { onTasksChanged });
-  const [confirmingStop, setConfirmingStop] = useState(false);
   const [termOpen, setTermOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+
+  // ==== 头部 ⋯ 菜单(终止/删除):受控 dropdown,外点/Esc 即收;危险动作
+  // 二段确认(首点换文案,再点才执行)——手法与 ChatView 头部菜单一致 ====
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const menuBoxRef = useRef<HTMLDivElement | null>(null);
+  const closeMenu = () => {
+    setMenuOpen(false);
+    setConfirmStop(false);
+    setConfirmDelete(false);
+  };
+  useDismiss(menuOpen, menuBoxRef, closeMenu);
+
+  const doDelete = () => {
+    closeMenu();
+    void mcTaskDelete(h.id)
+      .then(() => onDeleted?.())
+      .catch((e: unknown) => {
+        // 服务端会拒绝仍在运行/虚拟机尚在线的任务:原因外显,不静默
+        h.notifyErr(t("cloud.list.deleteFailed", { reason: e instanceof Error ? e.message : String(e) }));
+      });
+  };
+
+  // 键盘审批(⏎ 允许 / esc 拒绝)经云端 WS 上行;终端聚焦时由 shortcuts
+  // 的 inTerminal 守卫整体让路
+  useApprovalHotkeys(h.chat, h.id, h.sendFrame);
 
   // Esc 关文件抽屉(window capture,与 FilesDrawer 同法):浮层优先,这一下
   // Esc 已被抽屉消费必须立即截断——window 上还挂着审批热键(app/shortcuts.ts,
@@ -155,13 +194,26 @@ export function CloudTaskView({
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   }, [h.chat.items]);
 
+  // scroll 事件只做「贴底 → 跟随」的单向判定(与 ChatView 同法):程序滚动
+  // 同样发 scroll 事件,回放中一批内容长高就会把跟随误判成用户离底。
+  // 离底判定只认用户真实输入(onWheel 上滚/右缘 mousedown)
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_THRESHOLD;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) pinnedRef.current = true;
+  };
+  const onLogWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0) pinnedRef.current = false; // 向上滚 = 离开底部去看历史
+  };
+  const onLogMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
+    // 按在右缘滚动条带上 = 准备拖动定位,解除跟随(拖回底部经 scroll 事件重新贴上)
+    const el = scrollRef.current;
+    if (el && e.clientX > el.getBoundingClientRect().right - SCROLLBAR_EDGE) pinnedRef.current = false;
   };
 
   const onLoadEarlier = async () => {
+    // 解除贴底:前插保位后若仍是"贴底"态,下一批实时帧会立刻把视口拽回底
+    pinnedRef.current = false;
     const el = scrollRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
@@ -178,75 +230,147 @@ export function CloudTaskView({
     h.send();
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // IME 组合期的 Enter 是选字,不是发送
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      send();
-    }
-  };
-
   const pending = h.taskStatus === "pending";
   const connText = statusText(t, h.status);
-  const statusKey = `cloud.status.${h.taskStatus}` as MessageKey;
-  const statusLabel = STATUS_BADGE[h.taskStatus] ? t(statusKey) : h.taskStatus;
+  // 空态带 !cursor 守卫:结束态首轮可能没有帧但仍有更早可翻,
+  // 此时要保住「加载更早」入口,不能整屏换成空态
+  const showEmpty = !pending && h.chat.items.length === 0 && !h.cursor;
+
+  // 副标题:摘要(与标题同句时跳过——label 回退链会把 summary 顶成标题)
+  // → 仓库 · 分支(mono)→ 「云端」身份词;与 ChatView 副标题同构
+  const summary = task.summary || h.meta?.summary || "";
+  const repoLine = [h.meta?.full_name, h.meta?.branch].filter(Boolean).join(" · ");
 
   return (
     <main className="relative flex min-w-0 flex-1 flex-col bg-base-100">
+      {/* §7 拖拽区铁律:头部每个非交互子节点单独带 data-tauri-drag-region
+          (云端无双击改名,h1 整个在拖拽区内) */}
       <header data-view-header="" data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-2 border-b border-base-300 px-4">
-        <h1 data-tauri-drag-region="" className="min-w-0 flex-1 truncate text-sm font-semibold" title={h.label}>
-          {h.label}
-        </h1>
-        <span data-tauri-drag-region="" className={`badge badge-soft badge-sm ${STATUS_BADGE[h.taskStatus] ?? "badge-ghost"}`}>{statusLabel}</span>
-        <span data-tauri-drag-region="" className="badge badge-ghost badge-sm">{t("cloud.view.badge")}</span>
+        <div data-tauri-drag-region="" className="min-w-0 flex-1">
+          <h1 data-tauri-drag-region="" className="truncate text-sm leading-tight font-semibold" title={h.label}>
+            {h.label}
+          </h1>
+          {summary && summary !== h.label ? (
+            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/50">{summary}</p>
+          ) : repoLine ? (
+            <p data-tauri-drag-region="" title={repoLine} className="truncate font-mono text-[11px] leading-tight text-base-content/45">
+              {repoLine}
+            </p>
+          ) : (
+            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/45">{t("cloud.view.badge")}</p>
+          )}
+        </div>
         <button
           type="button"
-          className={`btn btn-ghost btn-xs ${filesOpen ? "btn-active" : ""}`}
+          aria-label={t("cloud.view.filesOpen")}
+          title={h.vmId ? t("cloud.view.filesOpen") : t("cloud.view.filesPending")}
+          className={`btn btn-ghost btn-square btn-sm text-base-content/60 ${filesOpen ? "btn-active" : ""}`}
           disabled={!h.vmId}
-          title={h.vmId ? undefined : t("cloud.view.filesPending")}
           onClick={() => setFilesOpen((o) => !o)}
         >
-          <Files size={14} strokeWidth={1.75} aria-hidden />
-          {t("cloud.view.filesOpen")}
+          <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
         </button>
         {h.vmId && !h.ended && (
           <button
             type="button"
-            className={`btn btn-ghost btn-xs ${termOpen ? "btn-active" : ""}`}
+            aria-label={termOpen ? t("cloud.view.terminalClose") : t("cloud.view.terminalOpen")}
+            title={termOpen ? t("cloud.view.terminalClose") : t("cloud.view.terminalOpen")}
+            className={`btn btn-ghost btn-square btn-sm text-base-content/60 ${termOpen ? "btn-active" : ""}`}
             onClick={() => setTermOpen((o) => !o)}
           >
-            <SquareTerminal size={14} strokeWidth={1.75} aria-hidden />
-            {termOpen ? t("cloud.view.terminalClose") : t("cloud.view.terminalOpen")}
+            <SquareTerminal size={16} strokeWidth={1.75} aria-hidden />
           </button>
         )}
-        {!h.ended && (
+        <div ref={menuBoxRef} className={`dropdown dropdown-end ${menuOpen ? "dropdown-open" : ""}`}>
           <button
             type="button"
-            className={`btn btn-xs ${confirmingStop ? "btn-error" : "btn-ghost"}`}
-            title={t("cloud.view.stopHint")}
-            onBlur={() => setConfirmingStop(false)}
-            onClick={() => {
-              // 危险动作二段确认:第一次点变文案,再点才停
-              if (!confirmingStop) {
-                setConfirmingStop(true);
-                return;
-              }
-              setConfirmingStop(false);
-              void h.stopTask();
-            }}
+            aria-label={t("cloud.view.menu")}
+            title={t("cloud.view.menu")}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            className="btn btn-ghost btn-square btn-sm text-base-content/60"
+            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
           >
-            {confirmingStop ? t("cloud.view.stopConfirm") : t("cloud.view.stop")}
+            <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
           </button>
-        )}
+          {menuOpen && (
+            <ul role="menu" aria-label={t("cloud.view.menu")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
+              {!h.ended && (
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    title={t("cloud.view.stopHint")}
+                    className={confirmStop ? "text-error" : ""}
+                    onClick={() => {
+                      // 危险动作二段确认:第一次点变文案,再点才停
+                      if (!confirmStop) {
+                        setConfirmStop(true);
+                        return;
+                      }
+                      closeMenu();
+                      void h.stopTask();
+                    }}
+                  >
+                    {confirmStop ? t("cloud.view.stopConfirm") : t("cloud.view.stop")}
+                  </button>
+                </li>
+              )}
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={confirmDelete ? "text-error" : ""}
+                  onClick={() => {
+                    if (!confirmDelete) {
+                      setConfirmDelete(true);
+                      return;
+                    }
+                    doDelete();
+                  }}
+                >
+                  {confirmDelete ? t("cloud.list.deleteConfirm") : t("cloud.list.delete")}
+                </button>
+              </li>
+            </ul>
+          )}
+        </div>
       </header>
+
+      {/* 布局规范(LAYOUT §3):连接状态是内容级信息,以内嵌条挂在 header
+          之下,恢复即消。形态 = 「header 的延长线」:同 px-4 内距、同
+          border-b 分隔线、微量 warning 底,不用 alert 横幅 */}
+      {connText && !h.ended && (
+        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-base-300 bg-warning/5 px-4 py-1.5 text-xs text-base-content/70">
+          <span aria-hidden className="status status-warning status-sm animate-pulse shrink-0" />
+          <span className="min-w-0 flex-1 truncate" title={connText}>{connText}</span>
+        </div>
+      )}
 
       {pending ? (
         // 启动页:VM 准备是以分钟计的过程,整屏让给时间线(此时必无对话)
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
           <StartupTimeline meta={h.meta} />
         </div>
+      ) : showEmpty ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
+          <img src="/logo.png" alt="" aria-hidden className="h-13 w-13 rounded-2xl shadow-sm" />
+          <p className="max-w-md text-center text-[15px] font-bold">
+            {t(h.ended ? "cloud.empty.ended.title" : "cloud.empty.connecting.title")}
+          </p>
+          <p className="max-w-md text-center text-xs leading-relaxed text-base-content/60">
+            {t(h.ended ? "cloud.empty.ended.detail" : "cloud.empty.connecting.detail")}
+          </p>
+        </div>
       ) : (
-        <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          onWheel={onLogWheel}
+          onMouseDown={onLogMouseDown}
+          // gutter 两侧对称预留:与页脚 composer 列(无滚动条)共享同一条中线
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 [scrollbar-gutter:stable_both-edges]"
+        >
           <div className="mx-auto flex max-w-3xl flex-col gap-3">
             {h.cursor && (
               <button
@@ -259,15 +383,11 @@ export function CloudTaskView({
                 {t("chat.loadEarlier")}
               </button>
             )}
-            {h.chat.items.length === 0 && (
-              <div className="py-10 text-center text-xs text-base-content/50">
-                {h.ended ? t("cloud.view.noReplay") : (connText ?? t("cloud.conn.connecting"))}
-              </div>
-            )}
             {/* 审批/提问答复经 stream WS 上行(h.sendFrame),不走本地 session_send;
-                包一层 div 做大纲跳转的定位根(LogList 直接子元素 ↔ items 下标) */}
+                包一层 div 做大纲跳转的定位根(LogList 直接子元素 ↔ items 下标);
+                结束态只读回放:卡片不再渲染交互按钮 */}
             <div ref={listRef}>
-              <LogList state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} flashSeq={flashSeq ?? undefined} />
+              <LogList state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} flashSeq={flashSeq ?? undefined} readonly={h.ended} />
             </div>
           </div>
         </div>
@@ -314,65 +434,17 @@ export function CloudTaskView({
             </div>
           )}
 
-          {h.err && (
-            <div role="alert" className="alert alert-error alert-soft flex items-center py-1.5 text-xs">
-              <span className="min-w-0 flex-1 break-words">{h.err}</span>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={h.clearErr}>
-                {t("chat.dismiss")}
-              </button>
-            </div>
-          )}
-
-          {/* 运行条:一行紧凑态——spinner + 文案 + 停止 icon 按钮(与本地 composer 同语言) */}
-          {h.running && (
-            <div role="status" className="flex items-center gap-2 text-xs text-base-content/60">
-              <span className="loading loading-dots loading-xs" aria-hidden />
-              <span className="flex-1">{t("cloud.view.running")}</span>
-              <button
-                type="button"
-                aria-label={t("chat.stop")}
-                className="btn btn-ghost btn-square btn-xs text-error"
-                title={t("cloud.view.cancelRun")}
-                onClick={h.cancelRun}
-              >
-                <CircleStop size={16} strokeWidth={1.75} aria-hidden />
-              </button>
-            </div>
-          )}
-
-          {/* 连接条:与 ChatView 会话连接条同形态(alert-soft + 状态点) */}
-          {connText && !h.ended && (
-            <div role="status" className="alert alert-warning alert-soft py-1.5 text-xs">
-              <span aria-hidden className={`status status-xs ${h.connected ? "status-success" : "status-warning animate-pulse"}`} />
-              <span className="min-w-0 flex-1 truncate">{connText}</span>
-            </div>
-          )}
-
           {h.ended ? (
-            <div className="py-1 text-center text-xs text-base-content/50">{t("cloud.view.readonly")}</div>
+            <>
+              {/* 结束态 composer 不渲染,错误通道(如删除被拒)另给一条 */}
+              {h.err && <ErrorBar text={h.err} onDismiss={h.clearErr} />}
+              <div className="py-1 text-center text-xs text-base-content/50">{t("cloud.view.readonly")}</div>
+            </>
           ) : (
-            <div className="flex items-end gap-2">
-              <textarea
-                aria-label={t("chat.composer")}
-                className="textarea min-h-10 w-full resize-none text-sm"
-                rows={2}
-                placeholder={pending ? t("cloud.view.composerPending") : t("cloud.view.composerPlaceholder")}
-                value={h.input}
-                onChange={(e) => h.setInput(e.target.value)}
-                onKeyDown={onKeyDown}
-                disabled={pending}
-              />
-              <button
-                type="button"
-                aria-label={t("chat.send")}
-                title={t("chat.sendTip")}
-                className="btn btn-primary btn-square btn-sm"
-                disabled={pending || !h.input.trim()}
-                onClick={send}
-              >
-                <SendHorizontal size={16} strokeWidth={1.75} aria-hidden />
-              </button>
-            </div>
+            <>
+              {h.chat.plan.length > 0 && <TaskPanel entries={h.chat.plan} />}
+              <CloudComposer h={h} pending={pending} onSend={send} />
+            </>
           )}
         </div>
       </footer>

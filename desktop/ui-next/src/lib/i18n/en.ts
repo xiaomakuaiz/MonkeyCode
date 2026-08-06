@@ -29,6 +29,7 @@ export const en: Record<MessageKey, string> = {
   "sidebar.overview.chats": "{n} chats",
   "sidebar.overview.running": "{n} running",
   "sidebar.overview.waiting": "{n} waiting",
+  "sidebar.overview.queued": "{n} queued",
   "sidebar.archivedTasks": "Archived tasks",
   "sidebar.archivedChats": "Archived chats",
   "sidebar.archivedProjects": "Archived projects",
@@ -397,6 +398,11 @@ export const en: Record<MessageKey, string> = {
   "cloud.view.composerPlaceholder": "Continue the conversation. Enter to send, Shift+Enter for newline",
   "cloud.view.composerPending": "Environment starting… you can send once it is ready",
   "cloud.view.menu": "Task actions",
+
+  "cloud.empty.connecting.title": "Connecting to the cloud task",
+  "cloud.empty.connecting.detail": "The conversation will replay here shortly; the task keeps running in the cloud regardless of this client.",
+  "cloud.empty.ended.title": "No conversation to replay",
+  "cloud.empty.ended.detail": "This task has ended without leaving a conversation. To continue the work, create a new cloud task.",
 
   "cloud.conn.connecting": "Connecting to the cloud…",
   "cloud.conn.reconnecting": "Cloud connection lost; reconnecting in {seconds}s…",

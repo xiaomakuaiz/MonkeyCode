@@ -28,6 +28,7 @@ export const zh = {
   "sidebar.overview.chats": "{n} 会话",
   "sidebar.overview.running": "{n} 运行中",
   "sidebar.overview.waiting": "{n} 等待确认",
+  "sidebar.overview.queued": "{n} 排队中",
   "sidebar.archivedTasks": "已归档任务",
   "sidebar.archivedChats": "已归档会话",
   "sidebar.archivedProjects": "已归档项目",
@@ -396,6 +397,11 @@ export const zh = {
   "cloud.view.composerPlaceholder": "继续对话,Enter 发送,Shift+Enter 换行",
   "cloud.view.composerPending": "环境启动中…就绪后可发送",
   "cloud.view.menu": "任务操作",
+
+  "cloud.empty.connecting.title": "正在连接云端任务",
+  "cloud.empty.connecting.detail": "对话记录马上回放到这里;任务在云端继续执行,不受本地影响。",
+  "cloud.empty.ended.title": "没有可回放的对话记录",
+  "cloud.empty.ended.detail": "这个任务已结束且没有留下对话。需要继续这项工作,可以新建云端任务。",
 
   "cloud.conn.connecting": "连接云端…",
   "cloud.conn.reconnecting": "云端连接断开,{seconds} 秒后自动重连…",
