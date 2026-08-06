@@ -6,7 +6,9 @@
 // 消息流(居中 max-w-3xl,gutter 对称)→ TaskPanel + composer(输入卡)。
 // - pending:整屏启动时间线(StartupTimeline),此时必然还没有对话;
 // - processing:attach 跟看 + CloudComposer + 中断/终止;
-// - finished/error:REST rounds 只读回放(LogList readonly),「加载更早」按 cursor 往前翻。
+// - finished/error:REST rounds 只读回放(LogList readonly),更早轮次按 cursor
+//   往前翻:滚近顶部自动补拉(懒加载),「加载更早」按钮兜底(内容不满一屏时
+//   没有滚动事件可触发)。
 // 提问大纲:数据 = REST 提问索引(全量目录)+ 已回放窗口的用户消息按时间锚
 // 合并(lib/cloud/outline),渲染复用本地 OutlineNav;跳转目标未加载时经
 // loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
@@ -43,6 +45,7 @@ import { useCloudTask } from "./useCloudTask";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
 const SCROLLBAR_EDGE = 18; // 右缘滚动条带宽(mousedown 落点判定,与 ChatView 同值)
+const AUTO_EARLIER_PX = 48; // 滚进距顶多少像素内自动补拉更早轮次(懒加载)
 const JUMP_MAX_PAGES = 80; // 大纲跳转补页上限(坏锚/游标不前进时不空转)
 const JUMP_STEP = 10; // 补页步长(轮/页;壳侧 mc_task_rounds 的 limit 上限)
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
@@ -285,9 +288,13 @@ export function CloudTaskView({
     if (!el) return;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) pinnedRef.current = true;
     scheduleActive();
+    maybeLoadEarlier();
   };
   const onLogWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
-    if (e.deltaY < 0) pinnedRef.current = false; // 向上滚 = 离开底部去看历史
+    if (e.deltaY < 0) {
+      pinnedRef.current = false; // 向上滚 = 离开底部去看历史
+      maybeLoadEarlier(); // 已顶到 0 时 scroll 不再发事件,wheel 兜住继续往前翻
+    }
   };
   const onLogMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
     // 按在右缘滚动条带上 = 准备拖动定位,解除跟随(拖回底部经 scroll 事件重新贴上)
@@ -307,6 +314,15 @@ export function CloudTaskView({
       const now = scrollRef.current;
       if (now) now.scrollTop = prevTop + (now.scrollHeight - prevHeight);
     });
+  };
+
+  // 懒加载:滚进距顶阈值内自动补拉(与按钮同一条 onLoadEarlier 链;数据层
+  // loadEarlier 自带在途守卫,滚动高频触发安全)。补拉落地后前插保位会把
+  // 视口推离顶部,链式触发自然停
+  const maybeLoadEarlier = () => {
+    const el = scrollRef.current;
+    if (!el || !h.cursor || h.loadingEarlier) return;
+    if (el.scrollTop < AUTO_EARLIER_PX) void onLoadEarlier();
   };
 
   const send = () => {
@@ -463,6 +479,7 @@ export function CloudTaskView({
       ) : (
         <div
           ref={scrollRef}
+          data-chat-log=""
           onScroll={onScroll}
           onWheel={onLogWheel}
           onMouseDown={onLogMouseDown}

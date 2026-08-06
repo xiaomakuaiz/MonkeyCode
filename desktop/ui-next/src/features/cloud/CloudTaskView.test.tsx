@@ -130,6 +130,40 @@ describe("CloudTaskView", () => {
     expect(seqs).toEqual(["1", "10"]);
   });
 
+  it("懒加载:滚动到距顶阈值内自动补拉更早轮次,不用点按钮", async () => {
+    let roundsCalls = 0;
+    stubShell((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t3b", status: "finished" });
+        case "mc_task_rounds":
+          roundsCalls += 1;
+          return roundsCalls === 1
+            ? Promise.resolve({
+                frames: [{ type: "user-input", seq: 10, data: { content: b64encode("第二轮提问") } }],
+                next_cursor: "c-early",
+                has_more: true,
+              })
+            : Promise.resolve({
+                frames: [{ type: "user-input", seq: 1, data: { content: b64encode("第一轮提问") } }],
+                next_cursor: "",
+                has_more: false,
+              });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    const { container } = render(<CloudTaskView task={{ id: "t3b", status: "finished" }} />);
+    await screen.findByText("第二轮提问");
+    const log = container.querySelector("[data-chat-log]") as HTMLElement;
+    log.scrollTop = 0; // jsdom 默认即 0(落在距顶阈值内)
+    fireEvent.scroll(log);
+    await screen.findByText("第一轮提问");
+    // 前插保序:更早的一轮在前
+    const seqs = [...document.querySelectorAll("[data-user-seq]")].map((el) => el.getAttribute("data-user-seq"));
+    expect(seqs).toEqual(["1", "10"]);
+  });
+
   it("提问大纲:REST 索引 + 回放窗口按时间锚合并;跳转未加载锚经 rounds 大步长补页", async () => {
     // 同一时刻的两种精度:REST 索引纳秒,帧流毫秒(壳已 ns→ms)
     const T1 = 1754190000456; // 第一问(最早,初始窗口外)
