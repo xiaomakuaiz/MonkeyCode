@@ -237,7 +237,7 @@ function ProjectDetails({
               }}>
                 {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
                 <summary
-                  className={`flex items-center gap-2 ${archivedProject ? "ps-9" : "ps-6"} text-[11px] text-base-content/40 after:hidden`}
+                  className={`flex items-center gap-2 ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
                 >
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
@@ -311,9 +311,9 @@ function Overview({
   return (
     <div className="shrink-0 px-5 pt-3 pb-1">
       <div className="text-xs font-semibold">{title}</div>
-      <div className="mt-0.5 text-[11px] leading-relaxed text-base-content/45">{desc}</div>
+      <div className="mt-0.5 text-xs leading-relaxed text-base-content/45">{desc}</div>
       {stats.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] tabular-nums text-base-content/60">
+        <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs tabular-nums text-base-content/60">
           {stats.map((s) => (
             <span key={s.text} className={s.cls}>
               {s.text}
@@ -443,7 +443,7 @@ export function Sidebar({
       const active = pool.filter((m) => !m.archived);
       const archived = pool.filter((m) => m.archived);
       return (
-        <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
+        <ul className="menu w-full flex-nowrap p-0 [&_li]:flex-nowrap">
           {rows(active, p)}
           {archived.length > 0 && (
             <SectionFold label={t("sidebar.archivedChats")} foldKey="mc.archivedOpen">
@@ -473,7 +473,7 @@ export function Sidebar({
       },
     };
     return (
-      <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
+      <ul className="menu w-full flex-nowrap p-0 [&_li]:flex-nowrap">
         {grouped.projects.map((group) => (
           <ProjectDetails
             key={group.key}
@@ -515,9 +515,10 @@ export function Sidebar({
 
   return (
     <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col border-e border-base-300 bg-base-200">
-      {/* 列头部:与 rail 角落/主区视图头部同一 h-13(52px)基线;空白处可拖拽窗口 */}
-      <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 px-3">
-        <Brand logo />
+      {/* 列头部:与 rail 角落/主区视图头部同一 h-13(52px)基线;空白处可拖拽窗口。
+          左内距对齐下方内容竖线:概览块 px-5 = 列表区 p-2 + menu 行内距 12px = 20px */}
+      <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 ps-5 pe-3">
+        <Brand />
         <span data-tauri-drag-region="" className="min-w-0 flex-1" />
         {space === "cloud" && cloud?.onRefresh && (
           <button

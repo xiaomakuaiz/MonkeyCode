@@ -98,7 +98,7 @@ export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void
   const menu = document.createElement("ul");
   // [&_li]:flex-nowrap:§6.2 截断铁律(.menu li 默认 column wrap,行宽跟
   // 内容走,truncate 不触发);字面量与 tsx 侧一致,Tailwind 扫源码可生成
-  menu.className = "menu menu-sm bg-base-100 rounded-box fixed z-50 w-36 flex-nowrap [&_li]:flex-nowrap shadow-sm";
+  menu.className = "menu bg-base-100 rounded-box fixed z-50 w-36 flex-nowrap [&_li]:flex-nowrap shadow-sm";
   for (const it of items) {
     const li = document.createElement("li");
     const btn = document.createElement("button");

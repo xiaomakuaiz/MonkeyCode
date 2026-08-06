@@ -365,7 +365,8 @@ export function SettingsView({ onClose }: { onClose: () => void }) {
             <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
               {/* 分区头:大标题+一句话说明(对齐旧工程设置屏的标题层级) */}
               <header className="flex flex-col gap-1">
-                <h2 className="text-xl font-bold">{active?.label}</h2>
+                {/* text-lg:应用最大字号档(欢迎页/新建任务同档),不再独一档 text-xl */}
+                <h2 className="text-lg font-bold">{active?.label}</h2>
                 <p className="text-xs text-base-content/60">{active?.desc}</p>
               </header>
               {body()}

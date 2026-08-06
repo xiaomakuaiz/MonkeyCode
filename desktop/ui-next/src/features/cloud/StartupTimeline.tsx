@@ -84,7 +84,7 @@ function StepRow({ step }: { step: StartupStep }) {
             {label}
           </span>
           {step.progress !== undefined && (
-            <span className="font-mono text-[11px] text-base-content/50 tabular-nums">{step.progress}%</span>
+            <span className="font-mono text-xs text-base-content/50 tabular-nums">{step.progress}%</span>
           )}
         </span>
         {step.progress !== undefined && (
@@ -92,7 +92,7 @@ function StepRow({ step }: { step: StartupStep }) {
         )}
         {/* 详情只在当前/失败步骤展开:已完成步骤的 message 是噪音 */}
         {step.message && step.state !== "done" && (
-          <span className={`text-[11px] leading-relaxed break-words ${step.state === "failed" ? "text-error" : "text-base-content/50"}`}>
+          <span className={`text-xs leading-relaxed break-words ${step.state === "failed" ? "text-error" : "text-base-content/50"}`}>
             {step.message}
           </span>
         )}
@@ -125,7 +125,7 @@ export function StartupTimeline({ meta }: { meta: CloudTaskDetail | null }) {
             steps.map((s) => <StepRow key={s.type} step={s} />)
           )}
         </ul>
-        <div className="border-t border-base-300 pt-3 text-[11px] leading-relaxed text-base-content/50">
+        <div className="border-t border-base-300 pt-3 text-xs leading-relaxed text-base-content/50">
           {failed ? t("cloud.startup.failedHint") : t("cloud.startup.hint")}
         </div>
       </div>

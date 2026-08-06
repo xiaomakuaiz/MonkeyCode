@@ -121,7 +121,10 @@
     height: 100%;
   }
   body {
-    font-size: 13px;
+    /* 与 text-sm/menu 默认档同值(0.875rem=14px):13px 卡在 Tailwind 阶梯
+     * 12/14 之间,任何字号类都打不到,裸文本自成一档是"不统一"的根源
+     * (2026-08-06 报障)。收成 12(辅助)/14(正文)两档主力 */
+    font-size: 0.875rem;
     overflow: hidden;
     /* 桌面壳手感:chrome 默认不可选中;可复制内容(消息/代码/输入框)由
      * 各 feature 按处放开(P3 起随视图落地) */

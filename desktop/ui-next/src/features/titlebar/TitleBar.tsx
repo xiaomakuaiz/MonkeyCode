@@ -61,12 +61,11 @@ const CAPTION_GLYPH = { strokeWidth: 1.1, stroke: "currentColor", fill: "none" }
 /** 品牌字后的小徽标。文案与含义由产品定,这里只保证它跟着品牌走。 */
 const BRAND_BADGE = "work";
 
-/** 品牌组合(可选 logo + 字标 + 徽标),侧栏头与 Windows 标题栏共用。
- *  每个可见子节点自带 data-tauri-drag-region(LAYOUT.md §7);logo 指针穿透给父级。 */
-export function Brand({ logo = false }: { logo?: boolean }) {
+/** 品牌组合(字标 + 徽标),侧栏头与 Windows 标题栏共用。
+ *  每个可见子节点自带 data-tauri-drag-region(LAYOUT.md §7)。 */
+export function Brand() {
   return (
     <>
-      {logo && <img src="/logo.png" alt="" draggable={false} className="pointer-events-none h-4 w-4 shrink-0 rounded" />}
       <span data-tauri-drag-region="" className="shrink-0 text-xs font-bold tracking-tight text-base-content/80">
         MonkeyCode
       </span>
@@ -88,8 +87,9 @@ export function TitleBar() {
     >
       {/* 左侧分段与内容区各列同宽同色(w-rail/w-side 令牌),竖分隔线贯通 */}
       <div data-tauri-drag-region="" className="flex w-rail items-center justify-center bg-base-300" />
-      <div data-tauri-drag-region="" className="flex w-side items-center gap-1.5 bg-base-200 px-3">
-        <Brand logo />
+      {/* 左内距与侧栏头部同一条 20px 竖线(Sidebar 头部 ps-5,对齐下方内容) */}
+      <div data-tauri-drag-region="" className="flex w-side items-center gap-1.5 bg-base-200 ps-5 pe-3">
+        <Brand />
       </div>
       <div data-tauri-drag-region="" className="flex-1 bg-base-100" />
       <div className="flex bg-base-100">

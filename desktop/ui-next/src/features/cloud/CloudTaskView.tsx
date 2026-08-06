@@ -362,13 +362,13 @@ export function CloudTaskView({
             {h.label}
           </h1>
           {summary && summary !== h.label ? (
-            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/50">{summary}</p>
+            <p data-tauri-drag-region="" className="truncate text-xs leading-tight text-base-content/50">{summary}</p>
           ) : repoLine ? (
-            <p data-tauri-drag-region="" title={repoLine} className="truncate font-mono text-[11px] leading-tight text-base-content/45">
+            <p data-tauri-drag-region="" title={repoLine} className="truncate font-mono text-xs leading-tight text-base-content/45">
               {repoLine}
             </p>
           ) : (
-            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/45">{t("cloud.view.badge")}</p>
+            <p data-tauri-drag-region="" className="truncate text-xs leading-tight text-base-content/45">{t("cloud.view.badge")}</p>
           )}
         </div>
         {/* 文件浏览走控制流(按 taskId 寻址,CloudFiles 懒建),不依赖 vmId
@@ -469,7 +469,7 @@ export function CloudTaskView({
       ) : showEmpty ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
           <img src="/logo.png" alt="" aria-hidden className="h-13 w-13 rounded-2xl shadow-sm" />
-          <p className="max-w-md text-center text-[15px] font-bold">
+          <p className="max-w-md text-center text-base font-bold">
             {t(h.ended ? "cloud.empty.ended.title" : "cloud.empty.connecting.title")}
           </p>
           <p className="max-w-md text-center text-xs leading-relaxed text-base-content/60">
@@ -531,8 +531,8 @@ export function CloudTaskView({
             <div className="card card-border h-64 min-h-0 overflow-hidden bg-base-100">
               <div className="flex h-8 shrink-0 items-center gap-2 border-b border-base-300 px-3">
                 <span aria-hidden className="status status-success" />
-                <span className="text-[11px] font-semibold">{t("cloud.view.terminalTitle")}</span>
-                <span className="text-[11px] text-base-content/60">{t("cloud.view.terminalSub")}</span>
+                <span className="text-xs font-semibold">{t("cloud.view.terminalTitle")}</span>
+                <span className="text-xs text-base-content/60">{t("cloud.view.terminalSub")}</span>
                 <span className="flex-1" />
                 <button
                   type="button"

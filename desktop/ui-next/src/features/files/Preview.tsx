@@ -26,7 +26,7 @@ export function Preview({ model, status, onClose }: { model: PreviewModel; statu
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-1.5">
         <span className="shrink-0 font-mono text-xs font-semibold">{basename(model.path)}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-base-content/45">{model.path}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-base-content/45">{model.path}</span>
         {meta && <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>}
         <button
           type="button"

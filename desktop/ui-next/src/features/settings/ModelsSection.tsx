@@ -87,7 +87,7 @@ export function ModelsSection({
     const d = modelDisplay({ name: m.name, model: m.model, source: m.source });
     const nameBody = (
       <>
-        {/* 行主文本 = 应用基准 13px 常规(与侧栏/菜单行同级),不加粗:
+        {/* 行主文本 = 应用基准 14px 常规(与侧栏/菜单行同级),不加粗:
             名称的主导地位靠 wire 串的灰色等宽小字衬出,不靠字重 */}
         <span className={`truncate ${m.locked ? "text-base-content/50" : ""}`}>
           {d.label.trim() || t("settings.models.unnamed")}
@@ -282,7 +282,7 @@ export function ModelsSection({
                   ? memberSections.map((s) => [
                       <li
                         key={`${s.label}-title`}
-                        className="flex items-baseline gap-2 px-4 pt-2.5 pb-1 text-[11px] font-bold tracking-wide text-base-content/40"
+                        className="flex items-baseline gap-2 px-4 pt-2.5 pb-1 text-xs font-bold tracking-wide text-base-content/40"
                       >
                         {s.label}
                         {s.badge && <span className="font-normal">{s.badge}</span>}

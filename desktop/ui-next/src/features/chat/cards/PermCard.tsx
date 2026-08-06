@@ -68,7 +68,7 @@ export function PermActions({
       <button type="button" className="btn btn-outline btn-error btn-xs" onClick={() => answer("deny")}>
         {t("chat.perm.deny")}
       </button>
-      <span className="ms-auto flex items-center gap-1 text-[11px] text-base-content/50">
+      <span className="ms-auto flex items-center gap-1 text-xs text-base-content/50">
         <kbd className="kbd kbd-xs">⏎</kbd>
         {t("chat.perm.allow")}
         <span aria-hidden> · </span>

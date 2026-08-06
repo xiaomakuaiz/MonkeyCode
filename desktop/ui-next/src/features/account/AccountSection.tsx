@@ -147,7 +147,7 @@ function BaizhiCard({
       // 组头已表明「百智云账号」,卡头显登录身份,不再重复产品名
       title={profileName(status.profile) || t("account.loggedIn")}
       badge={<span className="badge badge-success badge-soft badge-xs shrink-0">{t("account.loggedIn")}</span>}
-      subtitle={<span className="truncate font-mono text-[11px] text-base-content/50">{status.host}</span>}
+      subtitle={<span className="truncate font-mono text-xs text-base-content/50">{status.host}</span>}
       actions={
         <>
           <button type="button" className="btn btn-sm" disabled={syncing} onClick={() => void sync()}>
@@ -280,7 +280,7 @@ function McCard({
       // 组头已表明「MonkeyCode 云端」,卡头显登录身份
       title={userName}
       badge={<span className="badge badge-success badge-soft badge-xs shrink-0">{t("account.loggedIn")}</span>}
-      subtitle={<span className="truncate font-mono text-[11px] text-base-content/50">{status?.host}</span>}
+      subtitle={<span className="truncate font-mono text-xs text-base-content/50">{status?.host}</span>}
       actions={
         <>
           <button type="button" className="btn btn-sm" disabled={busy === "sync"} onClick={() => void sync()}>

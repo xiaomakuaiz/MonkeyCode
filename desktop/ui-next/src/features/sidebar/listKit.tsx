@@ -4,7 +4,8 @@
 // - ListRow 安静行:行首 12px 身份图标槽(不被状态顶掉,用户定案
 //   2026-08-05)+ 单行主文案截断 + 行尾要紧态状态点(点替代文字词,
 //   词进 title/aria);右键 = 行菜单。
-// - GroupLabel 区块标签:组头 12px 图标 + text-[11px] font-medium /50,
+// - GroupLabel 区块标签:组头 12px 图标 + text-xs font-medium /50(比行
+//   小一档;行 14px 后从 11px 提到 12px,免得差距拉到 3px 显得过小),
 //   放进 summary(flex 覆写、after:hidden 去尾箭头)。
 // - SectionFold 小节折叠:Archive 形小节头(10px 图标行首、无计数),
 //   开合走 prefs 契约键持久化,收起即卸载(部分 webview 里 details 收起
@@ -81,7 +82,7 @@ export function GroupLabel({ icon: Icon, name }: { icon: LucideIcon; name: strin
   return (
     <>
       <Icon size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-base-content/50">{name}</span>
+      <span className="min-w-0 flex-1 truncate text-xs font-medium text-base-content/50">{name}</span>
     </>
   );
 }

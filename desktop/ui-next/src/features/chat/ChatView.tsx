@@ -531,11 +531,11 @@ export function ChatView({
           {/* 副标题:有摘要显摘要;无摘要时 chat 会话标「独立会话」、其余
               显 workdir 末段(mono,悬停看全路径)——一眼可辨会话归属 */}
           {meta.summary ? (
-            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/50">{meta.summary}</p>
+            <p data-tauri-drag-region="" className="truncate text-xs leading-tight text-base-content/50">{meta.summary}</p>
           ) : meta.kind === "chat" ? (
-            <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/45">{t("chat.header.standalone")}</p>
+            <p data-tauri-drag-region="" className="truncate text-xs leading-tight text-base-content/45">{t("chat.header.standalone")}</p>
           ) : meta.workdir ? (
-            <p data-tauri-drag-region="" title={meta.workdir} className="truncate font-mono text-[11px] leading-tight text-base-content/45">
+            <p data-tauri-drag-region="" title={meta.workdir} className="truncate font-mono text-xs leading-tight text-base-content/45">
               {meta.workdir.split(/[\\/]/).filter(Boolean).pop() ?? meta.workdir}
             </p>
           ) : null}
@@ -633,13 +633,13 @@ export function ChatView({
       {empty ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
           <img src="/logo.png" alt="" aria-hidden className="h-13 w-13 rounded-2xl shadow-sm" />
-          <p className="max-w-md text-center text-[15px] font-bold">
+          <p className="max-w-md text-center text-base font-bold">
             {emptyChat ? (
               t("chat.empty.chatTitle")
             ) : (
               <>
                 {emptyTitlePre}
-                <span className="font-mono text-[13px] whitespace-nowrap">{meta.workdir}</span>
+                <span className="font-mono text-sm whitespace-nowrap">{meta.workdir}</span>
                 {emptyTitlePost}
               </>
             )}

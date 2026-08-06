@@ -165,7 +165,7 @@ export function Tree({
           <div className="text-sm font-semibold">{t("files.tree.emptyRoot")}</div>
         </div>
       ) : (
-        <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">{renderDir("", 0)}</ul>
+        <ul className="menu w-full flex-nowrap p-0 [&_li]:flex-nowrap">{renderDir("", 0)}</ul>
       )}
     </div>
   );

@@ -4,7 +4,8 @@
  * Tailwind preflight 清零了 h1-h6/列表/hr 的浏览器默认样式,这里显式补齐。 */
 
 .md {
-  font-size: 0.85rem;
+  /* 与应用正文基准同值(0.875rem=14px;标题/代码按 em 随动) */
+  font-size: 0.875rem;
   line-height: 1.75;
   overflow-wrap: anywhere;
   color: color-mix(in oklab, var(--color-base-content) 92%, var(--color-base-100));

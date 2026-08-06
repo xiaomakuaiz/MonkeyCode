@@ -76,7 +76,7 @@ export function AskCard({
   const [sent, setSent] = useState<Answers | null>(null);
 
   if (item.state === "expired") {
-    return <div className="self-center text-[11px] text-base-content/50">{t("chat.ask.expired")}</div>;
+    return <div className="self-center text-xs text-base-content/50">{t("chat.ask.expired")}</div>;
   }
   if (item.state === "done" || sent || readonly) {
     return <ReadonlyAsk item={item} local={sent} />;
@@ -192,7 +192,7 @@ export function AskCard({
             {t("chat.ask.cancel")}
           </button>
           <div className="flex items-center gap-2">
-            {!ready && <span className="text-[11px] text-base-content/40">{t("chat.ask.needAll")}</span>}
+            {!ready && <span className="text-xs text-base-content/40">{t("chat.ask.needAll")}</span>}
             <button type="button" className="btn btn-primary btn-sm" disabled={!ready} onClick={submit}>
               {t("chat.ask.submit")}
             </button>

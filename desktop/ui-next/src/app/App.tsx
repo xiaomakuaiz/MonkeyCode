@@ -175,7 +175,7 @@ function MainArea({
         <p className="max-w-sm text-sm leading-relaxed text-base-content/60">{t("main.welcome.detail")}</p>
       </div>
       {info && (
-        <p className="font-mono text-[11px] text-base-content/35 tabular-nums">
+        <p className="font-mono text-xs text-base-content/35 tabular-nums">
           {t("main.shellInfo", { version: info.version, engine: info.engine_version ?? t("main.engineNotReady") })}
         </p>
       )}

@@ -94,7 +94,7 @@ export function UsagePanel({ userId }: { userId?: string }) {
             <Crown size={12} strokeWidth={2} aria-hidden />
             {t(`account.usage.plan.${vm.plan}`)}
           </span>
-          <span className="text-[11px] text-base-content/50">
+          <span className="text-xs text-base-content/50">
             {vm.expiresAt ? t("account.usage.expiry", { date: vm.expiresAt }) : t("account.usage.noExpiry")}
           </span>
         </div>
@@ -128,7 +128,7 @@ export function UsagePanel({ userId }: { userId?: string }) {
         <div className="flex items-center gap-3 border-t border-base-300 pt-3">
           {vm.credits !== null && (
             <span className="flex shrink-0 flex-col gap-0.5">
-              <span className="text-[11px] text-base-content/50">{t("account.usage.creditsTitle")}</span>
+              <span className="text-xs text-base-content/50">{t("account.usage.creditsTitle")}</span>
               {/* 大数字用正文色:积分是余额陈述不是行动号召,主色留给品牌/选中 */}
               <span className="font-mono text-lg font-extrabold tracking-tight tabular-nums">
                 {vm.credits.toLocaleString()}
@@ -143,7 +143,7 @@ export function UsagePanel({ userId }: { userId?: string }) {
                 <span className="text-xs font-semibold text-base-content/70">
                   {t("account.usage.invite", { count: vm.invite.count })}
                 </span>
-                <span className="text-[11px] text-base-content/50">
+                <span className="text-xs text-base-content/50">
                   {t("account.usage.inviteReward", { reward: INVITE_REWARD.toLocaleString() })}
                 </span>
               </span>

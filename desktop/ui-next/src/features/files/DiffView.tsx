@@ -27,7 +27,7 @@ export function DiffView({ text }: { text: string }) {
 function Row({ row }: { row: DiffRow }) {
   if (row.kind === "hunk") {
     return (
-      <div className="flex bg-base-200 px-4 py-0.5 text-[11px] text-base-content/50">
+      <div className="flex bg-base-200 px-4 py-0.5 text-xs text-base-content/50">
         <span className="whitespace-pre-wrap wrap-anywhere">{row.text}</span>
       </div>
     );

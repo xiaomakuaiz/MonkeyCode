@@ -41,7 +41,7 @@ export function Changes({
   }
   const sorted = [...changes].sort((a, b) => a.path.localeCompare(b.path));
   return (
-    <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
+    <ul className="menu w-full flex-nowrap p-0 [&_li]:flex-nowrap">
       {sorted.map((c) => {
         const meta = statusMeta(c.status);
         const sep = c.path.lastIndexOf("/");
