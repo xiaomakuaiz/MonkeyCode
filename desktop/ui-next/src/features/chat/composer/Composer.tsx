@@ -312,20 +312,13 @@ export function Composer({
         />
 
         {/* min-w-0:长模型名可收缩截断,不得把发送按钮挤出卡片。
-            排布随旧 UI 口径:左端 = 模式 pill + 附件入口,右端 = 思考/模型/
-            用量/发送(输入侧元信息与动作)。ps-1 光学对齐:1px 边 + 4px +
-            btn-xs 内距 8px = 13px,首个按钮的**文字**左缘与 textarea 文字
-            (1px 边 + 12px 内距)重合——这排文字与输入文字/正文同一条竖线。
-            pe-2:发送钮是实底色块没有幽灵内距,贴 4px 边显挤,右侧多留一档 */}
+            排布:左端 = 附件入口 + 模式 pill(用户定案 2026-08-06 对调,
+            附件贴左缘),右端 = 思考/模型/用量/发送(输入侧元信息与动作)。
+            ps-1 光学对齐:1px 边 + 4px + btn-xs 内距 8px = 13px,首个按钮
+            的**内容**左缘与 textarea 文字(1px 边 + 12px 内距)重合——这排
+            与输入文字/正文同一条竖线。pe-2:发送钮是实底色块没有幽灵内距,
+            贴 4px 边显挤,右侧多留一档 */}
         <div className="flex min-w-0 items-center gap-1 ps-1 pe-2 pb-1.5">
-          <button
-            type="button"
-            title={t("chat.mode.tip")}
-            className={`btn btn-xs ${yolo ? "btn-warning btn-soft" : "btn-ghost font-medium text-base-content/70"}`}
-            onClick={toggleMode}
-          >
-            {yolo ? t("chat.mode.yolo") : t("chat.mode.default")}
-          </button>
           <button
             type="button"
             aria-label={t("chat.attach")}
@@ -334,6 +327,14 @@ export function Composer({
             onClick={attach}
           >
             <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+          </button>
+          <button
+            type="button"
+            title={t("chat.mode.tip")}
+            className={`btn btn-xs ${yolo ? "btn-warning btn-soft" : "btn-ghost font-medium text-base-content/70"}`}
+            onClick={toggleMode}
+          >
+            {yolo ? t("chat.mode.yolo") : t("chat.mode.default")}
           </button>
           <span className="min-w-0 flex-1" />
 
