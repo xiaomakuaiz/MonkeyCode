@@ -75,14 +75,14 @@ function ThemeSwatch({ theme }: { theme: string }) {
  * 主题色板 + 名称,菜单 = 全量主题列表(色板 + 名称 + 当前项对勾)。原生
  * select 的 option 塞不进色板,只能一排裸名——「丑」的根源,故自绘。
  * 点选即时换肤**不关**菜单(试玩几个再走,官方同款);外点/Esc/再点触发器关。
- * 品牌主题恒居列表头两位(THEMES 序),显示中文名,其余原名。 */
+ * 品牌主题(monkeycode/monkeycode-dark)恒居列表头两位(THEMES 序)。 */
 function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, boxRef, () => setOpen(false));
-  const labelOf = (v: Theme) =>
-    v === "monkeycode" ? t("settings.appearance.themeLight") : v === "monkeycode-dark" ? t("settings.appearance.themeDark") : v;
+  // 名称一律用主题原名(含品牌两项 monkeycode/monkeycode-dark,用户定案
+  // 2026-08-06):主题名是 data-theme 的取值,译名反而对不上号
   return (
     <div ref={boxRef} className={`dropdown dropdown-end shrink-0 ${open ? "dropdown-open" : ""}`}>
       <button
@@ -94,7 +94,7 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
         onClick={() => setOpen(!open)}
       >
         <ThemeSwatch theme={theme} />
-        <span className="min-w-0 flex-1 truncate text-start">{labelOf(theme)}</span>
+        <span className="min-w-0 flex-1 truncate text-start">{theme}</span>
         <ChevronDown size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 text-base-content/50 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
@@ -113,7 +113,7 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
                 onClick={() => onPick(v)}
               >
                 <ThemeSwatch theme={v} />
-                <span className="min-w-0 flex-1 truncate text-xs">{labelOf(v)}</span>
+                <span className="min-w-0 flex-1 truncate text-xs">{v}</span>
                 {v === theme && <Check size={14} strokeWidth={2} aria-hidden className="shrink-0" />}
               </button>
             </li>

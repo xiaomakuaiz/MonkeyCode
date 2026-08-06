@@ -100,8 +100,6 @@ export const en: Record<MessageKey, string> = {
   "main.engineNotReady": "not ready",
 
   "settings.appearance.theme": "Theme",
-  "settings.appearance.themeLight": "Light (default)",
-  "settings.appearance.themeDark": "Dark",
   "settings.appearance.language": "Language",
   "settings.appearance.hint": "Applies immediately and is remembered on this machine.",
 

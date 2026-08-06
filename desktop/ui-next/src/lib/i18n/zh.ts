@@ -99,8 +99,6 @@ export const zh = {
   "main.engineNotReady": "未就绪",
 
   "settings.appearance.theme": "外观主题",
-  "settings.appearance.themeLight": "浅色(默认)",
-  "settings.appearance.themeDark": "深色",
   "settings.appearance.language": "语言",
   "settings.appearance.hint": "切换立即生效并记在本机。",
 
