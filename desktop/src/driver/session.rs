@@ -490,6 +490,8 @@ impl OhmyDriver {
                 json!({
                     "id": id,
                     "title": meta.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                    // 用户改过名(session_patch title):头部标题优先级用
+                    "title_custom": meta.get("title_custom").and_then(|v| v.as_bool()).unwrap_or(false),
                     // 引擎每轮生成的会话摘要(顶栏副标题展示;不参与命名)
                     "summary": meta.get("summary").and_then(|v| v.as_str()).unwrap_or(""),
                     "workdir": meta.get("workdir").and_then(|v| v.as_str()).unwrap_or(""),
@@ -1007,6 +1009,9 @@ impl OhmyDriver {
                 // 边界截断会 panic
                 let t: String = t.trim().chars().take(80).collect();
                 m["title"] = json!(t);
+                // 用户改名标记:UI 头部标题优先级(用户改名 > summary >
+                // 首句自动标题)靠它区分前后两者——title 字段本身分不出来
+                m["title_custom"] = json!(true);
             }
             if let Some(a) = patch.get("archived").and_then(|v| v.as_bool()) {
                 m["archived"] = json!(a);

@@ -9,6 +9,9 @@ export type SessionKind = "local" | "chat";
 export interface SessionMeta {
   id: string;
   title: string;
+  /** 用户改过名(session_patch title):头部标题优先级
+   * (用户改名 > summary > 首句自动标题)靠它区分改名与自动标题 */
+  title_custom?: boolean;
   /** 引擎每轮异步生成的会话摘要(chat 空间列表的主行展示) */
   summary?: string;
   workdir: string;

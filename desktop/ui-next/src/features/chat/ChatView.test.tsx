@@ -217,30 +217,25 @@ describe("聊天视图", () => {
     expect(ops.some((o) => o.cmd === "session_close")).toBe(true);
   });
 
-  it("头部摘要:meta.summary 作为副标题显示;无摘要不渲染", async () => {
+  it("单行标题优先级:用户改名 > 轮末摘要 > 首句自动标题(2026-08-06 定案,撤两行)", async () => {
+    // 有摘要且未改名:标题位显摘要
     stubShell();
     const { unmount } = render(<ChatView meta={{ ...META, summary: "正在修复登录页闪退" }} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    expect(screen.getByText("正在修复登录页闪退")).toBeTruthy();
+    expect(screen.getByRole("heading").textContent).toBe("正在修复登录页闪退");
     unmount();
+    // 用户改过名:改名压过摘要
+    stubShell();
+    const r2 = render(<ChatView meta={{ ...META, summary: "正在修复登录页闪退", title_custom: true }} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    expect(screen.getByRole("heading").textContent).toBe("修复登录");
+    r2.unmount();
+    // 都没有:回落首句自动标题;头部不再有副标题行
     stubShell();
     render(<ChatView meta={META} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    expect(screen.queryByText("正在修复登录页闪退")).toBeNull();
-  });
-
-  it("D12 头部副标题:无摘要时 local 会话显 workdir 末段(title=全路径),chat 会话显「独立会话」", async () => {
-    stubShell();
-    const { unmount } = render(<ChatView meta={META} />);
-    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    const tail = screen.getByText("a"); // META.workdir = "/p/a" 的末段
-    expect(tail.getAttribute("title")).toBe("/p/a");
-    unmount();
-    stubShell();
-    render(<ChatView meta={{ ...META, kind: "chat", workdir: "" }} />);
-    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    expect(screen.getByText("本地会话")).toBeTruthy();
-    expect(screen.queryByText("a")).toBeNull(); // chat 会话不显 workdir
+    expect(screen.getByRole("heading").textContent).toBe("修复登录");
+    expect(screen.queryByText("a")).toBeNull(); // workdir 末段不再单独成行
   });
 
   it("任务面板:plan 帧非空时钉在 composer 上方,收起态一行摘要", async () => {

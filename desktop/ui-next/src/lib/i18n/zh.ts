@@ -194,7 +194,6 @@ export const zh = {
   "md.copy": "复制",
   "md.copied": "已复制",
 
-  "chat.header.standalone": "本地会话",
   "chat.thought": "思考",
   "chat.permission": "审批",
   "chat.question": "提问",

@@ -520,25 +520,21 @@ export function ChatView({
               }}
             />
           ) : (
+            /* 单行标题(用户定案 2026-08-06,撤两行):用户改名 > 轮末摘要 >
+               首句自动标题(title_custom 区分改名与自动,壳 sidecar 标记);
+               双击改名改的始终是 title。悬停 tooltip 带全量(标题/摘要/目录) */
             <h1 data-tauri-drag-region="" className="truncate text-sm leading-tight font-semibold">
               {/* 双击只挂在文字 span 上,且不带 data-tauri-drag-region:
                   Windows 壳把拖拽区双击吃成最大化,标题必须留在拖拽区之外 */}
-              <span title={t("chat.rename.hint")} className="cursor-text" onDoubleClick={startRename}>
-                {meta.title}
+              <span
+                title={[meta.title, meta.summary, meta.workdir, t("chat.rename.hint")].filter(Boolean).join("\n")}
+                className="cursor-text"
+                onDoubleClick={startRename}
+              >
+                {meta.title_custom ? meta.title : meta.summary || meta.title}
               </span>
             </h1>
           )}
-          {/* 副标题:有摘要显摘要;无摘要时 chat 会话标「独立会话」、其余
-              显 workdir 末段(mono,悬停看全路径)——一眼可辨会话归属 */}
-          {meta.summary ? (
-            <p data-tauri-drag-region="" className="truncate text-xs leading-tight text-base-content/50">{meta.summary}</p>
-          ) : meta.kind === "chat" ? (
-            <p data-tauri-drag-region="" className="truncate text-xs leading-tight text-base-content/45">{t("chat.header.standalone")}</p>
-          ) : meta.workdir ? (
-            <p data-tauri-drag-region="" title={meta.workdir} className="truncate font-mono text-xs leading-tight text-base-content/45">
-              {meta.workdir.split(/[\\/]/).filter(Boolean).pop() ?? meta.workdir}
-            </p>
-          ) : null}
         </div>
         {/* §7:indicator 壳与徽标是头部非交互子节点,必须各自带拖拽属性 */}
         <div data-tauri-drag-region="" className={changesCount > 0 ? "indicator" : undefined}>

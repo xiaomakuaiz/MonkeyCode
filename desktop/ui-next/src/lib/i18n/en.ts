@@ -195,7 +195,6 @@ export const en: Record<MessageKey, string> = {
   "md.copy": "Copy",
   "md.copied": "Copied",
 
-  "chat.header.standalone": "Local chat",
   "chat.thought": "Thinking",
   "chat.permission": "Approval",
   "chat.question": "Question",
