@@ -1,9 +1,12 @@
 // 侧栏列表共用件:本地/对话/云端三列表同一套呈现与交互(用户定案
 // 2026-08-05「统一风格和交互,不要做两套」;后续三空间会并入同一 tab 的
 // 横向双 tab,先在组件层归一)。形态语汇 = LAYOUT.md §6.1/§6.2:
-// - ListRow 安静行:行首 12px 身份图标槽(不被状态顶掉,用户定案
-//   2026-08-05)+ 单行主文案截断 + 行尾要紧态状态点(点替代文字词,
-//   词进 title/aria);右键 = 行菜单。
+// - ListRow 安静行:单行主文案顶行首截断 + 行尾要紧态状态点(点替代
+//   文字词,词进 title/aria);右键 = 行菜单。行首身份图标槽已撤(用户
+//   定案 2026-08-06:侧栏行宽本就紧,图标占掉 20px 不值——身份由空间
+//   tab 表达,行内不再重复)。
+// - 组头/小节头图标保留(Folder/History/Archive):组级标签要锚点,
+//   且一组只出一次不吃行宽。
 // - GroupLabel 区块标签:组头 12px 图标 + text-xs font-medium /50(比行
 //   小一档;行 14px 后从 11px 提到 12px,免得差距拉到 3px 显得过小),
 //   放进 summary(flex 覆写、after:hidden 去尾箭头)。
@@ -16,22 +19,10 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
 import { readFold, writeFold, type FoldKey } from "@/lib/util/prefs";
 
-/** 行首定宽 12px 身份图标槽,与组头图标同列(裸文字顶行首太秃,用户
- * 定案 2026-08-05);状态一律走行尾状态点,不顶掉身份图标(用户定案
- * 2026-08-05)。 */
-export function IconSlot({ icon: Icon }: { icon: LucideIcon }) {
-  return (
-    <span aria-hidden className="flex w-3 shrink-0 justify-center">
-      <Icon size={12} strokeWidth={1.75} className="text-base-content/40" />
-    </span>
-  );
-}
-
 /** 列表行(menu 的 li>a 载体):indent = 行内起始 padding 类(缩进阶梯
  * 进行内、行底满宽——嵌套 margin 会把 hover/选中底压窄错位)。 */
 export function ListRow({
   primary,
-  slot,
   trailing,
   tooltip,
   indent,
@@ -41,7 +32,6 @@ export function ListRow({
   menuItems,
 }: {
   primary: string;
-  slot: ReactNode;
   /** 行尾状态点:仅要紧态给(tone = status-* 色 + 动效);状态词不上行
    * (用户定案 2026-08-05「文字换状态图标」),进点的 title/aria-label */
   trailing?: { tone: string; label: string } | null;
@@ -66,7 +56,6 @@ export function ListRow({
           openMenu({ x: e.clientX, y: e.clientY }, menuItems);
         }}
       >
-        {slot}
         <span className="min-w-0 flex-1 truncate">{primary}</span>
         {trailing && (
           <span role="img" aria-label={trailing.label} title={trailing.label} className={`status shrink-0 ${trailing.tone}`} />

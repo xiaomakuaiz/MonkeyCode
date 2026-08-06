@@ -10,11 +10,11 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { Archive, Folder, Inbox, MessageSquare, MessagesSquare, Plus, RefreshCw, SquareTerminal } from "lucide-react";
+import { Archive, Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
-import { GroupLabel, IconSlot, ListRow, SectionFold } from "@/features/sidebar/listKit";
+import { GroupLabel, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -112,7 +112,6 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
   return (
     <ListRow
       primary={primary}
-      slot={<IconSlot icon={isChat ? MessageSquare : SquareTerminal} />}
       trailing={trailing}
       tooltip={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${trailing ? `${trailing.label}\n` : ""}${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
       indent={indent}

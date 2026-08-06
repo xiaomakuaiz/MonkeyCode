@@ -11,7 +11,7 @@
 import { Cloud, Folder, History } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { GroupLabel, IconSlot, ListRow, SectionFold } from "@/features/sidebar/listKit";
+import { GroupLabel, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import type { MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
@@ -180,7 +180,6 @@ function TaskRow({
   return (
     <ListRow
       primary={label}
-      slot={<IconSlot icon={Cloud} />}
       trailing={st}
       tooltip={`${label}\n${stateWord ? `${stateWord}\n` : ""}${t("sidebar.row.hint")}`}
       indent={indent}
