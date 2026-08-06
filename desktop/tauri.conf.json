@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MonkeyCode",
-  "version": "26071401.0.0",
+  "version": "26080601.0.0",
   "identifier": "com.chaitin.baizhi.monkeycode",
   "build": {
     "frontendDist": "uidist",
     "beforeBuildCommand": {
       "script": "npm ci && npm run build",
-      "cwd": "ui"
+      "cwd": "ui-next"
     }
   },
   "app": {
