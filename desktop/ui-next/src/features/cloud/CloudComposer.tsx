@@ -81,6 +81,9 @@ export function CloudComposer({
       value: m.id ?? "",
       label: groupedCloudModelLabel(m),
       disabled: m.locked,
+      // 锁定(超会员档)可见说明:行尾「未解锁」+ 悬停解锁路径(disabled
+      // 按钮不弹 tooltip,hint 由 OptionMenu 挂在 li 上)
+      ...(m.locked ? { note: t("settings.models.lockedBadge"), hint: t("chat.model.locked") } : {}),
     })),
   }));
 

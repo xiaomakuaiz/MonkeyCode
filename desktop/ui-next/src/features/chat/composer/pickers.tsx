@@ -127,21 +127,28 @@ export function ModelMenu({
     onPick(name);
   };
   // 模型条目渲染收口:会员分节内省略档位徽标(节头已表达);locked 条目
-  // 灰态禁选,title 说明解锁路径;onPick 必须用原始 name(引擎寻址键)
+  // 灰态禁选 + 行尾「未解锁」徽标(设置页同形态)——解锁路径的详情 title
+  // 必须挂 li:disabled 按钮在多数 webview 不弹 tooltip(2026-08-06 用户
+  // 报障「提示没了」的根因);onPick 必须用原始 name(引擎寻址键)
   const itemOf = (m: ModelInfo, noTier = false) => {
     const d = modelDisplay(m);
     return (
-      <li key={m.name} className={m.locked ? "menu-disabled" : ""}>
+      <li
+        key={m.name}
+        className={m.locked ? "menu-disabled" : ""}
+        title={m.locked ? `${stripSourceSuffix(m.name)} · ${t("chat.model.locked")}` : undefined}
+      >
         <button
           type="button"
           disabled={m.locked}
-          title={m.locked ? `${stripSourceSuffix(m.name)} · ${t("chat.model.locked")}` : stripSourceSuffix(m.name)}
+          title={m.locked ? undefined : stripSourceSuffix(m.name)}
           aria-current={m.name === current ? "true" : undefined}
           className={`flex items-center gap-2 ${m.name === current ? "menu-active" : ""}`}
           onClick={() => pick(m.name)}
         >
           <span className="min-w-0 flex-1 truncate text-xs">{d.label}</span>
           {!noTier && d.tier && <span className="badge badge-ghost badge-xs shrink-0">{d.tier}</span>}
+          {m.locked && <span className="badge badge-warning badge-soft badge-xs shrink-0">{t("settings.models.lockedBadge")}</span>}
           {m.default && <span className="shrink-0 text-[10px] opacity-50">{t("chat.model.default")}</span>}
         </button>
       </li>
@@ -205,9 +212,11 @@ export function ModelMenu({
             )}
             {/* 会员 tab:档位/付费/我的/团队分节,节头恒显(每节都承载
                 语义,条目内省略档位徽标);其余来源平铺 */}
+            {/* 节头 text-xs:menu-title 默认 .875rem 比条目(text-xs)还大,
+                比例倒挂(2026-08-06 用户报障「基础模型四个字太大」) */}
             {memberSections !== null
               ? memberSections.map((s) => [
-                  <li key={`${s.label}-title`} className="menu-title flex flex-row items-baseline gap-2">
+                  <li key={`${s.label}-title`} className="menu-title flex flex-row items-baseline gap-2 text-xs">
                     <span className="min-w-0 flex-1 truncate">{s.label}</span>
                     {s.badge && <span className="shrink-0 text-[10px] font-normal">{s.badge}</span>}
                   </li>,
@@ -290,6 +299,10 @@ export interface OptionItem {
   value: string;
   label: string;
   disabled?: boolean;
+  /** 行尾徽标(如锁定项的「未解锁」资格说明) */
+  note?: string;
+  /** 悬停详情;挂 li 而非按钮——disabled 按钮在多数 webview 不弹 tooltip */
+  hint?: string;
 }
 
 /** 通用单选菜单(云端任务的模型/宿主机/镜像等):形态同上;平铺给 options,
@@ -323,18 +336,19 @@ export function OptionMenu({
   const flat = options ?? sections?.flatMap((s) => s.options) ?? [];
   const currentLabel = triggerLabel ?? flat.find((o) => o.value === value)?.label ?? ariaLabel;
   const itemOf = (o: OptionItem) => (
-    <li key={o.value} className={o.disabled ? "menu-disabled" : ""}>
+    <li key={o.value} className={o.disabled ? "menu-disabled" : ""} title={o.hint}>
       <button
         type="button"
         disabled={o.disabled}
         aria-current={o.value === value ? "true" : undefined}
-        className={o.value === value ? "menu-active" : ""}
+        className={`flex items-center gap-2 ${o.value === value ? "menu-active" : ""}`}
         onClick={() => {
           setOpen(false);
           onPick(o.value);
         }}
       >
         <span className="min-w-0 flex-1 truncate text-xs">{o.label}</span>
+        {o.note && <span className="badge badge-warning badge-soft badge-xs shrink-0">{o.note}</span>}
       </button>
     </li>
   );
@@ -358,9 +372,10 @@ export function OptionMenu({
           aria-label={ariaLabel}
           className="dropdown-content menu max-h-72 w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
         >
+          {/* 节头 text-xs:与 ModelMenu 同理(menu-title 默认比条目大,倒挂) */}
           {sections
             ? sections.map((s) => [
-                <li key={`${s.key}-title`} className="menu-title flex flex-row items-baseline gap-2">
+                <li key={`${s.key}-title`} className="menu-title flex flex-row items-baseline gap-2 text-xs">
                   <span className="min-w-0 flex-1 truncate">{s.label}</span>
                   {s.badge && <span className="shrink-0 text-[10px] font-normal">{s.badge}</span>}
                 </li>,

@@ -222,10 +222,12 @@ describe("模型 / 思考深度 / 权限模式", () => {
     expect(within(menu).getByText("旗舰模型")).toBeTruthy();
     expect(within(menu).getByText("旗舰会员免费")).toBeTruthy();
     expect(within(menu).getByText("团队模型")).toBeTruthy();
-    // locked:超档条目留在档位节内,灰态禁选,title 讲解锁路径
-    const locked = within(menu).getByRole("button", { name: "claude" }) as HTMLButtonElement;
+    // locked:超档条目留在档位节内,灰态禁选 + 行尾可见「未解锁」徽标;
+    // 解锁路径 title 挂 li(disabled 按钮不弹 tooltip,2026-08-06 报障)
+    const locked = within(menu).getByRole("button", { name: /claude/ }) as HTMLButtonElement;
     expect(locked.disabled).toBe(true);
-    expect(locked.title).toContain("当前会员档不可用");
+    expect(within(locked).getByText("未解锁")).toBeTruthy();
+    expect(locked.closest("li")?.title).toContain("当前会员档不可用");
 
     await userEvent.click(within(menu).getByRole("button", { name: "glm" }));
     expect(calls(ops, "session_set_model").map((o) => o.args?.payload)).toEqual([
