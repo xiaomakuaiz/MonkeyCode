@@ -4,7 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { CircleAlert, CircleStop, Clock3, Paperclip, SendHorizontal, X } from "lucide-react";
+import { Clock3, Paperclip, SendHorizontal, X } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -22,10 +22,9 @@ import { pickAttachmentPaths } from "@/lib/ipc/uploads";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
+import { ComposerCard, ErrorBar, RunBar, useAutosizeTextarea } from "./composerKit";
 import { ModelMenu, ThinkMenu } from "./pickers";
 import type { ComposerCtl } from "./useComposer";
-
-const MAX_TEXTAREA_PX = 160;
 
 // 模型/思考档下拉的形态与逻辑收口在 ./pickers(新建任务页共用同一组件);
 // 模型展示投影(短名/档位)统一走 lib/models/modelMenu(protocol/reduce.ts
@@ -65,12 +64,7 @@ export function Composer({
   }, []);
 
   // 输入框随内容自适应高度(~160px 封顶,超出内滚)
-  useEffect(() => {
-    const el = taRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
-  }, [ctl.draft]);
+  useAutosizeTextarea(taRef, ctl.draft);
 
   // ==== 斜杠指令面板(首字符 / 就地补全) ====
   const [slashSuppressed, setSlashSuppressed] = useState(false);
@@ -216,22 +210,9 @@ export function Composer({
 
   return (
     <div className="flex flex-col gap-2">
-      {/* composer 域的两条瞬态反馈,统一形态:soft 底 + 14px 语义图标 +
-          truncate 正文 + 右端关闭;-mx-2.5 与输入卡同出血,左右缘对齐 */}
-      {ctl.error && (
-        <div role="alert" className="alert alert-error alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
-          <CircleAlert size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{ctl.error}</span>
-          <button
-            type="button"
-            aria-label={t("chat.dismiss")}
-            className="btn btn-ghost btn-square btn-xs"
-            onClick={ctl.dismissError}
-          >
-            <X size={14} strokeWidth={1.75} aria-hidden />
-          </button>
-        </div>
-      )}
+      {/* composer 域的两条瞬态反馈,统一形态(错误条件收口在 composerKit):
+          soft 底 + 14px 语义图标 + truncate 正文 + 右端关闭 */}
+      {ctl.error && <ErrorBar text={ctl.error} onDismiss={ctl.dismissError} />}
 
       {ctl.queued && (
         <div className="alert alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
@@ -250,16 +231,10 @@ export function Composer({
         </div>
       )}
 
-      {/* 输入卡外框:结构线 + 默认底,聚焦时边线加深。斜杠面板是卡内自绘
-          浮层(绝对定位,焦点始终留在 textarea)——**不得**给这层卡片挂
-          daisyUI dropdown 类:daisyUI 的隐藏规则是后代选择器
-          (`.dropdown:not(...) .dropdown-content`),外层 dropdown 处于关态
-          时会把嵌套在内的思考/模型菜单一并 display:none(思考菜单弹不出来
-          的根因,修复经历见 tasks/lessons.md) */}
-      {/* -mx-2.5 光学对齐(旧 UI 出血 10px 随迁):textarea 自带 ~12px 内距,
-          硬边卡片与正文同宽会显得输入文字向右缩;向两侧出血后卡内文字
-          左缘与对话文字几乎重合,卡片略宽于正文列 */}
-      <div className="relative -mx-2.5 flex flex-col rounded-box border border-base-300 bg-base-100 shadow-sm transition-colors focus-within:border-base-content/25">
+      {/* 输入卡外框(形态收口在 composerKit:出血/聚焦边线/禁挂 dropdown 类
+          的缘由见 ComposerCard 头注)。斜杠面板是卡内自绘浮层(绝对定位,
+          焦点始终留在 textarea) */}
+      <ComposerCard>
         {slashOpen && (
           <ul
             role="listbox"
@@ -296,23 +271,7 @@ export function Composer({
         )}
 
         {/* 运行条:一行紧凑态——spinner + 文案 + 停止 icon 按钮 */}
-        {state.running && (
-          <div className="flex items-center gap-2 border-b border-base-300 px-3 py-1.5 text-xs">
-            <span className="loading loading-spinner loading-xs text-primary" aria-hidden />
-            <span className="font-semibold">{runningLabel}</span>
-            <span className="truncate text-base-content/40">{runningDetail}</span>
-            <span className="flex-1" />
-            <button
-              type="button"
-              aria-label={t("chat.stop")}
-              title={t("chat.stop")}
-              className="btn btn-ghost btn-square btn-xs text-error"
-              onClick={ctl.stop}
-            >
-              <CircleStop size={16} strokeWidth={1.75} aria-hidden />
-            </button>
-          </div>
-        )}
+        {state.running && <RunBar label={runningLabel} detail={runningDetail} stopLabel={t("chat.stop")} onStop={ctl.stop} />}
 
         {(ctl.uploads.length > 0 || ctl.atts.length > 0) && (
           <div className="flex flex-wrap gap-2 px-3 pt-2">
@@ -427,7 +386,7 @@ export function Composer({
             <SendHorizontal size={16} strokeWidth={1.75} aria-hidden />
           </button>
         </div>
-      </div>
+      </ComposerCard>
     </div>
   );
 }
