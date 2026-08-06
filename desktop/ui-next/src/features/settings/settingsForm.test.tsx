@@ -252,6 +252,23 @@ describe("同步并入(mergeSyncedModels / mergeSyncedMcps)", () => {
     expect(next.models[next.defaultIdx]?.name).toBe("new2@baizhi");
   });
 
+  it("首次同步无默认模型:落会员可用最高档位的第一条(用户定案 2026-08-06)", () => {
+    // 空表首登:同步回 基础×2 + 专业 + 旗舰(锁定,超出会员档)
+    const r = mergeSyncedModels(
+      draft([]),
+      [
+        synced({ name: "b1", source: "monkeycode", id: "1", model: "monkeycode-basic/m1" }),
+        synced({ name: "b2", source: "monkeycode", id: "2", model: "monkeycode-basic/m2" }),
+        synced({ name: "p1", source: "monkeycode", id: "3", model: "monkeycode-pro/m3" }),
+        synced({ name: "u1", source: "monkeycode", id: "4", model: "monkeycode-ultra/m4", locked: true }),
+      ],
+      "monkeycode",
+    );
+    const next = r!.draft;
+    // 锁定的 ultra 不可当默认;可用最高档 = pro,取其第一条(不是列表首条 basic)
+    expect(next.models[next.defaultIdx]?.name).toBe("p1@monkeycode#3");
+  });
+
   it("空集合不清组;MCP 空集不触碰,非空整组替换(手工条目保留)", () => {
     const d0 = draft([model({ name: "a@baizhi", source: "baizhi" })]);
     expect(mergeSyncedModels(d0, [], "baizhi")).toBeNull();

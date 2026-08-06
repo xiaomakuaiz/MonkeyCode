@@ -50,6 +50,16 @@ export function builtinTierLabel(model?: string): string | undefined {
   return undefined;
 }
 
+/** 会员档位序(ultra > pro > basic > 无档;与 builtinTierLabel 同一前缀
+ * 口径):首次同步无默认模型时按它挑最高档,见 mergeSyncedModels。 */
+export function memberTierRank(model?: string): number {
+  const n = (model || "").toLowerCase();
+  if (n.startsWith("monkeycode-ultra")) return 3;
+  if (n.startsWith("monkeycode-pro")) return 2;
+  if (n.startsWith("monkeycode-basic")) return 1;
+  return 0;
+}
+
 /** 剥会员档位前缀(monkeycode-xxx/)得短名,剥空回落原名。Web
  * stripBuiltinPublicModelPackagePrefix 同款正则;remark 里写了前缀也一并剥。 */
 export function stripTierPrefix(name: string): string {

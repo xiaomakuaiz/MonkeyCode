@@ -10,7 +10,7 @@
 //   移植旧工程 settingsConfig 同名函数,语义注释随迁。
 import type { BaizhiSyncedModel } from "@/lib/ipc/account";
 import type { DesktopConfig, HostModel } from "@/lib/ipc/config";
-import { modelSourceRank, sameModelName, stripSourceSuffix, SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
+import { memberTierRank, modelSourceRank, sameModelName, stripSourceSuffix, SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
 
 // ---- MCP 编辑模型与序列化 ----
 
@@ -246,7 +246,17 @@ export function mergeSyncedModels(
   // 一次,升级后第一次同步会把默认模型悄悄挪到列表第一条
   let di = next.findIndex((m) => m.name.trim() === defaultName);
   if (di < 0) di = next.findIndex((m) => sameModelName(m.name, defaultName));
-  if (di < 0 || next[di]?.locked) di = next.findIndex((m) => !m.locked);
+  if (di < 0 || next[di]?.locked) {
+    // 无默认(首次登录同步)或原默认已锁定:回落到未锁条目里会员档位最高
+    // 的第一条(ultra > pro > basic > 无档;严格大于保首现,无档全平即
+    // 首个未锁条目 = 原行为)。2026-08-06 用户定案
+    di = -1;
+    for (let i = 0; i < next.length; i++) {
+      const m = next[i]!;
+      if (m.locked) continue;
+      if (di < 0 || memberTierRank(m.model) > memberTierRank(next[di]!.model)) di = i;
+    }
+  }
   di = di >= 0 ? di : 0;
   return { draft: { ...draft, models: next, defaultIdx: di }, skipped };
 }
