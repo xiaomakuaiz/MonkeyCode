@@ -8,6 +8,7 @@ import { ShieldCheck } from "lucide-react";
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import type { ToolItem } from "@/lib/protocol/types";
+import { statusDot } from "./statusDot";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -110,13 +111,14 @@ function FindingRow({ finding, onOpenFile }: { finding: ReviewFinding; onOpenFil
     .join("\n\n");
   const filename = finding.file.split(/[\\/]/).pop() ?? "";
   const location = filename ? (finding.line ? `${filename}:${finding.line}` : filename) : "";
-  const dot =
-    finding.verdict === "CONFIRMED" ? "status-error" : finding.verdict === "PLAUSIBLE" ? "status-warning" : "status-neutral";
+  const dot = statusDot(
+    finding.verdict === "CONFIRMED" ? "fail" : finding.verdict === "PLAUSIBLE" ? "warn" : "idle",
+  );
   const verdict = verdictBadge(finding.verdict);
   const outcome = outcomeBadge(finding.outcome);
   const row = (
     <>
-      <span aria-hidden className={`status ${dot}`} />
+      <span aria-hidden className={dot} />
       {verdict && <span className={verdict.cls}>{verdict.key ? t(verdict.key) : verdict.raw}</span>}
       <MarkdownInline source={title} className="min-w-0 flex-1" />
       {location &&

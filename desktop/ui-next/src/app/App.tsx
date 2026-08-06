@@ -146,10 +146,13 @@ function MainArea({
   current,
   epoch,
   onDelete,
+  onPatched,
 }: {
   current: SessionMeta | null;
   epoch: number;
   onDelete: (meta: SessionMeta) => void;
+  /** 视图内改名/归档落盘后重拉列表(壳 session_patch 不广播事件) */
+  onPatched: () => void;
 }) {
   const { t } = useI18n();
   const [info, setInfo] = useState<HostInfo | null>(null);
@@ -163,7 +166,7 @@ function MainArea({
     };
   }, []);
 
-  if (current) return <ChatView meta={current} epoch={epoch} onDeleted={() => onDelete(current)} />;
+  if (current) return <ChatView meta={current} epoch={epoch} onDeleted={() => onDelete(current)} onPatched={onPatched} />;
 
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-base-100">
@@ -413,6 +416,10 @@ export function App() {
               setCloudReload((n) => n + 1);
             },
             onRefresh: () => setCloudReload((n) => n + 1),
+            onOpenSettings: () => {
+              setCreating(null);
+              setSettingsOpen(true); // 设置初始分区即「账号」,直达连接入口
+            },
           }}
           actions={{
             onSelect: select,
@@ -468,7 +475,7 @@ export function App() {
             }}
           />
         ) : (
-          <MainArea current={space === "cloud" ? null : current} epoch={epoch} onDelete={removeSession} />
+          <MainArea current={space === "cloud" ? null : current} epoch={epoch} onDelete={removeSession} onPatched={refresh} />
         )}
       </div>
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭 */}

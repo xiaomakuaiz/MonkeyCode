@@ -5,14 +5,15 @@
 // (h.chat.usage,云端 usage_update 帧与本地同构)+ 发送。
 // 发送/上传/切换/错误通道全在 useCloudTask 的 handle 上,本组件纯视图。
 import { Paperclip, SendHorizontal, X } from "lucide-react";
-import { useEffect, useRef, type ClipboardEvent, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 
-import { ComposerCard, ErrorBar, RunBar, useAutosizeTextarea } from "@/features/chat/composer/composerKit";
+import { ComposerCard, ErrorBar, RunBar, SlashPanel, UsageRing, useAutosizeTextarea } from "@/features/chat/composer/composerKit";
 import { OptionMenu } from "@/features/chat/composer/pickers";
 import { useI18n } from "@/lib/i18n";
 import { groupedCloudModelLabel } from "@/lib/cloud/options";
 import { fmtK } from "@/lib/util/fmt";
-import { createImeGuard } from "@/lib/util/slash";
+import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
+import type { SlashCommand } from "@/lib/protocol/types";
 import type { CloudTaskHandle } from "./useCloudTask";
 
 export function CloudComposer({
@@ -36,7 +37,54 @@ export function CloudComposer({
   const { loadModels } = h;
   useEffect(() => loadModels(), [loadModels]);
 
+  // ==== 斜杠指令面板(与本地 Composer 同一套纯逻辑 + 同一件 SlashPanel;
+  // 指令清单由 useCloudTask 粘住,断线重连不空掉) ====
+  const [slashSuppressed, setSlashSuppressed] = useState(false);
+  const [active, setActive] = useState(0);
+  const query = slashQuery(h.input);
+  const slashOpen = query !== null && !slashSuppressed && h.commands.length > 0;
+  const list = useMemo(() => filterCommands(h.commands, query ?? ""), [h.commands, query]);
+  const act = Math.min(active, Math.max(0, list.length - 1));
+  useEffect(() => setActive(0), [query, h.commands]);
+  useEffect(() => {
+    if (query === null) setSlashSuppressed(false); // `/` 段清掉即解除压制
+  }, [query]);
+
+  const pickCommand = (cmd: SlashCommand) => {
+    h.setInput(commandText(cmd));
+    setSlashSuppressed(true); // 填入的文本自己就是 /name,不压住会立刻回弹匹配自己
+    taRef.current?.focus();
+  };
+
+  // Esc 关面板走 window capture 并阻断全局链:审批热键挂在冒泡阶段且
+  // esc = 不可逆的拒绝,面板开着时这一下只能归面板(与本地 Composer 同法)
+  useEffect(() => {
+    if (!slashOpen) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      setSlashSuppressed(true);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [slashOpen]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // 面板优先:↑↓/↩/⇥ 归面板,不落到发送
+    if (slashOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive(cycleIndex(act, e.key === "ArrowDown" ? 1 : -1, list.length));
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && list.length > 0) {
+        if (e.key === "Enter" && imeRef.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) return;
+        e.preventDefault();
+        pickCommand(list[act]!);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       // IME 组合期(或 WKWebView 上组合刚结束 100ms 窗口内)的 Enter 是选字
       if (imeRef.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) return;
@@ -130,6 +178,8 @@ export function CloudComposer({
           </div>
         )}
 
+        {slashOpen && <SlashPanel list={list} active={act} onHover={setActive} onPick={pickCommand} />}
+
         <textarea
           ref={taRef}
           aria-label={t("chat.composer")}
@@ -183,18 +233,11 @@ export function CloudComposer({
           </span>
 
           {usagePct !== null && usage && (
-            <div
-              className="tooltip tooltip-left mx-1 shrink-0"
-              data-tip={t("chat.usageTip", { pct: usagePct, used: fmtK(usage.used), size: fmtK(usage.size) })}
-            >
-              <div
-                role="progressbar"
-                aria-label={t("chat.contextUsage")}
-                aria-valuenow={usagePct}
-                className={`radial-progress align-middle ${usagePct > 85 ? "text-error" : "text-base-content/40"}`}
-                style={{ "--value": Math.min(100, usagePct), "--size": "1rem", "--thickness": "2px" } as CSSProperties}
-              />
-            </div>
+            <UsageRing
+              pct={usagePct}
+              label={t("chat.contextUsage")}
+              tip={t("chat.usageTip", { pct: usagePct, used: fmtK(usage.used), size: fmtK(usage.size) })}
+            />
           )}
           <button
             type="button"

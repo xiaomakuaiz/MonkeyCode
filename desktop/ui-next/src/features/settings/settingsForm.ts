@@ -215,6 +215,12 @@ export interface SyncMergeResult {
   skipped: string[];
 }
 
+/** 自动挑默认时的优先级:会员条目优先(会员模型是账号权益的主路径),
+ * 会员组内按档位 ultra > pro > basic > 无档。同分保首现(列表已按来源
+ * 排过序,会员组在最前)。 */
+const autoDefaultRank = (m: HostModel): number =>
+  (m.source === SOURCE_MONKEYCODE ? 10 : 0) + memberTierRank(m.model);
+
 /** 同步模型并入草稿:整组替换 + 按来源重排;默认模型按名字重新定位——
  * 被移除回退首个未锁条目,降档重同步后原默认可能变锁定同样让位(锁定条目
  * 不物化,default 落它头上等于没有默认)。空集合不视为"清空该组"。 */
@@ -246,15 +252,22 @@ export function mergeSyncedModels(
   // 一次,升级后第一次同步会把默认模型悄悄挪到列表第一条
   let di = next.findIndex((m) => m.name.trim() === defaultName);
   if (di < 0) di = next.findIndex((m) => sameModelName(m.name, defaultName));
-  if (di < 0 || next[di]?.locked) {
-    // 无默认(首次登录同步)或原默认已锁定:回落到未锁条目里会员档位最高
-    // 的第一条(ultra > pro > basic > 无档;严格大于保首现,无档全平即
-    // 首个未锁条目 = 原行为)。2026-08-06 用户定案
+  const cur = di >= 0 ? next[di] : undefined;
+  // 会员组同步时把默认接管过来:扫码登录会先后跑百智云与会员两路同步,
+  // 百智云先落地按上面的规则挑走了默认,会员模型随后进来也抢不回,结果
+  // 就是「有会员却默认用百智云」(2026-08-06 用户报障)。判据只认**同步来的**
+  // 非会员默认(source 非空);手工条目当默认时不抢——那是用户自己配的,
+  // 明确选择,不该被一次登录同步改掉
+  const memberClaims = source === SOURCE_MONKEYCODE && !!cur?.source && cur.source !== SOURCE_MONKEYCODE;
+  if (!cur || cur.locked || memberClaims) {
+    // 无默认(首次登录同步)/原默认已锁定/让位给会员条目:回落到未锁条目
+    // 里优先级最高的第一条(会员优先,组内 ultra > pro > basic > 无档;
+    // 严格大于保首现,全平即首个未锁条目 = 原行为)。2026-08-06 用户定案
     di = -1;
     for (let i = 0; i < next.length; i++) {
       const m = next[i]!;
       if (m.locked) continue;
-      if (di < 0 || memberTierRank(m.model) > memberTierRank(next[di]!.model)) di = i;
+      if (di < 0 || autoDefaultRank(m) > autoDefaultRank(next[di]!)) di = i;
     }
   }
   di = di >= 0 ? di : 0;
@@ -278,6 +291,12 @@ export type DraftError =
   | { kind: "mcpDup"; name: string }
   | { kind: "mcpIncomplete"; name: string };
 
+// 不校验 max_output 与 context_window 的比例(用户定案 2026-08-06):旧 UI 曾
+// 拦 max_output ≥ 窗口 10%(引擎在占用 90% 才压缩且不预留输出空间,高占用的
+// 请求会被服务端以"输入+输出超上限"拒)。但产品默认自己就越界(200k 窗口配
+// 32768 输出 = 16.4%,留空不报错、显式填同一个值反而报错),主流模型的真实
+// 输出上限(128k+32k、200k+64k)也普遍越界,而拦的是整次保存、会员条目在设
+// 置页又改不到——偶发失败换来的是配置面被拦死。越界与否交服务端在请求时报。
 export function validateDraft(draft: SettingsDraft): DraftError | null {
   const modelNames = new Set<string>();
   for (const m of draft.models) {

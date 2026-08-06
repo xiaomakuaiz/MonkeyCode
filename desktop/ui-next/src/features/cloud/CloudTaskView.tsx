@@ -12,7 +12,7 @@
 // 提问大纲:数据 = REST 提问索引(全量目录)+ 已回放窗口的用户消息按时间锚
 // 合并(lib/cloud/outline),渲染复用本地 OutlineNav;跳转目标未加载时经
 // loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
-import { Ellipsis, FolderOpen, SquareTerminal, X } from "lucide-react";
+import { Ellipsis, FolderOpen, Globe, SquareTerminal, X } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -30,6 +30,8 @@ import { LogList } from "@/features/chat/LogList";
 import { OutlineNav, outlineEntriesOf } from "@/features/chat/OutlineNav";
 import { TaskPanel } from "@/features/chat/TaskPanel";
 import { useI18n } from "@/lib/i18n";
+import { mcStatus } from "@/lib/ipc/account";
+import { openExternal } from "@/lib/ipc/host";
 import { mcTaskDelete, type CloudTask } from "@/lib/ipc/cloudtasks";
 import type { OutlineItem } from "@/lib/ipc/controls";
 import { cloudAnchorIndex, cloudOutlineAnchor, fetchCloudOutline, withCloudAnchors } from "@/lib/cloud/outline";
@@ -86,6 +88,18 @@ export function CloudTaskView({
   const h = useCloudTask(task, { onTasksChanged });
   const [termOpen, setTermOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  // 云端主机名:「在浏览器打开」拼控制台 URL 用。挂载拉一次(登录态本就
+  // 在设置页维护,这里只借 host);拿不到就不出这一项,不给死链
+  const [mcHost, setMcHost] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void mcStatus().then((st) => {
+      if (alive && st?.host) setMcHost(st.host);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // ==== 头部 ⋯ 菜单(终止/删除):受控 dropdown,外点/Esc 即收;危险动作
   // 二段确认(首点换文案,再点才执行)——手法与 ChatView 头部菜单一致 ====
@@ -274,11 +288,14 @@ export function CloudTaskView({
     setJumpAnchor(anchor);
   };
 
-  // 贴底跟随:items 变化后,若此前贴底则滚到底(useLayoutEffect 赶在绘制前)
+  // 贴底跟随:items 变化后,若此前贴底则滚到底(useLayoutEffect 赶在绘制前)。
+  // h.running 同为依赖:发出消息后运行条(RunBar)才挂进 composer 卡,footer
+  // 长高多少,flex-1 的日志视口就被压矮多少——items 已经贴过底了,不重贴的话
+  // 刚发出的那条正好被顶到 composer 后面(用户报障 2026-08-06)
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [h.chat.items]);
+  }, [h.chat.items, h.running]);
 
   // scroll 事件只做「贴底 → 跟随」的单向判定(与 ChatView 同法):程序滚动
   // 同样发 scroll 事件,回放中一批内容长高就会把跟随误判成用户离底。
@@ -335,6 +352,25 @@ export function CloudTaskView({
   // 空态带 !cursor 守卫:结束态首轮可能没有帧但仍有更早可翻,
   // 此时要保住「加载更早」入口,不能整屏换成空态
   const showEmpty = !pending && h.chat.items.length === 0 && !h.cursor;
+
+  // 尺寸兜底(与 ChatView 同法,两处口径必须一致):能改变高度的来源两头都要盯——
+  // 视口(footer 长高:运行条/附件 chips/终端卡 h-64/textarea 自适应,顶部连接
+  // 横幅,窗口缩放)与内容轨(图片解码、字体加载、工具卡挂载后异步取回的正文,
+  // 这类不经过 items 变化也不改变视口尺寸)。align 语义即「贴底则贴底,否则不动」。
+  // scrollTop 不改变元素尺寸,不会与 RO 自激
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const repin = () => {
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight;
+    };
+    const ro = new ResizeObserver(repin);
+    ro.observe(el);
+    const track = el.firstElementChild;
+    if (track) ro.observe(track);
+    return () => ro.disconnect();
+    // 分支翻面时滚动容器整棵换掉,要重新 observe
+  }, [pending, showEmpty]);
 
   // 副标题:摘要(与标题同句时跳过——label 回退链会把 summary 顶成标题)
   // → 仓库 · 分支(mono)→ 「云端」身份词;与 ChatView 副标题同构
@@ -403,12 +439,71 @@ export function CloudTaskView({
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             className="btn btn-ghost btn-square btn-sm text-base-content/60"
-            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
+            onClick={() => {
+              if (menuOpen) return closeMenu();
+              setMenuOpen(true);
+              h.fetchPorts(); // 在线预览分节:开菜单即检测开放端口
+            }}
           >
             <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
           </button>
           {menuOpen && (
-            <ul role="menu" aria-label={t("cloud.view.menu")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
+            <ul role="menu" aria-label={t("cloud.view.menu")} className="dropdown-content menu z-40 w-56 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
+              {/* 在浏览器打开:完整控制台(共享终端/文件下载/预览等桌面端
+                  没做的部分都在那边)。拿不到 host 就不出这项,不给死链 */}
+              {mcHost && (
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    title={t("cloud.view.openConsoleTip")}
+                    onClick={() => {
+                      closeMenu();
+                      openExternal(`https://${mcHost}/console/task/${h.id}`);
+                    }}
+                  >
+                    <Globe size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                    {t("cloud.view.openConsole")}
+                  </button>
+                </li>
+              )}
+              {/* 在线预览:VM 里跑起来的服务,access_url 直接在浏览器打开。
+                  开菜单即拉端口(fetchPorts),三态各有交代不留悬空 */}
+              {!h.ended && h.vmId && (
+                <>
+                  <li className="menu-title px-2 py-1 text-xs">{t("cloud.view.preview")}</li>
+                  {h.ports === null && (
+                    <li className="menu-disabled">
+                      <span className="text-xs">{t("cloud.view.previewLoading")}</span>
+                    </li>
+                  )}
+                  {h.ports !== null && h.ports.filter((p) => p.access_url).length === 0 && (
+                    <li className="menu-disabled">
+                      <span className="text-xs">{t("cloud.view.previewEmpty")}</span>
+                    </li>
+                  )}
+                  {(h.ports ?? [])
+                    .filter((p) => p.access_url)
+                    .map((p) => (
+                      <li key={p.port} role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          title={p.access_url}
+                          onClick={() => {
+                            closeMenu();
+                            openExternal(p.access_url!);
+                          }}
+                        >
+                          <Globe size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary" />
+                          <span className="min-w-0 flex-1 truncate">
+                            :{p.port} {p.label || p.process || ""}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                </>
+              )}
               {!h.ended && (
                 <li role="none">
                   <button

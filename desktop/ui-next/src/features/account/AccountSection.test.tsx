@@ -178,6 +178,25 @@ describe("短信验证码登录", () => {
 });
 
 describe("MonkeyCode 账号密码登录入口", () => {
+  it("全未登录:MonkeyCode 组照出,入口归本卡;不摆「连接」死钮(桥接要百智云会话)", async () => {
+    stubShell({ baizhi_status: bzOut, mc_status: mcOut, baizhi_wechat_start: never });
+    render(<AccountSection />);
+    expect(await screen.findByText("MonkeyCode 云端")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "连接 MonkeyCode 云端" })).toBeNull();
+    // 展开 → 收起:表单在 MonkeyCode 卡内,不再挂在百智云登录卡下方
+    await userEvent.click(screen.getByRole("button", { name: "使用 MonkeyCode 账号密码登录" }));
+    expect(screen.getByRole("textbox", { name: "邮箱" })).toBeDefined();
+    await userEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(screen.queryByRole("textbox", { name: "邮箱" })).toBeNull();
+  });
+
+  it("百智云已登录、MC 未连:出「连接」主钮,账密入口仍在同一张卡", async () => {
+    stubShell({ baizhi_status: bzIn, mc_status: mcOut, mc_usage: () => null });
+    render(<AccountSection />);
+    expect(await screen.findByRole("button", { name: "连接 MonkeyCode 云端" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "使用 MonkeyCode 账号密码登录" })).toBeDefined();
+  });
+
   it("空提交拦截;正确提交 mc_password_login 原样携带 email/password", async () => {
     let mcConnected = false;
     const { calls } = stubShell({
@@ -215,6 +234,25 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     baizhi_status: bzIn,
     mc_status: mcIn,
     mc_usage: () => usage.current,
+  });
+
+  it("身份副行:主机名 + 用户 ID(长串按 头8…尾6 掩码),点击复制完整原值", async () => {
+    const longId = "5f8a12c3-9b4d-4e7a-8c1f-0a2b3c4d9d21";
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(window.navigator, "clipboard", { value: { writeText }, configurable: true });
+    stubShell({
+      baizhi_status: bzIn,
+      mc_status: () => ({ logged_in: true, host: "monkeycode-ai.com", user: { id: longId, name: "云端用户" } }),
+      mc_usage: () => null,
+    });
+    render(<AccountSection />);
+    const btn = await screen.findByRole("button", { name: "复制用户 ID" });
+    expect(btn.textContent).toBe("5f8a12c3...4d9d21");
+    expect(btn.getAttribute("title")).toBe(`用户 ID:${longId}(点击复制)`);
+
+    await userEvent.click(btn);
+    expect(writeText).toHaveBeenCalledWith(longId); // 复制的是完整原值,不是掩码
+    expect(await screen.findByRole("button", { name: "用户 ID 已复制" })).toBeDefined();
   });
 
   it("用量面板:会员档 badge、有效期、额度 progress、积分、邀请;签到成功后刷为已签", async () => {

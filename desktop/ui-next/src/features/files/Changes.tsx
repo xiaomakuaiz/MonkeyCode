@@ -5,6 +5,7 @@ import { FileDiff } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
 import type { RepoChange } from "@/lib/ipc/repo";
+import { fileIconOf } from "./fileIcon";
 import { basename, statusMeta } from "./status";
 
 export interface ChangeItem extends RepoChange {
@@ -55,6 +56,12 @@ export function Changes({
               onClick={() => onOpen(c.path)}
               className={`flex min-w-0 items-center gap-2 ${activePath === c.path ? "menu-active" : ""}`}
             >
+              {/* 行首类型图标(与文件树同一份 fileIcon):此前改动列表
+                  一个图标都没有,一屏文字糊成一片(用户报障 2026-08-06) */}
+              {(() => {
+                const spec = fileIconOf(c.path);
+                return <spec.icon size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
+              })()}
               <span className={`shrink-0 ${deleted ? "line-through opacity-60" : ""}`}>{basename(c.path)}</span>
               <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-base-content/40">{dir}</span>
               {(c.additions ?? 0) > 0 && (

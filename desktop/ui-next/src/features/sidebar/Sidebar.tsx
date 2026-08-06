@@ -78,7 +78,9 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
       if (e.key === "Escape") return p.onRenameEnd();
       if (e.key !== "Enter") return;
       const title = e.currentTarget.value.trim();
-      if (title && title !== meta.title) p.actions.onRename(meta, title);
+      // 空提交 = 撤销自定义、回落自动链(壳摘 title_custom 并重填首句);
+      // 只有「本就没改过名又提交空」才是纯空转,与头部改名同一口径
+      if (title !== meta.title && !(!title && !meta.title_custom)) p.actions.onRename(meta, title);
       p.onRenameEnd();
     };
     return (
@@ -87,6 +89,7 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
           <input
             type="text"
             aria-label={t("sidebar.row.rename")}
+            placeholder={t("chat.rename.clearHint")}
             className="input input-xs w-full"
             defaultValue={meta.title}
             autoFocus
@@ -100,8 +103,10 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
   }
 
   const isChat = meta.kind === "chat";
-  // 单行(用户定案):有摘要给摘要(随对话演进,比标题达意),缺席回落标题
-  const primary = meta.summary || meta.title;
+  // 单行,优先级 用户改名 > 轮末摘要 > 首句自动标题(与 ChatView 头部
+  // 同一口径,2026-08-06 用户定案:改过名的会话在哪儿都得显改的那个;
+  // title_custom 由壳 sidecar 标记,区分改名与首句自动标题)
+  const primary = meta.title_custom ? meta.title : meta.summary || meta.title;
   const trailing = rowTrailing(meta, t, attention);
   const turns = meta.turns > 0 ? t("status.turns", { n: String(Math.trunc(meta.turns)) }) : "";
   const menuItems: MenuItem[] = [
@@ -266,10 +271,13 @@ function Overview({
   space,
   sessions,
   cloud,
+  onRefresh,
 }: {
   space: Space;
   sessions: SessionMeta[];
   cloud?: { feed: CloudTasksFeed; projects: import("@/lib/ipc/cloudtasks").CloudProject[] };
+  /** 云端列表刷新(概览块右上;整表故障条也用它重试) */
+  onRefresh?: () => void;
 }) {
   const { t } = useI18n();
   const title = t(space === "cloud" ? "rail.cloud" : space === "chat" ? "rail.chat" : "rail.local");
@@ -307,9 +315,25 @@ function Overview({
     if (running > 0) stats.push({ text: t("sidebar.overview.running", { n: String(running) }), cls: "text-primary" });
     if (waiting > 0) stats.push({ text: t("sidebar.overview.waiting", { n: String(waiting) }), cls: "text-warning" });
   }
+  const feedErr = space === "cloud" ? cloud?.feed.error : "";
   return (
     <div className="shrink-0 px-5 pt-3 pb-1">
-      <div className="text-xs font-semibold">{title}</div>
+      <div className="flex items-center gap-1">
+        <div className="min-w-0 flex-1 truncate text-xs font-semibold">{title}</div>
+        {/* 刷新是**列表级**操作,归概览块;品牌头只放品牌与新建
+            (用户报障 2026-08-06:刷新钮不该在 header) */}
+        {space === "cloud" && onRefresh && (
+          <button
+            type="button"
+            aria-label={t("cloud.list.refresh")}
+            title={t("cloud.list.refresh")}
+            className="btn btn-ghost btn-square btn-xs -me-1 shrink-0 text-base-content/50"
+            onClick={onRefresh}
+          >
+            <RefreshCw size={13} strokeWidth={1.75} aria-hidden />
+          </button>
+        )}
+      </div>
       <div className="mt-0.5 text-xs leading-relaxed text-base-content/45">{desc}</div>
       {stats.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs tabular-nums text-base-content/60">
@@ -318,6 +342,18 @@ function Overview({
               {s.text}
             </span>
           ))}
+        </div>
+      )}
+      {/* 整表加载故障:概览块内一行低调告警 + 就地重试。此前挂在列表
+          末尾,混在条目里读不出「这是整个列表的状态」(用户报障 2026-08-06) */}
+      {feedErr && (
+        <div role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-error">
+          <span className="min-w-0 flex-1 break-all">{t("cloud.list.error", { reason: feedErr })}</span>
+          {onRefresh && (
+            <button type="button" className="btn btn-ghost btn-xs shrink-0" onClick={onRefresh}>
+              {t("cloud.list.retry")}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -355,6 +391,8 @@ export function Sidebar({
     reloadKey: number;
     onDeleted?: (id: string) => void;
     onRefresh?: () => void;
+    /** 未连接空态的「去设置连接」:App 打开设置页(默认落账号分区) */
+    onOpenSettings?: () => void;
   };
 }) {
   const { t } = useI18n();
@@ -421,6 +459,7 @@ export function Sidebar({
           onSelect={(task) => cloud?.onSelect(task)}
           reloadKey={cloud?.reloadKey ?? 0}
           onDeleted={cloud?.onDeleted}
+          onOpenSettings={cloud?.onOpenSettings}
         />
       );
     }
@@ -519,17 +558,6 @@ export function Sidebar({
       <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 ps-5 pe-3">
         <Brand />
         <span data-tauri-drag-region="" className="min-w-0 flex-1" />
-        {space === "cloud" && cloud?.onRefresh && (
-          <button
-            type="button"
-            aria-label={t("cloud.list.refresh")}
-            title={t("cloud.list.refresh")}
-            className="btn btn-ghost btn-square btn-xs"
-            onClick={cloud.onRefresh}
-          >
-            <RefreshCw size={13} strokeWidth={1.75} aria-hidden />
-          </button>
-        )}
         <button
           type="button"
           aria-label={t("sidebar.newTask")}
@@ -544,7 +572,7 @@ export function Sidebar({
           scrollbar-gutter 预留滚条槽位:滚条挤占布局,auto 下出现/消失会让
           整列内容横移抖动;常驻滚道(overflow-y-scroll)会在壳内露白条,
           gutter 只留空间不绘制,透容器底(§5) */}
-      <Overview space={space} sessions={sessions} cloud={{ feed: cloudFeed, projects: cloudProjects }} />
+      <Overview space={space} sessions={sessions} cloud={{ feed: cloudFeed, projects: cloudProjects }} onRefresh={cloud?.onRefresh} />
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 [scrollbar-gutter:stable]">{body()}</div>
       <div className="shrink-0 empty:hidden">
         <UpdateFooter />

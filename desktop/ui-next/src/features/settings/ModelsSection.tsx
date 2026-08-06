@@ -1,7 +1,10 @@
 // 模型列表编辑:行内受控展开(一次一行),增删改与"设为默认"。
-// 表单只呈现核心字段(名称/协议/接口地址/API Key/模型标识/思考深度);
-// 高级字段(context_window/max_output/vision)与同步标记(source/locked/owner)
-// 留在草稿对象里随保存透传,不因编辑丢失。
+// 表单呈现全部可改字段(名称/协议/接口地址/API Key/模型标识/上下文窗口/
+// 最大输出/思考深度/图片输入)——可展开的是百智云与自定义条目,它们的窗口
+// 与输出上限本就该由用户改(旧 UI 的「高级选项」折叠区,这里平铺不再二级
+// 折叠);同步标记(source/locked/owner)留在草稿对象里随保存透传。
+// 上下文窗口/最大输出留空 = 落壳的产品默认(200000/32768),不写死进草稿;
+// 两者的比例不做校验(用户定案 2026-08-06,理由见 settingsForm.validateDraft)。
 // 展示口径:行标题经 modelDisplay 剥来源后缀/会员档位前缀(落盘名是引擎
 // 寻址键,任何展示面都必须剥;编辑表单里的「名称」字段仍是原始键);
 // 列表按来源分组(会员→百智云→自定义,modelSourceRank 单一出处),全部
@@ -14,6 +17,12 @@ import type { HostModel } from "@/lib/ipc/config";
 import type { ModelInfo } from "@/lib/ipc/sessions";
 import { groupMemberSections, modelDisplay, modelSourceRank, SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
 import { emptyModel, type SettingsDraft } from "./settingsForm";
+
+/** 数字输入 → 草稿值:空/非法/非正一律回 undefined(= 用产品默认,不落盘)。 */
+const posInt = (v: string): number | undefined => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
 
 export function ModelsSection({
   draft,
@@ -212,6 +221,32 @@ export function ModelsSection({
                   />
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
+                  <legend className="fieldset-legend">{t("settings.models.contextWindow")}</legend>
+                  {/* 留空 = 产品默认;非正整数按留空处理(不把 0/负数写进草稿) */}
+                  <input
+                    className="input input-sm w-full font-mono text-xs"
+                    type="number"
+                    min={1}
+                    aria-label={t("settings.models.contextWindow")}
+                    placeholder={t("settings.models.contextWindow.placeholder")}
+                    value={m.context_window ?? ""}
+                    onChange={(e) => patch(i, { context_window: posInt(e.target.value) })}
+                  />
+                </fieldset>
+                <fieldset className="fieldset gap-1.5">
+                  <legend className="fieldset-legend">{t("settings.models.maxOutput")}</legend>
+                  <input
+                    className="input input-sm w-full font-mono text-xs"
+                    type="number"
+                    min={1}
+                    aria-label={t("settings.models.maxOutput")}
+                    placeholder={t("settings.models.maxOutput.placeholder")}
+                    title={t("settings.models.maxOutput.hint")}
+                    value={m.max_output ?? ""}
+                    onChange={(e) => patch(i, { max_output: posInt(e.target.value) })}
+                  />
+                </fieldset>
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.think")}</legend>
                   {/* 缺省("")= 产品默认「低」;off 才是关闭——契约同壳/内核 */}
                   <select
@@ -226,6 +261,20 @@ export function ModelsSection({
                     <option value="medium">{t("settings.models.think.medium")}</option>
                     <option value="high">{t("settings.models.think.high")}</option>
                   </select>
+                </fieldset>
+                <fieldset className="fieldset gap-1.5">
+                  <legend className="fieldset-legend">{t("settings.models.vision")}</legend>
+                  {/* 勾选 = 显式支持;不勾选时壳写 supports_images:false,
+                      图片以路径文本进对话(不发图片块) */}
+                  <label className="label h-8 cursor-pointer justify-start gap-2" title={t("settings.models.vision.hint")}>
+                    <input
+                      type="checkbox"
+                      className="toggle toggle-sm"
+                      checked={!!m.vision}
+                      onChange={(e) => patch(i, { vision: e.target.checked || undefined })}
+                    />
+                    <span className="text-xs">{t("settings.models.vision.on")}</span>
+                  </label>
                 </fieldset>
               </div>
             )}
@@ -275,9 +324,11 @@ export function ModelsSection({
                 <span className="font-normal text-base-content/40">{g.items.length}</span>
               </button>
             )}
-            {/* 组 = 一个 list 容器,行间分隔线;不再每行一个独立小盒子 */}
+            {/* 组 = 一个 list 容器,行间分隔线;不再每行一个独立小盒子。
+                overflow-hidden 同 McpSection:行 rounded-none 方角,daisyUI .list
+                不裁剪,首/末行 hover 底色否则盖出圆角轮廓 */}
             {groupOpen && (
-              <ul className="list divide-y divide-base-300 rounded-box border border-base-300 bg-base-100">
+              <ul className="list divide-y divide-base-300 overflow-hidden rounded-box border border-base-300 bg-base-100">
                 {memberSections
                   ? memberSections.map((s) => [
                       <li

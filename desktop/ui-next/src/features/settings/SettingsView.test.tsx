@@ -209,6 +209,32 @@ describe("模型增删改与设默认", () => {
     ]);
   });
 
+  it("高级字段:上下文窗口/最大输出/图片输入可改并进载荷", async () => {
+    const { calls } = stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    await userEvent.type(screen.getByRole("spinbutton", { name: "上下文窗口(token)" }), "128000");
+    await userEvent.type(screen.getByRole("spinbutton", { name: "最大输出(token)" }), "8000");
+    await userEvent.click(screen.getByRole("checkbox", { name: "支持图片" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
+    const models = (calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig).models;
+    expect(models[0]).toMatchObject({ name: "主力", context_window: 128000, max_output: 8000, vision: true });
+  });
+
+  it("最大输出填大值(旧 UI 会拦的 10% 越界量):照常保存,不拦", async () => {
+    const { calls } = stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    await userEvent.type(screen.getByRole("spinbutton", { name: "最大输出(token)" }), "64000");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
+    const models = (calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig).models;
+    expect(models[0]).toMatchObject({ max_output: 64000 });
+  });
+
   it("设为默认:default 标记随行重算", async () => {
     const { calls } = stubShell();
     render(<SettingsView onClose={() => {}} />);
@@ -270,6 +296,44 @@ describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
     // 载荷含同步条目(落盘名带 @monkeycode 来源后缀)
     const saved = calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig;
     expect(saved.models.some((m) => m.name.startsWith("member-m@"))).toBe(true);
+  });
+
+  it("保存在途时第二路同步落地:补存一轮把它写进去,不留给用户手点", async () => {
+    // 扫码登录的真实时序:百智云同步先落地起了保存(写盘+重启引擎数秒),
+    // 会员模型同步随后落在保存在途期。旧 UI 的补存循环漏迁时,第二路条目
+    // 就停在未保存态(2026-08-06 用户报障「扫码之后还要手动保存」)
+    const pending: Array<() => void> = [];
+    const model = (name: string) => ({ name, base_url: "https://m", api_key: "k", model: name, source: "monkeycode" });
+    let round = 0;
+    const { calls } = stubShell({
+      extra: {
+        mc_status: () => ({ logged_in: true, user: { name: "李四" } }),
+        baizhi_status: () => ({ logged_in: false, host: "baizhi.cloud" }),
+        // 第二次同步多回一条:草稿在保存在途期发生变化
+        mc_models_sync: () => ({ models: round++ === 0 ? [model("mem-a")] : [model("mem-a"), model("mem-b")] }),
+      },
+      save: () => new Promise<null>((res) => pending.push(() => res(null))),
+    });
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: "账号" }));
+    const syncBtn = await screen.findByRole("button", { name: "同步会员模型" });
+    await userEvent.click(syncBtn);
+    await waitFor(() => expect(pending).toHaveLength(1)); // 第一路保存在途
+
+    await userEvent.click(await screen.findByRole("button", { name: "同步会员模型" }));
+    expect((await screen.findByText(/已获取 2 个会员模型/)).textContent).toContain("已自动保存");
+    expect(pending).toHaveLength(1); // 在途期不另起保存
+
+    await act(async () => pending[0]!()); // 第一路存完 → 补存循环发现草稿变了
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => pending[1]!());
+
+    const saves = calls.filter((c) => c.cmd === "save_config");
+    expect(saves).toHaveLength(2);
+    const names = (saves[1]!.args?.config as DesktopConfig).models.map((m) => m.name);
+    expect(names.some((n) => n.startsWith("mem-b@"))).toBe(true);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "保存" })).toBeNull()); // 保存条自行收起
   });
 
   it("有任务在跑:不自动保存(重启引擎会踹掉任务),提示原因并留保存条", async () => {

@@ -67,3 +67,12 @@ export function createImeGuard(): ImeGuard {
     },
   };
 }
+
+/** 发送前补指令分隔符:整条消息恰好是 `/<已知指令名>`(前后无参数)时补一个
+ * 尾随空格,其余原样。云端按 `/name args` 解析,缺了这个空格整条消息会被当成
+ * 普通文本;而句中的 /path、未知的 /xxx 都不该被动。 */
+export function withCommandSeparator(input: string, commands: readonly SlashCommand[]): string {
+  const q = slashQuery(input);
+  if (q === null || !q) return input;
+  return commands.some((c) => c.name === q) ? `${input} ` : input;
+}

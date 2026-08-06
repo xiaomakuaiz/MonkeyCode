@@ -1,11 +1,12 @@
 // 文件树:目录懒加载(点开才拉子层),子项缓存 + 展开集合 + 目录粒度加载态
 // (骨架屏),缩进表达层级(每层 16px,动态 px 走内联样式)。已删除文件只
 // 属于「改动」页;这里只展示当前真实存在的文件,改动状态以徽标标注。
-import { ChevronRight, File, Files, Folder } from "lucide-react";
+import { ChevronRight, Files, Folder, FolderOpen } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { RepoEntry } from "@/lib/ipc/repo";
+import { fileIconOf } from "./fileIcon";
 import { fmtSize, statusMeta } from "./status";
 
 export function Tree({
@@ -118,10 +119,20 @@ export function Tree({
                 />
               )}
             </span>
+            {/* 目录:开合两态两形(FolderOpen/Folder);文件:按类型分型
+                上色(fileIcon,语义色跟主题走)——清一色灰 File 分不出
+                谁是谁(用户报障 2026-08-06「太丑」) */}
             {en.isDir ? (
-              <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+              open ? (
+                <FolderOpen size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary/70" />
+              ) : (
+                <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary/60" />
+              )
             ) : (
-              <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
+              (() => {
+                const spec = fileIconOf(en.name);
+                return <spec.icon size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
+              })()
             )}
             <span className="min-w-0 flex-1 truncate">{en.name}</span>
             {meta ? (

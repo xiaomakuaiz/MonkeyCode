@@ -11,7 +11,6 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
@@ -22,7 +21,7 @@ import { pickAttachmentPaths } from "@/lib/ipc/uploads";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
-import { ComposerCard, ErrorBar, RunBar, useAutosizeTextarea } from "./composerKit";
+import { ComposerCard, ErrorBar, RunBar, SlashPanel, UsageRing, useAutosizeTextarea } from "./composerKit";
 import { ModelMenu, ThinkMenu } from "./pickers";
 import type { ComposerCtl } from "./useComposer";
 
@@ -236,38 +235,7 @@ export function Composer({
           焦点始终留在 textarea) */}
       <ComposerCard>
         {slashOpen && (
-          <ul
-            role="listbox"
-            aria-label={t("chat.slash.label")}
-            className="menu absolute start-2 bottom-full z-50 mb-1 max-h-64 w-80 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
-          >
-            {list.length === 0 && (
-              <li className="menu-disabled">
-                <span className="text-xs">{t("chat.slash.empty")}</span>
-              </li>
-            )}
-            {list.map((c, i) => (
-              <li key={c.name}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={i === act}
-                  className={`flex items-baseline gap-2 ${i === act ? "menu-active" : ""}`}
-                  onMouseEnter={() => setActive(i)}
-                  onClick={() => pickCommand(c)}
-                >
-                  <span className="font-mono text-xs font-bold">/{c.name}</span>
-                  {c.input?.hint && <span className="font-mono text-[10px] opacity-50">{c.input.hint}</span>}
-                  {c.description && (
-                    <span className="min-w-0 flex-1 truncate text-xs opacity-60">{c.description}</span>
-                  )}
-                </button>
-              </li>
-            ))}
-            <li className="menu-disabled mt-1 border-t border-base-300">
-              <span className="text-[10px]">{t("chat.slash.hint")}</span>
-            </li>
-          </ul>
+          <SlashPanel list={list} active={act} onHover={setActive} onPick={pickCommand} />
         )}
 
         {/* 运行条:一行紧凑态——spinner + 文案 + 停止 icon 按钮 */}
@@ -352,29 +320,18 @@ export function Composer({
             title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
           />
 
-          {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端。
-              形态:daisyUI radial-progress + tooltip(精确 tokens);>85% 用
-              功能性状态色示警(旧 ContextRing 的设计,组件官方化) */}
+          {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
+              (形态收口在 composerKit/UsageRing) */}
           {usagePct !== null && state.usage && (
-            <div
-              // tooltip-left:圆环贴视口右缘,tooltip-top 居中弹会被窗口裁掉半截
-              className="tooltip tooltip-left mx-1 shrink-0"
-              // 紧凑口径:百分比 + fmtK 缩写(精确 token 数没有决策价值,
-              // 长串数字把 tooltip 撑成一整行)
-              data-tip={t("chat.usageTip", {
+            <UsageRing
+              pct={usagePct}
+              label={t("chat.contextUsage")}
+              tip={t("chat.usageTip", {
                 pct: usagePct,
                 used: fmtK(state.usage.used),
                 size: fmtK(state.usage.size),
               })}
-            >
-              <div
-                role="progressbar"
-                aria-label={t("chat.contextUsage")}
-                aria-valuenow={usagePct}
-                className={`radial-progress align-middle ${usagePct > 85 ? "text-error" : "text-base-content/40"}`}
-                style={{ "--value": Math.min(100, usagePct), "--size": "1rem", "--thickness": "2px" } as CSSProperties}
-              />
-            </div>
+            />
           )}
           <button
             type="button"

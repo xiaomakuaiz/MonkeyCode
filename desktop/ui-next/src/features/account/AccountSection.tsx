@@ -11,6 +11,7 @@
 //   SettingsView.applySync 并入草稿;干净表单+无任务在跑时那边自动保存,
 //   否则回退保存条——结果行按 autoSaved/blocked 说明白落到哪一步了
 //   (密钥复用 knownKeys 联动留后续版本)。
+import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -28,10 +29,55 @@ import {
   mcModelsSync,
 } from "@/lib/ipc/account";
 import { inDesktopShell } from "@/lib/ipc/ipc";
+import { copyText } from "@/lib/util/clipboard";
 import { LoginPanel, PasswordForm } from "./LoginPanel";
 import { UsagePanel } from "./UsagePanel";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** 用户 ID 掩码:短串原样,长串取头 8 + 尾 6(与移动端「我的」页同口径,
+ *  mobile/app/(tabs)/profile.tsx maskUserId)——只为不撑爆行宽,复制的、
+ *  title 里的都是完整原值。 */
+export function maskUserId(id: string): string {
+  const v = id.trim();
+  return v.length <= 16 ? v : `${v.slice(0, 8)}...${v.slice(-6)}`;
+}
+
+/** 用户 ID 一键复制(移动端是整行可点 + toast,桌面无 toast:图标就地
+ *  翻成对勾 1.8 秒,与用量面板的「复制邀请链接」同一反馈语汇)。 */
+function UserIdChip({ id }: { id: string }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const copy = () => {
+    copyText(id);
+    setCopied(true);
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <button
+      type="button"
+      title={t("account.mc.userIdTitle", { id })}
+      aria-label={copied ? t("account.mc.userIdCopied") : t("account.mc.copyUserId")}
+      className="flex min-w-0 cursor-pointer items-center gap-1 font-mono text-xs text-base-content/50 transition-colors hover:text-base-content"
+      onClick={copy}
+    >
+      {copied ? (
+        <Check size={11} strokeWidth={2} aria-hidden className="shrink-0 text-success" />
+      ) : (
+        <Copy size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      )}
+      <span className="truncate">{maskUserId(id)}</span>
+    </button>
+  );
+}
 
 /** profile 字段对壳不透明,展示名尽力提取常见字段;提不出返回空串。 */
 export function profileName(p?: Record<string, unknown>): string {
@@ -203,15 +249,22 @@ function BaizhiCard({
  *  会员模型同步 + 断开(先 revoke 再 logout)。 */
 function McCard({
   status,
+  baizhiLoggedIn,
   bridgeErr,
   onChanged,
+  onLoggedIn,
   onResult,
   autoSyncToken = 0,
 }: {
   status: McStatus | null;
+  /** 百智云是否已登录:决定「连接」主钮出不出(桥接要拿百智云会话去换
+   *  MonkeyCode 会话,未登录时点它必失败,不摆这个死钮) */
+  baizhiLoggedIn: boolean;
   /** 百智云登录后自动桥接的失败信息(不阻断,卡内外显并留手动重试) */
   bridgeErr: string;
   onChanged: () => Promise<void>;
+  /** 账密登录成功:宿主刷新状态并起一次会员模型同步(与桥接登录同待遇) */
+  onLoggedIn: () => void;
   /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
   onResult?: (r: McModelsSyncResult) => SyncApplied | undefined | void;
   /** 登录/桥接真实事件的自动同步信号(语义同 BaizhiCard.autoSyncToken) */
@@ -281,17 +334,23 @@ function McCard({
       <AccountCard
         logo="/logo.png"
         title={t("account.notConnected")}
-        subtitle={<span className="truncate">{t("account.mc.notConnected")}</span>}
+        subtitle={
+          <span className="truncate">
+            {baizhiLoggedIn ? t("account.mc.notConnected") : t("account.mc.notConnectedIdle")}
+          </span>
+        }
         actions={
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={busy === "connect"}
-            onClick={() => void connect()}
-          >
-            {busy === "connect" && <span className="loading loading-spinner loading-xs" aria-hidden />}
-            {busy === "connect" ? t("account.mc.connecting") : t("account.mc.connect")}
-          </button>
+          baizhiLoggedIn && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy === "connect"}
+              onClick={() => void connect()}
+            >
+              {busy === "connect" && <span className="loading loading-spinner loading-xs" aria-hidden />}
+              {busy === "connect" ? t("account.mc.connecting") : t("account.mc.connect")}
+            </button>
+          )
         }
       >
         {bridgeErr && (
@@ -299,11 +358,20 @@ function McCard({
             {t("account.mc.connectFailed", { message: bridgeErr })}
           </span>
         )}
-        {/* 账密登录:不经百智云的手动路径(桥接失败/私有化/换账号) */}
+        {/* 账密登录:不经百智云的手动路径(桥接失败/私有化/换账号)。入口与
+            表单都在本卡内——它登的是 MonkeyCode 账号,挂在百智云登录卡下方
+            是把两块账号串到一处(用户报障 2026-08-06) */}
         {pwOpen ? (
-          <div className="max-w-sm border-t border-base-300 pt-2">
-            <p className="pt-1 text-xs text-base-content/60">{t("account.pw.hint")}</p>
-            <PasswordForm onLoggedIn={() => void onChanged()} />
+          <div className="flex max-w-sm flex-col gap-2 border-t border-base-300 pt-3">
+            <p className="text-xs text-base-content/60">{t("account.pw.hint")}</p>
+            <PasswordForm onLoggedIn={onLoggedIn} />
+            <button
+              type="button"
+              className="btn btn-link btn-xs self-start px-0 font-normal text-base-content/50 no-underline hover:text-base-content"
+              onClick={() => setPwOpen(false)}
+            >
+              {t("account.pw.collapse")}
+            </button>
           </div>
         ) : (
           <button
@@ -324,7 +392,21 @@ function McCard({
       // 组头已表明「MonkeyCode 云端」,卡头显登录身份
       title={userName}
       badge={<span className="badge badge-success badge-soft badge-xs shrink-0">{t("account.loggedIn")}</span>}
-      subtitle={<span className="truncate font-mono text-xs text-base-content/50">{status?.host}</span>}
+      subtitle={
+        // 副行 = 身份的次级事实:主机名 + 用户 ID(移动端把 ID 摆在邮箱行
+        // 下方同一身份块,桌面卡是横向的,并入同一行)
+        <>
+          <span className="truncate font-mono text-xs text-base-content/50">{status?.host}</span>
+          {user?.id && (
+            <>
+              <span aria-hidden className="shrink-0 text-base-content/30">
+                ·
+              </span>
+              <UserIdChip id={user.id} />
+            </>
+          )}
+        </>
+      }
       actions={
         <>
           <button type="button" className="btn btn-sm" disabled={busy === "sync"} onClick={() => void sync()}>
@@ -429,8 +511,6 @@ export function AccountSection({
     );
   }
 
-  const anyLoggedIn = !!bz?.logged_in || !!mc?.logged_in;
-
   return (
     <section aria-label={t("settings.nav.account")} className="flex max-w-xl flex-col gap-3">
       {statusErr && (
@@ -450,24 +530,26 @@ export function AccountSection({
             {bz?.logged_in ? (
               <BaizhiCard status={bz} onChanged={refresh} onResult={onSyncResult} autoSyncToken={bzSyncToken} />
             ) : (
-              // MC 已连时不再给账密入口(重复登录只添乱);全未登录时给
               <BaizhiLoginCard>
-                <LoginPanel
-                  withPassword={!mc?.logged_in}
-                  onBaizhiLoggedIn={() => void onBaizhiLoggedIn()}
-                  onMcLoggedIn={() => void onMcLoggedIn()}
-                />
+                <LoginPanel onBaizhiLoggedIn={() => void onBaizhiLoggedIn()} />
               </BaizhiLoginCard>
             )}
           </div>
-          {/* MonkeyCode 组:任一登录后才出(全未登录时百智云登录顺带桥接,
-              不提前摆一张未连接卡分散主路径) */}
-          {anyLoggedIn && (
-            <div className="flex flex-col gap-1.5">
-              <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.mc.title")}</h3>
-              <McCard status={mc} bridgeErr={bridgeErr} onChanged={refresh} onResult={onSyncResult} autoSyncToken={mcSyncToken} />
-            </div>
-          )}
+          {/* MonkeyCode 组恒在(2026-08-06 用户定案):两个账号 = 两块,
+              MonkeyCode 的连接/账密登录入口都在本块内。未登录时卡里不摆
+              「连接」死钮——桥接需要百智云会话,只留账密登录这条手动路径 */}
+          <div className="flex flex-col gap-1.5">
+            <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.mc.title")}</h3>
+            <McCard
+              status={mc}
+              baizhiLoggedIn={!!bz?.logged_in}
+              bridgeErr={bridgeErr}
+              onChanged={refresh}
+              onLoggedIn={() => void onMcLoggedIn()}
+              onResult={onSyncResult}
+              autoSyncToken={mcSyncToken}
+            />
+          </div>
         </>
       )}
     </section>

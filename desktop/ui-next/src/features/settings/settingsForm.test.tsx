@@ -184,6 +184,13 @@ describe("validateDraft(保存前拦截,首错即返)", () => {
     });
   });
 
+  it("模型:最大输出与上下文窗口的比例不校验(用户定案:越界交服务端报)", () => {
+    // 旧 UI 曾拦 max_output ≥ 窗口 10%;产品默认自己就越界(200k 配 32768),
+    // 主流模型的真实输出上限同样越界,拦下的是整次保存 → 一律放行
+    expect(validateDraft(draftWith({ models: [model({ context_window: 100000, max_output: 32768 })] }))).toBeNull();
+    expect(validateDraft(draftWith({ models: [model({ max_output: 64000 })] }))).toBeNull();
+  });
+
   it("MCP:非法字符 → mcpName;重名 → mcpDup;有名缺 URL/命令 → mcpIncomplete", () => {
     expect(validateDraft(draftWith({ mcps: [mcp({ name: "带 空格" })] }))).toEqual({ kind: "mcpName", name: "带 空格" });
     expect(validateDraft(draftWith({ mcps: [mcp(), mcp()] }))).toEqual({ kind: "mcpDup", name: "fetch" });
@@ -267,6 +274,50 @@ describe("同步并入(mergeSyncedModels / mergeSyncedMcps)", () => {
     const next = r!.draft;
     // 锁定的 ultra 不可当默认;可用最高档 = pro,取其第一条(不是列表首条 basic)
     expect(next.models[next.defaultIdx]?.name).toBe("p1@monkeycode#3");
+  });
+
+  it("会员组同步接管默认:百智云先落地占的默认让位给会员最高档(扫码登录两路同步)", () => {
+    // 扫码登录时序:百智云同步先并入并挑走默认,会员模型随后到
+    const afterBaizhi = draft([model({ name: "glm-5@baizhi", source: "baizhi" }), model({ name: "手工" })], 0);
+    const r = mergeSyncedModels(
+      afterBaizhi,
+      [
+        synced({ name: "b1", source: "monkeycode", id: "1", model: "monkeycode-basic/m1" }),
+        synced({ name: "p1", source: "monkeycode", id: "2", model: "monkeycode-pro/m3" }),
+        synced({ name: "u1", source: "monkeycode", id: "3", model: "monkeycode-ultra/m4", locked: true }),
+      ],
+      "monkeycode",
+    );
+    const next = r!.draft;
+    expect(next.models[next.defaultIdx]?.name).toBe("p1@monkeycode#2");
+  });
+
+  it("会员组同步不抢手工条目的默认(用户自己配的是明确选择);已是会员默认也不动", () => {
+    const custom = draft([model({ name: "手工" }), model({ name: "old@baizhi", source: "baizhi" })], 0);
+    const r1 = mergeSyncedModels(
+      custom,
+      [synced({ name: "u1", source: "monkeycode", id: "1", model: "monkeycode-ultra/m" })],
+      "monkeycode",
+    );
+    expect(r1!.draft.models[r1!.draft.defaultIdx]?.name).toBe("手工");
+
+    // 默认已是会员基础档:重同步不擅自跳到 ultra(用户可能就想用便宜的)
+    const onMember = draft([model({ name: "b1@monkeycode#1", source: "monkeycode", model: "monkeycode-basic/m1" })], 0);
+    const r2 = mergeSyncedModels(
+      onMember,
+      [
+        synced({ name: "b1", source: "monkeycode", id: "1", model: "monkeycode-basic/m1" }),
+        synced({ name: "u1", source: "monkeycode", id: "2", model: "monkeycode-ultra/m4" }),
+      ],
+      "monkeycode",
+    );
+    expect(r2!.draft.models[r2!.draft.defaultIdx]?.name).toBe("b1@monkeycode#1");
+  });
+
+  it("百智云组同步不接管默认(接管只在会员组落地时发生)", () => {
+    const onMember = draft([model({ name: "u1@monkeycode#1", source: "monkeycode", model: "monkeycode-ultra/m" })], 0);
+    const r = mergeSyncedModels(onMember, [synced({ name: "glm-5" })], "baizhi");
+    expect(r!.draft.models[r!.draft.defaultIdx]?.name).toBe("u1@monkeycode#1");
   });
 
   it("空集合不清组;MCP 空集不触碰,非空整组替换(手工条目保留)", () => {

@@ -324,8 +324,10 @@ export function SettingsView({
     draftRef.current = next;
     setDraft(next);
     setSaveError("");
-    // 保存在途(双路同步第一路刚落地):不再起一次,留给保存条兜底
-    if (savingRef.current) return { skipped, autoSaved: false };
+    // 保存在途(双路同步第一路刚落地):不再起一次——在途那次的补存循环
+    // 收尾时会发现草稿又变了,自己再存一轮(见 save()),所以对用户仍是
+    // 「已自动保存」,不必回退保存条
+    if (savingRef.current) return { skipped, autoSaved: true };
     if (wasDirty) return { skipped, autoSaved: false, blocked: "dirty" };
     if (hasRunningTask) return { skipped, autoSaved: false, blocked: "busy" };
     void save(next);
@@ -348,28 +350,44 @@ export function SettingsView({
   };
 
   /** target:同步自动保存传入合并后的草稿(state 提交尚未落地,闭包里的
-   * draft 是旧值);保存条点击不传,存当前草稿。 */
+   * draft 是旧值);保存条点击不传,存当前草稿。
+   *
+   * 补存循环(旧 UI performSave 随迁,ui-next 首版漏迁 → 2026-08-06 用户报障
+   * 「扫码之后还要手动保存」):一次保存要写盘 + 重启内核(数秒),期间表单
+   * 可能又被并入新的同步结果——扫码登录顺带桥接 MonkeyCode,百智云与会员
+   * 模型两路同步先后落地,第二路正好撞在第一路的保存在途期(applySync 见
+   * savingRef 就只合并不保存,把收尾交给这里)。存到表单不再变化为止,轮数
+   * 设上限兜底:不收敛就停手交给保存条,不无休止地重启内核。 */
   const save = async (target?: SettingsDraft) => {
     const conf = cfgRef.current;
-    const d = target ?? draft;
+    let d = target ?? draft;
     if (!conf || !d) return;
     const invalid = validateDraft(d);
     if (invalid) {
       setSaveError(draftErrText(invalid));
       return;
     }
-    const p = buildPayload(conf, d);
     setSaving(true);
     savingRef.current = true;
     setSaveError("");
     try {
-      await saveConfig(p);
-      // 保存即真值:壳按载荷写盘(壳自有偏好以磁盘合并,不在本类型内),
-      // 表单态重建为已保存形态,保存条随之收起;引擎重启由横幅外显。
-      // 在途期间草稿又变过(如双路同步第二路并入):保留更新的草稿只换
-      // 基线,不许把后到的合并结果盖回已保存形态
-      setCfg(p);
-      setDraft((cur) => (cur === d ? draftFromConfig(p) : cur));
+      for (let round = 0; ; round++) {
+        const p = buildPayload(conf, d);
+        await saveConfig(p);
+        // 保存即真值:壳按载荷写盘(壳自有偏好以磁盘合并,不在本类型内)
+        setCfg(p);
+        // 在途期间草稿没再变:表单态重建为已保存形态,保存条随之收起;
+        // 引擎重启由横幅外显
+        const cur = draftRef.current;
+        if (!cur || payloadEquals(buildPayload(conf, cur), p)) {
+          setDraft((c) => (c === d || c === cur ? draftFromConfig(p) : c));
+          break;
+        }
+        // 变过了:再存一轮。轮数用尽或新草稿校验不过就保留草稿(dirty →
+        // 保存条兜底),绝不回读已保存形态覆盖——那会把后到的同步条目抹掉
+        if (round >= 2 || validateDraft(cur)) break;
+        d = cur;
+      }
     } catch (e) {
       setSaveError(errMsg(e)); // 壳的 Err 是中文,直接外显
     } finally {

@@ -7,10 +7,11 @@
 // additions/deletions 云端超集字段有则展示);变动挂载拉一次,刷新钮与
 // 上传落地后重拉。控制流懒建 + call() 懒重连:连不上时不无限拨号刷屏,
 // 操作时再试。
-import { CornerUpLeft, Download, File, Folder, FolderOpen, RefreshCw, X } from "lucide-react";
+import { CornerUpLeft, Download, Folder, FolderOpen, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Changes, type ChangeItem } from "@/features/files/Changes";
+import { fileIconOf } from "@/features/files/fileIcon";
 import { Preview, type PreviewModel } from "@/features/files/Preview";
 import { connectCloudControl, WAKE_CALL_TIMEOUT_MS, type CloudControl } from "@/lib/cloud/control";
 import { useI18n } from "@/lib/i18n";
@@ -312,12 +313,16 @@ export function CloudFiles({
               <li key={f.path} className="group">
                 {isDir(f) ? (
                   <button type="button" className={vmId ? "pe-9" : undefined} onClick={() => setDir(f.path)}>
-                    <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                    <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary/60" />
                     <span className="min-w-0 flex-1 truncate">{f.name}</span>
                   </button>
                 ) : (
                   <span className={vmId ? "pe-9" : undefined}>
-                    <File size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/40" />
+                    {/* 类型图标与本地文件树同一份 fileIcon,不做两套 */}
+                    {(() => {
+                      const spec = fileIconOf(f.name);
+                      return <spec.icon size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
+                    })()}
                     <span className="min-w-0 flex-1 truncate">{f.name}</span>
                     <span className="font-mono text-[10px] text-base-content/40 tabular-nums">{fmtSize(f.size)}</span>
                   </span>

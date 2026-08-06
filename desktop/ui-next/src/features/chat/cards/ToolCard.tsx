@@ -21,6 +21,7 @@ import { toolDetailFor, type ToolDetail } from "@/lib/tools/toolDetails";
 import { presentToolCall, toolDisplayName, type ToolTargetKind } from "@/lib/tools/toolLabels";
 import { FindingsCard, findingsReportFor } from "./FindingsCard";
 import { PermActions } from "./PermCard";
+import { statusDot } from "./statusDot";
 
 /** 进度滚动窗口:固定只展示最后几条,旧条目自然滚出。 */
 const FEED_WINDOW = 5;
@@ -37,8 +38,9 @@ function formatDuration(ms?: number): string {
   return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
 }
 
+/** 工具态 → 状态点(配色降调口径收口在 statusDot)。 */
 function statusTone(status: "run" | "ok" | "fail"): string {
-  return status === "fail" ? "status-error" : status === "run" ? "status-primary animate-pulse" : "status-success";
+  return statusDot(status);
 }
 
 /** 目标文本:path 型截断目录段、保住末段文件名可见(旧 UI ToolTargetText
@@ -227,7 +229,9 @@ export function ToolCard({
           <span aria-hidden className={`status ${statusTone(item.status)}`} />
         )}
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="shrink-0 font-medium" title={item.title}>
+          {/* 动作名不加粗(用户定案 2026-08-06):一屏几十行工具卡,行行半粗
+              等于没有重点;层次靠目标文本的 base-content/60 灰阶拉开 */}
+          <span className="shrink-0" title={item.title}>
             {presentation.action}
           </span>
           {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
@@ -269,7 +273,13 @@ export function ToolCard({
             aria-label={detailOpen ? t("chat.tool.detailClose") : t("chat.tool.detailOpen")}
             aria-expanded={detailOpen}
             title={detailOpen ? t("chat.tool.detailClose") : t("chat.tool.detailOpen")}
-            className="btn btn-ghost btn-square btn-xs shrink-0"
+            // 裸图标钮,**不能**套 btn-xs:daisyUI 的 .btn 有 height:var(--size),
+            // btn-xs 是 --size-field*6 = 24px,把 12px 的 text-xs 行撑到 24px,
+            // 整张卡比工具组摘要头/思考块(同为 px-3 py-2 的 16px 行)高出 8px
+            // ——单条工具卡显著高过合并后的组头,就是这 8px(用户报障 2026-08-06)。
+            // 行本身已是点击热区,这个钮只作键盘/无障碍开关兼指示,与组头、
+            // 思考块的裸 chevron 同形态
+            className="shrink-0 cursor-pointer"
             onClick={(e) => {
               e.stopPropagation(); // 行开关已在容器上,不拦会一次点击切换两次
               setDetailOpen((v) => !v);

@@ -19,6 +19,7 @@ import { presentToolCall } from "@/lib/tools/toolLabels";
 import { thoughtMarkdown } from "@/lib/util/thoughtMarkdown";
 import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
+import { statusDot } from "./cards/statusDot";
 import { ToolCard } from "./cards/ToolCard";
 import { MessageTime } from "./MessageTime";
 
@@ -119,7 +120,12 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
     // 行尾 ChevronRight(open 态转 90°,弃 collapse-arrow 的另一套箭头语言,
     // 用户定案 2026-08-05);时间与其他块一致 hover 显影(group 在 details 上)
     <details className="group collapse border border-base-300 bg-base-200">
-      <summary className="collapse-title flex min-h-0 items-center gap-1.5 py-2 pe-3 text-xs text-base-content/60">
+      {/* ps-2.5 是对齐算出来的,不是随手取的:daisyUI .collapse-title 自带
+          padding:1rem,只覆 py/pe 会留下 16px 的左内距,而工具卡/组头是 px-3
+          (12px)+ 8px 状态点 → 点心在 16px。这里 12px 的 Sparkles 要让图标中心
+          也落 16px,左内距得是 16-6=10px;文字起点随之 10+12+gap-1.5 = 28px,
+          与工具行的 12+8+gap-2 = 28px 齐平(用户报障 2026-08-06:两种行首图标错位) */}
+      <summary className="collapse-title flex min-h-0 items-center gap-1.5 py-2 ps-2.5 pe-3 text-xs text-base-content/60">
         <Sparkles size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
         <span className="shrink-0">{t("chat.thought")}</span>
         <span className="min-w-0 flex-1 truncate opacity-70">{summary.slice(0, 80)}</span>
@@ -130,8 +136,15 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
           className="shrink-0 text-base-content/40 transition-transform group-open:rotate-90"
         />
       </summary>
-      <div className="collapse-content border-s-2 border-base-300 text-xs">
-        <Markdown source={md} className="opacity-80" />
+      {/* 结构线走**内嵌**引用条(与 ToolCard 子代理结果同形态:border-s-2 + ps-3),
+          不能挂在 collapse-content 自身:那层与卡片边缘齐平,而 daisyUI .collapse
+          有 border-radius 却无 overflow 裁剪,大圆角主题(--radius-box 1rem+)下
+          这条直线会戳出卡片左下的圆角轮廓,看着像块碎片。靠 collapse-content
+          自带的 1rem 内距把条子推进卡内,任何圆角口径都不碰边。 */}
+      <div className="collapse-content text-xs">
+        <div className="border-s-2 border-base-300 ps-3">
+          <Markdown source={md} className="opacity-80" />
+        </div>
       </div>
     </details>
   );
@@ -356,11 +369,7 @@ export const LogList = memo(function LogList({
             const it = state.items[idx];
             return it?.kind === "tool" && it.status === "fail";
           }).length;
-          const tone = groupActive(stack.members)
-            ? "status-primary animate-pulse"
-            : failCount > 0
-              ? "status-error"
-              : "status-success";
+          const tone = statusDot(groupActive(stack.members) ? "run" : failCount > 0 ? "fail" : "ok");
           const toggle = () => {
             if (expanded) {
               setClosedGroups((prev) => new Set(prev).add(stackKey));
@@ -388,8 +397,10 @@ export const LogList = memo(function LogList({
                 className={`card card-border flex-row items-center gap-2 overflow-hidden bg-base-100 px-3 py-2 text-xs ${expanded ? "rounded-b-none border-b-0" : ""} cursor-pointer`}
                 onClick={toggle}
               >
-                <span aria-hidden className={`status ${tone}`} />
-                <span className="min-w-0 flex-1 truncate text-start font-medium">{groupSummary(stack.members)}</span>
+                <span aria-hidden className={tone} />
+                {/* 与单条工具卡的动作名同字重(都不加粗):两者在流里交替出现,
+                    一个粗一个不粗会读成两级信息 */}
+                <span className="min-w-0 flex-1 truncate text-start">{groupSummary(stack.members)}</span>
                 {failCount > 0 && (
                   <span className="shrink-0 text-error">{t("chat.tool.groupFailed", { n: failCount })}</span>
                 )}

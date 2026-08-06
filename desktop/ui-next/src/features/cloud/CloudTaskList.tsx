@@ -15,6 +15,7 @@ import { GroupLabel, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import type { MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
+import { mcStatus } from "@/lib/ipc/account";
 import { mcProjects, mcTaskDelete, mcTasks, mcTaskStop, type CloudProject, type CloudTask } from "@/lib/ipc/cloudtasks";
 
 const PAGE_SIZE = 20;
@@ -27,7 +28,11 @@ export interface CloudTasksFeed {
   active: CloudTask[];
   history: CloudTask[];
   loading: boolean;
+  /** 真故障(网络/服务端);未连接另走 unauthorized——那不是错误是状态 */
   error: string;
+  /** 未连接云端(未登录或会话失效):恢复动作是去设置连接,不是重试
+   * (用户报障 2026-08-06:红底报错 + 没用的「重试」) */
+  unauthorized: boolean;
   total: number | null;
   hasMore: boolean;
   loadMore(): void;
@@ -42,6 +47,7 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
   const [tasks, setTasks] = useState<CloudTask[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [unauthorized, setUnauthorized] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const pageRef = useRef(0); // 已加载的最后一页(0 = 尚未加载)
   const inFlight = useRef(false);
@@ -58,6 +64,7 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
     setError("");
     try {
       const r = await mcTasks(page, PAGE_SIZE);
+      setUnauthorized(false); // 连上了(设置里刚连接完再回来)
       const batch = r.tasks ?? [];
       setTotal(r.page_info?.total ?? r.page_info?.total_count ?? null);
       pageRef.current = page;
@@ -68,7 +75,18 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
         return [...prev, ...batch.filter((task) => !seen.has(task.id))];
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 会话失效/未登录不是"加载失败":回查一次登录态确证(壳的 401 文案
+      // 是中文串,按串匹配太脆),据此分流成「未连接」状态而非红底报错
+      // 只认**明确**的未登录信号:拿不到状态/字段缺失时不许吞掉原错误
+      // (否则一切故障都被粉饰成「未连接」,真问题无从诊断)
+      const st = await mcStatus().catch(() => null);
+      if (st?.logged_in === false) {
+        setUnauthorized(true);
+        setError("");
+        setTasks((prev) => prev ?? []); // 收掉首屏 spinner,交给未连接空态
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       inFlight.current = false;
       setLoading(false);
@@ -89,6 +107,7 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
     history: (tasks ?? []).filter((task) => !ACTIVE.has(task.status ?? "")),
     loading,
     error,
+    unauthorized,
     total,
     hasMore,
     loadMore: () => void fetchPage(pageRef.current + 1, false),
@@ -205,6 +224,7 @@ export function CloudTaskList({
   reloadKey = 0,
   onDeleted,
   query = "",
+  onOpenSettings,
 }: {
   /** 列表数据源(useCloudTasks;Sidebar 供数——概览统计与列表同一份) */
   feed: CloudTasksFeed;
@@ -218,6 +238,8 @@ export function CloudTaskList({
   onDeleted?: (id: string) => void;
   /** 侧栏搜索词(已 trim/lowercase);非空时过滤行并强制展开折叠段 */
   query?: string;
+  /** 未连接空态的「去设置连接」入口(App 打开设置页) */
+  onOpenSettings?: () => void;
 }) {
   const { t } = useI18n();
   const forceOpen = query !== "";
@@ -284,6 +306,23 @@ export function CloudTaskList({
   };
 
   const hit = (task: CloudTask) => !query || cloudTaskLabel(task, "").toLowerCase().includes(query);
+
+  // 未连接:恢复动作是去设置连接,不是重试——给空态形态(图标+标题+辅助+
+  // 动作),与其他空态同构;红底 alert 留给真故障
+  if (feed.unauthorized) {
+    return (
+      <div className="flex flex-col items-center gap-1.5 px-3 py-8 text-center">
+        <Cloud size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <div className="text-sm font-semibold">{t("cloud.list.offline.title")}</div>
+        <div className="text-xs text-base-content/60">{t("cloud.list.offline.detail")}</div>
+        {onOpenSettings && (
+          <button type="button" className="btn btn-primary btn-xs mt-1.5" onClick={onOpenSettings}>
+            {t("cloud.list.offline.action")}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   if (feed.tasks === null) {
     return feed.error ? (
@@ -392,8 +431,10 @@ export function CloudTaskList({
           )}
         </SectionFold>
       )}
+      {/* 行动作(删除/终止)失败留在列表内:它属于某一行的操作。
+          整表加载故障不在这儿——那是列表级状态,挂尾巴像个条目
+          (用户报障 2026-08-06),已上移到列表区顶部的提示条 */}
       {actionErr && <li className="px-2 py-1 text-xs text-error">{actionErr}</li>}
-      {feed.error && <li className="px-2 py-1 text-xs text-error">{t("cloud.list.error", { reason: feed.error })}</li>}
     </ul>
   );
 }

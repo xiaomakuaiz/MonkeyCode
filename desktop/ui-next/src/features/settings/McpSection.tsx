@@ -42,9 +42,11 @@ export function McpSection({
         </div>
       )}
       {/* 行形态与模型列表同款:一个 list 容器 + list-row(行级 hover,
-          左段整体是展开钮,动作与旋转箭头靠右) */}
+          左段整体是展开钮,动作与旋转箭头靠右)。
+          overflow-hidden 不可省:行是 rounded-none 的方角,daisyUI .list 自身
+          不裁剪,首/末行的 hover 底色会盖出圆角轮廓(大圆角主题下尤其明显) */}
       {draft.mcps.length > 0 && (
-      <ul className="list divide-y divide-base-300 rounded-box border border-base-300 bg-base-100">
+      <ul className="list divide-y divide-base-300 overflow-hidden rounded-box border border-base-300 bg-base-100">
       {draft.mcps.map((m, i) => {
         const open = expanded === i;
         return (

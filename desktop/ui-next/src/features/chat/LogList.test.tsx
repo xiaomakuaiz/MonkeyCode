@@ -304,6 +304,27 @@ describe("思考块", () => {
     expect(container.querySelector("time")?.textContent).toBe("09:05");
     expect(container.querySelector(".collapse-arrow")).toBeNull(); // 统一为行尾 chevron
   });
+
+  it("正文引用条内嵌一层,不挂 collapse-content 自身(大圆角主题下不戳出卡片轮廓)", () => {
+    const state = withItems([{ kind: "thought", text: "先看日志" }]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    const content = container.querySelector(".collapse-content");
+    expect(content).toBeTruthy();
+    // 挂在 collapse-content 上 = 与卡片边缘齐平,而 daisyUI .collapse 有圆角却不裁剪子元素,
+    // --radius-box 大的主题下这条直线会戳出左下圆角轮廓(形态与 ToolCard 子代理结果一致)
+    expect(content!.classList.contains("border-s-2")).toBe(false);
+    expect(content!.querySelector(".border-s-2")).toBeTruthy();
+  });
+
+  it("行首 Sparkles 与工具行状态点同轴:必须覆盖 collapse-title 自带的 1rem 左内距", () => {
+    const state = withItems([{ kind: "thought", text: "先看日志" }]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    const summary = container.querySelector(".collapse-title");
+    // daisyUI .collapse-title 是 padding:1rem;只覆 py/pe 会留 16px 左内距,
+    // 而工具卡/组头是 px-3(12px)+ 8px 点 → 点心落 16px。12px 图标要同轴,
+    // 左内距必须是 16-6=10px(ps-2.5),否则两种行首图标错位
+    expect(summary!.classList.contains("ps-2.5")).toBe(true);
+  });
 });
 
 describe("工具组聚合(摘要头 + 开合)", () => {
@@ -336,10 +357,25 @@ describe("工具组聚合(摘要头 + 开合)", () => {
     expect(screen.queryByText("step1")).toBeNull();
   });
 
+  it("摘要头状态点走降调口径:不吃全强度语义色,也不留 --depth 的高光/投影", () => {
+    const state = withItems(tools(4));
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    const dot = container.querySelector(".status");
+    expect(dot).toBeTruthy();
+    // status-success 一类是 background-color:var(--color-success) 直上,主题里
+    // 这个值可以是 oklch(84% .143) 那种荧光薄荷,8px 的点亮得刺眼(报障 2026-08-06)
+    expect(dot!.className).not.toMatch(/status-(success|error|warning|primary|neutral)\b/);
+    expect(dot!.classList.contains("bg-none")).toBe(true); // 关掉 --depth:1 主题的白高光
+    expect(dot!.classList.contains("shadow-none")).toBe(true); // 关掉同色投影
+  });
+
   it("组内有运行中的卡:默认展开(当前动作要看得到)", () => {
-    render(<LogList state={withItems(tools(4, true))} sessionId="s1" />);
+    const { container } = render(<LogList state={withItems(tools(4, true))} sessionId="s1" />);
     expect(screen.getByText("step4")).toBeTruthy(); // 运行中的那张可见
     expect(screen.getByRole("button", { name: "工具调用组" })).toBeTruthy();
+    // 运行态的闪动是「还在跑」的唯一动态提示,降调配色不能顺手把它抹掉
+    const dots = [...container.querySelectorAll(".status")];
+    expect(dots.some((d) => d.classList.contains("animate-pulse"))).toBe(true);
   });
 
   it("2 张不聚合(普通共享外框)", () => {

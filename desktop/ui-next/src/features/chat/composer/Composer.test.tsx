@@ -500,5 +500,17 @@ describe("运行条 detail 与上下文用量", () => {
     const bar = await screen.findByRole("progressbar", { name: "上下文用量" });
     expect(bar.getAttribute("aria-valuenow")).toBe("90");
     expect(bar.closest("[data-tip]")?.getAttribute("data-tip")).toBe("上下文 90% · 180k/200k");
+
+    // 弧线底下必须垫一整圈轨道(--value:100 的同几何层,aria-hidden 不进无障碍树):
+    // daisyUI radial-progress 未填充段全透明,缺轨道时低用量看着像半截残环
+    const track = bar.parentElement?.querySelector("[aria-hidden].radial-progress");
+    expect(track).toBeTruthy();
+    expect((track as HTMLElement).style.getPropertyValue("--value")).toBe("100");
+    expect((track as HTMLElement).style.getPropertyValue("--size")).toBe(
+      (bar as HTMLElement).style.getPropertyValue("--size"),
+    );
+    expect((track as HTMLElement).style.getPropertyValue("--thickness")).toBe(
+      (bar as HTMLElement).style.getPropertyValue("--thickness"),
+    );
   });
 });

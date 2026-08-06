@@ -1001,25 +1001,54 @@ impl OhmyDriver {
         Ok(json!({ "ok": true }))
     }
 
+    /// 首条用户消息的首行(≤40 字符,与 session_send 的自动标题同口径)。
+    /// 清空标题时用它回填:回落链「用户改名 > summary > 首句」在没有
+    /// summary 的会话上也得有着落,不能落成空白标题。找不到返回空串
+    /// (会话尚未物化;title 留空,下次发消息 session_send 会自动补首句)。
+    fn first_user_line(&self, id: &str) -> String {
+        let Some(dir) = self.0.session_dir(id) else { return String::new() };
+        for (_, line) in fold::scan_lines(&dir.join("replay.jsonl")) {
+            for entry in fold::outline_of_line(0, &line) {
+                // 大纲条目的 content 是 base64(与帧内一致,见 fold::outline_entry)
+                let Some(b64) = entry.get("content").and_then(|v| v.as_str()) else { continue };
+                let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) else { continue };
+                let Ok(text) = String::from_utf8(bytes) else { continue };
+                let head: String = text.lines().next().unwrap_or("").trim().chars().take(40).collect();
+                if !head.is_empty() {
+                    return head;
+                }
+            }
+        }
+        String::new()
+    }
+
     pub async fn session_patch(&self, id: &str, patch: Value) -> Result<Value, String> {
         check_session_id(id)?;
-        self.write_sidecar(id, |m| {
-            if let Some(t) = patch.get("title").and_then(|v| v.as_str()) {
-                // 按字符截断:String::truncate 是字节索引,中文标题在非字符
-                // 边界截断会 panic
-                let t: String = t.trim().chars().take(80).collect();
+        // 空标题 = 撤销自定义,回落自动链(用户定案 2026-08-06「清空想用回
+        // summary」):摘掉 title_custom 让 UI 回到 summary 优先,title 本身
+        // 重填首句——摘了标记但 title 还留着旧改名值的话,无 summary 的会话
+        // 会继续显示那个被撤销的名字
+        let title = patch.get("title").and_then(|v| v.as_str()).map(|t| {
+            // 按字符截断:String::truncate 是字节索引,中文标题在非字符边界截断会 panic
+            let t: String = t.trim().chars().take(80).collect();
+            if t.is_empty() { (self.first_user_line(id), false) } else { (t, true) }
+        });
+        if let Some((t, custom)) = title.clone() {
+            self.write_sidecar(id, |m| {
                 m["title"] = json!(t);
-                // 用户改名标记:UI 头部标题优先级(用户改名 > summary >
-                // 首句自动标题)靠它区分前后两者——title 字段本身分不出来
-                m["title_custom"] = json!(true);
-            }
+                // 用户改名标记:UI 标题优先级(用户改名 > summary > 首句自动
+                // 标题)靠它区分前后两者——title 字段本身分不出来
+                m["title_custom"] = json!(custom);
+            });
+        }
+        self.write_sidecar(id, |m| {
             if let Some(a) = patch.get("archived").and_then(|v| v.as_bool()) {
                 m["archived"] = json!(a);
             }
         });
-        if let Some(t) = patch.get("title").and_then(|v| v.as_str()) {
+        if let Some((t, _)) = title {
             if let Some(s) = self.0.sess.sessions.lock_ok().get_mut(id) {
-                s.title = t.to_string();
+                s.title = t;
             }
         }
         Ok(json!({ "ok": true }))

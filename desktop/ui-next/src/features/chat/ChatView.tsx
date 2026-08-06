@@ -10,7 +10,7 @@
 // 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
 // 用短时重试兜(旧 chat.tsx jumpWithRetry 语义);大纲当前项 activeSeq 由
 // rAF 节流的滚动跟踪算出(lib/util/scrollAnchor.outlineActiveSeq)。
-import { Ellipsis, FolderOpen, X } from "lucide-react";
+import { Ellipsis, FolderOpen, Pencil, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -57,11 +57,17 @@ export function ChatView({
   meta,
   epoch = 0,
   onDeleted,
+  onPatched,
 }: {
   meta: SessionMeta;
   epoch?: number;
   /** ⋯ 菜单二段确认后的删除动作:通知 App 走与侧栏同一套删除流程 */
   onDeleted?: () => void;
+  /** 改名/归档落盘后通知 App 重拉列表:壳侧 session_patch 不广播
+   * session-event,不主动拉就没有任何信号回流(2026-08-06 用户报障
+   * 「改了不生效」的根因;侧栏右键改名一直是 patch().then(refresh),
+   * 头部这条链路对齐同一条路) */
+  onPatched?: () => void;
 }) {
   const { t } = useI18n();
   const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier, ensureLoaded } = useSessionFeed(meta.id, epoch);
@@ -165,9 +171,40 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.id]);
 
-  // items 变化后赶在绘制前对齐(锚点恢复或贴底跟随)
+  // 空态 = items 空且非 running(渲染分支与下方 RO 的重挂条件共用一个判定)
+  const empty = state.items.length === 0 && !state.running;
+
+  // items 变化后赶在绘制前对齐(锚点恢复或贴底跟随)。
+  // state.plan 也在依赖里:任务面板钉在 composer 上方(footer 内),plan 帧
+  // 一到面板就撑高 footer,把 flex-1 的日志视口压矮同样多——内容没变、
+  // scrollTop 不动,于是正好停在离底「一个面板高」的地方(用户报障
+  // 2026-08-06:进本地会话不贴底)。这一档必须在绘制前修,交给下面的 RO
+  // 会晚一帧,肉眼是一次跳动
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useLayoutEffect(align, [state.items, state.running]);
+  useLayoutEffect(align, [state.items, state.running, state.plan]);
+
+  // 尺寸兜底:贴底跟随原先**只**在 items/running 变化时对齐,可高度变化的
+  // 来源远不止 items——两头都得盯住,漏一头就停在离底几十像素的地方:
+  // - 视口(el):footer 长高(任务面板/运行条/附件 chips/textarea 自适应)、
+  //   顶部连接横幅、窗口缩放都会压矮它;
+  // - 内容轨(el.firstElementChild):图片解码、字体加载、以及 ToolCard 挂载后
+  //   异步取回的完整工具正文(loadFullTool)都会把内容顶高——**不经过 items
+  //   变化,也不改变视口尺寸**,只盯视口的话这一类一个都抓不到(用户报障
+  //   2026-08-06:进本地会话不贴底,且 composer 上方并无任务面板)。
+  // 恢复路径早就为同一原因给内容轨挂了 RO(见 startRestore),贴底路径此前
+  // 是空的。align 内部自带优先级:恢复中以锚点优先,否则贴底;未贴底则什么
+  // 都不做。scrollTop 不改变元素尺寸,不会与 RO 自激。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(align);
+    ro.observe(el);
+    const track = el.firstElementChild;
+    if (track) ro.observe(track);
+    return () => ro.disconnect();
+    // empty 翻面时滚动容器整棵换掉,要重新 observe
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empty]);
 
   // scroll 事件只做「贴底 → 跟随」的单向判定,离底不在这里判:程序滚动
   // 同样发 scroll 事件,回放中一批内容长高就会把跟随误判成用户离底(实测
@@ -274,7 +311,12 @@ export function ChatView({
     renameDoneRef.current = true;
     setEditingTitle(false);
     const next = titleDraft.trim();
-    if (next && next !== meta.title) void sessionPatch(meta.id, { title: next }).catch(() => {});
+    // 空提交要发:清空 = 撤销自定义、回落自动链(壳摘 title_custom 并把
+    // title 重填首句);只有「本就没改过名又提交空」才是纯空转。
+    // 落盘后必须主动重拉:壳侧 session_patch 不广播 session-event,
+    // 不拉就没有任何信号回流(标题看着「改了没反应」)
+    const noop = next === meta.title || (!next && !meta.title_custom);
+    if (!noop) void sessionPatch(meta.id, { title: next }).catch(() => {}).then(() => onPatched?.());
   };
   const cancelRename = () => {
     renameDoneRef.current = true;
@@ -473,10 +515,10 @@ export function ChatView({
     [meta.id],
   );
 
-  // ==== 空态(旧 chat.tsx 同款信息设计:logo + 主句 + 副句):items 空且
-  // 非 running 才算空;chat 会话(无 workdir)与本地任务两版文案。本地版
-  // 主句内嵌 mono workdir——模板留 {dir} 占位,渲染时拆开插 span。 ====
-  const empty = state.items.length === 0 && !state.running;
+  // ==== 空态(旧 chat.tsx 同款信息设计:logo + 主句 + 副句):判定见上方
+  // empty(滚动容器的 RO 要按它重挂,声明提前到 effect 之前);chat 会话
+  // (无 workdir)与本地任务两版文案。本地版主句内嵌 mono workdir——模板
+  // 留 {dir} 占位,渲染时拆开插 span。 ====
   const emptyChat = !meta.workdir;
   const [emptyTitlePre, emptyTitlePost] = t("chat.empty.taskTitle").split("{dir}");
 
@@ -500,6 +542,8 @@ export function ChatView({
             <input
               autoFocus
               aria-label={t("chat.rename.label")}
+              // placeholder 只在清空时现身,正好是「清空会怎样」的说明位
+              placeholder={t("chat.rename.clearHint")}
               className="input input-xs w-full max-w-xs text-sm font-semibold"
               value={titleDraft}
               maxLength={80}
@@ -523,16 +567,28 @@ export function ChatView({
             /* 单行标题(用户定案 2026-08-06,撤两行):用户改名 > 轮末摘要 >
                首句自动标题(title_custom 区分改名与自动,壳 sidecar 标记);
                双击改名改的始终是 title。悬停 tooltip 带全量(标题/摘要/目录) */
-            <h1 data-tauri-drag-region="" className="truncate text-sm leading-tight font-semibold">
+            <h1 data-tauri-drag-region="" className="group/title flex min-w-0 items-center gap-1 text-sm leading-tight font-semibold">
               {/* 双击只挂在文字 span 上,且不带 data-tauri-drag-region:
                   Windows 壳把拖拽区双击吃成最大化,标题必须留在拖拽区之外 */}
               <span
                 title={[meta.title, meta.summary, meta.workdir, t("chat.rename.hint")].filter(Boolean).join("\n")}
-                className="cursor-text"
+                className="min-w-0 cursor-text truncate"
                 onDoubleClick={startRename}
               >
                 {meta.title_custom ? meta.title : meta.summary || meta.title}
               </span>
+              {/* 改名 affordance:双击是隐藏交互,光标形状不足以自明(用户
+                  报障 2026-08-06「不知道可以改」)——hover 浮现铅笔钮,
+                  单击即进编辑态;不占常驻视觉,不参与拖拽区 */}
+              <button
+                type="button"
+                aria-label={t("chat.rename.label")}
+                title={t("chat.rename.hint")}
+                className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/40 opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100"
+                onClick={startRename}
+              >
+                <Pencil size={12} strokeWidth={1.75} aria-hidden />
+              </button>
             </h1>
           )}
         </div>
@@ -585,7 +641,7 @@ export function ChatView({
                   role="menuitem"
                   onClick={() => {
                     closeMenu();
-                    void sessionPatch(meta.id, { archived: !meta.archived }).catch(() => {});
+                    void sessionPatch(meta.id, { archived: !meta.archived }).catch(() => {}).then(() => onPatched?.());
                   }}
                 >
                   {meta.archived ? t("chat.menu.unarchive") : t("chat.menu.archive")}

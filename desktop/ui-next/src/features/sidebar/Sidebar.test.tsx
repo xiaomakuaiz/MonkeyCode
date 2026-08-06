@@ -70,10 +70,18 @@ describe("侧栏(local 空间)", () => {
     expect(acts.onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "修复登录" }));
   });
 
+  it("用户改过名的行:改名压过摘要(title_custom;与 ChatView 头部同一优先级)", () => {
+    const renamed = SESSIONS.map((s) => (s.id === "修复登录" ? { ...s, title_custom: true } : s));
+    render(<Sidebar space="local" sessions={renamed} currentId={null} actions={actions()} />);
+    const alphaGroup = detailsOf("alpha");
+    expect(within(alphaGroup).getByText("修复登录")).toBeTruthy();
+    expect(within(alphaGroup).queryByText("修复了闪退,补了用例")).toBeNull();
+  });
+
   it("概览块:空间标题 + 描述 + 统计(归档不计;等待确认仅 >0 时着色出现)", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(screen.getByText("本地任务")).toBeTruthy();
-    expect(screen.getByText("按本地项目组织的 Agent 任务")).toBeTruthy();
+    expect(screen.getByText("挑个文件夹,让它在你电脑上干活")).toBeTruthy();
     expect(screen.getByText("1 项目")).toBeTruthy(); // beta 只剩归档任务,不计
     expect(screen.getByText("2 任务")).toBeTruthy();
     expect(screen.getByText("1 等待确认")).toBeTruthy();

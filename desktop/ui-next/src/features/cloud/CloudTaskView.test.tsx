@@ -4,7 +4,7 @@
 // 形态与 ChatView 同构(LAYOUT §3/§4/§7):头部图标钮 + ⋯ 菜单(终止/删除
 // 二段确认)、状态徽标不进头部、拖拽属性逐节点、运行条入输入卡、结束态
 // LogList 只读。
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -162,6 +162,87 @@ describe("CloudTaskView", () => {
     // 前插保序:更早的一轮在前
     const seqs = [...document.querySelectorAll("[data-user-seq]")].map((el) => el.getAttribute("data-user-seq"));
     expect(seqs).toEqual(["1", "10"]);
+  });
+
+  it("⋯ 菜单:「在浏览器打开」拼控制台 URL;「在线预览」开菜单即拉端口,条目直开 access_url", async () => {
+    const opened: string[] = [];
+    stubShellWs((cmd, args) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t9", status: "processing", virtualmachine: { id: "vm9", status: "running" } });
+        case "mc_status":
+          return Promise.resolve({ logged_in: true, host: "mc.example.com" });
+        case "cloud_ws_open":
+          return Promise.resolve(null);
+        case "plugin:opener|open_url":
+          opened.push(String(args?.url));
+          return Promise.resolve(null);
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t9", status: "processing" }} />);
+    await userEvent.click(await screen.findByRole("button", { name: "任务操作" }));
+
+    // 控制台入口:host 取自 mc_status,拿不到就不该出这一项(见下一用例)
+    await userEvent.click(await screen.findByRole("menuitem", { name: /在浏览器打开/ }));
+    expect(opened).toEqual(["https://mc.example.com/console/task/t9"]);
+  });
+
+  it("⋯ 菜单:无云端主机名不出「在浏览器打开」(不给死链);无开放端口给交代", async () => {
+    stubShellWs((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t10", status: "processing", virtualmachine: { id: "vm10", status: "running" } });
+        case "mc_status":
+          return Promise.resolve(null); // 未登录/浏览器模式
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t10", status: "processing" }} />);
+    await userEvent.click(await screen.findByRole("button", { name: "任务操作" }));
+    expect(screen.queryByRole("menuitem", { name: /在浏览器打开/ })).toBeNull();
+    // 端口检测走控制流(假壳不应答 call),菜单停在「检测中」而非空白
+    expect(screen.getByText("在线预览")).toBeTruthy();
+    expect(screen.getByText("检测开放端口…")).toBeTruthy();
+  });
+
+  it("云端 composer 斜杠指令:/ 弹面板(与本地同一件),↩ 填入;清单粘住不随重算空掉", async () => {
+    const listeners = stubShellWs((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t11", status: "processing", virtualmachine: { id: "vm11", status: "running" } });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t11", status: "processing" }} />);
+    const box = await screen.findByRole("textbox", { name: "消息输入" });
+    // 指令清单经 available_commands_update 帧下发(与本地同一归约链)
+    const push = (payload: unknown) => {
+      for (const [name, cb] of listeners) if (name.startsWith("ws-msg:")) cb({ payload });
+    };
+    push(
+      JSON.stringify({
+        type: "task-running",
+        kind: "acp_event",
+        seq: 1,
+        timestamp: 1,
+        data: {
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [{ name: "compact", description: "压缩上下文" }],
+          },
+        },
+      }),
+    );
+    await userEvent.type(box, "/");
+    const panel = await screen.findByRole("listbox", { name: "斜杠指令" });
+    expect(within(panel).getByText("/compact")).toBeTruthy();
+    await userEvent.keyboard("{Enter}");
+    expect((box as HTMLTextAreaElement).value).toBe("/compact ");
+    expect(screen.queryByRole("listbox", { name: "斜杠指令" })).toBeNull(); // 填入即收
   });
 
   it("提问大纲:REST 索引 + 回放窗口按时间锚合并;跳转未加载锚经 rounds 大步长补页", async () => {
@@ -457,6 +538,41 @@ describe("CloudTaskView", () => {
     await screen.findByText(/npm test/);
     expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
     expect(screen.queryByRole("button", { name: "拒绝" })).toBeNull();
+  });
+
+  // task-started 只翻 running、不动 items(reduce.ts),而运行条挂在 composer
+  // 卡内:发出消息后 items 先贴过底,运行条随后才把 footer 撑高,视口被压矮
+  // 同样多——不把 running 也算进贴底依赖,刚发的那条就正好被顶到 composer
+  // 后面(用户报障 2026-08-06,截图里被切掉的正是运行条那一条的高度)。
+  // 几何在 happy-dom 里全 0,桩住 scrollHeight 才能断言贴底动作发生。
+  it("发出后运行条挂起时重新贴底(运行条撑高 footer 会压矮日志视口)", async () => {
+    let wsPipe = "";
+    const listeners = stubShellWs((cmd, args) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t13b", status: "processing" });
+        case "cloud_ws_open":
+          wsPipe = String(args?.pipe ?? "");
+          return Promise.resolve({});
+        default:
+          return Promise.resolve({});
+      }
+    });
+    const { container } = render(<CloudTaskView task={{ id: "t13b", status: "processing" }} />);
+    await waitFor(() => expect(wsPipe).not.toBe(""));
+    const push = (frame: Record<string, unknown>) =>
+      listeners.get(`ws-msg:${wsPipe}`)?.({ payload: JSON.stringify(frame) });
+
+    push({ type: "user-input", seq: 1, data: { content: b64encode("大概是这样的") } });
+    await screen.findByText("大概是这样的");
+
+    const log = container.querySelector("[data-chat-log]") as HTMLElement;
+    Object.defineProperty(log, "scrollHeight", { value: 2048, configurable: true });
+    log.scrollTop = 0; // items 那一档已跑过,这里把位置压回去只看 running 这一档
+
+    push({ type: "task-started", seq: 2 }); // 只翻 running,items 不变
+    await screen.findByText("云端执行中");
+    expect(log.scrollTop).toBe(2048);
   });
 
   it("运行中:运行条入输入卡(云端执行中),plan 帧钉 TaskPanel,⏎ 键盘审批经 WS 上行", async () => {

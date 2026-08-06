@@ -1,13 +1,18 @@
-// 未登录面板:百智云登录两 tab(微信扫码/短信验证码)+ MonkeyCode 账号
-// 密码登录入口(mc_password_login,不经百智云)。
+// 百智云未登录面板:微信扫码 / 短信验证码两 tab。
 //
 // - 微信扫码:状态机在 lib/account/wechatFlow(可注入 poll/时钟),本层只
 //   消费快照;expired/error 在二维码上覆「重新获取」,canceled 由状态机
 //   自行回待扫。
 // - 短信:手机号弱校验(1[3-9] 开头 11 位)+ 60s 倒计时发码按钮。
-// - 登录成功只报边沿(onBaizhiLoggedIn / onMcLoggedIn),状态刷新与
-//   MonkeyCode 桥接由宿主 AccountSection 统一处理。
-import { useEffect, useRef, useState } from "react";
+// - 登录成功只报边沿(onBaizhiLoggedIn),状态刷新与 MonkeyCode 桥接由宿主
+//   AccountSection 统一处理。
+// - MonkeyCode 账号密码登录(PasswordForm)从这里导出但**不在本面板出现**:
+//   入口归 MonkeyCode 卡(用户报障 2026-08-06:两块账号的东西串到一块了)。
+//
+// 字段一律用本文件的紧凑排布(标签 12px + gap-1),不用 daisyUI .fieldset:
+// 后者 legend 上下各 8px + 栅格 6px + 容器 4px,两三个字段的登录表单会被摊
+// 成几段空白(用户报障:「账号密码登录真的丑」)。
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { createWechatFlow, WECHAT_IDLE, type WechatFlow, type WechatSnapshot } from "@/lib/account/wechatFlow";
 import { useI18n } from "@/lib/i18n";
@@ -17,6 +22,16 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 
 const phoneValid = (v: string) => /^1[3-9]\d{9}$/.test(v);
 const codeValid = (v: string) => /^\d{4,6}$/.test(v);
+
+/** 单控件字段:整块是 label,可访问名取自标签文本(不再逐个 aria-label)。 */
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-semibold text-base-content/70">{label}</span>
+      {children}
+    </label>
+  );
+}
 
 /** 微信扫码卡:二维码 + 状态遮罩。 */
 function WechatTab({ onLoggedIn }: { onLoggedIn: () => void }) {
@@ -137,21 +152,30 @@ function SmsTab({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <div className="flex flex-col gap-3 py-2">
-      <fieldset className="fieldset">
-        <legend className="fieldset-legend">{t("account.sms.phone")}</legend>
+    // 表单元素:两个字段里回车都能提交(发码钮 type=button 不触发提交)
+    <form
+      className="flex flex-col gap-2.5 py-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!busy) void login();
+      }}
+    >
+      <Field label={t("account.sms.phone")}>
         <input
           className="input input-sm w-full"
-          aria-label={t("account.sms.phone")}
           value={phone}
           placeholder={t("account.sms.phonePlaceholder")}
           inputMode="numeric"
+          autoComplete="tel"
           maxLength={11}
           onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))}
         />
-      </fieldset>
-      <fieldset className="fieldset">
-        <legend className="fieldset-legend">{t("account.sms.code")}</legend>
+      </Field>
+      {/* 验证码字段是「输入框 + 发码钮」两个控件,不能整块套 label
+          (点发码钮会连带激活 label 把焦点甩回输入框):标签走独立 span,
+          可访问名回落 aria-label */}
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-semibold text-base-content/70">{t("account.sms.code")}</span>
         <div className="flex gap-2">
           <input
             className="input input-sm flex-1"
@@ -159,16 +183,11 @@ function SmsTab({ onLoggedIn }: { onLoggedIn: () => void }) {
             value={code}
             placeholder={t("account.sms.codePlaceholder")}
             inputMode="numeric"
+            autoComplete="one-time-code"
             maxLength={6}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            onKeyDown={(e) => e.key === "Enter" && !busy && void login()}
           />
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={sending || countdown > 0}
-            onClick={() => void send()}
-          >
+          <button type="button" className="btn btn-sm" disabled={sending || countdown > 0} onClick={() => void send()}>
             {sending
               ? t("account.sms.sending")
               : countdown > 0
@@ -176,19 +195,18 @@ function SmsTab({ onLoggedIn }: { onLoggedIn: () => void }) {
                 : t("account.sms.send")}
           </button>
         </div>
-      </fieldset>
-      <div className="flex items-center gap-2">
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void login()}>
-          {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
-          {busy ? t("account.sms.loggingIn") : t("account.sms.login")}
-        </button>
-        {err && (
-          <span role="alert" className="text-xs text-error">
-            {err}
-          </span>
-        )}
       </div>
-    </div>
+      {err && (
+        <span role="alert" className="text-xs text-error">
+          {err}
+        </span>
+      )}
+      {/* 主行动占满面板宽:面板只有这一件事可做,小钮缩在左下角反而像附注 */}
+      <button type="submit" className="btn btn-primary btn-sm mt-0.5 w-full" disabled={busy}>
+        {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
+        {busy ? t("account.sms.loggingIn") : t("account.sms.login")}
+      </button>
+    </form>
   );
 }
 
@@ -219,74 +237,53 @@ export function PasswordForm({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <div className="flex flex-col gap-3 py-2">
-      <fieldset className="fieldset">
-        <legend className="fieldset-legend">{t("account.pw.email")}</legend>
+    <form
+      className="flex flex-col gap-2.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!busy) void login();
+      }}
+    >
+      <Field label={t("account.pw.email")}>
         <input
           className="input input-sm w-full"
-          aria-label={t("account.pw.email")}
           type="email"
+          autoComplete="username"
+          placeholder={t("account.pw.emailPlaceholder")}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
-      </fieldset>
-      <fieldset className="fieldset">
-        <legend className="fieldset-legend">{t("account.pw.password")}</legend>
+      </Field>
+      <Field label={t("account.pw.password")}>
         <input
           className="input input-sm w-full"
-          aria-label={t("account.pw.password")}
           type="password"
+          autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !busy && void login()}
         />
-      </fieldset>
-      <div className="flex items-center gap-2">
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void login()}>
-          {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
-          {t("account.pw.login")}
-        </button>
-        {err && (
-          <span role="alert" className="text-xs text-error">
-            {err}
-          </span>
-        )}
-      </div>
-    </div>
+      </Field>
+      {err && (
+        <span role="alert" className="text-xs text-error">
+          {err}
+        </span>
+      )}
+      <button type="submit" className="btn btn-primary btn-sm mt-0.5 w-full" disabled={busy}>
+        {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
+        {t("account.pw.login")}
+      </button>
+    </form>
   );
 }
 
 export function LoginPanel({
-  withPassword,
   onBaizhiLoggedIn,
-  onMcLoggedIn,
 }: {
-  /** 是否提供 MonkeyCode 账号密码登录入口(已连 MonkeyCode、只补百智云
-   *  登录的场景不给,免得引导用户重复登录) */
-  withPassword: boolean;
   /** 百智云真实登录事件(短信/扫码成功各一次);宿主刷新状态并顺带桥接 */
   onBaizhiLoggedIn: () => void;
-  /** MonkeyCode 账密登录成功;宿主刷新状态 */
-  onMcLoggedIn: () => void;
 }) {
   const { t } = useI18n();
-  const [mode, setMode] = useState<"wechat" | "sms" | "password">("wechat");
-
-  if (mode === "password") {
-    return (
-      <div className="flex max-w-sm flex-col gap-1">
-        <p className="text-xs text-base-content/60">{t("account.pw.hint")}</p>
-        <PasswordForm onLoggedIn={onMcLoggedIn} />
-        <button
-          type="button"
-          className="btn btn-link btn-xs self-start px-0 font-normal text-base-content/50 no-underline hover:text-base-content"
-          onClick={() => setMode("wechat")}
-        >
-          {t("account.pw.back")}
-        </button>
-      </div>
-    );
-  }
+  const [mode, setMode] = useState<"wechat" | "sms">("wechat");
 
   return (
     <div className="flex max-w-sm flex-col gap-1">
@@ -312,15 +309,6 @@ export function LoginPanel({
         </button>
       </div>
       {mode === "wechat" ? <WechatTab onLoggedIn={onBaizhiLoggedIn} /> : <SmsTab onLoggedIn={onBaizhiLoggedIn} />}
-      {withPassword && (
-        <button
-          type="button"
-          className="btn btn-link btn-xs self-start px-0 font-normal text-base-content/50 no-underline hover:text-base-content"
-          onClick={() => setMode("password")}
-        >
-          {t("account.pw.entry")}
-        </button>
-      )}
     </div>
   );
 }

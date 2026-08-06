@@ -1,11 +1,13 @@
 // composer 共用呈现件(本地 Composer 与云端 CloudComposer 一套件,参照
 // sidebar/listKit 先例;LAYOUT §6.2「不做两套」同一精神):错误条 / 运行条 /
-// 输入卡外框 / textarea 自适应高度。类名是从 Composer 原样搬迁的定稿形态
-// (-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),改形态只改这里。
+// 输入卡外框 / textarea 自适应高度 / 斜杠指令面板。类名是从 Composer 原样
+// 搬迁的定稿形态(-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),
+// 改形态只改这里。
 import { CircleAlert, CircleStop, X } from "lucide-react";
-import { useEffect, type ReactNode, type RefObject } from "react";
+import { useEffect, type CSSProperties, type ReactNode, type RefObject } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import type { SlashCommand } from "@/lib/protocol/types";
 
 /** composer 域错误条:soft 底 + 14px 语义图标 + truncate 正文 + 右端关闭;
  * -mx-2.5 与输入卡同出血,左右缘对齐。 */
@@ -55,6 +57,37 @@ export function RunBar({
   );
 }
 
+/** 上下文用量圆环(composer 集群右端的输入侧元信息)。
+ * 两层同几何叠放:底层是走满一圈的轨道(radial-progress --value:100),上层
+ * 才是实际用量弧。daisyUI 的 radial-progress 未填充段是**全透明**的,只画一层
+ * 时低用量下看着就是「半截环/一根斜杠」,不像进度而像残缺图形——轨道给足
+ * 「一整圈是满」的参照,弧长才读得出比例。
+ * >85% 用功能性状态色示警(旧 ContextRing 的设计);tooltip 走紧凑口径:
+ * 百分比 + fmtK 缩写(精确 token 数没有决策价值,长串数字把 tooltip 撑成
+ * 一整行)。tooltip-left:圆环贴视口右缘,tooltip-top 居中弹会被窗口裁掉半截。 */
+export function UsageRing({ pct, tip, label }: { pct: number; tip: string; label: string }) {
+  const geom = { "--size": "1rem", "--thickness": "2px" } as CSSProperties;
+  return (
+    <div className="tooltip tooltip-left mx-1 shrink-0" data-tip={tip}>
+      {/* 同格叠放(col/row-start-1),不用 absolute:两层几何完全一致才不会错圈 */}
+      <div className="grid size-4 place-items-center align-middle">
+        <div
+          aria-hidden
+          className="radial-progress col-start-1 row-start-1 text-base-content/15"
+          style={{ ...geom, "--value": 100 } as CSSProperties}
+        />
+        <div
+          role="progressbar"
+          aria-label={label}
+          aria-valuenow={pct}
+          className={`radial-progress col-start-1 row-start-1 ${pct > 85 ? "text-error" : "text-base-content/40"}`}
+          style={{ ...geom, "--value": Math.min(100, pct) } as CSSProperties}
+        />
+      </div>
+    </div>
+  );
+}
+
 /** 输入卡外框:结构线 + 默认底,聚焦时边线加深。**不得**给这层卡片挂
  * daisyUI dropdown 类:daisyUI 的隐藏规则是后代选择器
  * (`.dropdown:not(...) .dropdown-content`),外层 dropdown 处于关态时会把
@@ -85,4 +118,54 @@ export function useAutosizeTextarea(
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, maxPx)}px`;
   }, [ref, value, maxPx]);
+}
+
+/** 斜杠指令面板(本地与云端同一件):贴输入卡上缘上弹的候选列表。
+ * 纯呈现——过滤/高亮/键盘循环的状态机在调用方(lib/util/slash 纯函数),
+ * 这里只画 listbox 与条目。 */
+export function SlashPanel({
+  list,
+  active,
+  onHover,
+  onPick,
+}: {
+  list: readonly SlashCommand[];
+  /** 高亮项下标(调用方已按 list 长度收敛) */
+  active: number;
+  onHover: (i: number) => void;
+  onPick: (cmd: SlashCommand) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ul
+      role="listbox"
+      aria-label={t("chat.slash.label")}
+      className="menu absolute start-2 bottom-full z-50 mb-1 max-h-64 w-80 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+    >
+      {list.length === 0 && (
+        <li className="menu-disabled">
+          <span className="text-xs">{t("chat.slash.empty")}</span>
+        </li>
+      )}
+      {list.map((c, i) => (
+        <li key={c.name}>
+          <button
+            type="button"
+            role="option"
+            aria-selected={i === active}
+            className={`flex items-baseline gap-2 ${i === active ? "menu-active" : ""}`}
+            onMouseEnter={() => onHover(i)}
+            onClick={() => onPick(c)}
+          >
+            <span className="font-mono text-xs font-bold">/{c.name}</span>
+            {c.input?.hint && <span className="font-mono text-[10px] opacity-50">{c.input.hint}</span>}
+            {c.description && <span className="min-w-0 flex-1 truncate text-xs opacity-60">{c.description}</span>}
+          </button>
+        </li>
+      ))}
+      <li className="menu-disabled mt-1 border-t border-base-300">
+        <span className="text-[10px]">{t("chat.slash.hint")}</span>
+      </li>
+    </ul>
+  );
 }

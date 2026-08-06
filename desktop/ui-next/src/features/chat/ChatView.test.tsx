@@ -495,6 +495,43 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
   });
 
+  // 任务面板钉在 composer 上方的 footer 里,footer 是 shrink-0、日志视口是
+  // flex-1:plan 帧一到,面板撑高 footer 就把视口压矮同样多。内容没变、
+  // scrollTop 不动,于是停在离底「正好一个面板高」的位置(用户报障 2026-08-06)。
+  // 几何在 happy-dom 里全 0,这里桩住 scrollHeight 才能断言贴底动作发生。
+  it("任务面板到达后重新贴底(plan 撑高 footer 会压矮日志视口)", async () => {
+    const { emit } = stubShell();
+    // 用新会话 id:scrollMemo 是模块级留档,同文件先前用例给 s1 存过
+    // pinned:false,复用会走锚点恢复而非贴底——这里要的正是"首次进会话"
+    const meta = { ...META, id: "s-plan" };
+    const { container } = render(<ChatView meta={meta} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const log = container.querySelector("[data-chat-log]") as HTMLElement;
+    Object.defineProperty(log, "scrollHeight", { value: 1234, configurable: true });
+    log.scrollTop = 0;
+
+    emit("frames:s-plan", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [
+              { content: "第一步", status: "completed" },
+              { content: "第二步", status: "in_progress" },
+            ],
+          },
+        },
+        timestamp: 3,
+        seq: 3,
+      },
+    ]);
+
+    await waitFor(() => expect(screen.getByText("任务 1/2")).toBeTruthy()); // 面板已挂
+    expect(log.scrollTop).toBe(1234); // plan 变化也要触发对齐,否则短一个面板高
+  });
+
   it("空态:items 空且非 running 给欢迎信息;本地版主句含 mono workdir,chat 版另一套文案", async () => {
     stubShell({ frames: [] });
     const { unmount } = render(<ChatView meta={META} />);
@@ -517,6 +554,40 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
     expect(screen.queryByText(/开始新任务/)).toBeNull();
     expect(screen.queryByText(/描述你想做的事/)).toBeNull();
+  });
+
+  it("改名:铅笔钮进编辑态,提交发 patch 并回调 onPatched(壳不广播事件,不拉就不生效)", async () => {
+    const { ops } = stubShell();
+    let patched = 0;
+    render(<ChatView meta={META} onPatched={() => (patched += 1)} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    // hover 才浮现的铅笔钮(双击是隐藏交互,单击入口必须在)
+    await userEvent.click(screen.getByRole("button", { name: "会话标题" }));
+    const input = screen.getByRole("textbox", { name: "会话标题" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "新标题{Enter}");
+    const patches = ops.filter((o) => o.cmd === "session_patch");
+    expect(patches[0]?.args).toEqual({ id: "s1", patch: { title: "新标题" } });
+    await waitFor(() => expect(patched).toBe(1)); // 落盘后主动重拉,meta 才会流回来
+  });
+
+  it("清空标题:改过名的会话发 patch{title:\"\"}(壳摘 title_custom 回落 summary);没改过名的空提交是空转", async () => {
+    const shell = stubShell();
+    const { unmount } = render(<ChatView meta={{ ...META, title_custom: true }} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    await userEvent.click(screen.getByRole("button", { name: "会话标题" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "会话标题" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "会话标题" }), { key: "Enter" });
+    expect(shell.ops.filter((o) => o.cmd === "session_patch")[0]?.args).toEqual({ id: "s1", patch: { title: "" } });
+    unmount();
+
+    const plain = stubShell();
+    render(<ChatView meta={META} />); // 没改过名:标题本就是自动的,清空无事可撤
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    await userEvent.click(screen.getByRole("button", { name: "会话标题" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "会话标题" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "会话标题" }), { key: "Enter" });
+    expect(plain.ops.filter((o) => o.cmd === "session_patch")).toHaveLength(0);
   });
 
   it("头部 ⋯ 菜单:重命名触发标题输入态;归档发 session_patch(archived)", async () => {

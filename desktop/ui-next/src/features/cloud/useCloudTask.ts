@@ -33,7 +33,8 @@ import {
 } from "@/lib/ipc/cloudtasks";
 import { frameData } from "@/lib/protocol/codec";
 import { createChatState, prependHistory, reduceBatch } from "@/lib/protocol/reduce";
-import type { ChatState, Frame } from "@/lib/protocol/types";
+import type { ChatState, Frame, SlashCommand } from "@/lib/protocol/types";
+import { withCommandSeparator } from "@/lib/util/slash";
 
 /** 任务详情决定首屏数据源。运行中只能由 attach 回放当前轮;若同时用 REST
  * rounds 播种,迟到的 REST 快照会覆盖 attach 已归档的当前轮。 */
@@ -41,6 +42,15 @@ export function cloudInitialSource(status: string): "attach" | "rounds" | "pendi
   if (status === "processing") return "attach";
   if (status === "finished" || status === "error") return "rounds";
   return "pending";
+}
+
+/** port_forward_list 条目(控制流内核代理;与 web 控制台同一形状)。 */
+export interface PortInfo {
+  port?: number;
+  access_url?: string;
+  label?: string;
+  process?: string;
+  status?: string;
 }
 
 export interface CloudTaskHandle {
@@ -92,6 +102,13 @@ export interface CloudTaskHandle {
   /** 往更早翻 limit 轮(默认 1;壳侧上限 10)。大纲跳转补页用大步长
    * 减少跳到很早提问时的串行往返,"加载更早"按钮维持一次一轮。 */
   loadEarlier(limit?: number): Promise<void>;
+  /** 斜杠指令清单(粘住最近一次非空:attach 重连/新一轮会以历史帧重算
+   * chat 使 chat.commands 归零,菜单不该跟着空掉) */
+  commands: SlashCommand[];
+  /** VM 开放端口(null = 检测中/未拉过);access_url 可直接在浏览器打开 */
+  ports: PortInfo[] | null;
+  /** 拉一次开放端口(⋯ 菜单打开时触发;结束态/无 VM 不拉) */
+  fetchPorts(): void;
 }
 
 export function useCloudTask(
@@ -110,6 +127,10 @@ export function useCloudTask(
   const [uploading, setUploading] = useState(0);
   // 附件占位计数走 ref:addFiles 的串行 async 循环里 state 闭包是陈旧的
   const attCountRef = useRef(0);
+  // 斜杠指令清单粘住最近一次非空:清单是事件驱动的(available_commands_update),
+  // attach 重连/新一轮以历史帧重算 chat 会让 chat.commands 归零,菜单不能跟着空
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [ports, setPorts] = useState<PortInfo[] | null>(null);
   const [models, setModels] = useState<McCloudModelGroup[] | null>(null);
   const [switching, setSwitching] = useState(false);
   const modelsInFlight = useRef(false);
@@ -280,7 +301,9 @@ export function useCloudTask(
   );
 
   const send = () => {
-    const text = input;
+    // 整条恰是 `/<已知指令>` 时补尾随空格:云端按 `/name args` 解析,
+    // 缺了这个分隔符整条会被当普通文本(与旧 UI 同一口径)
+    const text = withCommandSeparator(input, commands);
     if (!text.trim() || ended) return;
     if (chat.running) {
       // 简版:执行中不排队,提示并保留草稿(服务端运行互斥,抢发必被拒)
@@ -354,6 +377,23 @@ export function useCloudTask(
         modelsInFlight.current = false;
       });
   }, []);
+
+  useEffect(() => {
+    if (chat.commands.length) setCommands(chat.commands);
+  }, [chat.commands]);
+
+  // 在线预览:⋯ 菜单打开时拉一次开放端口。控制流连接本身会唤醒休眠 VM,
+  // 给足唤醒余量——默认 15s 在唤醒期间必超时,菜单会误显「没有开放的端口」
+  const fetchPorts = () => {
+    if (!vmId || ended) return;
+    setPorts(null);
+    const ctrl = connectCloudControl(id);
+    ctrl
+      .call<{ ports?: PortInfo[] }>("port_forward_list", {}, { timeoutMs: WAKE_CALL_TIMEOUT_MS, timeoutMsg: t("cloud.ctl.wakeTimeout") })
+      .then((r) => setPorts(r.ports ?? []))
+      .catch(() => setPorts([])) // 失败与「没开端口」同一呈现:菜单不留悬空 loading
+      .finally(() => ctrl.close());
+  };
 
   // 切换模型:经控制流调 switch_model(load_session=true 保留会话上下文)。
   // 临时建一条控制连接,用完即关(ui-next 无常驻控制流;连接本身会唤醒
@@ -464,5 +504,8 @@ export function useCloudTask(
     cursor,
     loadingEarlier,
     loadEarlier,
+    commands,
+    ports,
+    fetchPorts,
   };
 }
