@@ -399,6 +399,21 @@ export const zh = {
   "cloud.view.composerPending": "环境启动中…就绪后可发送",
   "cloud.view.menu": "任务操作",
 
+  "cloud.model.label": "模型",
+  "cloud.model.tip": "切换模型(保留会话上下文)",
+  "cloud.model.switching": "切换中…",
+  "cloud.model.switchFailed": "切换模型失败:{reason}",
+
+  "cloud.attach.limit": "一条消息最多 {n} 个附件",
+  "cloud.attach.uploading": "上传中…",
+  "cloud.attach.uploadFailed": "附件上传失败:{reason}",
+  "cloud.attach.uploadingWait": "附件上传中,请稍候再发送",
+  "cloud.attach.empty": "「{name}」是空文件",
+  "cloud.attach.noExt": "「{name}」缺少扩展名,云端无法识别类型",
+  "cloud.attach.tooLarge": "「{name}」超过单文件 2MB 上限",
+  "cloud.attach.stillTooLarge": "「{name}」压缩后仍超过 2MB 上限",
+  "cloud.attach.readFailed": "读取文件失败",
+
   "cloud.empty.connecting.title": "正在连接云端任务",
   "cloud.empty.connecting.detail": "对话记录马上回放到这里;任务在云端继续执行,不受本地影响。",
   "cloud.empty.ended.title": "没有可回放的对话记录",

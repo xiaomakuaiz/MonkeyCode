@@ -11,16 +11,21 @@
 // 契约:App 必须以 task.id 为 key 挂载视图(id 在一次挂载内不变)。
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { connectCloudControl, WAKE_CALL_TIMEOUT_MS } from "@/lib/cloud/control";
+import { groupCloudModels, type McCloudModelGroup } from "@/lib/cloud/options";
+import { chronoRounds } from "@/lib/cloud/rounds";
 import {
   connectCloudStream,
   type CloudStreamConn,
   type StreamHandlers,
   type StreamStatus,
 } from "@/lib/cloud/stream";
+import { isImageFilename, MAX_CLOUD_ATTS, uploadCloudFile, type CloudUploadedAtt } from "@/lib/cloud/upload";
 import { t } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
 import {
   mcTaskInfo,
+  mcTaskOptions,
   mcTaskRounds,
   mcTaskStop,
   type CloudTask,
@@ -62,6 +67,19 @@ export interface CloudTaskHandle {
   input: string;
   setInput(v: string): void;
   send(): void;
+  /** 待发附件(上传已完成;发送时映射成 {url, filename} 随首条输入出线) */
+  atts: CloudUploadedAtt[];
+  /** 上传在途计数(>0 时发送被拦截并外显提示) */
+  uploading: number;
+  /** 逐个上传文件为附件(超限/失败经 err 外显;对话框/粘贴/拖拽共用) */
+  addFiles(files: File[]): void;
+  removeAtt(i: number): void;
+  /** 模型分组投影(null = 未加载/加载失败;loadModels 幂等可重试) */
+  models: McCloudModelGroup[] | null;
+  loadModels(): void;
+  switching: boolean;
+  /** 经控制流 switch_model 切换模型(保留会话上下文;成败都刷新详情) */
+  switchModel(modelId: string): Promise<void>;
   /** 中断当前执行(WS user-cancel,不终止任务;真布尔回执,失败外显) */
   cancelRun(): void;
   /** 审批/提问答复的上行发送面(适配 stream WS 的 send,封包归 stream;
@@ -88,6 +106,14 @@ export function useCloudTask(
   const [idle, setIdle] = useState(false);
   const [err, setErr] = useState("");
   const [input, setInput] = useState("");
+  const [atts, setAtts] = useState<CloudUploadedAtt[]>([]);
+  const [uploading, setUploading] = useState(0);
+  // 附件占位计数走 ref:addFiles 的串行 async 循环里 state 闭包是陈旧的
+  const attCountRef = useRef(0);
+  const [models, setModels] = useState<McCloudModelGroup[] | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const modelsInFlight = useRef(false);
+  const modelsLoadedRef = useRef(false);
   const [cursor, setCursorState] = useState<{ cursor: string; hasMore: boolean } | null>(null);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   // 游标/翻页互斥的权威读写走 ref:连续 await 间的 state 闭包是陈旧的
@@ -169,11 +195,16 @@ export function useCloudTask(
       setConnected(false);
       setIdle(true);
     },
-    // mode=new 首条输入未送达(拨号失败/零回显被关):草稿交还输入框,
+    // mode=new 首条输入未送达(拨号失败/零回显被关):草稿与附件都交还,
     // 绝不静默丢;重建 attach 拿回观察通道(被拒大多因为轮在跑)
     onSendFailed: (failed) => {
       connRef.current = null;
       setInput((cur) => (cur ? failed.content + "\n" + cur : failed.content));
+      const back = (failed.attachments ?? []).map((a) => ({ ...a, isImage: isImageFilename(a.filename) }));
+      if (back.length) {
+        attCountRef.current += back.length;
+        setAtts((cur) => [...back, ...cur]);
+      }
       setErr(t("cloud.err.sendRejected"));
       attachIdleRef.current = false;
       setAttachEpoch((e) => e + 1);
@@ -190,6 +221,8 @@ export function useCloudTask(
     applyCursor(null);
     setErr("");
     setInput("");
+    setAtts([]);
+    attCountRef.current = 0;
     setIdle(false);
     let alive = true;
     void (async () => {
@@ -199,7 +232,7 @@ export function useCloudTask(
         try {
           const r = await mcTaskRounds(id, "", 1);
           if (!alive) return;
-          historyRef.current = r.frames ?? [];
+          historyRef.current = chronoRounds(r.frames ?? []);
           applyCursor(r.next_cursor ? { cursor: r.next_cursor, hasMore: !!r.has_more } : null);
           setChat(reduceBatch(createChatState(), historyRef.current));
         } catch (e) {
@@ -254,17 +287,97 @@ export function useCloudTask(
       setErr(t("cloud.err.roundRunning"));
       return;
     }
+    if (uploading > 0) {
+      // 上传没落定就发送,消息会带着半套附件出门:拦下并外显
+      setErr(t("cloud.attach.uploadingWait"));
+      return;
+    }
     setErr("");
     setInput("");
+    const attachments = atts.map(({ url, filename }) => ({ url, filename }));
+    setAtts([]);
+    attCountRef.current = 0;
     // 直发:当前轮并入历史,关掉观察连接,mode=new 连接连上即上行首条输入
-    // (经 stream 内部 send;拨号失败/零回显被拒经 onSendFailed 交还草稿)
+    // (经 stream 内部 send;拨号失败/零回显被拒经 onSendFailed 交还草稿+附件)
     historyRef.current = [...historyRef.current, ...liveRef.current];
     liveRef.current = [];
     connRef.current?.close();
     attachIdleRef.current = true; // 由新连接接管;失败时 onSendFailed 重新武装
     setIdle(false);
     // content 交明文:内层 base64 由 stream 状态机统一包(双重编码会乱码)
-    connRef.current = connectCloudStream(id, "new", makeHandlers(), { content: text });
+    connRef.current = connectCloudStream(id, "new", makeHandlers(), { content: text, attachments });
+  };
+
+  // 附件逐个上传(与本地会话 addFiles 语义对齐:超限/失败经 err 外显,
+  // 成功即出现在待发条;上传中计数供发送拦截与 spinner)
+  const addFiles = (files: File[]) => {
+    if (ended) return;
+    void (async () => {
+      for (const f of files) {
+        if (attCountRef.current >= MAX_CLOUD_ATTS) {
+          setErr(t("cloud.attach.limit", { n: MAX_CLOUD_ATTS }));
+          break;
+        }
+        attCountRef.current += 1;
+        setUploading((n) => n + 1);
+        try {
+          const att = await uploadCloudFile(f);
+          setAtts((prev) => [...prev, att]);
+          setErr("");
+        } catch (e) {
+          attCountRef.current -= 1;
+          setErr(t("cloud.attach.uploadFailed", { reason: e instanceof Error ? e.message : String(e) }));
+        } finally {
+          setUploading((n) => n - 1);
+        }
+      }
+    })();
+  };
+
+  const removeAtt = (i: number) => {
+    attCountRef.current = Math.max(0, attCountRef.current - 1);
+    setAtts((prev) => prev.filter((_, j) => j !== i));
+  };
+
+  // 模型分组投影懒加载。幂等靠 inFlight ref 而非「已有值」:失败保持 null,
+  // 重开菜单可重试(失败缓存 [] 会让本次挂载永远「没有可用模型」)
+  const loadModels = useCallback(() => {
+    if (modelsLoadedRef.current || modelsInFlight.current) return;
+    modelsInFlight.current = true;
+    mcTaskOptions()
+      .then((o) => {
+        modelsLoadedRef.current = true;
+        setModels(groupCloudModels(o.models, o.plan));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        modelsInFlight.current = false;
+      });
+  }, []);
+
+  // 切换模型:经控制流调 switch_model(load_session=true 保留会话上下文)。
+  // 临时建一条控制连接,用完即关(ui-next 无常驻控制流;连接本身会唤醒
+  // 休眠 VM,给足唤醒余量,超时也不能断言失败——操作可能已在云端生效)
+  const switchModel = async (modelId: string) => {
+    if (switching || !modelId || modelId === meta?.model?.id) return;
+    // locked(超会员档)条目菜单层已禁选,这里兜底防旁路
+    if (models?.some((g) => g.models.some((m) => m.id === modelId && m.locked))) return;
+    setSwitching(true);
+    setErr("");
+    const ctrl = connectCloudControl(id);
+    try {
+      await ctrl.call(
+        "switch_model",
+        { model_id: modelId, load_session: true },
+        { timeoutMs: WAKE_CALL_TIMEOUT_MS, timeoutMsg: t("cloud.ctl.wakeTimeout") },
+      );
+    } catch (e) {
+      setErr(t("cloud.model.switchFailed", { reason: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      ctrl.close();
+      setSwitching(false);
+      void refreshInfo(); // 成败都刷新:超时路径的真实结果以详情为准
+    }
   };
 
   // 审批/提问答复上行:适配 stream 的 send(b64(JSON) 封包在 stream 内统一
@@ -306,7 +419,8 @@ export function useCloudTask(
     setLoadingEarlier(true);
     try {
       const r = await mcTaskRounds(id, cur.cursor, limit);
-      const frames = r.frames ?? [];
+      // 时序归一(lib/cloud/rounds):backward 批次轮间倒序,多轮直插会乱序
+      const frames = chronoRounds(r.frames ?? []);
       historyRef.current = [...frames, ...historyRef.current];
       applyCursor(r.next_cursor && r.has_more !== false ? { cursor: r.next_cursor, hasMore: !!r.has_more } : null);
       setChat((s) => prependHistory(s, frames));
@@ -336,6 +450,14 @@ export function useCloudTask(
     input,
     setInput,
     send,
+    atts,
+    uploading,
+    addFiles,
+    removeAtt,
+    models,
+    loadModels,
+    switching,
+    switchModel,
     cancelRun,
     sendFrame,
     stopTask,

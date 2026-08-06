@@ -17,6 +17,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -29,8 +30,10 @@ import { TaskPanel } from "@/features/chat/TaskPanel";
 import { useI18n } from "@/lib/i18n";
 import { mcTaskDelete, type CloudTask } from "@/lib/ipc/cloudtasks";
 import type { OutlineItem } from "@/lib/ipc/controls";
-import { cloudAnchorIndex, fetchCloudOutline, withCloudAnchors } from "@/lib/cloud/outline";
+import { cloudAnchorIndex, cloudOutlineAnchor, fetchCloudOutline, withCloudAnchors } from "@/lib/cloud/outline";
 import type { StreamStatus } from "@/lib/cloud/stream";
+import { onNativeFileDrop } from "@/lib/ipc/uploads";
+import { outlineActiveSeq } from "@/lib/util/scrollAnchor";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { CloudComposer } from "./CloudComposer";
 import { CloudFiles } from "./CloudFiles";
@@ -108,6 +111,48 @@ export function CloudTaskView({
   // 的 inTerminal 守卫整体让路
   useApprovalHotkeys(h.chat, h.id, h.sendFrame);
 
+  // ==== 拖拽附件(与 ChatView 同构):HTML5 计数配对 + 落区浮层;结束态
+  // 只读不收 ====
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const hRef = useRef(h);
+  hRef.current = h;
+  const onDragEnter = (e: DragEvent<HTMLElement>) => {
+    if (h.ended || ![...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onDragLeave = (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (--dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  };
+  const onDrop = (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (files.length && !h.ended) h.addFiles(files);
+  };
+  // Linux 壳:WebKitGTK 的 HTML5 拖拽拿不到 File,走壳原生 tauri://drag-*
+  // (mac/Windows 壳禁用原生处理器,监听永不触发)。经 ref 取最新 handle
+  useEffect(
+    () =>
+      onNativeFileDrop({
+        onDragging: (v) => setDragging(v && !hRef.current.ended),
+        onFiles: (files) => {
+          if (!hRef.current.ended) hRef.current.addFiles(files);
+        },
+        onError: (m) => hRef.current.notifyErr(t("cloud.attach.uploadFailed", { reason: m })),
+      }),
+    // t 稳定(hook 返回的翻译函数按 locale 变化,重订阅无害)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [h.id],
+  );
+
   // Esc 关文件抽屉(window capture,与 FilesDrawer 同法):浮层优先,这一下
   // Esc 已被抽屉消费必须立即截断——window 上还挂着审批热键(app/shortcuts.ts,
   // esc = deny 不可逆),同一下按键绝不能"关抽屉 + 拒绝审批"双消费
@@ -145,6 +190,44 @@ export function CloudTaskView({
     };
   }, [h.id]);
   const entries = useMemo(() => outlineEntriesOf(outline, withCloudAnchors(h.chat.items)), [outline, h.chat.items]);
+
+  // ==== 当前项跟踪(与 ChatView 同法,rAF 节流):大纲条目的 seq 是 10ms
+  // 时间锚(见 lib/cloud/outline),DOM 的 data-user-seq 是帧原生 seq,两套
+  // 坐标对不上号——按 LogList 结构契约(直接子元素 ↔ items 下标)从条目
+  // 几何反查锚,判定纯函数与本地共用(outlineActiveSeq) ====
+  const [activeAnchor, setActiveAnchor] = useState<number | null>(null);
+  const activeRaf = useRef(0);
+  const itemsRef = useRef(h.chat.items);
+  itemsRef.current = h.chat.items;
+  const scheduleActive = () => {
+    if (activeRaf.current) return;
+    activeRaf.current = window.requestAnimationFrame(() => {
+      activeRaf.current = 0;
+      const el = scrollRef.current;
+      const col = listRef.current?.firstElementChild;
+      if (!el || !col) return;
+      const seqTops: Array<{ seq: number; top: number }> = [];
+      itemsRef.current.forEach((it, i) => {
+        if (it.kind !== "user") return;
+        const anchor = cloudOutlineAnchor(it.timestamp);
+        if (anchor === undefined) return;
+        const node = col.children.item(i);
+        if (node) seqTops.push({ seq: anchor, top: node.getBoundingClientRect().top });
+      });
+      setActiveAnchor(outlineActiveSeq(seqTops, el.getBoundingClientRect().top));
+    });
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(scheduleActive, [h.chat.items]);
+  // 取消后必须把 id 清零:scheduleActive 以「非零 = 已排队」做节流,残留
+  // 旧 id 会让它永远短路(StrictMode 双挂载即触发,与 ChatView 同教训)
+  useEffect(
+    () => () => {
+      window.cancelAnimationFrame(activeRaf.current);
+      activeRaf.current = 0;
+    },
+    [],
+  );
 
   // ==== 大纲跳转:effect 驱动的补页循环(锚 = 10ms 时间锚,见 lib/cloud/outline) ====
   const [jumpAnchor, setJumpAnchor] = useState<number | null>(null);
@@ -201,6 +284,7 @@ export function CloudTaskView({
     const el = scrollRef.current;
     if (!el) return;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) pinnedRef.current = true;
+    scheduleActive();
   };
   const onLogWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
     if (e.deltaY < 0) pinnedRef.current = false; // 向上滚 = 离开底部去看历史
@@ -242,7 +326,18 @@ export function CloudTaskView({
   const repoLine = [h.meta?.full_name, h.meta?.branch].filter(Boolean).join(" · ");
 
   return (
-    <main className="relative flex min-w-0 flex-1 flex-col bg-base-100">
+    <main
+      className="relative flex min-w-0 flex-1 flex-col bg-base-100"
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-box border-2 border-dashed border-primary bg-primary/10 text-sm font-semibold text-primary">
+          {t("chat.dropHint")}
+        </div>
+      )}
       {/* §7 拖拽区铁律:头部每个非交互子节点单独带 data-tauri-drag-region
           (云端无双击改名,h1 整个在拖拽区内) */}
       <header data-view-header="" data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-2 border-b border-base-300 px-4">
@@ -260,12 +355,15 @@ export function CloudTaskView({
             <p data-tauri-drag-region="" className="truncate text-[11px] leading-tight text-base-content/45">{t("cloud.view.badge")}</p>
           )}
         </div>
+        {/* 文件浏览走控制流(按 taskId 寻址,CloudFiles 懒建),不依赖 vmId
+            ——结束态浏览最终快照、运行中即便详情未捎带 VM 也能看;vmId 只
+            决定面板内上传/下载入口。仅 pending(VM 未建)禁用 */}
         <button
           type="button"
           aria-label={t("cloud.view.filesOpen")}
-          title={h.vmId ? t("cloud.view.filesOpen") : t("cloud.view.filesPending")}
+          title={pending ? t("cloud.view.filesPending") : t("cloud.view.filesOpen")}
           className={`btn btn-ghost btn-square btn-sm text-base-content/60 ${filesOpen ? "btn-active" : ""}`}
-          disabled={!h.vmId}
+          disabled={pending}
           onClick={() => setFilesOpen((o) => !o)}
         >
           <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
@@ -394,7 +492,7 @@ export function CloudTaskView({
       )}
 
       {/* 大纲挂在视图根(高度恒定的参照物),不挂日志视口(与 ChatView 同理) */}
-      {!pending && <OutlineNav entries={entries} onJump={onJumpOutline} />}
+      {!pending && <OutlineNav entries={entries} activeSeq={activeAnchor ?? undefined} onJump={onJumpOutline} />}
 
       {/* 云端文件:右滑抽屉,受控开合手法与 FilesDrawer 统一(scrim 点击关 +
           Esc 关,见上方 effect);面板挂在主区内(absolute,参照 relative main),

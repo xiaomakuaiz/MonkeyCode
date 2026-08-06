@@ -400,6 +400,21 @@ export const en: Record<MessageKey, string> = {
   "cloud.view.composerPending": "Environment starting… you can send once it is ready",
   "cloud.view.menu": "Task actions",
 
+  "cloud.model.label": "Model",
+  "cloud.model.tip": "Switch model (keeps the session context)",
+  "cloud.model.switching": "Switching…",
+  "cloud.model.switchFailed": "Failed to switch model: {reason}",
+
+  "cloud.attach.limit": "At most {n} attachments per message",
+  "cloud.attach.uploading": "Uploading…",
+  "cloud.attach.uploadFailed": "Attachment upload failed: {reason}",
+  "cloud.attach.uploadingWait": "Attachments are still uploading; send once they finish",
+  "cloud.attach.empty": "“{name}” is empty",
+  "cloud.attach.noExt": "“{name}” has no file extension, so the cloud cannot detect its type",
+  "cloud.attach.tooLarge": "“{name}” exceeds the 2MB per-file limit",
+  "cloud.attach.stillTooLarge": "“{name}” still exceeds 2MB after compression",
+  "cloud.attach.readFailed": "Failed to read the file",
+
   "cloud.empty.connecting.title": "Connecting to the cloud task",
   "cloud.empty.connecting.detail": "The conversation will replay here shortly; the task keeps running in the cloud regardless of this client.",
   "cloud.empty.ended.title": "No conversation to replay",

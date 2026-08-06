@@ -132,7 +132,8 @@ describe("CloudTaskView", () => {
 
   it("提问大纲:REST 索引 + 回放窗口按时间锚合并;跳转未加载锚经 rounds 大步长补页", async () => {
     // 同一时刻的两种精度:REST 索引纳秒,帧流毫秒(壳已 ns→ms)
-    const T1 = 1754190000456; // 第一问(更早,初始窗口外)
+    const T1 = 1754190000456; // 第一问(最早,初始窗口外)
+    const T15 = 1754190050789; // 第一点五问(同页补入,轮间倒序在前)
     const T2 = 1754190100123; // 第二问(已回放)
     const roundsArgs: Record<string, unknown>[] = [];
     stubShell((cmd, args) => {
@@ -151,7 +152,11 @@ describe("CloudTaskView", () => {
                 has_more: true,
               })
             : Promise.resolve({
+                // backward 契约:一批多轮时**轮间倒序**(新轮在前、轮内正序),
+                // UI 必须时序归一后再前插(2026-08-06 乱序报障)
                 frames: [
+                  { type: "user-input", seq: 5, timestamp: T15, data: { content: b64encode("第一点五问") } },
+                  { type: "task-ended", seq: 6, timestamp: T15 + 1000 },
                   { type: "user-input", seq: 1, timestamp: T1, data: { content: b64encode("第一问") } },
                   { type: "task-ended", seq: 2, timestamp: T1 + 1000 },
                 ],
@@ -162,6 +167,7 @@ describe("CloudTaskView", () => {
           return Promise.resolve({
             items: [
               { content: "第二问", timestamp: T2 * 1e6 },
+              { content: "第一点五问", timestamp: T15 * 1e6 },
               { content: "第一问", timestamp: T1 * 1e6 },
             ],
             has_more: false,
@@ -173,10 +179,10 @@ describe("CloudTaskView", () => {
     render(<CloudTaskView task={{ id: "t6", status: "finished" }} />);
     await screen.findByText("第二问"); // 初始窗口只有最新一轮
     const nav = await screen.findByRole("navigation", { name: "提问大纲" });
-    // 悬停点列浮出条目面板:全量目录(含未加载的第一问)与回放窗口合并去重
+    // 悬停点列浮出条目面板:全量目录(含未加载的更早提问)与回放窗口合并去重
     fireEvent.mouseEnter(nav.firstElementChild!);
-    const panelEntries = screen.getAllByText(/第[一二]问/).filter((el) => el.closest("nav"));
-    expect(panelEntries.map((el) => el.textContent)).toEqual(["第一问", "第二问"]);
+    const panelEntries = screen.getAllByText(/第[一二].*问/).filter((el) => el.closest("nav"));
+    expect(panelEntries.map((el) => el.textContent)).toEqual(["第一问", "第一点五问", "第二问"]);
 
     // 点第一问:目标未加载 → 经 mc_task_rounds 大步长补页后定位到气泡
     fireEvent.click(panelEntries[0]!);
@@ -188,6 +194,9 @@ describe("CloudTaskView", () => {
     await waitFor(() => {
       expect(screen.getAllByText("第一问").some((el) => !el.closest("nav"))).toBe(true);
     });
+    // 时序归一:补入的一页轮间倒序,前插后对话流仍是全局正序(乱序报障回归钉)
+    const seqs = [...document.querySelectorAll("[data-user-seq]")].map((el) => el.getAttribute("data-user-seq"));
+    expect(seqs).toEqual(["1", "5", "10"]);
   });
 
   it("云端文件:vmId 就绪才可用,点开右滑面板挂 CloudFiles,可关闭", async () => {
@@ -221,7 +230,7 @@ describe("CloudTaskView", () => {
     window.removeEventListener("keydown", leaked);
   });
 
-  it("云端文件:vmId 未就绪时按钮禁用", async () => {
+  it("云端文件:pending(VM 未建)时按钮禁用", async () => {
     stubShell((cmd) =>
       cmd === "mc_task_info"
         ? Promise.resolve({ id: "t8", status: "pending", virtualmachine: { id: "", conditions: [] } })
@@ -230,6 +239,24 @@ describe("CloudTaskView", () => {
     render(<CloudTaskView task={{ id: "t8", status: "pending" }} />);
     const btn = await screen.findByRole("button", { name: "云端文件" });
     expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("云端文件:结束态/详情无 VM 也可浏览(控制流按 taskId 寻址,不拿 vmId 当门槛)", async () => {
+    stubShell((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t8b", status: "finished" }); // VM 已回收,详情不带 virtualmachine
+        case "mc_task_rounds":
+          return Promise.resolve({ frames: [], next_cursor: "", has_more: false });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t8b", status: "finished" }} />);
+    const btn = await screen.findByRole("button", { name: "云端文件" });
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(btn);
+    expect(screen.getByRole("button", { name: "刷新" })).toBeTruthy(); // CloudFiles 面板已挂载(快照浏览)
   });
 
   it("运行中:审批答复经 stream WS 上行(帧形状 {type, data: b64(JSON)}),不走本地 IPC", async () => {
@@ -440,5 +467,102 @@ describe("CloudTaskView", () => {
     const frame = JSON.parse(String(wsSends[0]?.text)) as { type: string; data: string };
     expect(frame.type).toBe("permission-resp");
     expect(JSON.parse(b64decode(frame.data))).toMatchObject({ id: "p1", approved: true });
+
+    // 上下文用量环:usage_update 帧(与本地同构)→ composer 集群出环
+    expect(screen.queryByRole("progressbar", { name: "上下文用量" })).toBeNull();
+    push({
+      type: "task-running",
+      kind: "acp_event",
+      seq: 4,
+      data: { update: { sessionUpdate: "usage_update", used: 32_000, size: 200_000 } },
+    });
+    const ring = await screen.findByRole("progressbar", { name: "上下文用量" });
+    expect(ring.getAttribute("aria-valuenow")).toBe("16");
+  });
+
+  it("附件:选文件经 mc_upload 出待发 chip,发送时随 user-input 出线({url,filename})", async () => {
+    const wsSends: { text?: unknown }[] = [];
+    stubShellWs((cmd, args) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t15", status: "processing" });
+        case "mc_task_options":
+          return Promise.resolve({ models: [] });
+        case "mc_upload":
+          return Promise.resolve({ access_url: "https://oss/a.txt" });
+        case "cloud_ws_open":
+          return Promise.resolve({});
+        case "cloud_ws_send":
+          wsSends.push(args ?? {});
+          return Promise.resolve({});
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t15", status: "processing" }} />);
+    const attachBtn = await screen.findByRole("button", { name: "附件" });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(attachBtn).toBeTruthy();
+    fireEvent.change(fileInput, { target: { files: [new File(["hello"], "a.txt", { type: "text/plain" })] } });
+    await screen.findByText("a.txt"); // 上传完成,待发 chip 出现
+
+    fireEvent.change(screen.getByLabelText("消息输入"), { target: { value: "带附件的一句" } });
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    // mode=new 连上即上行首条输入:content 内层 b64,附件只带 {url, filename}
+    await waitFor(() => {
+      const sent = wsSends
+        .map((s) => JSON.parse(String(s.text)) as { type: string; data: string })
+        .find((f) => f.type === "user-input");
+      expect(sent).toBeTruthy();
+      const payload = JSON.parse(b64decode(sent!.data)) as { content: string; attachments: unknown };
+      expect(b64decode(payload.content)).toBe("带附件的一句");
+      expect(payload.attachments).toEqual([{ url: "https://oss/a.txt", filename: "a.txt" }]);
+    });
+    expect(screen.queryByText("a.txt")).toBeNull(); // 发送后待发条清空
+  });
+
+  it("切换模型:菜单显当前模型,选项来自 mc_task_options,选中经控制流 switch_model(load_session)", async () => {
+    const controlSends: { pipe?: unknown; text?: unknown }[] = [];
+    const pipeKinds = new Map<string, string>();
+    const listeners = stubShellWs((cmd, args) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({ id: "t16", status: "processing", model: { id: "m1", model: "gpt-x", remark: "旧模型" } });
+        case "mc_task_options":
+          return Promise.resolve({
+            models: [
+              { id: "m1", model: "gpt-x", remark: "旧模型", owner: { type: "public" } },
+              { id: "m2", model: "claude-y", remark: "新模型", owner: { type: "public" } },
+            ],
+          });
+        case "cloud_ws_open":
+          pipeKinds.set(String(args?.pipe ?? ""), String(args?.kind ?? ""));
+          return Promise.resolve({});
+        case "cloud_ws_send": {
+          if (pipeKinds.get(String(args?.pipe ?? "")) !== "control") return Promise.resolve({});
+          controlSends.push(args ?? {});
+          // 即答成功:按 request_id 配对 call-response,switching 归位
+          const f = JSON.parse(String(args?.text)) as { data: string };
+          const req = JSON.parse(b64decode(f.data)) as { request_id: string };
+          listeners.get(`ws-msg:${String(args?.pipe)}`)?.({
+            payload: JSON.stringify({ type: "call-response", data: { request_id: req.request_id, success: true } }),
+          });
+          return Promise.resolve({});
+        }
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t16", status: "processing" }} />);
+    // 触发器显当前模型(详情 remark)
+    const trigger = await screen.findByRole("button", { name: "模型" });
+    await waitFor(() => expect(trigger.textContent).toContain("旧模型"));
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByText("新模型"));
+    await waitFor(() => expect(controlSends.length).toBe(1));
+    const call = JSON.parse(String(controlSends[0]?.text)) as { type: string; kind: string; data: string };
+    expect(call.type).toBe("call");
+    expect(call.kind).toBe("switch_model");
+    expect(JSON.parse(b64decode(call.data))).toMatchObject({ model_id: "m2", load_session: true });
   });
 });

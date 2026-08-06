@@ -1,12 +1,16 @@
 // 云端任务 composer:与本地 Composer 同一形态语言(composerKit 一套件)——
-// 错误条 + 输入卡(卡内顶端运行条 / 无边框 textarea / 底部集群)。云端没有
-// 附件/斜杠/模型热切,底部集群左端放静态元信息(模型名 · 分支),右端发送。
-// 发送/中断/错误通道全在 useCloudTask 的 handle 上,本组件纯视图。
-import { SendHorizontal } from "lucide-react";
-import { useRef, type KeyboardEvent } from "react";
+// 错误条 + 输入卡(卡内顶端运行条 / 附件 chips / 无边框 textarea / 底部集群)。
+// 底部集群:左 = 附件入口(隐藏 file input,WebView 原生对话框),右 =
+// 模型切换(OptionMenu 分组,经控制流 switch_model)+ 上下文用量环
+// (h.chat.usage,云端 usage_update 帧与本地同构)+ 发送。
+// 发送/上传/切换/错误通道全在 useCloudTask 的 handle 上,本组件纯视图。
+import { Paperclip, SendHorizontal, X } from "lucide-react";
+import { useEffect, useRef, type ClipboardEvent, type CSSProperties, type KeyboardEvent } from "react";
 
 import { ComposerCard, ErrorBar, RunBar, useAutosizeTextarea } from "@/features/chat/composer/composerKit";
+import { OptionMenu } from "@/features/chat/composer/pickers";
 import { useI18n } from "@/lib/i18n";
+import { groupedCloudModelLabel } from "@/lib/cloud/options";
 import { fmtK } from "@/lib/util/fmt";
 import { createImeGuard } from "@/lib/util/slash";
 import type { CloudTaskHandle } from "./useCloudTask";
@@ -24,8 +28,13 @@ export function CloudComposer({
 }) {
   const { t } = useI18n();
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const imeRef = useRef(createImeGuard());
   useAutosizeTextarea(taRef, h.input);
+
+  // 模型清单预取(幂等;失败保持 null,悬停菜单区再触发即重试)
+  const { loadModels } = h;
+  useEffect(() => loadModels(), [loadModels]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -36,13 +45,48 @@ export function CloudComposer({
     }
   };
 
+  // 粘贴附件:剪贴板 file item(截图/复制的文件)转附件,文本粘贴不受影响
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files: File[] = [];
+    for (const item of e.clipboardData.items) {
+      if (item.kind === "file") {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length) {
+      e.preventDefault();
+      h.addFiles(files);
+    }
+  };
+
+  const onPickFiles = (list: FileList | null) => {
+    if (list?.length) h.addFiles([...list]);
+    // 复位 value:同一文件再次选择也要触发 change
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
   // 运行条 detail:云端没有轮次概念,给累计 tokens(详情统计,轮询刷新)
   const tokens = h.meta?.stats?.total_tokens ?? 0;
   const runningDetail = tokens > 0 ? `${fmtK(tokens)} tokens` : undefined;
 
-  // 底部集群左端静态词:模型名 · 分支(有啥显啥;都缺省时留空撑位)
-  const modelName = h.meta?.model?.remark || h.meta?.model?.model || "";
-  const branch = h.meta?.branch || "";
+  // 模型菜单:当前项 = 详情里的模型;切换中触发器换文案
+  const currentModelId = h.meta?.model?.id ?? "";
+  const currentModelName = h.meta?.model?.remark || h.meta?.model?.model || t("cloud.model.label");
+  const modelSections = (h.models ?? []).map((g) => ({
+    key: g.key,
+    label: g.label,
+    ...(g.badge ? { badge: g.badge } : {}),
+    options: g.models.map((m) => ({
+      value: m.id ?? "",
+      label: groupedCloudModelLabel(m),
+      disabled: m.locked,
+    })),
+  }));
+
+  // 上下文用量(usage_update 帧,云端与本地同构;>85% 示警,同 Composer)
+  const usage = h.chat.usage;
+  const usagePct = usage && usage.size > 0 ? Math.round((usage.used / usage.size) * 100) : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -59,6 +103,30 @@ export function CloudComposer({
           />
         )}
 
+        {(h.uploading > 0 || h.atts.length > 0) && (
+          <div className="flex flex-wrap gap-2 px-3 pt-2">
+            {h.atts.map((a, i) => (
+              <span key={a.url} title={a.filename} className="badge badge-ghost text-xs">
+                <span className="max-w-40 truncate">{a.filename}</span>
+                <button
+                  type="button"
+                  aria-label={t("chat.attachRemove")}
+                  className="btn btn-ghost btn-circle btn-xs"
+                  onClick={() => h.removeAtt(i)}
+                >
+                  <X size={12} strokeWidth={1.75} aria-hidden />
+                </button>
+              </span>
+            ))}
+            {h.uploading > 0 && (
+              <span className="badge badge-ghost text-xs">
+                <span className="loading loading-spinner loading-xs" aria-hidden />
+                {t("cloud.attach.uploading")}
+              </span>
+            )}
+          </div>
+        )}
+
         <textarea
           ref={taRef}
           aria-label={t("chat.composer")}
@@ -69,23 +137,61 @@ export function CloudComposer({
           onChange={(e) => h.setInput(e.target.value)}
           onCompositionEnd={(e) => imeRef.current.markEnd(e.timeStamp)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           disabled={pending}
         />
 
-        {/* ps-1 + 文字 ps-2 光学对齐(同 Composer 底部集群口径):静态词左缘
-            与 textarea 文字同一条竖线(1px 边 + 4px + 8px = 13px) */}
+        {/* 底部集群(同 Composer 口径:ps-1 光学对齐/pe-2 发送钮留白):
+            左 = 附件入口,右 = 模型切换 + 用量环 + 发送 */}
         <div className="flex min-w-0 items-center gap-1 ps-1 pe-2 pb-1.5">
-          {modelName || branch ? (
-            <span
-              className="min-w-0 flex-1 truncate ps-2 text-[11px] text-base-content/50"
-              title={[modelName, branch].filter(Boolean).join(" · ")}
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            className="hidden"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(e) => onPickFiles(e.target.files)}
+          />
+          <button
+            type="button"
+            aria-label={t("chat.attach")}
+            title={t("chat.attachTip")}
+            className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60"
+            disabled={pending}
+            onClick={() => fileRef.current?.click()}
+          >
+            <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+          </button>
+          <span className="min-w-0 flex-1" />
+
+          {/* 悬停即(重)拉模型清单:loadModels 幂等,失败后这里就是重试入口 */}
+          <span className="contents" onPointerEnter={() => h.loadModels()}>
+            <OptionMenu
+              ariaLabel={t("cloud.model.label")}
+              value={currentModelId}
+              triggerLabel={h.switching ? t("cloud.model.switching") : currentModelName}
+              onPick={(id) => void h.switchModel(id)}
+              disabled={pending || h.running || h.switching}
+              title={h.running ? t("chat.switchWhileRunning") : t("cloud.model.tip")}
+              sections={modelSections}
+              align="end"
+            />
+          </span>
+
+          {usagePct !== null && usage && (
+            <div
+              className="tooltip tooltip-left mx-1 shrink-0"
+              data-tip={t("chat.usageTip", { pct: usagePct, used: fmtK(usage.used), size: fmtK(usage.size) })}
             >
-              {modelName}
-              {modelName && branch && <span className="text-base-content/30"> · </span>}
-              {branch && <span className="font-mono">{branch}</span>}
-            </span>
-          ) : (
-            <span className="min-w-0 flex-1" />
+              <div
+                role="progressbar"
+                aria-label={t("chat.contextUsage")}
+                aria-valuenow={usagePct}
+                className={`radial-progress align-middle ${usagePct > 85 ? "text-error" : "text-base-content/40"}`}
+                style={{ "--value": Math.min(100, usagePct), "--size": "1rem", "--thickness": "2px" } as CSSProperties}
+              />
+            </div>
           )}
           <button
             type="button"
