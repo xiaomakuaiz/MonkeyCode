@@ -42,7 +42,7 @@ function contextMenuOf(el: HTMLElement): HTMLElement {
 const rowOf = (text: string) => screen.getByText(text).closest("a") as HTMLElement;
 
 describe("CloudTaskList", () => {
-  it("进行中裸行置顶(行尾「运行中」状态点,无区标签),历史收进「历史任务」小节(默认收起、收起即卸载);点击回调", async () => {
+  it("进行中裸行置顶(无区标签、无常亮状态点——运行/排队是常态,词进 tooltip),历史收进「历史任务」小节(默认收起、收起即卸载);点击回调", async () => {
     stubShell((cmd) => {
       if (cmd === "mc_tasks") return Promise.resolve({ tasks, page_info: { total: 3 } });
       return Promise.resolve({});
@@ -52,8 +52,10 @@ describe("CloudTaskList", () => {
     await screen.findByText("修复登录");
     // 区标签已撤(listKit 统一版式):进行中行直接平铺
     expect(screen.queryByText("进行中")).toBeNull();
-    expect(within(rowOf("修复登录")).getByRole("img", { name: "运行中" })).toBeTruthy();
-    expect(within(rowOf("修复登录")).queryByText("运行中")).toBeNull(); // 词不上行,进点 aria
+    // 点只给要紧态(2026-08-06 定案):processing 是常态,无点,词进 tooltip
+    expect(within(rowOf("修复登录")).queryByRole("img")).toBeNull();
+    expect(within(rowOf("修复登录")).queryByText("运行中")).toBeNull(); // 词不上行
+    expect(rowOf("修复登录").title).toContain("运行中");
     // 历史默认收起(未持久化过);收起即卸载,行不在 DOM
     const history = screen.getByText("历史任务").closest("details") as HTMLDetailsElement;
     expect(history.open).toBe(false);
@@ -61,7 +63,7 @@ describe("CloudTaskList", () => {
     await userEvent.click(screen.getByText("历史任务"));
     expect(history.open).toBe(true);
     expect(screen.getByText("旧任务甲")).toBeTruthy(); // title 缺省回退 summary
-    expect(within(rowOf("旧任务乙")).getByRole("img", { name: "运行出错" })).toBeTruthy(); // 再回退 content;error 状态点
+    expect(within(rowOf("旧任务乙")).getByRole("img", { name: "运行出错" })).toBeTruthy(); // 再回退 content;error 仍给点
     // 安静行:终态无尾注,状态词收进 tooltip
     expect(within(rowOf("旧任务甲")).queryByText("已完成")).toBeNull();
     expect(rowOf("旧任务甲").title).toContain("已完成");

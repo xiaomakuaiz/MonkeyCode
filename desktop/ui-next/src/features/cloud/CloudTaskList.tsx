@@ -123,18 +123,32 @@ export function cloudTaskLabel(task: CloudTask, fallback: string): string {
 
 type T = ReturnType<typeof useI18n>["t"];
 
-/** 行尾状态点(安静行同构,用户定案 2026-08-05「文字换状态图标」):
- * 仅要紧态给彩点,终态无点(状态词进点的 title/aria 与行 tooltip)。 */
+/** 行尾状态点(安静行同构):仅「需要用户介入」级别给点——云端任务的
+ * pending(VM 排队数分钟)/processing(执行数小时)是**常态**不是要紧态,
+ * 每行常亮脉动点是噪音不是信号(用户定案 2026-08-06,对齐本地行的按需
+ * 口径);运行/排队的一眼可见由概览统计行承担,状态词全量进行 tooltip。 */
 function cloudState(status: string | undefined, t: T): { tone: string; label: string } | null {
   switch (status) {
-    case "pending":
-      return { tone: "status-warning animate-pulse", label: t("cloud.status.pending") };
-    case "processing":
-      return { tone: "status-primary animate-pulse", label: t("cloud.status.processing") };
     case "error":
       return { tone: "status-error", label: t("cloud.status.error") };
     default:
       return null;
+  }
+}
+
+/** 行 tooltip 的状态词(点已收敛,词仍全量可查)。 */
+function cloudStateWord(status: string | undefined, t: T): string {
+  switch (status) {
+    case "pending":
+      return t("cloud.status.pending");
+    case "processing":
+      return t("cloud.status.processing");
+    case "error":
+      return t("cloud.status.error");
+    case "finished":
+      return t("cloud.status.finished");
+    default:
+      return "";
   }
 }
 
@@ -156,8 +170,8 @@ function TaskRow({
   const { t } = useI18n();
   const label = cloudTaskLabel(task, t("cloud.list.untitled"));
   const st = cloudState(task.status, t);
-  // tooltip 保留状态词:点化/安静掉的状态在这里仍可查
-  const stateWord = st?.label ?? (task.status === "finished" ? t("cloud.status.finished") : "");
+  // tooltip 保留状态词:点已收敛(仅 error),排队/运行/完成在这里仍可查
+  const stateWord = cloudStateWord(task.status, t);
   const running = ACTIVE.has(task.status ?? "");
   const menuItems: MenuItem[] = [
     ...(running ? [{ label: t("cloud.view.stop"), confirm: t("cloud.view.stopConfirm"), danger: true, run: () => onStop(task) }] : []),
