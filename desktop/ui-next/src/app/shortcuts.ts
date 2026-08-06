@@ -14,6 +14,10 @@ export interface ShortcutCtx {
   targetTag?: string;
   /** 目标输入框里已有的内容(⏎ 不抢正在写的消息) */
   inputText?: string;
+  /** 焦点在 xterm 终端内:终端的隐藏 textarea value 恒空,"草稿非空"守卫
+   * 对它失效——Enter 会被劫持成审批允许,Esc 会把终端 blur 掉。终端里的
+   * 每一次按键都属于终端本身,审批热键一律不消费 */
+  inTerminal?: boolean;
   /** 最近一张待答复审批卡 id(无则 null) */
   openPermId: string | null;
 }
@@ -33,6 +37,7 @@ const TYPING_TAGS = new Set(["TEXTAREA", "INPUT", "SELECT"]);
 
 export function resolveShortcut(ctx: ShortcutCtx): ShortcutAction {
   if (ctx.isComposing) return NONE;
+  if (ctx.inTerminal) return NONE;
   const typing = TYPING_TAGS.has(ctx.targetTag ?? "");
   if (ctx.key === "Enter") {
     if (!ctx.openPermId) return NONE;
@@ -77,6 +82,7 @@ export function useApprovalHotkeys(state: ChatState, sessionId: string, sendFram
         isComposing: e.isComposing,
         targetTag: target?.tagName,
         inputText,
+        inTerminal: !!target?.closest(".xterm"),
         openPermId,
       });
       if (action.kind === "blur") {

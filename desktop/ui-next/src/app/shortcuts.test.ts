@@ -26,6 +26,10 @@ describe("resolveShortcut(表驱动:允许/拒绝都不可逆,守卫逐条钉死
     ["esc SELECT 聚焦 → 只收敛焦点(esc 归下拉)", { key: "Escape", openPermId: "p1", targetTag: "SELECT" }, BLUR],
     ["esc 无待决审批 → 不消费(交上层浮层链)", { key: "Escape", openPermId: null }, NONE],
     ["esc IME 组合中 → 不消费", { key: "Escape", openPermId: "p1", isComposing: true }, NONE],
+    // ---- 终端内(xterm 隐藏 textarea value 恒空,草稿守卫失效) ----
+    ["⏎ 终端聚焦 → 不消费(不劫持为允许)", { key: "Enter", openPermId: "p1", targetTag: "TEXTAREA", inTerminal: true }, NONE],
+    ["esc 终端聚焦 → 不消费(不 blur 不误拒)", { key: "Escape", openPermId: "p1", targetTag: "TEXTAREA", inTerminal: true }, NONE],
+    ["esc 终端聚焦且无待决审批 → 仍不消费", { key: "Escape", openPermId: null, targetTag: "TEXTAREA", inTerminal: true }, NONE],
     // ---- 其他键 ----
     ["普通按键 → 不消费", { key: "a", openPermId: "p1" }, NONE],
     ["Tab → 不消费", { key: "Tab", openPermId: "p1" }, NONE],
