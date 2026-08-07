@@ -6,7 +6,7 @@
 import { ChevronRight, File as FileIcon, Sparkles } from "lucide-react";
 import { memo, useState } from "react";
 
-import { Markdown } from "@/components/markdown/Markdown";
+import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
 import { useI18n } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
@@ -16,7 +16,7 @@ import { splitAttachments } from "@/lib/protocol/attLine";
 import { itemKey, permAnchors } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState, Frame, PermItem } from "@/lib/protocol/types";
 import { presentToolCall } from "@/lib/tools/toolLabels";
-import { thoughtMarkdown } from "@/lib/util/thoughtMarkdown";
+import { thoughtMarkdown, thoughtSummary } from "@/lib/util/thoughtMarkdown";
 import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
 import { statusDot } from "./cards/statusDot";
@@ -114,7 +114,7 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   const { t } = useI18n();
   // 正文过 thoughtMarkdown:流式裸拼的相邻加粗标题(****)先补成段落边界
   const md = thoughtMarkdown(item.text);
-  const summary = md.split("\n").find((l) => l.trim()) ?? "";
+  const summary = thoughtSummary(md);
   return (
     // 思考块走官方 collapse 形态(native details);展开指示与工具卡统一为
     // 行尾 ChevronRight(open 态转 90°,弃 collapse-arrow 的另一套箭头语言,
@@ -128,7 +128,9 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
       <summary className="collapse-title flex min-h-0 items-center gap-1.5 py-2 ps-2.5 pe-3 text-xs text-base-content/60">
         <Sparkles size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
         <span className="shrink-0">{t("chat.thought")}</span>
-        <span className="min-w-0 flex-1 truncate opacity-70">{summary.slice(0, 80)}</span>
+        {/* 摘要行走 MarkdownInline(与 FindingsCard 的发现标题同件):引擎的
+            思考首行几乎都是 `**小标题**`,当纯文本贴出来就是满屏字面量星号 */}
+        <MarkdownInline source={summary} className="min-w-0 flex-1 truncate opacity-70" />
         <ChevronRight
           size={12}
           strokeWidth={1.75}

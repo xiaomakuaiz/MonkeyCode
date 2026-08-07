@@ -109,6 +109,25 @@ describe("侧栏(local 空间)", () => {
     expect(JSON.parse(localStorage.getItem("mc.sessionArchivesOpen") ?? "[]")).toContain("/p/beta");
   });
 
+  it("活态点 = 实心点 + 扩散环(运行中/等待确认);终态只给静点", () => {
+    const sessions = [
+      meta({ id: "跑着的", workdir: "/p/alpha", status: "running" }),
+      meta({ id: "等确认", workdir: "/p/alpha", waiting_ask: true }),
+      meta({ id: "挂了的", workdir: "/p/alpha", status: "error" }),
+    ];
+    render(<Sidebar space="local" sessions={sessions} currentId={null} actions={actions()} />);
+    // 环是**额外**一层,实心点照旧常驻——用户反馈 animate-pulse 靠淡化制造
+    // 动效、点本身反而看不清(2026-08-07);换 ping 后任何相位状态都可读
+    const live = within(rowOf("跑着的")).getByRole("img", { name: "运行中" });
+    expect(live.querySelectorAll(".status").length).toBe(2);
+    expect(live.innerHTML).toContain("animate-ping");
+    expect(within(rowOf("等确认")).getByRole("img", { name: "等待确认" }).innerHTML).toContain("animate-ping");
+    // 终态不动:出错是结论,不是进行中
+    const done = within(rowOf("挂了的")).getByRole("img", { name: "运行出错" });
+    expect(done.querySelectorAll(".status").length).toBe(1);
+    expect(done.innerHTML).not.toContain("animate-ping");
+  });
+
   it("已归档任务的标题降为弱化色,活跃任务保持正文色(用户报障:归档标题还是黑的)", async () => {
     localStorage.setItem("mc.sessionArchivesOpen", JSON.stringify(["/p/beta"]));
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);

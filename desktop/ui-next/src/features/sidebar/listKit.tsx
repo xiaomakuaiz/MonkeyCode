@@ -47,9 +47,10 @@ export function ListRow({
   menuItems,
 }: {
   primary: string;
-  /** 行尾状态点:仅要紧态给(tone = status-* 色 + 动效);状态词不上行
-   * (用户定案 2026-08-05「文字换状态图标」),进点的 title/aria-label */
-  trailing?: { tone: string; label: string } | null;
+  /** 行尾状态点:仅要紧态给(tone = 纯 status-* 语义色);状态词不上行
+   * (用户定案 2026-08-05「文字换状态图标」),进点的 title/aria-label。
+   * pulse = 进行中的活态(运行中/等待确认),渲染成「实心点 + 扩散环」 */
+  trailing?: { tone: string; label: string; pulse?: boolean } | null;
   tooltip: string;
   indent?: string;
   active?: boolean;
@@ -77,8 +78,24 @@ export function ListRow({
       >
         {/* 活跃行走正文色(不覆写);归档降到 /55,选中态不降——选中就该看清 */}
         <span className={`min-w-0 flex-1 truncate ${archived && !active ? "text-base-content/55" : ""}`}>{primary}</span>
+        {/* 活态点 = 实心点常驻 + 外环扩散(daisyUI status 的官方 ping 形态)。
+            原先是 animate-pulse——8px 的点在 opacity 1↔0.5 之间慢慢淡进淡出,
+            用户反馈「呼吸效果不明显」(2026-08-07)。根因不是幅度不够:pulse
+            与「更狠的呼吸」都是**靠让点变淡来制造动效**,等于削弱信号来表达
+            信号,随便哪一眼瞥过去都可能正赶上最淡那帧。换成 ping 后点本身
+            恒满色(状态任何时刻都读得出),动的是环。
+            motion-safe:仅在用户没要求减弱动效时animate;减弱时环退化成与
+            实心点重合的静态点,不影响状态可读 */}
         {trailing && (
-          <span role="img" aria-label={trailing.label} title={trailing.label} className={`status shrink-0 ${trailing.tone}`} />
+          <span
+            role="img"
+            aria-label={trailing.label}
+            title={trailing.label}
+            className="inline-grid shrink-0 *:[grid-area:1/1]"
+          >
+            {trailing.pulse && <span aria-hidden className={`status ${trailing.tone} motion-safe:animate-ping`} />}
+            <span aria-hidden className={`status ${trailing.tone}`} />
+          </span>
         )}
       </a>
     </li>

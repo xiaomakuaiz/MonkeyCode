@@ -51,10 +51,11 @@ type T = ReturnType<typeof useI18n>["t"];
 /** 行尾状态点(用户定案 2026-08-05「文字换状态图标」):仅要紧态给彩点,
  * 静默态无点(轮次进 tooltip);状态词进点的 title/aria。attention(D3
  * 后台提醒未读)也在此:终态用警示点点出来,点开行即消。 */
-function rowTrailing(meta: SessionMeta, t: T, attention: boolean): { tone: string; label: string } | null {
-  if (meta.waiting_ask) return { tone: "status-warning animate-pulse", label: t("status.waitingAsk") };
+function rowTrailing(meta: SessionMeta, t: T, attention: boolean): { tone: string; label: string; pulse?: boolean } | null {
+  // pulse = 进行中的活态(点 + 扩散环);未读/出错是静态终态,给静点即可
+  if (meta.waiting_ask) return { tone: "status-warning", label: t("status.waitingAsk"), pulse: true };
   if (attention) return { tone: "status-warning", label: t("status.attention") };
-  if (meta.status === "running") return { tone: "status-primary animate-pulse", label: t("status.running") };
+  if (meta.status === "running") return { tone: "status-primary", label: t("status.running"), pulse: true };
   if (meta.status === "error") return { tone: "status-error", label: t("status.error") };
   return null;
 }

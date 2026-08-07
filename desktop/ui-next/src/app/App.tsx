@@ -526,9 +526,14 @@ export function App() {
         )}
       </div>
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭。
-          壳级提示(浏览器工具装载等)与会话提醒共用同一角落栈,只是不可跳转 */}
+          壳级提示(浏览器工具装载等)与会话提醒共用同一角落栈,只是不可跳转。
+          纵向起点是算出来的:daisyUI .toast-top 自带 top:1rem(16px),要让提醒
+          落到头部基线(h-13 = 52px,三列同高)之下,mt 得补 52-16=36px——原来的
+          mt-9 恰好就是这个数,于是严丝合缝贴着头部下边线,一点缝都不留。
+          mt-13(52px)把顶起点推到 68px,即基线下留 16px,与 .toast 自带的
+          inset-inline-end:1rem 同值:右上角上下左右同一圈留白 */}
       {(notices.length > 0 || shellNotices.length > 0) && (
-        <div className="toast toast-top toast-end z-50 mt-9" aria-label={t("notice.label")}>
+        <div className="toast toast-top toast-end z-50 mt-13" aria-label={t("notice.label")}>
           {shellNotices.map((n) => (
             <div
               key={n.id}

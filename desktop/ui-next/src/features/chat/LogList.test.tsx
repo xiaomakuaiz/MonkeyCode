@@ -152,6 +152,14 @@ describe("思考块(thoughtMarkdown 修复)", () => {
     expect(screen.getAllByText("先看日志").some((el) => el.tagName === "STRONG")).toBe(true);
     expect(screen.getAllByText("再改代码").some((el) => el.tagName === "STRONG")).toBe(true);
   });
+
+  it("折叠态摘要行也过 markdown:引擎首行几乎都是 **小标题**,当纯文本贴就是字面量星号", () => {
+    const state = withItems([{ kind: "thought", text: "**看日志**\n\n然后改代码" }]);
+    const { container } = render(<LogList state={state} sessionId="s1" />);
+    const head = container.querySelector("summary")!;
+    expect(head.textContent).not.toContain("**"); // 星号不得作为字面量出现在摘要行
+    expect(head.querySelector("strong")?.textContent).toBe("看日志");
+  });
 });
 
 describe("LogList 只读回放(readonly,子会话浮层)", () => {
