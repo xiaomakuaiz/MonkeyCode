@@ -194,7 +194,7 @@ export const en: Record<MessageKey, string> = {
   "account.server.basicAuthHint":
     "HTTP basic auth on the reverse proxy in front of a staging deployment; sent only with MonkeyCode service requests",
   "account.server.llmBaseUrl": "Model endpoint (optional)",
-  "account.server.llmBaseUrlPlaceholder": "Empty = <service URL>/v1 (where member-model LLM calls go)",
+  "account.server.llmBaseUrlPlaceholder": "Empty: official cloud uses proxy.monkeycode-ai.com/v1, self-hosted uses <service URL>/v1",
   "account.server.llmBaseUrlHint":
     "Address of the model proxy (llmproxy); set it separately for split deployments or to bypass proxy auth for model traffic",
   "account.server.hint":

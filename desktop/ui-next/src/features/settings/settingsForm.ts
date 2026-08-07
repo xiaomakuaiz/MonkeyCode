@@ -107,7 +107,8 @@ export interface SettingsDraft {
   mcBaseUrl: string;
   /** 测试环境反代的 HTTP Basic Auth("user:pass") */
   mcBasicAuth: string;
-  /** 模型请求地址(llmproxy);"" = {服务地址}/v1 */
+  /** 模型请求地址(llmproxy);"" = 官方云走 proxy 子域、自建走 {服务地址}/v1
+   *  (口径在壳侧 baizhi::resolve_mc_llm) */
   mcLlmBaseUrl: string;
 }
 

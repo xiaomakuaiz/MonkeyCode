@@ -191,7 +191,7 @@ export const zh = {
   "account.server.basicAuth": "Basic Auth(可选)",
   "account.server.basicAuthHint": "测试环境反向代理层的 HTTP Basic Auth;仅对 MonkeyCode 服务的请求附加",
   "account.server.llmBaseUrl": "模型请求地址(可选)",
-  "account.server.llmBaseUrlPlaceholder": "留空 = 服务地址/v1(会员模型的 LLM 调用打这里)",
+  "account.server.llmBaseUrlPlaceholder": "留空:官方云走 proxy.monkeycode-ai.com/v1,自建走 服务地址/v1",
   "account.server.llmBaseUrlHint": "模型代理(llmproxy)的地址;拆分部署或模型流量绕开反代鉴权时单独指定",
   "account.server.hint":
     "指向自建/私有化 MonkeyCode 服务,保存后需重启应用生效。环境变量 MC_DESKTOP_MONKEYCODE_URL 优先于地址设置。切换服务地址后需重新连接账号并重新同步会员模型;仅改模型请求地址无需重新同步。",
