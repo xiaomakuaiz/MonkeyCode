@@ -175,12 +175,14 @@ async fn export_engine_log(app: AppHandle) -> Result<Option<String>, String> {
     if !src.is_file() {
         return Err("引擎日志不存在(引擎尚未启动过)".into());
     }
-    let Some(dest) = app
-        .dialog()
-        .file()
-        .set_file_name("ohmyagent.log")
-        .blocking_save_file()
-    else {
+    // 起始目录落系统「下载」:不给 set_directory 时,对话框的落点由平台
+    // 自行决定(Windows 上是进程 CWD——安装目录,用户根本找不到自己存哪了),
+    // 与云端文件下载的 pickSaveFile 同一口径;拿不到目录就交回平台默认
+    let mut picker = app.dialog().file().set_file_name("ohmyagent.log");
+    if let Ok(dir) = app.path().download_dir() {
+        picker = picker.set_directory(dir);
+    }
+    let Some(dest) = picker.blocking_save_file() else {
         return Ok(None);
     };
     let dest = dest
