@@ -444,7 +444,14 @@ export function App() {
           attentionIds={attentionIds}
           cloud={{
             currentId: cloudTask?.id ?? null,
-            onSelect: setCloudTask,
+            // 与本地 select 同口径:点列表永远切走覆盖视图(设置/新建)。
+            // 漏掉这两句 = 设置页开着时点云端任务毫无反应(用户报障
+            // 2026-08-07),因为主区分支 settingsOpen/creating 优先级在前
+            onSelect: (task) => {
+              setCloudTask(task);
+              setSettingsOpen(false);
+              setCreating(null);
+            },
             reloadKey: cloudReload,
             onDeleted: (id) => {
               if (cloudTask?.id === id) setCloudTask(null);

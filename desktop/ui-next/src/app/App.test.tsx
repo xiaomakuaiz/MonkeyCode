@@ -80,7 +80,7 @@ interface Call {
 }
 
 /** 桌面壳桩:支持同名事件多监听(App 与 EngineBanner 都听 engine-status)。 */
-function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?: string | null } = {}) {
+function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?: string | null; cloudTasks?: unknown[] } = {}) {
   const calls: Call[] = [];
   const listeners = new Map<string, Set<(e: { payload: unknown }) => void>>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
@@ -94,6 +94,11 @@ function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?
         if (cmd === "session_open") return Promise.resolve({ frames: [], cursor: 0, has_more: false });
         if (cmd === "host_info") return Promise.resolve({ version: "1", engine_version: "1" });
         if (cmd === "sound_enabled") return Promise.resolve(true);
+        if (cmd === "get_config") return Promise.resolve({ models: [], mcp_servers: {} });
+        if (cmd === "mc_status") return Promise.resolve({ logged_in: true, host: "h", user: { id: "u" } });
+        if (cmd === "mc_projects") return Promise.resolve({ projects: [] });
+        if (cmd === "mc_tasks")
+          return Promise.resolve({ tasks: opts.cloudTasks ?? [], page_info: { total: (opts.cloudTasks ?? []).length } });
         return Promise.resolve(null);
       },
     },
@@ -283,5 +288,37 @@ describe("壳级提示(浏览器工具装载)", () => {
     act(() => shell.emit("browser-mcp-refresh-timeout", undefined));
     act(() => shell.emit("browser-mcp-refresh-timeout", undefined));
     expect((await screen.findAllByText(/浏览器工具尚未装载/)).length).toBe(1);
+  });
+});
+
+describe("覆盖视图开着时点侧栏(设置/新建永远让位)", () => {
+  const openSettings = () => userEvent.click(screen.getByRole("button", { name: "设置" }));
+  const openCreate = async () => userEvent.click(await screen.findByRole("button", { name: "新建任务" }));
+
+  it("本地空间:设置页/新建页开着时点任务,都切到该任务", async () => {
+    stubShell({ sessions: [sess({ id: "s1", title: "任务一" })] });
+    render(<App />);
+    await openSettings();
+    await userEvent.click(await screen.findByText("任务一"));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "设置" })).toBeNull());
+
+    await openCreate();
+    await userEvent.click(await screen.findByText("任务一"));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "新建任务" })).toBeNull());
+  });
+
+  // 云端 onSelect 曾只 setCloudTask、不收覆盖视图,于是设置页开着时点云端任务
+  // 毫无反应(主区分支 settingsOpen/creating 优先级在前)——用户报障 2026-08-07
+  it("云端空间:设置页/新建页开着时点云端任务,都切到该任务", async () => {
+    localStorage.setItem("mc.sidebarSpace", "cloud");
+    stubShell({ cloudTasks: [{ id: "c1", title: "云端任务一", status: "processing" }] });
+    render(<App />);
+    await openSettings();
+    await userEvent.click(await screen.findByText("云端任务一"));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "设置" })).toBeNull());
+
+    await openCreate();
+    await userEvent.click(await screen.findByText("云端任务一"));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "新建任务" })).toBeNull());
   });
 });
