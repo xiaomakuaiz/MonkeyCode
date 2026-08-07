@@ -87,10 +87,12 @@ const applyTheme = (theme: Theme): void => {
   const root = document.documentElement;
   const custom = theme === CUSTOM_THEME ? readCustomTheme() : null;
   if (custom) {
-    // data-theme 落的是**基础主题名**:未被覆盖的十几个变量仍由它提供,
-    // 覆盖块挂在 CUSTOM_ATTR 上叠加(无层规则,压得住 @layer base 里的主题声明)
+    // 20 个颜色变量全部由本模块生成,data-theme 落 light/dark 只是给
+    // --size-field / --depth / --noise 这些非颜色变量兜个底(daisyUI 的
+    // 组件仍会读它们);覆盖块挂 CUSTOM_ATTR 叠加在上面——无层规则,
+    // 压得住 @layer base 里的主题声明
     applyCustomStyle(customThemeCss(custom));
-    root.dataset.theme = custom.base;
+    root.dataset.theme = custom.mode;
     root.setAttribute(CUSTOM_ATTR, "");
   } else {
     applyCustomStyle(null);

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyStoredTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME } from "./theme";
-import { CUSTOM_ATTR, CUSTOM_STYLE_ID } from "./customTheme";
+import { CUSTOM_ATTR, CUSTOM_STYLE_ID, DEFAULT_CUSTOM, type CustomTheme } from "./customTheme";
 
 // unit(node)环境无 DOM/存储:只桩出用到的全局。
 // 自定义主题要往 <head> 注样式、往根节点挂属性,桩要覆盖到这几件:
@@ -118,23 +118,24 @@ describe("主题偏好", () => {
   });
 });
 
-describe("自定义主题(派生式:基础主题 + 覆盖块叠加)", () => {
-  const cfg = { base: "valentine", primary: "#ff0000", base100: "#101828", radius: 0.5, border: 2 };
+describe("自定义主题(生成整套调色板 + 覆盖块叠加)", () => {
+  const cfg: CustomTheme = { ...DEFAULT_CUSTOM, mode: "dark", seed: "#ff0000" };
 
-  it("data-theme 落的是**基础主题名**,覆盖挂在 CUSTOM_ATTR 上", () => {
+  it("data-theme 落 light/dark(给非颜色变量兜底),调色板挂在 CUSTOM_ATTR 上", () => {
     setCustomTheme(cfg);
-    // 落 mc-custom 的话,daisyUI 找不到该主题声明会整套回落缺省主题——
-    // 未被覆盖的十几个变量就全错了
-    expect(root.dataset.theme).toBe("valentine");
+    // 落 mc-custom 的话 daisyUI 找不到该主题声明,--size-field/--depth 这些
+    // 非颜色变量就没了兜底
+    expect(root.dataset.theme).toBe("dark");
     expect(root.attrs.get(CUSTOM_ATTR)).toBe("");
     const style = head.find((e) => e.id === CUSTOM_STYLE_ID);
-    expect(style?.textContent).toContain("--color-primary:#ff0000;");
+    // 颜色一律 oklch():配方在 OKLCH 坐标下算,不回写 hex(回写会丢精度且没意义)
+    expect(style?.textContent).toMatch(/--color-primary:oklch\(/);
   });
 
   it("配置与渲染好的 CSS 都落盘:首帧脚本要的是 CSS,不能让它按配置现算", () => {
     setCustomTheme(cfg);
     expect(JSON.parse(values.get("mc.themeCustom") ?? "null")).toEqual(cfg);
-    expect(values.get("mc.themeCustomCss")).toContain("--color-primary:#ff0000;");
+    expect(values.get("mc.themeCustomCss")).toMatch(/--color-primary:oklch\(/);
     expect(values.get("mc.theme")).toBe(CUSTOM_THEME);
   });
 
@@ -146,11 +147,12 @@ describe("自定义主题(派生式:基础主题 + 覆盖块叠加)", () => {
     expect(head.find((e) => e.id === CUSTOM_STYLE_ID)).toBeUndefined();
   });
 
-  it("再次切入自定义复用同一个 <style>,不叠第二份", () => {
+  it("再次切入自定义复用同一个 <style>,不叠第二份且内容确实换了", () => {
     setCustomTheme(cfg);
-    setCustomTheme({ ...cfg, primary: "#00ff00" });
+    const first = head[0]?.textContent;
+    setCustomTheme({ ...cfg, seed: "#00ff00" });
     expect(head.filter((e) => e.id === CUSTOM_STYLE_ID)).toHaveLength(1);
-    expect(head[0]?.textContent).toContain("--color-primary:#00ff00;");
+    expect(head[0]?.textContent).not.toBe(first); // 换了种子色,整套调色板都该变
   });
 
   it("存了 mc-custom 但配置缺失 → 回落品牌主题(否则是「选了没反应」的一套裸基础主题)", () => {
@@ -164,7 +166,7 @@ describe("自定义主题(派生式:基础主题 + 覆盖块叠加)", () => {
     values.set("mc.theme", CUSTOM_THEME);
     values.set("mc.themeCustom", JSON.stringify(cfg));
     applyStoredTheme();
-    expect(root.dataset.theme).toBe("valentine");
+    expect(root.dataset.theme).toBe("dark");
     expect(root.attrs.get(CUSTOM_ATTR)).toBe("");
   });
 });

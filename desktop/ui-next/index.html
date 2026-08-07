@@ -24,11 +24,11 @@
          这里先原样落上(daisyUI 对未知值自动回落缺省主题,首帧不至于花)。
          mc.themeBg 是 theme.ts 在每次换主题后缓存的该主题 base-100 色值,
          内联到 html 上,让非 light/dark 主题的首帧底色也正确。
-         mc.theme === "mc-custom" 时是用户自定义主题:data-theme 要落**基础主题名**
-         (未覆盖的变量仍由它提供),覆盖块挂 data-mc-custom 叠加。这里必须同步
-         把 mc.themeCustomCss 插进去——只落属性不插样式的话,首帧会拿基础主题的
-         整套变量渲染:底色对了(themeBg 兜着)、主色圆角全不对,比不做防闪更显眼。
-         CSS 用缓存而不在此现算:派生规则(可读前景色阈值、base-200/300 掺色比例)
+         mc.theme === "mc-custom" 时是用户自定义主题:整套调色板由 mc.themeCustomCss
+         提供,data-theme 落 light/dark 只是给 --size-field/--depth/--noise 这些非
+         颜色变量兜底。这里必须同步把样式插进去——只落属性不插样式的话,首帧会拿
+         light/dark 的原色渲染:底色对了(themeBg 兜着)、主色圆角全不对,比不做防闪
+         更显眼。CSS 用缓存而不在此现算:调色板配方(OKLCH 亮度阶梯、色相旋转角度)
          在 lib/customTheme.ts,抄一份到这里就是两个真值源。
          键名与回落规则跟 src/lib/theme.ts 一致(同样的检查器盯着)。 */
       try {
@@ -36,8 +36,8 @@
         if (mcTheme === "mc-custom") {
           var mcCss = localStorage.getItem("mc.themeCustomCss");
           var mcCfg = JSON.parse(localStorage.getItem("mc.themeCustom") || "null");
-          if (mcCss && mcCfg && mcCfg.base) {
-            document.documentElement.dataset.theme = mcCfg.base;
+          if (mcCss && mcCfg && mcCfg.mode) {
+            document.documentElement.dataset.theme = mcCfg.mode;
             document.documentElement.setAttribute("data-mc-custom", "");
             var mcStyle = document.createElement("style");
             mcStyle.id = "mc-custom-theme"; /* 与 lib/theme.ts 同 id:那边复用本元素,不会插第二份 */

@@ -6,7 +6,7 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { IconAdjustmentsHorizontal, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
+import { IconAdjustmentsHorizontal, IconDice5, IconRotate, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
@@ -22,7 +22,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
-import { customThemeVars, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE } from "@/lib/customTheme";
+import { customThemeVars, randomTheme, roleHex, COLOR_ROLES, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE, SIZE_RANGE, type ColorRole } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
 import { engineCaps } from "@/lib/ipc/approvals";
@@ -65,68 +65,220 @@ function SettingRow({ label, hint, children }: { label: string; hint?: string; c
  * ——每个主题的性格一眼可辨,不用逐个切换试。 */
 /** 色板的内联覆盖:只取自定义属性(`--*`)。React 的 style 对象对标准属性要
  * 驼峰键,"color-scheme" 这种连字符键会被丢掉——而 4 个圆点的预览也用不上它。 */
-function swatchVars(c: CustomTheme): CSSProperties {
+function previewVars(c: CustomTheme): CSSProperties {
   return Object.fromEntries(Object.entries(customThemeVars(c)).filter(([k]) => k.startsWith("--"))) as CSSProperties;
 }
 
-/** 自定义主题编辑器:派生式——基础主题提供其余十几个变量,这里只改关键几项。
- * 无「保存」钮:外观设置是「切换立即生效并记在本机」口径(settings.appearance.hint),
- * 与主题下拉「点选即时换肤」一致,每次改动直接落盘 + 应用。 */
+/** 一组设置的小节头:编辑器里有颜色/形状/质感三组,不分组就是一堆控件糊在一起。 */
+function EditorGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-semibold text-base-content/45">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** 色块磁贴:整块是拾色器命中区(原生 input 铺满并透明,只借它的取色面板),
+ * 被覆盖过的角落点一记 —— 用户要能看出"哪些是我改过的、哪些还是生成的"。 */
+function ColorTile({ role, hex, overridden, resetLabel, onPick, onReset }: {
+  role: ColorRole;
+  hex: string;
+  overridden: boolean;
+  resetLabel: string;
+  onPick: (v: string) => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="group/tile relative flex items-center gap-2 rounded-field border border-base-300 bg-base-100 py-1.5 pe-2 ps-1.5">
+      <span aria-hidden className="size-5 shrink-0 rounded-field border border-base-content/10" style={{ background: hex }} />
+      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-base-content/70">{role}</span>
+      {overridden && (
+        <button
+          type="button"
+          title={resetLabel}
+          aria-label={`${role} reset`}
+          className="btn btn-ghost btn-xs shrink-0 px-1 opacity-0 group-hover/tile:opacity-100 focus-visible:opacity-100"
+          onClick={onReset}
+        >
+          <IconRotate size={12} stroke={1.75} aria-hidden />
+        </button>
+      )}
+      {/* 覆盖整块的透明拾色器:磁贴任意处点击都开取色面板 */}
+      <input
+        type="color"
+        aria-label={role}
+        className="absolute inset-0 cursor-pointer opacity-0"
+        value={hex}
+        onChange={(e) => onPick(e.target.value)}
+      />
+    </div>
+  );
+}
+
+/** 自定义主题编辑器。分三组(颜色/形状与尺寸/质感)+ 顶部种子行 + 实时预览,
+ * 对齐官方 theme-generator 的可调面(9 个角色色、圆角三档、尺寸两档、
+ * depth/noise、边框),差别在起点是生成而非全手调。
+ * 无「保存」钮:外观设置是「切换立即生效并记在本机」口径,与主题下拉一致。 */
 function CustomThemeEditor({ value, onChange }: { value: CustomTheme; onChange: (v: CustomTheme) => void }) {
   const { t } = useI18n();
   const set = (patch: Partial<CustomTheme>) => onChange({ ...value, ...patch });
-  const color = (label: string, key: "primary" | "base100") => (
-    <label className="flex items-center gap-2 text-xs">
-      <input
-        type="color"
-        aria-label={label}
-        className="h-6 w-9 shrink-0 cursor-pointer rounded border border-base-300 bg-base-100 p-0.5"
-        value={value[key]}
-        onChange={(e) => set({ [key]: e.target.value } as Partial<CustomTheme>)}
-      />
-      <span className="text-base-content/70">{label}</span>
-    </label>
-  );
-  const slider = (label: string, key: "radius" | "border", range: { min: number; max: number; step: number }, fmt: (v: number) => string) => (
-    <label className="flex items-center gap-2 text-xs">
-      <span className="w-8 shrink-0 text-base-content/70">{label}</span>
+  const setOverride = (role: ColorRole, hex: string | null) => {
+    const next = { ...value.overrides };
+    if (hex) next[role] = hex;
+    else delete next[role];
+    set({ overrides: next });
+  };
+
+  const slider = (
+    label: string,
+    hint: string,
+    key: "radiusBox" | "radiusField" | "radiusSelector" | "sizeField" | "sizeSelector" | "border",
+    range: { min: number; max: number; step: number },
+    unit: string,
+  ) => (
+    <label className="flex flex-col gap-1">
+      <span className="flex items-baseline gap-1.5 text-xs">
+        <span className="text-base-content/70">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-[10px] text-base-content/35">{hint}</span>
+        <span className="shrink-0 font-mono text-[10px] text-base-content/50 tabular-nums">{`${value[key]}${unit}`}</span>
+      </span>
       <input
         type="range"
         aria-label={label}
-        className="range range-xs min-w-0 flex-1"
+        className="range range-xs"
         min={range.min}
         max={range.max}
         step={range.step}
         value={value[key]}
         onChange={(e) => set({ [key]: Number(e.target.value) } as Partial<CustomTheme>)}
       />
-      <span className="w-12 shrink-0 text-end font-mono text-base-content/50 tabular-nums">{fmt(value[key])}</span>
     </label>
   );
+
+  const toggle = (label: string, hint: string, key: "depth" | "noise") => (
+    <label className="flex items-center gap-2 text-xs">
+      <input
+        type="checkbox"
+        className="toggle toggle-xs shrink-0"
+        aria-label={label}
+        checked={value[key]}
+        onChange={(e) => set({ [key]: e.target.checked } as Partial<CustomTheme>)}
+      />
+      <span className="text-base-content/70">{label}</span>
+      <span className="min-w-0 truncate text-[10px] text-base-content/35">{hint}</span>
+    </label>
+  );
+
+  const dirty = Object.keys(value.overrides).length > 0;
   return (
-    <div className="flex flex-col gap-2.5 px-4 pt-1 pb-3">
-      <label className="flex items-center gap-2 text-xs">
-        <span className="shrink-0 text-base-content/70">{t("settings.appearance.customBase")}</span>
-        <select
-          aria-label={t("settings.appearance.customBase")}
-          className="select select-xs min-w-0 flex-1"
-          value={value.base}
-          onChange={(e) => set({ base: e.target.value })}
-        >
-          {THEMES.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
+    <div className="flex flex-col gap-4 px-4 pt-1 pb-4">
+      {/* 种子行:整套配色的入口 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="radiogroup" aria-label={t("settings.appearance.customMode")} className="join shrink-0">
+          {(["light", "dark"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={value.mode === m}
+              className={`btn btn-xs join-item ${value.mode === m ? "btn-active" : "text-base-content/60"}`}
+              onClick={() => set({ mode: m })}
+            >
+              {t(m === "light" ? "settings.appearance.customLight" : "settings.appearance.customDark")}
+            </button>
           ))}
-        </select>
-      </label>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        {color(t("settings.appearance.customPrimary"), "primary")}
-        {color(t("settings.appearance.customBase100"), "base100")}
+        </div>
+        <label className="flex items-center gap-1.5 text-xs">
+          <span className="relative inline-flex">
+            <span aria-hidden className="size-6 rounded-field border border-base-300" style={{ background: value.seed }} />
+            <input
+              type="color"
+              aria-label={t("settings.appearance.customSeed")}
+              className="absolute inset-0 cursor-pointer opacity-0"
+              value={value.seed}
+              onChange={(e) => set({ seed: e.target.value })}
+            />
+          </span>
+          <span className="text-base-content/70">{t("settings.appearance.customSeed")}</span>
+        </label>
+        {/* 随机换的是**整套**:配色 + 几何(圆角三档/边框/质感)一起。色相随机
+            但亮度彩度锁窗口、几何从内置主题的真实组合里整组抽——见 randomTheme */}
+        <button type="button" className="btn btn-xs gap-1" onClick={() => onChange(randomTheme(value))}>
+          <IconDice5 size={14} stroke={1.75} aria-hidden />
+          {t("settings.appearance.customRandom")}
+        </button>
+        <span className="min-w-0 flex-1" />
+        {dirty && (
+          <button type="button" className="btn btn-ghost btn-xs text-base-content/60" onClick={() => set({ overrides: {} })}>
+            {t("settings.appearance.customResetColors")}
+          </button>
+        )}
       </div>
-      {slider(t("settings.appearance.customRadius"), "radius", RADIUS_RANGE, (v) => `${v}rem`)}
-      {slider(t("settings.appearance.customBorder"), "border", BORDER_RANGE, (v) => `${v}px`)}
-      <p className="text-xs text-base-content/50">{t("settings.appearance.customHint")}</p>
+
+      {/* 实时预览(官方生成器同款):圆角/边框/尺寸/depth 的效果都要在这里看得见,
+          所以按钮、徽标、输入框、开关各摆一件,而不是只放几个色点 */}
+      <div
+        data-theme={value.mode}
+        style={previewVars(value)}
+        className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3"
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="btn btn-primary btn-xs">Primary</span>
+          <span className="btn btn-secondary btn-xs">Secondary</span>
+          <span className="btn btn-accent btn-xs">Accent</span>
+          <span className="btn btn-xs">Neutral</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="badge badge-info badge-sm">Info</span>
+          <span className="badge badge-success badge-sm">Success</span>
+          <span className="badge badge-warning badge-sm">Warning</span>
+          <span className="badge badge-error badge-sm">Error</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input input-xs w-28" defaultValue="input" aria-hidden tabIndex={-1} readOnly />
+          <input type="checkbox" className="toggle toggle-xs" defaultChecked aria-hidden tabIndex={-1} readOnly />
+          <input type="checkbox" className="checkbox checkbox-xs" defaultChecked aria-hidden tabIndex={-1} readOnly />
+          <span className="rounded-box bg-base-200 px-2 py-1 text-[10px] text-base-content/60">base-200</span>
+          <span className="rounded-box bg-base-300 px-2 py-1 text-[10px] text-base-content/60">base-300</span>
+        </div>
+      </div>
+
+      <EditorGroup label={t("settings.appearance.customGroupColor")}>
+        <div className="grid grid-cols-3 gap-1.5">
+          {COLOR_ROLES.map((role) => (
+            <ColorTile
+              key={role}
+              role={role}
+              hex={roleHex(value, role)}
+              overridden={value.overrides[role] !== undefined}
+              resetLabel={t("settings.appearance.customResetOne")}
+              onPick={(v) => setOverride(role, v)}
+              onReset={() => setOverride(role, null)}
+            />
+          ))}
+        </div>
+      </EditorGroup>
+
+      <EditorGroup label={t("settings.appearance.customGroupShape")}>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-3">
+          {slider(t("settings.appearance.customRadiusBox"), t("settings.appearance.customRadiusBoxHint"), "radiusBox", RADIUS_RANGE, "rem")}
+          {slider(t("settings.appearance.customRadiusField"), t("settings.appearance.customRadiusFieldHint"), "radiusField", RADIUS_RANGE, "rem")}
+          {slider(t("settings.appearance.customRadiusSelector"), t("settings.appearance.customRadiusSelectorHint"), "radiusSelector", RADIUS_RANGE, "rem")}
+          {slider(t("settings.appearance.customBorder"), t("settings.appearance.customBorderHint"), "border", BORDER_RANGE, "px")}
+          {slider(t("settings.appearance.customSizeField"), t("settings.appearance.customSizeFieldHint"), "sizeField", SIZE_RANGE, "rem")}
+          {slider(t("settings.appearance.customSizeSelector"), t("settings.appearance.customSizeSelectorHint"), "sizeSelector", SIZE_RANGE, "rem")}
+        </div>
+      </EditorGroup>
+
+      <EditorGroup label={t("settings.appearance.customGroupEffect")}>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          {toggle(t("settings.appearance.customDepth"), t("settings.appearance.customDepthHint"), "depth")}
+          {toggle(t("settings.appearance.customNoise"), t("settings.appearance.customNoiseHint"), "noise")}
+        </div>
+      </EditorGroup>
+
+      <p className="text-xs leading-relaxed text-base-content/50">{t("settings.appearance.customHint")}</p>
     </div>
   );
 }
@@ -139,9 +291,9 @@ function ThemeSwatch({ theme, custom }: { theme: string; custom?: CustomTheme | 
   if (custom) {
     return (
       <span
-        data-theme={custom.base}
+        data-theme={custom.mode}
         aria-hidden
-        style={swatchVars(custom)}
+        style={previewVars(custom)}
         className="grid shrink-0 grid-cols-2 gap-0.5 rounded-md bg-base-100 p-1 shadow-sm"
       >
         <span className="size-1.5 rounded-full bg-base-content" />

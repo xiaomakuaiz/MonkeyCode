@@ -73,6 +73,21 @@ export function oklchToHex({ l, c, h }: Oklch): string {
   return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
+/** WCAG 相对亮度。注意**不能**拿 OKLCH 的 l 当它用:l 是感知亮度,
+ * 相对亮度是物理量,两者的曲线不同——判"该配黑字还是白字"必须用后者。 */
+export function relativeLuminance({ l, c, h }: Oklch): number {
+  const hex = oklchToHex({ l, c, h });
+  const ch = (i: number) => toLinear(Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.2126 * ch(1) + 0.7152 * ch(3) + 0.0722 * ch(5);
+}
+
+/** WCAG 对比度(1..21)。 */
+export function contrastRatio(a: Oklch, b: Oklch): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
 /** 输出 CSS 的 oklch();百分号写法与 daisyUI 内置主题一致,便于对读。 */
 export function oklchCss({ l, c, h }: Oklch): string {
   const n = (v: number, d: number) => Number(v.toFixed(d));
