@@ -108,7 +108,7 @@ export const en: Record<MessageKey, string> = {
   "settings.appearance.customMode": "Mode",
   "settings.appearance.customLight": "Light",
   "settings.appearance.customDark": "Dark",
-  "settings.appearance.customSeed": "Primary",
+  "settings.appearance.customSeedHint": "Seeds the whole palette — changing it recomputes secondary, accent and the neutrals",
   "settings.appearance.customRandom": "Random",
   "settings.appearance.customResetColors": "Reset colors",
   "settings.appearance.customResetOne": "Back to generated",

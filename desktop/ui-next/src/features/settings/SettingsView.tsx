@@ -6,7 +6,7 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { IconAdjustmentsHorizontal, IconDice5, IconRotate, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
+import { IconAdjustmentsHorizontal, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
@@ -81,11 +81,14 @@ function EditorGroup({ label, children }: { label: string; children: ReactNode }
 
 /** 色块磁贴:整块是拾色器命中区(原生 input 铺满并透明,只借它的取色面板),
  * 被覆盖过的角落点一记 —— 用户要能看出"哪些是我改过的、哪些还是生成的"。 */
-function ColorTile({ role, hex, overridden, resetLabel, onPick, onReset }: {
+function ColorTile({ role, hex, overridden, resetLabel, seed, seedHint, onPick, onReset }: {
   role: ColorRole;
   hex: string;
   overridden: boolean;
   resetLabel: string;
+  /** 这一格是整套配色的种子(primary):标记出来,否则用户以为它和其余 8 格一样只管自己 */
+  seed?: boolean;
+  seedHint?: string;
   onPick: (v: string) => void;
   onReset: () => void;
 }) {
@@ -93,6 +96,11 @@ function ColorTile({ role, hex, overridden, resetLabel, onPick, onReset }: {
     <div className="group/tile relative flex items-center gap-2 rounded-field border border-base-300 bg-base-100 py-1.5 pe-2 ps-1.5">
       <span aria-hidden className="size-5 shrink-0 rounded-field border border-base-content/10" style={{ background: hex }} />
       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-base-content/70">{role}</span>
+      {seed && (
+        <span title={seedHint} className="shrink-0 text-base-content/35">
+          <IconWand size={13} stroke={1.75} aria-hidden />
+        </span>
+      )}
       {overridden && (
         <button
           type="button"
@@ -123,6 +131,13 @@ function ColorTile({ role, hex, overridden, resetLabel, onPick, onReset }: {
 function CustomThemeEditor({ value, onChange }: { value: CustomTheme; onChange: (v: CustomTheme) => void }) {
   const { t } = useI18n();
   const set = (patch: Partial<CustomTheme>) => onChange({ ...value, ...patch });
+  // 种子色即 primary:换它要连带清掉可能存在的 primary 覆盖(旧配置遗留),
+  // 否则覆盖压在种子生成的 primary 上,看起来像"改了不生效"
+  const pickSeed = (hex: string) => {
+    const next = { ...value.overrides };
+    delete next.primary;
+    onChange({ ...value, seed: hex, overrides: next });
+  };
   const setOverride = (role: ColorRole, hex: string | null) => {
     const next = { ...value.overrides };
     if (hex) next[role] = hex;
@@ -189,19 +204,9 @@ function CustomThemeEditor({ value, onChange }: { value: CustomTheme; onChange: 
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-1.5 text-xs">
-          <span className="relative inline-flex">
-            <span aria-hidden className="size-6 rounded-field border border-base-300" style={{ background: value.seed }} />
-            <input
-              type="color"
-              aria-label={t("settings.appearance.customSeed")}
-              className="absolute inset-0 cursor-pointer opacity-0"
-              value={value.seed}
-              onChange={(e) => set({ seed: e.target.value })}
-            />
-          </span>
-          <span className="text-base-content/70">{t("settings.appearance.customSeed")}</span>
-        </label>
+        {/* 种子色不在这里出第二个入口:它就是下面色板里的 primary(用户定案
+            2026-08-07「主色不用放在这里,下面不是可以选择么」)。两个同色的
+            「主色」控件摆在一起,还各管各的事,是纯粹的困惑源 */}
         {/* 随机换的是**整套**:配色 + 几何(圆角三档/边框/质感)一起。色相随机
             但亮度彩度锁窗口、几何从内置主题的真实组合里整组抽——见 randomTheme */}
         <button type="button" className="btn btn-xs gap-1" onClick={() => onChange(randomTheme(value))}>
@@ -246,17 +251,35 @@ function CustomThemeEditor({ value, onChange }: { value: CustomTheme; onChange: 
 
       <EditorGroup label={t("settings.appearance.customGroupColor")}>
         <div className="grid grid-cols-3 gap-1.5">
-          {COLOR_ROLES.map((role) => (
-            <ColorTile
-              key={role}
-              role={role}
-              hex={roleHex(value, role)}
-              overridden={value.overrides[role] !== undefined}
-              resetLabel={t("settings.appearance.customResetOne")}
-              onPick={(v) => setOverride(role, v)}
-              onReset={() => setOverride(role, null)}
-            />
-          ))}
+          {COLOR_ROLES.map((role) =>
+            // primary 这一格**就是种子色**:改它整套配色跟着重算(次要色/强调色
+            // 按色相旋转、中性色掺同色相),而不是只换掉 --color-primary 一个变量
+            // ——只换单项的话次要色和中性色还留在旧色相上,又回到「不搭」的老问题。
+            // 因此它没有「恢复生成值」:它本身就是生成的源头。
+            role === "primary" ? (
+              <ColorTile
+                key={role}
+                role={role}
+                hex={roleHex(value, role)}
+                seed
+                seedHint={t("settings.appearance.customSeedHint")}
+                overridden={false}
+                resetLabel=""
+                onPick={(v) => pickSeed(v)}
+                onReset={() => undefined}
+              />
+            ) : (
+              <ColorTile
+                key={role}
+                role={role}
+                hex={roleHex(value, role)}
+                overridden={value.overrides[role] !== undefined}
+                resetLabel={t("settings.appearance.customResetOne")}
+                onPick={(v) => setOverride(role, v)}
+                onReset={() => setOverride(role, null)}
+              />
+            ),
+          )}
         </div>
       </EditorGroup>
 

@@ -107,7 +107,7 @@ export const zh = {
   "settings.appearance.customMode": "明暗",
   "settings.appearance.customLight": "浅色",
   "settings.appearance.customDark": "深色",
-  "settings.appearance.customSeed": "主色",
+  "settings.appearance.customSeedHint": "整套配色的种子:改它,次要色/强调色/中性色一起重算",
   "settings.appearance.customRandom": "随机",
   "settings.appearance.customResetColors": "重置颜色",
   "settings.appearance.customResetOne": "恢复为生成值",
