@@ -7,9 +7,9 @@
 //   tab 表达,行内不再重复)。
 // - 组头/小节头图标保留(Folder/History/Archive):组级标签要锚点,
 //   且一组只出一次不吃行宽。
-// - GroupLabel 组头锚点:13px 图标 + 与行同字号的 font-semibold 满色名称
-//   (2026-08-07 对表旧 UI 后推翻 08-04「小一档 + /50 的区块标签」——
-//   详见该函数头注),放进 summary(flex 覆写、after:hidden 去尾箭头)。
+// - GroupLabel 区块标签:组头 12px 图标 + text-xs font-medium /50(比行
+//   小一档;行 14px 后从 11px 提到 12px,免得差距拉到 3px 显得过小),
+//   放进 summary(flex 覆写、after:hidden 去尾箭头)。
 // - SectionFold 小节折叠:Archive 形小节头(10px 图标行首、无计数),
 //   开合走 prefs 契约键持久化,收起即卸载(部分 webview 里 details 收起
 //   后嵌套 ul 残留占位空间)。
@@ -75,11 +75,8 @@ export function ListRow({
           openMenu({ x: e.clientX, y: e.clientY }, menuItems);
         }}
       >
-        {/* 正文比组头浅一档(旧 UI `--t2` 92%):项目名才是锚点,任务挂在它
-            下面;选中态交回 menu-active-fg,归档降到 /55 */}
-        <span className={`min-w-0 flex-1 truncate ${active ? "" : archived ? "text-base-content/55" : "text-base-content/90"}`}>
-          {primary}
-        </span>
+        {/* 活跃行走正文色(不覆写);归档降到 /55,选中态不降——选中就该看清 */}
+        <span className={`min-w-0 flex-1 truncate ${archived && !active ? "text-base-content/55" : ""}`}>{primary}</span>
         {trailing && (
           <span role="img" aria-label={trailing.label} title={trailing.label} className={`status shrink-0 ${trailing.tone}`} />
         )}
@@ -88,25 +85,18 @@ export function ListRow({
   );
 }
 
-/** 组头标签:图标裸放 flex 行(图标不需要定宽槽,多包一层反而竖向对不齐),
- * 名称保留原大小写。
+/** 区块标签(组头 summary 内容):图标裸放 flex 行(12px 图标不需要定宽
+ * 槽,多包一层反而竖向对不齐),名称保留原大小写。
  *
- * **项目名是锚点,不是淡标签**(2026-08-07 用户报障「任务和项目的亲密性
- * 不够」后对表旧 UI sidebar.tsx 定案,推翻 08-04「区块标签 = 小一档 + /50」):
- * 旧 UI 里组头 12.5px/600/`--t1`(全列最深),任务行 12.5px/400/`--t2`(92%)
- * ——**组头比行更重**,任务才「挂」在项目下面。ui-next 此前做反了(组头
- * 12px//50 最淡、行 14px/100% 最深),项目名成了飘在一堆大黑字上方的说明
- * 文字,间距怎么调都不亲。现按旧 UI:同字号、加粗、满色;归档项目降一档。 */
-export function GroupLabel({ icon: Icon, name, muted }: { icon: LucideIcon; name: string; muted?: boolean }) {
+ * 组头保持**安静的小标签**(用户定案 2026-08-04,2026-08-07 复核后维持):
+ * 期间试过按旧 UI 换成「与行同字号 + font-semibold + 满色」的锚点形态
+ * ——旧 UI 正是靠组头比行更重来表达从属——但用户定案回退,组头继续小一档、
+ * 淡一档。层级改由缩进 + 引导竖线承担(§6.2)。**别再提锚点形态。** */
+export function GroupLabel({ icon: Icon, name }: { icon: LucideIcon; name: string }) {
   return (
     <>
-      <Icon
-        size={13}
-        strokeWidth={1.75}
-        className={`shrink-0 ${muted ? "text-base-content/45" : "text-base-content/65"}`}
-        aria-hidden
-      />
-      <span className={`min-w-0 flex-1 truncate text-sm font-semibold ${muted ? "text-base-content/60" : ""}`}>{name}</span>
+      <Icon size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
+      <span className="min-w-0 flex-1 truncate text-xs font-medium text-base-content/50">{name}</span>
     </>
   );
 }

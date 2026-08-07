@@ -117,14 +117,15 @@ describe("侧栏(local 空间)", () => {
     const archived = screen.getByText("旧任务");
     const active = screen.getByText("修复了闪退,补了用例");
     expect(archived.className).toContain("text-base-content/55");
-    expect(active.className).toContain("text-base-content/90");
+    expect(active.className).not.toContain("text-base-content/55"); // 活跃行走正文色
   });
 
-  it("组头是锚点:项目名与行同字号但加粗(层级靠字重,不靠间距)", () => {
+  it("组头维持安静小标签(用户定案:不走锚点形态)", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     const label = screen.getByText("alpha");
-    expect(label.className).toContain("font-semibold");
-    expect(label.className).toContain("text-sm");
+    expect(label.className).toContain("text-xs");
+    expect(label.className).toContain("text-base-content/50");
+    expect(label.className).not.toContain("font-semibold");
   });
 
   it("行右键菜单:归档直接触发;删除二段确认", async () => {

@@ -213,7 +213,7 @@ function ProjectDetails({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
         >
-          <GroupLabel icon={Folder} name={group.name} muted={archivedProject} />
+          <GroupLabel icon={Folder} name={group.name} />
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           {/* 快捷钮常驻占位、hover 只切可见性:插入式显隐会挤动项目名,鼠标一进一出就抖 */}
           {!archivedProject && (
