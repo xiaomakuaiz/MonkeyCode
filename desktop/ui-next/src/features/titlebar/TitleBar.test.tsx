@@ -50,11 +50,19 @@ describe("Windows 自绘标题栏", () => {
     const { container } = render(<TitleBar />);
     const bar = container.querySelector("[data-window-titlebar]");
     expect(bar?.hasAttribute("data-tauri-drag-region")).toBe(true);
-    // 分段与品牌字都要能拖
+    // 条本身 + 两个列宽分段 + 右侧留白都要能拖
     expect(container.querySelectorAll("[data-tauri-drag-region]").length).toBeGreaterThanOrEqual(4);
     for (const btn of container.querySelectorAll("button")) {
       expect(btn.hasAttribute("data-tauri-drag-region")).toBe(false);
     }
+    done();
+  });
+
+  it("不放品牌:品牌的法定位置只有侧栏头,两处都摆会变成上下两个 header", () => {
+    const { done } = stubShell("Windows NT 10.0");
+    render(<TitleBar />);
+    expect(screen.queryByText("MonkeyCode")).toBeNull();
+    expect(screen.queryByText("work")).toBeNull();
     done();
   });
 });

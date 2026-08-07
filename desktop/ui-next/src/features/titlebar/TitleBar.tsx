@@ -1,6 +1,9 @@
 // 自绘窗口 chrome:
 // - Windows 壳去掉原生装饰栏,这里补 36px 标题栏(左侧按 rail/side 列宽分段
 //   与内容区对齐,右侧最小化/最大化(还原)/关闭三键,关闭键 hover 官方红)。
+//   本条**只做 chrome,不放品牌**:品牌的法定位置是侧栏头(LAYOUT §2),两处
+//   都摆就成了上下紧挨的两行同样字样(2026-08-07 用户报障「两个 header」)。
+//   Linux 不走这条(壳保留原生装饰栏,UI 侧不渲染 TitleBar),不受影响。
 // - mac 壳隐藏原生红绿灯(TitleBarStyle::Overlay),MacWindowControls 自绘
 //   10px 圆点(悬停整组浮现字形、窗口失焦整组退灰;绿点 ⌥ 点击最大化、
 //   否则全屏)。渲染位置在 NavRail 顶部(App 拼装)。
@@ -85,12 +88,12 @@ export function TitleBar() {
       data-window-titlebar=""
       className="flex h-9 shrink-0 items-stretch select-none"
     >
-      {/* 左侧分段与内容区各列同宽同色(w-rail/w-side 令牌),竖分隔线贯通 */}
+      {/* 左侧分段与内容区各列同宽同色(w-rail/w-side 令牌),竖分隔线贯通。
+          **不放品牌**:品牌的法定位置只有侧栏头(LAYOUT §2/§3),这里再摆一份
+          就是紧挨着的两行同样的「MonkeyCode work」——Windows 上看着像两个
+          header(2026-08-07 用户报障)。本条只做窗体 chrome:拖拽 + caption 三键 */}
       <div data-tauri-drag-region="" className="flex w-rail items-center justify-center bg-base-300" />
-      {/* 左内距与侧栏头部同一条 20px 竖线(Sidebar 头部 ps-5,对齐下方内容) */}
-      <div data-tauri-drag-region="" className="flex w-side items-center gap-1.5 bg-base-200 ps-5 pe-3">
-        <Brand />
-      </div>
+      <div data-tauri-drag-region="" className="w-side bg-base-200" />
       <div data-tauri-drag-region="" className="flex-1 bg-base-100" />
       <div className="flex bg-base-100">
         <button

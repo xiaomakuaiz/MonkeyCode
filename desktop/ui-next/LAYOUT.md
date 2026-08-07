@@ -4,7 +4,10 @@
 
 ## 1. 层级(自底向上)
 1. **窗体 chrome**:Windows = 36px 全宽标题栏(caption 三键);mac = rail 左上角红绿灯
-   (chrome 角落);Linux/浏览器 = 无。
+   (chrome 角落);Linux/浏览器 = 无(Linux 壳保留原生装饰栏,UI 不自绘)。
+   > chrome 条**只做 chrome**:不放品牌、不放视图信息。Windows 标题栏曾摆了一份
+   > 品牌,与紧挨其下的侧栏头凑成上下两行同样字样,看着就是「两个 header」
+   > (2026-08-07 用户报障)。品牌的法定位置只有侧栏头,见 §2/§3。
 2. **全局横幅**:EngineBanner(引擎生命周期专用),chrome 之下、三列之上,全宽。
 3. **三列内容**:rail(w-rail,bg-base-300)/ 侧栏(w-side,bg-base-200,border-e)/
    主区(flex-1,bg-base-100)。
