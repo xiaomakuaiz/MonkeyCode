@@ -567,7 +567,13 @@ export function ChatView({
             /* 单行标题(用户定案 2026-08-06,撤两行):用户改名 > 轮末摘要 >
                首句自动标题(title_custom 区分改名与自动,壳 sidecar 标记);
                双击改名改的始终是 title。悬停 tooltip 带全量(标题/摘要/目录) */
-            <h1 data-tauri-drag-region="" className="group/title flex min-w-0 items-center gap-1 text-sm leading-tight font-semibold">
+            /* w-fit 不可省:h1 是块级元素、父层又是 flex-1,不收窄的话它的盒子
+               横跨整个 header,而 group/title 就挂在它身上——鼠标停在标题右侧
+               那一大片空白上也会算作"悬停标题",铅笔莫名其妙浮出来(用户报障
+               2026-08-06)。fit-content 让盒子贴合内容,长标题时仍回落到父宽,
+               span 的 truncate 照常生效。悬停区因此 = 标题文字 + 铅笔自身的
+               槽位(opacity-0 仍占位),正好是够得着按钮的最小范围 */
+            <h1 data-tauri-drag-region="" className="group/title flex w-fit min-w-0 items-center gap-1 text-sm leading-tight font-semibold">
               {/* 双击只挂在文字 span 上,且不带 data-tauri-drag-region:
                   Windows 壳把拖拽区双击吃成最大化,标题必须留在拖拽区之外 */}
               <span

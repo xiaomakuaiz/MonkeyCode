@@ -571,6 +571,17 @@ describe("聊天视图", () => {
     await waitFor(() => expect(patched).toBe(1)); // 落盘后主动重拉,meta 才会流回来
   });
 
+  it("铅笔的悬停区贴合标题,不横跨整条 header", async () => {
+    stubShell();
+    const { container } = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    const h1 = container.querySelector("h1")!;
+    // group/title 挂在 h1 上,而 h1 是块级、父层 flex-1:不收窄就横跨整个 header,
+    // 鼠标停在标题右侧空白处也会浮出铅笔(用户报障 2026-08-06)
+    expect(h1.classList.contains("group/title")).toBe(true);
+    expect(h1.classList.contains("w-fit")).toBe(true);
+  });
+
   it("清空标题:改过名的会话发 patch{title:\"\"}(壳摘 title_custom 回落 summary);没改过名的空提交是空转", async () => {
     const shell = stubShell();
     const { unmount } = render(<ChatView meta={{ ...META, title_custom: true }} />);
