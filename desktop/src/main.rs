@@ -155,9 +155,13 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
 }
 
 /// 在文件管理器中定位**程序本体**(关于页的隐藏排障入口)。
-/// macOS 的可执行文件埋在 <应用>.app/Contents/MacOS/ 里,直接揭示它等于把
-/// 用户丢进包内部——往上找到 .app 那一层揭示应用本体;其他平台揭示 exe
-/// 自身(reveal_item_in_dir 会在其所在目录里高亮它)。
+///
+/// 这里刻意用 reveal(父目录里选中)而不是 open:macOS 的 .app 是个"目录",
+/// open 它等于**再启动一次应用**;Windows/Linux 上目标是可执行文件,open
+/// 同样是执行它。要的是"看见它在哪",所以是选中而非打开。
+/// macOS 的可执行文件埋在 <应用>.app/Contents/MacOS/ 里,直接选中它等于把
+/// 用户丢进包内部——往上找到 .app 那一层选中应用本体(开发构建没有 .app
+/// 祖先,自然回落到可执行文件)。
 #[tauri::command]
 fn open_app_dir() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("无法定位程序路径: {e}"))?;
@@ -165,7 +169,7 @@ fn open_app_dir() -> Result<String, String> {
         .ancestors()
         .find(|p| p.extension().and_then(|s| s.to_str()) == Some("app"))
         .unwrap_or(exe.as_path());
-    tauri_plugin_opener::reveal_item_in_dir(target).map_err(|e| format!("打开目录失败: {e}"))?;
+    tauri_plugin_opener::reveal_item_in_dir(target).map_err(|e| format!("定位程序失败: {e}"))?;
     Ok(target.to_string_lossy().into_owned())
 }
 
@@ -177,7 +181,10 @@ fn open_app_dir() -> Result<String, String> {
 #[tauri::command]
 fn open_log_dir(app: AppHandle) -> Result<String, String> {
     let dir = config::config_dir(&app)?;
-    tauri_plugin_opener::reveal_item_in_dir(&dir).map_err(|e| format!("打开目录失败: {e}"))?;
+    // open_path 而非 reveal_item_in_dir:reveal 的语义是「在**父目录**里选中
+    // 该项」,对目录就是停在 Application Support 里高亮一个文件夹,用户还得
+    // 自己双击进去(2026-08-07 用户报障)。这里要的是直接进到目录内
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("打开目录失败: {e}"))?;
     Ok(dir.to_string_lossy().into_owned())
 }
 
