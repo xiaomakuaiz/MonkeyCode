@@ -381,9 +381,10 @@ export function CloudTaskList({
   const projectGroup = (project: CloudProject, projectId: string, name: string) => {
     const isOpen = forceOpen || openGroups.has(projectId);
     return (
-    // 组间距/组头贴行与本地列表同值(三列表一套件,§6.2)
-    <li key={projectId} className="mt-4 first:mt-0">
+    // 组间距/组头贴行与本地列表同一套(三列表一套件,§6.2):间距挂展开态
+    <li key={projectId}>
       <details
+        className="open:mb-4"
         open={isOpen}
         onToggle={(e) => {
           if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
@@ -402,7 +403,7 @@ export function CloudTaskList({
         {/* 区块标签形态(与本地组头同一件):无折叠箭头,开合只靠点击组头。
             快捷「+」与本地组头同构:常驻占位、hover 只切可见性(插入式显隐
             会挤动项目名) */}
-        <summary title={name} className="group flex items-center pb-0.5 after:hidden">
+        <summary title={name} className={`group flex items-center after:hidden ${isOpen ? "pb-0.5" : ""}`}>
           <GroupLabel icon={Folder} name={name} />
           {onNewTaskIn && (
             <button

@@ -108,8 +108,8 @@ export function SectionFold({
         }}
       >
         {/* Archive 形小节头:图标行首(与组头 Folder 同构)、去 menu 默认尾箭头。
-            pb-0.5 同项目组头:小节头也要贴住自己的行,不然层级只剩缩进 */}
-        <summary className="flex items-center gap-2 pb-0.5 text-xs text-base-content/50 after:hidden">
+            展开时 pb-0.5 贴住自己的行(同项目组头);折叠时没有要贴的行,不收 */}
+        <summary className={`flex items-center gap-2 text-xs text-base-content/50 after:hidden ${isOpen ? "pb-0.5" : ""}`}>
           <Icon size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </summary>

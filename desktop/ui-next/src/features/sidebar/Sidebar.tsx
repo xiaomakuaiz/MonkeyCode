@@ -173,12 +173,13 @@ function ProjectDetails({
     },
   ];
   return (
-    // 组间距 mt-4(用户报障 2026-08-07「亲密性不够,像一路排下来」):daisyUI
-    // 给每行/组头 padding-block .375rem,原 mt-1 下「组头↔首行 12px、行↔行
-    // 12px、组↔组 16px」三档几乎等距,读不出组;拉到 mt-4 后组间空白 28px,
-    // 与组内 12px 拉开一档(组头再靠 pb-0.5 贴住首行,见下)
-    <li className="mt-4 first:mt-0">
+    <li>
+      {/* 组间距挂**展开态**(open:mb-4),不挂组本身(用户报障 2026-08-07
+          第二轮:全部折叠时组头之间没有内容要分开,常驻组间距纯粹是空)。
+          展开的组尾部留 16px,与下一组隔出 28px;折叠的组头彼此按普通行
+          节奏 12px 相邻——「需要被分开的是有内容的块,不是标签」 */}
       <details
+        className="open:mb-4"
         open={!collapsed}
         onToggle={(e) => {
           // ⚠️ React 把原生不冒泡的 toggle 做成合成冒泡:内层「已归档任务」
@@ -190,10 +191,11 @@ function ProjectDetails({
       >
         {/* 区块标签形态:summary 由 grid 覆写为 flex(名称伸展、徽标/＋殿后);
             原生折叠箭头整个去掉(用户定案 2026-08-04),开合只靠点击组头 */}
-        {/* pb-0.5 收掉组头的下内距(daisyUI 默认 .375rem):组头要贴住自己的
-            首行,否则「组头↔首行」与「行↔行」同距,层级只剩缩进一个信号 */}
+        {/* 展开时 pb-0.5 收掉组头下内距(daisyUI 默认 .375rem)贴住自己的首行,
+            否则「组头↔首行」与「行↔行」同距,层级只剩缩进一个信号。折叠时不收:
+            没有要贴的行,组头就只是普通标签行,按列表统一节奏排 */}
         <summary
-          className={`group flex items-center pb-0.5 after:hidden ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
+          className={`group flex items-center after:hidden ${collapsed ? "" : "pb-0.5"} ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
           title={[group.key, t("sidebar.project.hint"), drag ? t("sidebar.project.dragHint") : ""].filter(Boolean).join("\n")}
           draggable={!!drag}
           onDragStart={() => drag?.onDragStart(group.key)}
@@ -246,7 +248,7 @@ function ProjectDetails({
               }}>
                 {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
                 <summary
-                  className={`flex items-center gap-2 pb-0.5 ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
+                  className={`flex items-center gap-2 ${archOpen ? "pb-0.5" : ""} ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
                 >
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
