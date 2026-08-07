@@ -29,7 +29,7 @@ import {
   type HostInfo,
 } from "@/lib/ipc/host";
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
-import { engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
+import { afterEngineReady, engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
 import type { CloudProject, CloudTask } from "@/lib/ipc/cloudtasks";
 import {
   modelsList,
@@ -222,7 +222,10 @@ export function App() {
   const shellSeq = useRef(0);
   const shellTimers = useRef<Set<number>>(new Set());
 
-  const refresh = () => void sessionsList().then(setSessions);
+  // 同样过退避重试:引擎重启后这一拉也在壳的 apply 闸门窗口里(见
+  // afterEngineReady 头注)。原先连 catch 都没有,撞闸门时既不重试、
+  // 又抛未处理拒绝,列表停在重启前的旧快照
+  const refresh = () => void afterEngineReady(sessionsList).then(setSessions).catch(() => {});
 
   const setSpace = (next: Space) => {
     setSpaceState(next);

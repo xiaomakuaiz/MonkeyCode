@@ -20,3 +20,27 @@ export function engineRestart(): Promise<void> {
 export function onEngineStatus(cb: (s: EngineStatus) => void): () => void {
   return listen<EngineStatus>("engine-status", cb);
 }
+
+/** 引擎重启后的首个命令要能撞上壳的「配置应用中」闸门再退回来,退避重试抹平。
+ *
+ * 壳侧契约(main.rs):`restart_engine_locked` 在 `adopt_engine` 里就 emit 了
+ * engine-status Ready,而调用方(save_config / schedule_browser_mcp_refresh)
+ * **仍持着 EngineApply 锁**,要到整个闭包返回才释放。于是 UI 一收到 Ready 就
+ * 发的命令必然落在这段窗口里被闸门拒掉;连着两次重启(保存紧跟浏览器配对
+ * 刷新)窗口还会更长。
+ *
+ * 症状:浏览器配对后会话重开被拒且无人重试,对话仍挂在旧引擎上——表现为
+ * 「配对了但对话没加载 browser MCP」(2026-08-07 用户报障)。旧 UI App.tsx
+ * 的 afterEngineReady 就是干这个的,ui-next 首版漏迁。
+ *
+ * 全败也不外显:重连是后台自愈动作,调用方各自保留原状态。 */
+export async function afterEngineReady<T>(fn: () => Promise<T>, tries = 4): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt >= tries - 1) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+  }
+}

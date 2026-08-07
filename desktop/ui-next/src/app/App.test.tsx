@@ -82,6 +82,7 @@ interface Call {
 /** 桌面壳桩:支持同名事件多监听(App 与 EngineBanner 都听 engine-status)。 */
 function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?: string | null; cloudTasks?: unknown[] } = {}) {
   const calls: Call[] = [];
+  let gate = 0;
   const listeners = new Map<string, Set<(e: { payload: unknown }) => void>>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
@@ -91,7 +92,14 @@ function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?
         if (cmd === "models_list") return Promise.resolve(opts.models ?? [{ name: "m", default: true }]);
         if (cmd === "take_ui_intent") return Promise.resolve(opts.intent ?? null);
         if (cmd === "engine_status") return Promise.resolve({ phase: "ready", version: "1" });
-        if (cmd === "session_open") return Promise.resolve({ frames: [], cursor: 0, has_more: false });
+        if (cmd === "session_open") {
+          // 模拟壳的「配置应用中」闸门:重启后头几发被拒(见 afterEngineReady)
+          if (gate > 0) {
+            gate -= 1;
+            return Promise.reject(new Error("配置应用中,请稍后重试"));
+          }
+          return Promise.resolve({ frames: [], cursor: 0, has_more: false });
+        }
         if (cmd === "host_info") return Promise.resolve({ version: "1", engine_version: "1" });
         if (cmd === "sound_enabled") return Promise.resolve(true);
         if (cmd === "get_config") return Promise.resolve({ models: [], mcp_servers: {} });
@@ -113,6 +121,10 @@ function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?
   };
   return {
     calls,
+    /** 让随后 n 次 session_open 撞闸门被拒 */
+    armGate: (n: number) => {
+      gate = n;
+    },
     count: (cmd: string) => calls.filter((c) => c.cmd === cmd).length,
     emit: (name: string, payload: unknown) => listeners.get(name)?.forEach((cb) => cb({ payload })),
   };
@@ -320,5 +332,25 @@ describe("覆盖视图开着时点侧栏(设置/新建永远让位)", () => {
     await openCreate();
     await userEvent.click(await screen.findByText("云端任务一"));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "新建任务" })).toBeNull());
+  });
+});
+
+describe("引擎重启后的重开要撞得过壳的 apply 闸门", () => {
+  // 壳 restart_engine_locked 在 adopt_engine 里就发 Ready,而调用方(保存设置 /
+  // 浏览器配对刷新)仍持着 EngineApply 锁——UI 一收到 Ready 就发的命令必然
+  // 落在这段窗口里被拒。不退避重试的话,浏览器配对后这次重开静默失败,对话
+  // 继续挂在旧引擎上、拿不到 browser MCP 工具集(2026-08-07 用户报障)
+  it("Ready 后首发 session_open 被闸门拒:退避重试直到成功", async () => {
+    localStorage.setItem("mc.lastSession", "s1");
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({ sessions: [sess({ id: "s1", title: "任务一" })] });
+    render(<App />);
+    await waitFor(() => expect(shell.count("session_open")).toBe(1));
+
+    shell.armGate(2); // 前两发拒,第三发放行
+    act(() => shell.emit("engine-status", { phase: "starting", attempt: 0 }));
+    act(() => shell.emit("engine-status", { phase: "ready", version: "2" }));
+    // 1(首挂)+ 3(重开:拒/拒/成)
+    await waitFor(() => expect(shell.count("session_open")).toBe(4), { timeout: 3000 });
   });
 });

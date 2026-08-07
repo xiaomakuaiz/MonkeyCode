@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Frame } from "@/lib/protocol/types";
+import { afterEngineReady } from "@/lib/ipc/engine";
 import { createChatState, prependHistory, reduceBatch } from "@/lib/protocol/reduce";
 import type { ChatState } from "@/lib/protocol/types";
 import {
@@ -70,7 +71,10 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
       });
       if (!alive) return;
       try {
-        const win = await sessionOpen(id);
+        // 退避重试:引擎重启后 Ready 与壳的 apply 闸门有重叠窗口,首发必被拒
+        // (afterEngineReady 头注记了壳侧契约)。不重试的话浏览器配对后这次
+        // 重开就静默失败,对话继续挂在旧引擎上、拿不到新 MCP 工具集
+        const win = await afterEngineReady(() => sessionOpen(id));
         if (!alive) return;
         cursorRef.current = win.cursor;
         hasMoreRef.current = !!win.has_more;
