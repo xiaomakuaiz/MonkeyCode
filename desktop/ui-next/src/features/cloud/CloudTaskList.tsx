@@ -11,7 +11,7 @@
 import { Cloud, Folder, History, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { GroupLabel, ListRow, SectionFold } from "@/features/sidebar/listKit";
+import { GroupLabel, GUIDE_L1, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import type { MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
@@ -361,7 +361,7 @@ export function CloudTaskList({
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
       // 缩进进行内、行底满宽(与本地组同构,2026-08-05 定案):组内行 ps-6
-      <ul className="ms-0 min-w-0 ps-0 before:hidden">
+      <ul className={`ms-0 min-w-0 ps-0 ${GUIDE_L1}`}>
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
@@ -381,10 +381,9 @@ export function CloudTaskList({
   const projectGroup = (project: CloudProject, projectId: string, name: string) => {
     const isOpen = forceOpen || openGroups.has(projectId);
     return (
-    // 组间距/组头贴行与本地列表同一套(三列表一套件,§6.2):间距挂展开态
+    // 与本地列表同一套(三列表一套件,§6.2):等距行 + 缩进引导竖线,零组间空白
     <li key={projectId}>
       <details
-        className="open:mb-4"
         open={isOpen}
         onToggle={(e) => {
           if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
@@ -403,7 +402,7 @@ export function CloudTaskList({
         {/* 区块标签形态(与本地组头同一件):无折叠箭头,开合只靠点击组头。
             快捷「+」与本地组头同构:常驻占位、hover 只切可见性(插入式显隐
             会挤动项目名) */}
-        <summary title={name} className={`group flex items-center after:hidden ${isOpen ? "pb-0.5" : ""}`}>
+        <summary title={name} className="group flex items-center after:hidden">
           <GroupLabel icon={Folder} name={name} />
           {onNewTaskIn && (
             <button

@@ -19,6 +19,20 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
 import { readFold, writeFold, type FoldKey } from "@/lib/util/prefs";
 
+// 缩进引导竖线(挂展开后的嵌套 ul):把子行归拢到组头名下。
+// 为什么是竖线而不是空白(2026-08-07 用户三轮报障后的收敛):主流树组件
+// ——VS Code 资源管理器、Finder 列表视图、JetBrains 项目树、GitHub 文件树、
+// Notion 侧栏——**一律等距行 + 零组间空白**,层级只由「缩进 + 折叠箭头 +
+// 引导竖线」表达。空白分组是 Slack/Linear 那种「少数几个固定分区」的手法,
+// 项目数一多就把列表撑散(用户报障「项目之间太空了」正是此因)。
+// start 值 = 该层组头图标的中心横坐标,竖线正落在图标列上(VS Code 同款:
+// 线在 twisty 列,文字在其右)。绝对定位,不参与布局,行底照旧满宽。
+const GUIDE = "relative before:absolute before:inset-y-0.5 before:w-px before:bg-base-content/15 before:content-['']";
+/** L1:组头基准内距 12px + 12px 图标的一半 = 18px(项目组 / 云端项目组 / 底部小节) */
+export const GUIDE_L1 = `${GUIDE} before:start-[18px]`;
+/** L2:组内小节头 ps-6(24px)+ 10px 图标的一半 = 29px(项目内「已归档任务」) */
+export const GUIDE_L2 = `${GUIDE} before:start-[29px]`;
+
 /** 列表行(menu 的 li>a 载体):indent = 行内起始 padding 类(缩进阶梯
  * 进行内、行底满宽——嵌套 margin 会把 hover/选中底压窄错位)。 */
 export function ListRow({
@@ -107,14 +121,13 @@ export function SectionFold({
           writeFold(foldKey, next);
         }}
       >
-        {/* Archive 形小节头:图标行首(与组头 Folder 同构)、去 menu 默认尾箭头。
-            展开时 pb-0.5 贴住自己的行(同项目组头);折叠时没有要贴的行,不收 */}
-        <summary className={`flex items-center gap-2 text-xs text-base-content/50 after:hidden ${isOpen ? "pb-0.5" : ""}`}>
+        {/* Archive 形小节头:图标行首(与组头 Folder 同构)、去 menu 默认尾箭头 */}
+        <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
           <Icon size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </summary>
         {/* 收起即卸载:防 details 收起后嵌套 ul 残留占位空间 */}
-        {isOpen && <ul className="ms-0 min-w-0 ps-0 before:hidden">{children}</ul>}
+        {isOpen && <ul className={`ms-0 min-w-0 ps-0 ${GUIDE_L1}`}>{children}</ul>}
       </details>
     </li>
   );

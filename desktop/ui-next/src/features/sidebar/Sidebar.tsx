@@ -14,7 +14,7 @@ import { Archive, Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
-import { GroupLabel, ListRow, SectionFold } from "@/features/sidebar/listKit";
+import { GroupLabel, GUIDE_L1, GUIDE_L2, ListRow, SectionFold } from "@/features/sidebar/listKit";
 import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -174,12 +174,7 @@ function ProjectDetails({
   ];
   return (
     <li>
-      {/* 组间距挂**展开态**(open:mb-4),不挂组本身(用户报障 2026-08-07
-          第二轮:全部折叠时组头之间没有内容要分开,常驻组间距纯粹是空)。
-          展开的组尾部留 16px,与下一组隔出 28px;折叠的组头彼此按普通行
-          节奏 12px 相邻——「需要被分开的是有内容的块,不是标签」 */}
       <details
-        className="open:mb-4"
         open={!collapsed}
         onToggle={(e) => {
           // ⚠️ React 把原生不冒泡的 toggle 做成合成冒泡:内层「已归档任务」
@@ -190,12 +185,14 @@ function ProjectDetails({
         }}
       >
         {/* 区块标签形态:summary 由 grid 覆写为 flex(名称伸展、徽标/＋殿后);
-            原生折叠箭头整个去掉(用户定案 2026-08-04),开合只靠点击组头 */}
-        {/* 展开时 pb-0.5 收掉组头下内距(daisyUI 默认 .375rem)贴住自己的首行,
-            否则「组头↔首行」与「行↔行」同距,层级只剩缩进一个信号。折叠时不收:
-            没有要贴的行,组头就只是普通标签行,按列表统一节奏排 */}
+            原生折叠箭头整个去掉(用户定案 2026-08-04),开合只靠点击组头。
+            行节奏全列统一,组间不加空白(2026-08-07 用户三轮报障后改按主流
+            树组件的做法:VS Code 资源管理器 / Finder 列表 / JetBrains 项目树 /
+            GitHub 文件树都是等距行 + 缩进 + 引导竖线,空白分组是 Slack 那种
+            「少数固定分区」的手法,项目数一多就把列表撑散)。层级信号交给
+            缩进与下方的引导竖线,不再靠 mb/pb 调间距 */}
         <summary
-          className={`group flex items-center after:hidden ${collapsed ? "" : "pb-0.5"} ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
+          className={`group flex items-center after:hidden ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
           title={[group.key, t("sidebar.project.hint"), drag ? t("sidebar.project.dragHint") : ""].filter(Boolean).join("\n")}
           draggable={!!drag}
           onDragStart={() => drag?.onDragStart(group.key)}
@@ -238,7 +235,7 @@ function ProjectDetails({
             (ms-0 ps-0,margin 缩进会把行底压窄错位);L1 行 ps-6、L2 行
             ps-9(基准 item padding 12px,每级恰 = 图标宽 12px),行首标记
             统一 12px 定宽槽 → 同级文字对齐、跨级阶梯均匀 */}
-        <ul className="ms-0 min-w-0 ps-0 before:hidden">
+        <ul className={`ms-0 min-w-0 ps-0 ${GUIDE_L1}`}>
           {rows(group.sessions, p, archivedProject ? "ps-9" : "ps-6")}
           {group.archivedSessions.length > 0 && (
             <li>
@@ -248,7 +245,7 @@ function ProjectDetails({
               }}>
                 {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
                 <summary
-                  className={`flex items-center gap-2 ${archOpen ? "pb-0.5" : ""} ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
+                  className={`flex items-center gap-2 ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
                 >
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
@@ -258,7 +255,7 @@ function ProjectDetails({
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
                     占位空间(用户报障),条件渲染釜底抽薪 */}
                 {archOpen && (
-                  <ul className="ms-0 min-w-0 ps-0 before:hidden">
+                  <ul className={`ms-0 min-w-0 ps-0 ${GUIDE_L2}`}>
                     {rows(group.archivedSessions, p, archivedProject ? "ps-12" : "ps-9")}
                   </ul>
                 )}
