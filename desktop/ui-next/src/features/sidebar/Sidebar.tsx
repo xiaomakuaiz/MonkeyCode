@@ -121,6 +121,7 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
       tooltip={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${trailing ? `${trailing.label}\n` : ""}${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
       indent={indent}
       active={meta.id === p.currentId}
+      archived={meta.archived}
       attention={attention}
       onSelect={() => p.actions.onSelect(meta)}
       menuItems={menuItems}
@@ -212,7 +213,7 @@ function ProjectDetails({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
         >
-          <GroupLabel icon={Folder} name={group.name} />
+          <GroupLabel icon={Folder} name={group.name} muted={archivedProject} />
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           {/* 快捷钮常驻占位、hover 只切可见性:插入式显隐会挤动项目名,鼠标一进一出就抖 */}
           {!archivedProject && (
@@ -235,7 +236,7 @@ function ProjectDetails({
             (ms-0 ps-0,margin 缩进会把行底压窄错位);L1 行 ps-6、L2 行
             ps-9(基准 item padding 12px,每级恰 = 图标宽 12px),行首标记
             统一 12px 定宽槽 → 同级文字对齐、跨级阶梯均匀 */}
-        <ul className={`ms-0 min-w-0 ps-0 ${GUIDE_L1}`}>
+        <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${GUIDE_L1}`}>
           {rows(group.sessions, p, archivedProject ? "ps-9" : "ps-6")}
           {group.archivedSessions.length > 0 && (
             <li>
@@ -255,7 +256,7 @@ function ProjectDetails({
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
                     占位空间(用户报障),条件渲染釜底抽薪 */}
                 {archOpen && (
-                  <ul className={`ms-0 min-w-0 ps-0 ${GUIDE_L2}`}>
+                  <ul className={`ms-0 min-w-0 ps-0 pb-1 ${GUIDE_L2}`}>
                     {rows(group.archivedSessions, p, archivedProject ? "ps-12" : "ps-9")}
                   </ul>
                 )}

@@ -109,6 +109,24 @@ describe("侧栏(local 空间)", () => {
     expect(JSON.parse(localStorage.getItem("mc.sessionArchivesOpen") ?? "[]")).toContain("/p/beta");
   });
 
+  it("已归档任务的标题降为弱化色,活跃任务保持正文色(用户报障:归档标题还是黑的)", async () => {
+    localStorage.setItem("mc.sessionArchivesOpen", JSON.stringify(["/p/beta"]));
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    // 归档行主文案挂弱化档;活跃行是正文档——两者必须不同,否则归档区与
+    // 活跃任务在列表里一样抢眼
+    const archived = screen.getByText("旧任务");
+    const active = screen.getByText("修复了闪退,补了用例");
+    expect(archived.className).toContain("text-base-content/55");
+    expect(active.className).toContain("text-base-content/90");
+  });
+
+  it("组头是锚点:项目名与行同字号但加粗(层级靠字重,不靠间距)", () => {
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    const label = screen.getByText("alpha");
+    expect(label.className).toContain("font-semibold");
+    expect(label.className).toContain("text-sm");
+  });
+
   it("行右键菜单:归档直接触发;删除二段确认", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
