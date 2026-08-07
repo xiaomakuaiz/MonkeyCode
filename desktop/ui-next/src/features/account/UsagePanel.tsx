@@ -3,7 +3,7 @@
 // 条,余量见底转警示)→ 积分余额(大号等宽数字)· 邀请(人数+每邀奖励+
 // 复制链接)。数据在挂载时自取一次(mc_usage 四路并发在壳侧收口),不进
 // 任何全局轮询——面板只在设置页可见,常驻轮询等于为看不见的面板空跑请求。
-import { Check, Copy, Crown } from "lucide-react";
+import { IconCheck, IconCopy, IconCrown } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CHECKIN_REWARD, INVITE_REWARD, usageVM } from "@/lib/account/usage";
@@ -91,7 +91,7 @@ export function UsagePanel({ userId }: { userId?: string }) {
       {vm.hasSubscription && (
         <div className="flex items-center gap-2">
           <span className={`badge badge-soft gap-1 font-bold ${vm.plan === "basic" ? "" : "badge-primary"}`}>
-            <Crown size={12} strokeWidth={2} aria-hidden />
+            <IconCrown size={12} stroke={2} aria-hidden />
             {t(`account.usage.plan.${vm.plan}`)}
           </span>
           <span className="text-xs text-base-content/50">
@@ -152,9 +152,9 @@ export function UsagePanel({ userId }: { userId?: string }) {
               {vm.invite.link && (
                 <button type="button" className="btn btn-sm min-w-32 shrink-0" title={vm.invite.link} onClick={copyInvite}>
                   {copied ? (
-                    <Check size={12} strokeWidth={2} aria-hidden className="text-success" />
+                    <IconCheck size={12} stroke={2} aria-hidden className="text-success" />
                   ) : (
-                    <Copy size={12} strokeWidth={1.75} aria-hidden />
+                    <IconCopy size={12} stroke={1.75} aria-hidden />
                   )}
                   {copied ? t("account.usage.copied") : t("account.usage.copyInvite")}
                 </button>

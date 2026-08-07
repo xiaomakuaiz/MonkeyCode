@@ -8,7 +8,7 @@
 // UI 契约键);query 非空过滤并强制展开(未拉过的组顺势懒拉)。
 // 数据 hook(useCloudTasks/useCloudProjects)由 Sidebar 顶层调用后注入
 // props——概览统计与列表共用同一份 feed,enabled 仅云端空间为真。
-import { Cloud, Folder, History, Plus } from "lucide-react";
+import { IconCloud, IconFolder, IconHistory, IconPlus } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { GroupLabel, GUIDE_L1, ListRow, SectionFold } from "@/features/sidebar/listKit";
@@ -315,7 +315,7 @@ export function CloudTaskList({
   if (feed.unauthorized) {
     return (
       <div className="flex flex-col items-center gap-1.5 px-3 py-8 text-center">
-        <Cloud size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <IconCloud size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
         <div className="text-sm font-semibold">{t("cloud.list.offline.title")}</div>
         <div className="text-xs text-base-content/60">{t("cloud.list.offline.detail")}</div>
         {onOpenSettings && (
@@ -346,7 +346,7 @@ export function CloudTaskList({
     // 空态统一形态:图标 + 标题档 + 辅助档,居中
     return (
       <div className="flex flex-col items-center gap-1.5 px-3 py-8 text-center">
-        <Cloud size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <IconCloud size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
         <div className="text-sm font-semibold">{t("cloud.list.empty.title")}</div>
         <div className="text-xs text-base-content/60">{t("cloud.list.empty.detail")}</div>
       </div>
@@ -403,7 +403,7 @@ export function CloudTaskList({
             快捷「+」与本地组头同构:常驻占位、hover 只切可见性(插入式显隐
             会挤动项目名) */}
         <summary title={name} className="group flex items-center after:hidden">
-          <GroupLabel icon={Folder} name={name} />
+          <GroupLabel icon={IconFolder} name={name} />
           {onNewTaskIn && (
             <button
               type="button"
@@ -416,7 +416,7 @@ export function CloudTaskList({
                 onNewTaskIn(project);
               }}
             >
-              <Plus size={14} strokeWidth={1.75} aria-hidden />
+              <IconPlus size={14} stroke={1.75} aria-hidden />
             </button>
           )}
         </summary>
@@ -438,7 +438,7 @@ export function CloudTaskList({
       )}
       {/* 历史置底(与本地「已归档项目」同位同构):History 小节头、无计数 */}
       {historyRows.length > 0 && (
-        <SectionFold label={t("cloud.list.history")} icon={History} foldKey="mc.cloudHistoryOpen" forceOpen={forceOpen}>
+        <SectionFold label={t("cloud.list.history")} icon={IconHistory} foldKey="mc.cloudHistoryOpen" forceOpen={forceOpen}>
           {historyRows.map((task) => (
             <TaskRow key={task.id} task={task} currentId={currentId} indent="ps-6" onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
           ))}

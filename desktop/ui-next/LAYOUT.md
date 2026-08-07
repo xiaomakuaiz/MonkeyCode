@@ -192,6 +192,15 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
   不散落在组件类上。
 - 允许保留:功能性状态色(attention 行的 warning 淡底)、文字四档透明度
   (内容排版,非组件覆写)、布局结构线(列分界/头部基线)。
+- **图标族 = `@tabler/icons-react`**(2026-08-07 由 lucide 换过来):组件名
+  一律 `Icon` 前缀,线宽属性是 `stroke` 而非 `strokeWidth`(全库统一
+  `stroke={1.75}`,组头 12px / 行内 13-14px / 空态 20px)。
+  > 选图标两条:①**先确认是字形不是文字标记**——tabler 有一批画的是字母
+  > (`IconJson` 就是「JSON」四个字),图集里清楚、12px 下糊成一团,必须
+  > 按真实尺寸离屏出一版图再定;②**图标不能暗示不成立的前提**——如本地
+  > 任务空间曾用 lucide 的 `FolderGit2`(带 git 分支的文件夹),而本地任务
+  > 并不要求工作区是 git 仓库(FilesDrawer 专有非 git 降级分支),已换
+  > `IconFolderCode`。
 
 ### 8.1 豁免清单(daisyUI 无对应形态,自绘保留;新增豁免须在此登记)
 - TitleBar Windows caption 三键 / mac 红绿灯:系统 chrome 规范(热区/配色跟

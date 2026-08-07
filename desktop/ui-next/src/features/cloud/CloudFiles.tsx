@@ -7,7 +7,7 @@
 // additions/deletions 云端超集字段有则展示);变动挂载拉一次,刷新钮与
 // 上传落地后重拉。控制流懒建 + call() 懒重连:连不上时不无限拨号刷屏,
 // 操作时再试。
-import { CornerUpLeft, Download, Folder, FolderOpen, RefreshCw, X } from "lucide-react";
+import { IconDownload, IconFolder, IconFolderOpen, IconFolderUp, IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Changes, type ChangeItem } from "@/features/files/Changes";
@@ -244,7 +244,7 @@ export function CloudFiles({
             loadChanges();
           }}
         >
-          <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
+          <IconRefresh size={14} stroke={1.75} aria-hidden />
         </button>
         {vmId && tab === "files" && (
           <>
@@ -268,7 +268,7 @@ export function CloudFiles({
         )}
         {onClose && (
           <button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={t("cloud.files.close")} onClick={onClose}>
-            <X size={14} strokeWidth={1.75} aria-hidden />
+            <IconX size={14} stroke={1.75} aria-hidden />
           </button>
         )}
       </header>
@@ -294,7 +294,7 @@ export function CloudFiles({
             {dir && (
               <li>
                 <button type="button" onClick={() => setDir(parent)}>
-                  <CornerUpLeft size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                  <IconFolderUp size={14} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                   {t("cloud.files.up")}
                 </button>
               </li>
@@ -302,7 +302,7 @@ export function CloudFiles({
             {files.length === 0 && (
               // 空态统一形态:图标 + 标题档,居中
               <li className="pointer-events-none flex flex-col items-center gap-1.5 px-3 py-8 text-center">
-                <FolderOpen size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+                <IconFolderOpen size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
                 <span className="text-sm font-semibold">{t("cloud.files.empty")}</span>
               </li>
             )}
@@ -313,7 +313,7 @@ export function CloudFiles({
               <li key={f.path} className="group">
                 {isDir(f) ? (
                   <button type="button" className={vmId ? "pe-9" : undefined} onClick={() => setDir(f.path)}>
-                    <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary/60" />
+                    <IconFolder size={14} stroke={1.75} aria-hidden className="shrink-0 text-primary/60" />
                     <span className="min-w-0 flex-1 truncate">{f.name}</span>
                   </button>
                 ) : (
@@ -321,7 +321,7 @@ export function CloudFiles({
                     {/* 类型图标与本地文件树同一份 fileIcon,不做两套 */}
                     {(() => {
                       const spec = fileIconOf(f.name);
-                      return <spec.icon size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
+                      return <spec.icon size={14} stroke={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
                     })()}
                     <span className="min-w-0 flex-1 truncate">{f.name}</span>
                     <span className="font-mono text-[10px] text-base-content/40 tabular-nums">{fmtSize(f.size)}</span>
@@ -335,7 +335,7 @@ export function CloudFiles({
                     className="btn btn-ghost btn-square btn-xs absolute end-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus:opacity-100"
                     onClick={() => void download(f)}
                   >
-                    <Download size={14} strokeWidth={1.75} aria-hidden />
+                    <IconDownload size={14} stroke={1.75} aria-hidden />
                   </button>
                 )}
               </li>

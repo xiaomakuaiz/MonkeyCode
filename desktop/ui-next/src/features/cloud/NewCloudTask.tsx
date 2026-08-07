@@ -8,7 +8,7 @@
 // - 镜像:公共 devbox → is_default → 第一个;
 // - 仓库:默认不关联(快速开始);选云端项目下发 project_id,手输地址下发
 //   repo_url,两者互斥(选一个即清掉另一个)。
-import { Check, Cloud, ChevronDown, Folder, SendHorizontal } from "lucide-react";
+import { IconCheck, IconChevronDown, IconCloud, IconFolder, IconSend } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { OptionMenu } from "@/features/chat/composer/pickers";
@@ -197,15 +197,15 @@ export function NewCloudTask({
             setRepoOpen(!repoOpen);
           }}
         >
-          <Cloud size={13} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/60" />
+          <IconCloud size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/60" />
           <span
             className={`min-w-0 truncate text-xs ${project || repoUrl ? "font-semibold" : "text-base-content/50"}`}
           >
             {repoTriggerLabel}
           </span>
-          <ChevronDown
+          <IconChevronDown
             size={12}
-            strokeWidth={1.75}
+            stroke={1.75}
             aria-hidden
             className={`shrink-0 text-base-content/50 transition-transform duration-150 ${repoOpen ? "rotate-180" : ""}`}
           />
@@ -222,9 +222,9 @@ export function NewCloudTask({
                 className={`btn btn-ghost btn-sm w-full justify-start gap-2 px-2 font-normal ${!project && !repoUrl ? "btn-active" : ""}`}
                 onClick={clearRepo}
               >
-                <Cloud size={13} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                <IconCloud size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                 <span className="min-w-0 flex-1 truncate text-start text-xs">{t("cloud.new.repoNone")}</span>
-                {!project && !repoUrl && <Check size={12} strokeWidth={2} aria-hidden className="shrink-0 text-primary" />}
+                {!project && !repoUrl && <IconCheck size={12} stroke={2} aria-hidden className="shrink-0 text-primary" />}
               </button>
             </li>
             <li aria-hidden className="my-1 border-t border-base-300" />
@@ -276,14 +276,14 @@ export function NewCloudTask({
                       className={`btn btn-ghost btn-sm h-auto w-full justify-start gap-2 px-2 py-1.5 font-normal ${project?.id === p.id ? "btn-active" : ""}`}
                       onClick={() => pickProject(p)}
                     >
-                      <Folder size={13} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                      <IconFolder size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                       <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
                         <span className="max-w-full truncate text-xs font-medium">{projectLabel(p)}</span>
                         {p.repo_url && (
                           <span className="max-w-full truncate font-mono text-[10px] text-base-content/50">{p.repo_url}</span>
                         )}
                       </span>
-                      {project?.id === p.id && <Check size={12} strokeWidth={2} aria-hidden className="shrink-0 text-primary" />}
+                      {project?.id === p.id && <IconCheck size={12} stroke={2} aria-hidden className="shrink-0 text-primary" />}
                     </button>
                   </li>
                 ))}
@@ -362,7 +362,7 @@ export function NewCloudTask({
             >
               {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
               {t("cloud.new.submit")}
-              {!busy && <SendHorizontal size={12} strokeWidth={2} aria-hidden />}
+              {!busy && <IconSend size={12} stroke={2} aria-hidden />}
             </button>
           </div>
         </>

@@ -12,7 +12,7 @@
 // 提问大纲:数据 = REST 提问索引(全量目录)+ 已回放窗口的用户消息按时间锚
 // 合并(lib/cloud/outline),渲染复用本地 OutlineNav;跳转目标未加载时经
 // loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
-import { Ellipsis, FolderOpen, Globe, SquareTerminal, X } from "lucide-react";
+import { IconDots, IconFolderOpen, IconTerminal2, IconWorld, IconX } from "@tabler/icons-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -418,7 +418,7 @@ export function CloudTaskView({
           disabled={pending}
           onClick={() => setFilesOpen((o) => !o)}
         >
-          <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
+          <IconFolderOpen size={16} stroke={1.75} aria-hidden />
         </button>
         {h.vmId && !h.ended && (
           <button
@@ -428,7 +428,7 @@ export function CloudTaskView({
             className={`btn btn-ghost btn-square btn-sm text-base-content/60 ${termOpen ? "btn-active" : ""}`}
             onClick={() => setTermOpen((o) => !o)}
           >
-            <SquareTerminal size={16} strokeWidth={1.75} aria-hidden />
+            <IconTerminal2 size={16} stroke={1.75} aria-hidden />
           </button>
         )}
         <div ref={menuBoxRef} className={`dropdown dropdown-end ${menuOpen ? "dropdown-open" : ""}`}>
@@ -445,7 +445,7 @@ export function CloudTaskView({
               h.fetchPorts(); // 在线预览分节:开菜单即检测开放端口
             }}
           >
-            <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
+            <IconDots size={16} stroke={1.75} aria-hidden />
           </button>
           {menuOpen && (
             <ul role="menu" aria-label={t("cloud.view.menu")} className="dropdown-content menu z-40 w-56 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
@@ -462,7 +462,7 @@ export function CloudTaskView({
                       openExternal(`https://${mcHost}/console/task/${h.id}`);
                     }}
                   >
-                    <Globe size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                    <IconWorld size={14} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                     {t("cloud.view.openConsole")}
                   </button>
                 </li>
@@ -495,7 +495,7 @@ export function CloudTaskView({
                             openExternal(p.access_url!);
                           }}
                         >
-                          <Globe size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary" />
+                          <IconWorld size={14} stroke={1.75} aria-hidden className="shrink-0 text-primary" />
                           <span className="min-w-0 flex-1 truncate">
                             :{p.port} {p.label || p.process || ""}
                           </span>
@@ -635,7 +635,7 @@ export function CloudTaskView({
                   aria-label={t("cloud.view.terminalClose")}
                   onClick={() => setTermOpen(false)}
                 >
-                  <X size={14} strokeWidth={1.75} aria-hidden />
+                  <IconX size={14} stroke={1.75} aria-hidden />
                 </button>
               </div>
               <div className="min-h-0 flex-1">

@@ -109,10 +109,19 @@ export function sessionIdFromUiIntent(intent: unknown): string | null {
   return id || null;
 }
 
-/** 打开引擎日志目录(文件管理器定位);浏览器模式 no-op。 */
+/** 打开应用存储目录 = 引擎日志目录(app_config_dir,壳侧同一命令:配置、
+ *  会话、cookie 与引擎日志都在这);文件管理器定位,浏览器模式 no-op。 */
 export function openLogDir(): Promise<void> {
   if (!inDesktopShell()) return Promise.resolve();
   return invoke<string>("open_log_dir")
+    .then(() => {})
+    .catch(() => {});
+}
+
+/** 打开程序本体所在处(macOS 为 .app,其余平台为可执行文件);浏览器模式 no-op。 */
+export function openAppDir(): Promise<void> {
+  if (!inDesktopShell()) return Promise.resolve();
+  return invoke<string>("open_app_dir")
     .then(() => {})
     .catch(() => {});
 }

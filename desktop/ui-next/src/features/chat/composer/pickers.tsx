@@ -8,7 +8,7 @@
 // - OptionMenu:通用平铺单选(云端任务的宿主机/镜像等)。
 // 关闭胶水统一 useDismiss(外点 pointerdown + Esc;不用 onBlur,WebKitGTK
 // 点按钮不移焦点会误关)。
-import { ChevronDown } from "lucide-react";
+import { IconChevronDown } from "@tabler/icons-react";
 import { useRef, useState } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -70,7 +70,7 @@ function Trigger({
       onClick={onToggle}
     >
       {children}
-      <ChevronDown size={12} strokeWidth={1.75} aria-hidden className="shrink-0 opacity-60" />
+      <IconChevronDown size={12} stroke={1.75} aria-hidden className="shrink-0 opacity-60" />
     </button>
   );
 }

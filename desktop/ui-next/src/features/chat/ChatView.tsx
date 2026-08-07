@@ -10,7 +10,7 @@
 // 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
 // 用短时重试兜(旧 chat.tsx jumpWithRetry 语义);大纲当前项 activeSeq 由
 // rAF 节流的滚动跟踪算出(lib/util/scrollAnchor.outlineActiveSeq)。
-import { Ellipsis, FolderOpen, Pencil, X } from "lucide-react";
+import { IconDots, IconFolderOpen, IconPencil, IconX } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -593,7 +593,7 @@ export function ChatView({
                 className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/40 opacity-0 transition-opacity group-hover/title:opacity-100 focus-visible:opacity-100"
                 onClick={startRename}
               >
-                <Pencil size={12} strokeWidth={1.75} aria-hidden />
+                <IconPencil size={12} stroke={1.75} aria-hidden />
               </button>
             </h1>
           )}
@@ -612,7 +612,7 @@ export function ChatView({
             className="btn btn-ghost btn-square btn-sm text-base-content/60"
             onClick={() => setDrawerOpen((v) => !v)}
           >
-            <FolderOpen size={16} strokeWidth={1.75} aria-hidden />
+            <IconFolderOpen size={16} stroke={1.75} aria-hidden />
           </button>
         </div>
         <div ref={menuBoxRef} className={`dropdown dropdown-end ${menuOpen ? "dropdown-open" : ""}`}>
@@ -625,7 +625,7 @@ export function ChatView({
             className="btn btn-ghost btn-square btn-sm text-base-content/60"
             onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
           >
-            <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
+            <IconDots size={16} stroke={1.75} aria-hidden />
           </button>
           {menuOpen && (
             <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
@@ -802,7 +802,7 @@ function ChildSessionModal({ id, workdir, onClose }: { id: string; workdir?: str
             className="btn btn-ghost btn-square btn-xs"
             onClick={onClose}
           >
-            <X size={14} strokeWidth={1.75} aria-hidden />
+            <IconX size={14} stroke={1.75} aria-hidden />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">

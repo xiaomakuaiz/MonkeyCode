@@ -10,7 +10,7 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { Archive, Folder, Inbox, MessagesSquare, Plus, RefreshCw } from "lucide-react";
+import { IconArchive, IconFolder, IconInbox, IconMessages, IconPlus, IconRefresh } from "@tabler/icons-react";
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
@@ -214,7 +214,7 @@ function ProjectDetails({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
         >
-          <GroupLabel icon={Folder} name={group.name} />
+          <GroupLabel icon={IconFolder} name={group.name} />
           {waiting > 0 && <span className="badge badge-warning badge-xs">{waiting}</span>}
           {/* 快捷钮常驻占位、hover 只切可见性:插入式显隐会挤动项目名,鼠标一进一出就抖 */}
           {!archivedProject && (
@@ -229,7 +229,7 @@ function ProjectDetails({
                 p.actions.onNewTaskIn(group.key);
               }}
             >
-              <Plus size={14} strokeWidth={1.75} aria-hidden />
+              <IconPlus size={14} stroke={1.75} aria-hidden />
             </button>
           )}
         </summary>
@@ -251,7 +251,7 @@ function ProjectDetails({
                 >
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
-                  <Archive size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                  <IconArchive size={10} stroke={1.75} aria-hidden className="shrink-0" />
                   <span className="min-w-0 flex-1 truncate">{t("sidebar.archivedTasks")}</span>
                 </summary>
                 {/* 收起即卸载:details 收起后嵌套 ul 在部分 webview 里残留
@@ -336,7 +336,7 @@ function Overview({
             className="btn btn-ghost btn-square btn-xs -me-1 shrink-0 text-base-content/50"
             onClick={onRefresh}
           >
-            <RefreshCw size={13} strokeWidth={1.75} aria-hidden />
+            <IconRefresh size={13} stroke={1.75} aria-hidden />
           </button>
         )}
       </div>
@@ -476,10 +476,10 @@ export function Sidebar({
     const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat"));
     if (pool.length === 0) {
       const chat = space === "chat";
-      const EmptyIcon = chat ? MessagesSquare : Inbox;
+      const EmptyIcon = chat ? IconMessages : IconInbox;
       return (
         <EmptySlate
-          icon={<EmptyIcon size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />}
+          icon={<EmptyIcon size={20} stroke={1.75} className="text-base-content/30" aria-hidden />}
           title={t(chat ? "sidebar.empty.chat.title" : "sidebar.empty.local.title")}
           detail={t(chat ? "sidebar.empty.chat.detail" : "sidebar.empty.local.detail")}
         />
@@ -574,7 +574,7 @@ export function Sidebar({
           className="btn btn-primary btn-square btn-xs"
           onClick={actions.onNewTask}
         >
-          <Plus size={14} strokeWidth={2} aria-hidden />
+          <IconPlus size={14} stroke={2} aria-hidden />
         </button>
       </div>
       {/* 四段式(LAYOUT.md):头部固定 → 概览块固定 → 列表 = 唯一滚动区 → footer 钉底。

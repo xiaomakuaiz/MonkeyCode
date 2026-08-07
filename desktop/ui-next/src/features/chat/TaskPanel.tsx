@@ -1,7 +1,7 @@
 // 实时任务面板(plan 帧驱动):钉在 composer 上方,不进对话流。
 // 收起 = 一行摘要(进度 + 当前项),展开 = 限高滚动的只读勾选清单;
 // 整卡随 plan 全量重发更新(daisyUI collapse 强制开合态)。
-import { ChevronRight } from "lucide-react";
+import { IconChevronRight } from "@tabler/icons-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -49,9 +49,9 @@ export function TaskPanel({ entries }: { entries: PlanEntry[] }) {
             {current.content}
           </span>
         )}
-        <ChevronRight
+        <IconChevronRight
           size={14}
-          strokeWidth={1.75}
+          stroke={1.75}
           aria-hidden
           className={`ml-auto shrink-0 text-base-content/40 transition-transform ${open ? "rotate-90" : ""}`}
         />

@@ -4,7 +4,7 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { Clock3, Paperclip, SendHorizontal, X } from "lucide-react";
+import { IconClock, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import {
   useEffect,
   useMemo,
@@ -215,7 +215,7 @@ export function Composer({
 
       {ctl.queued && (
         <div className="alert alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
-          <Clock3 size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+          <IconClock size={14} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
           <span className="shrink-0 font-medium">{t("chat.queued")}</span>
           <span className="min-w-0 flex-1 truncate">{ctl.queued}</span>
           <span className="shrink-0 text-base-content/50">{t("chat.queuedHint")}</span>
@@ -225,7 +225,7 @@ export function Composer({
             className="btn btn-ghost btn-square btn-xs"
             onClick={ctl.clearQueued}
           >
-            <X size={14} strokeWidth={1.75} aria-hidden />
+            <IconX size={14} stroke={1.75} aria-hidden />
           </button>
         </div>
       )}
@@ -250,7 +250,7 @@ export function Composer({
                 {u.pct >= 0 && <span className="tabular-nums opacity-60">{u.pct}%</span>}
                 {u.cancel && (
                   <button type="button" aria-label={t("chat.uploadCancel")} className="btn btn-ghost btn-circle btn-xs" onClick={u.cancel}>
-                    <X size={12} strokeWidth={1.75} aria-hidden />
+                    <IconX size={12} stroke={1.75} aria-hidden />
                   </button>
                 )}
               </span>
@@ -259,7 +259,7 @@ export function Composer({
               <span key={a.path} title={a.path} className="badge badge-ghost text-xs">
                 <span className="max-w-40 truncate">{a.name}</span>
                 <button type="button" aria-label={t("chat.attachRemove")} className="btn btn-ghost btn-circle btn-xs" onClick={() => ctl.removeAtt(i)}>
-                  <X size={12} strokeWidth={1.75} aria-hidden />
+                  <IconX size={12} stroke={1.75} aria-hidden />
                 </button>
               </span>
             ))}
@@ -294,7 +294,7 @@ export function Composer({
             className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60"
             onClick={attach}
           >
-            <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+            <IconPaperclip size={15} stroke={1.75} aria-hidden />
           </button>
           <button
             type="button"
@@ -341,7 +341,7 @@ export function Composer({
             disabled={!ctl.draft.trim() && ctl.atts.length === 0}
             onClick={submit}
           >
-            <SendHorizontal size={16} strokeWidth={1.75} aria-hidden />
+            <IconSend size={16} stroke={1.75} aria-hidden />
           </button>
         </div>
       </ComposerCard>

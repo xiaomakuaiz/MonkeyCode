@@ -1,4 +1,4 @@
-// 文件类型图标:文件名 → lucide 图标 + 色调。文件树/改动列表/云端文件页
+// 文件类型图标:文件名 → tabler 图标 + 色调。文件树/改动列表/云端文件页
 // 共用一份(三处此前要么清一色灰 File、要么根本没图标,用户报障
 // 2026-08-06「太丑」)。
 //
@@ -7,46 +7,35 @@
 // 类名必须是完整字面量:Tailwind 静态扫描源码文本,拼接出来的类不生成。
 // 语义色在这里表达的是「文件族类」不是状态——状态另有行尾徽标承担,
 // 两者一个在行首一个在行尾,不抢读。
-import {
-  Database,
-  File,
-  FileArchive,
-  FileAudio,
-  FileCode,
-  FileCog,
-  FileImage,
-  FileJson,
-  FileLock,
-  FileSpreadsheet,
-  FileTerminal,
-  FileText,
-  FileType,
-  FileVideo,
-  type LucideIcon,
-} from "lucide-react";
+//
+// ⚠️ 选图标先确认**它是不是字形**:tabler 里有一批是文字标记(IconJson 画的
+// 就是「JSON」四个字母),20px 的图集里看着挺清楚,落到文件树的 12px 上糊成
+// 一团。数据文件因此取 IconBraces(花括号)而非 IconJson——2026-08-07 换库时
+// 按真实尺寸离屏出图才发现,只翻图集不出图会漏掉这类。
+import { IconDatabase, IconFile, IconFileCertificate, IconFileCode, IconFileMusic, IconFileSettings, IconFileSpreadsheet, IconFileText, IconFileTypography, IconFileZip, IconBraces, IconMovie, IconPhoto, IconScript, type TablerIcon } from "@tabler/icons-react";
 
 export interface FileIconSpec {
-  icon: LucideIcon;
+  icon: TablerIcon;
   /** 完整的 Tailwind 颜色类字面量(禁拼接) */
   tone: string;
 }
 
-const CODE: FileIconSpec = { icon: FileCode, tone: "text-info" };
-const MARKUP: FileIconSpec = { icon: FileCode, tone: "text-warning" };
-const STYLE: FileIconSpec = { icon: FileCode, tone: "text-secondary" };
-const DATA: FileIconSpec = { icon: FileJson, tone: "text-warning" };
-const CONF: FileIconSpec = { icon: FileCog, tone: "text-base-content/45" };
-const DOC: FileIconSpec = { icon: FileText, tone: "text-base-content/50" };
-const IMAGE: FileIconSpec = { icon: FileImage, tone: "text-accent" };
-const VIDEO: FileIconSpec = { icon: FileVideo, tone: "text-accent" };
-const AUDIO: FileIconSpec = { icon: FileAudio, tone: "text-accent" };
-const ARCHIVE: FileIconSpec = { icon: FileArchive, tone: "text-base-content/45" };
-const SHELL: FileIconSpec = { icon: FileTerminal, tone: "text-success" };
-const SHEET: FileIconSpec = { icon: FileSpreadsheet, tone: "text-success" };
-const DB: FileIconSpec = { icon: Database, tone: "text-info" };
-const LOCK: FileIconSpec = { icon: FileLock, tone: "text-base-content/35" };
-const FONT: FileIconSpec = { icon: FileType, tone: "text-base-content/45" };
-const PLAIN: FileIconSpec = { icon: File, tone: "text-base-content/40" };
+const CODE: FileIconSpec = { icon: IconFileCode, tone: "text-info" };
+const MARKUP: FileIconSpec = { icon: IconFileCode, tone: "text-warning" };
+const STYLE: FileIconSpec = { icon: IconFileCode, tone: "text-secondary" };
+const DATA: FileIconSpec = { icon: IconBraces, tone: "text-warning" };
+const CONF: FileIconSpec = { icon: IconFileSettings, tone: "text-base-content/45" };
+const DOC: FileIconSpec = { icon: IconFileText, tone: "text-base-content/50" };
+const IMAGE: FileIconSpec = { icon: IconPhoto, tone: "text-accent" };
+const VIDEO: FileIconSpec = { icon: IconMovie, tone: "text-accent" };
+const AUDIO: FileIconSpec = { icon: IconFileMusic, tone: "text-accent" };
+const ARCHIVE: FileIconSpec = { icon: IconFileZip, tone: "text-base-content/45" };
+const SHELL: FileIconSpec = { icon: IconScript, tone: "text-success" };
+const SHEET: FileIconSpec = { icon: IconFileSpreadsheet, tone: "text-success" };
+const DB: FileIconSpec = { icon: IconDatabase, tone: "text-info" };
+const LOCK: FileIconSpec = { icon: IconFileCertificate, tone: "text-base-content/35" };
+const FONT: FileIconSpec = { icon: IconFileTypography, tone: "text-base-content/45" };
+const PLAIN: FileIconSpec = { icon: IconFile, tone: "text-base-content/40" };
 
 const BY_EXT: Record<string, FileIconSpec> = {
   // 代码

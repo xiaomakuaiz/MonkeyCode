@@ -1,7 +1,7 @@
 // 改动列表:状态徽标 + 文件名 + 目录 + 可选 +N/-N,点击 → diff 预览。
 // 本地 repo_file_changes 只给 {path, status},additions/deletions 是云端
 // 超集字段——有则展示,无则整列缺席(不发明数据)。changes null = 加载中。
-import { FileDiff } from "lucide-react";
+import { IconFileDiff } from "@tabler/icons-react";
 
 import { useI18n } from "@/lib/i18n";
 import type { RepoChange } from "@/lib/ipc/repo";
@@ -35,7 +35,7 @@ export function Changes({
     // 空态统一形态:图标 + 标题档,居中
     return (
       <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
-        <FileDiff size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <IconFileDiff size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
         <div className="text-sm font-semibold">{t("files.changes.empty")}</div>
       </div>
     );
@@ -60,7 +60,7 @@ export function Changes({
                   一个图标都没有,一屏文字糊成一片(用户报障 2026-08-06) */}
               {(() => {
                 const spec = fileIconOf(c.path);
-                return <spec.icon size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
+                return <spec.icon size={14} stroke={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
               })()}
               <span className={`shrink-0 ${deleted ? "line-through opacity-60" : ""}`}>{basename(c.path)}</span>
               <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-base-content/40">{dir}</span>

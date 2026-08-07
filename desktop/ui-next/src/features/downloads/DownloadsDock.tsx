@@ -1,5 +1,5 @@
 // 全局下载条:右下角 toast 栈,跨视图常显(daisyUI toast + progress)。
-import { X } from "lucide-react";
+import { IconX } from "@tabler/icons-react";
 
 import { useI18n } from "@/lib/i18n";
 import {
@@ -22,11 +22,11 @@ function DownloadCard({ item }: { item: DownloadItem }) {
           </span>
           {item.state === "running" ? (
             <button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={t("downloads.cancel")} onClick={() => cancelDownload(item.dlId)}>
-              <X size={14} strokeWidth={1.75} aria-hidden />
+              <IconX size={14} stroke={1.75} aria-hidden />
             </button>
           ) : (
             <button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={t("downloads.dismiss")} onClick={() => dismissDownload(item.dlId)}>
-              <X size={14} strokeWidth={1.75} aria-hidden />
+              <IconX size={14} stroke={1.75} aria-hidden />
             </button>
           )}
         </div>

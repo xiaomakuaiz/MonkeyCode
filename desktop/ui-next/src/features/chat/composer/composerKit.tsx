@@ -3,7 +3,7 @@
 // 输入卡外框 / textarea 自适应高度 / 斜杠指令面板。类名是从 Composer 原样
 // 搬迁的定稿形态(-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),
 // 改形态只改这里。
-import { CircleAlert, CircleStop, X } from "lucide-react";
+import { IconAlertCircle, IconPlayerStop, IconX } from "@tabler/icons-react";
 import { useEffect, type CSSProperties, type ReactNode, type RefObject } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -15,10 +15,10 @@ export function ErrorBar({ text, onDismiss }: { text: string; onDismiss: () => v
   const { t } = useI18n();
   return (
     <div role="alert" className="alert alert-error alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
-      <CircleAlert size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      <IconAlertCircle size={14} stroke={1.75} aria-hidden className="shrink-0" />
       <span className="min-w-0 flex-1 truncate">{text}</span>
       <button type="button" aria-label={t("chat.dismiss")} className="btn btn-ghost btn-square btn-xs" onClick={onDismiss}>
-        <X size={14} strokeWidth={1.75} aria-hidden />
+        <IconX size={14} stroke={1.75} aria-hidden />
       </button>
     </div>
   );
@@ -51,7 +51,7 @@ export function RunBar({
         className="btn btn-ghost btn-square btn-xs text-error"
         onClick={onStop}
       >
-        <CircleStop size={16} strokeWidth={1.75} aria-hidden />
+        <IconPlayerStop size={16} stroke={1.75} aria-hidden />
       </button>
     </div>
   );

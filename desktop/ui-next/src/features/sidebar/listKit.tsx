@@ -13,7 +13,7 @@
 // - SectionFold 小节折叠:Archive 形小节头(10px 图标行首、无计数),
 //   开合走 prefs 契约键持久化,收起即卸载(部分 webview 里 details 收起
 //   后嵌套 ul 残留占位空间)。
-import { Archive, type LucideIcon } from "lucide-react";
+import { IconArchive, type TablerIcon } from "@tabler/icons-react";
 import { useState, type MouseEvent, type ReactNode } from "react";
 
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -109,10 +109,10 @@ export function ListRow({
  * 期间试过按旧 UI 换成「与行同字号 + font-semibold + 满色」的锚点形态
  * ——旧 UI 正是靠组头比行更重来表达从属——但用户定案回退,组头继续小一档、
  * 淡一档。层级改由缩进 + 引导竖线承担(§6.2)。**别再提锚点形态。** */
-export function GroupLabel({ icon: Icon, name }: { icon: LucideIcon; name: string }) {
+export function GroupLabel({ icon: Icon, name }: { icon: TablerIcon; name: string }) {
   return (
     <>
-      <Icon size={12} strokeWidth={1.75} className="shrink-0 text-base-content/40" aria-hidden />
+      <Icon size={12} stroke={1.75} className="shrink-0 text-base-content/40" aria-hidden />
       <span className="min-w-0 flex-1 truncate text-xs font-medium text-base-content/50">{name}</span>
     </>
   );
@@ -122,13 +122,13 @@ export function GroupLabel({ icon: Icon, name }: { icon: LucideIcon; name: strin
  * 契约键;标签不带计数(用户定案 2026-08-05)。 */
 export function SectionFold({
   label,
-  icon: Icon = Archive,
+  icon: Icon = IconArchive,
   foldKey,
   forceOpen = false,
   children,
 }: {
   label: string;
-  icon?: LucideIcon;
+  icon?: TablerIcon;
   foldKey: FoldKey;
   /** 搜索命中等场景强制展开:不写盘、不响应开合 */
   forceOpen?: boolean;
@@ -151,7 +151,7 @@ export function SectionFold({
       >
         {/* Archive 形小节头:图标行首(与组头 Folder 同构)、去 menu 默认尾箭头 */}
         <summary className="flex items-center gap-2 text-xs text-base-content/50 after:hidden">
-          <Icon size={10} strokeWidth={1.75} aria-hidden className="shrink-0" />
+          <Icon size={10} stroke={1.75} aria-hidden className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </summary>
         {/* 收起即卸载:防 details 收起后嵌套 ul 残留占位空间 */}

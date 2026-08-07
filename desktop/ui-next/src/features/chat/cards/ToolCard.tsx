@@ -5,7 +5,7 @@
 // 相邻工具卡由 LogList 计算 joinPrev/joinNext 塌陷边框共享外框(旧
 // tool-stack 设计,DOM 仍与 items 一一对应不破结构契约);子代理进度窗、
 // 「查看结果」兜底、失败外显、findings、内嵌审批同前。
-import { ChevronRight, Pause } from "lucide-react";
+import { IconChevronRight, IconHandStop } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
@@ -224,7 +224,7 @@ export function ToolCard({
         onClick={detail ? () => setDetailOpen((v) => !v) : undefined}
       >
         {perm ? (
-          <Pause size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-warning" />
+          <IconHandStop size={14} stroke={1.75} aria-hidden className="shrink-0 text-warning" />
         ) : (
           <span aria-hidden className={`status ${statusTone(item.status)}`} />
         )}
@@ -285,9 +285,9 @@ export function ToolCard({
               setDetailOpen((v) => !v);
             }}
           >
-            <ChevronRight
+            <IconChevronRight
               size={12}
-              strokeWidth={1.75}
+              stroke={1.75}
               aria-hidden
               className={`text-base-content/40 transition-transform ${detailOpen ? "rotate-90" : ""}`}
             />

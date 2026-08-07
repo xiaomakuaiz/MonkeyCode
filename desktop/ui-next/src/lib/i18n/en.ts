@@ -183,8 +183,13 @@ export const en: Record<MessageKey, string> = {
   "settings.about.install": "Download update",
   "settings.about.installing": "Updating…",
   "settings.about.checkFailed": "Update check failed",
-  "settings.about.exportLog": "Export log",
-  "settings.about.exported": "Log exported: {path}",
+  "settings.about.restart": "Restart engine",
+  "settings.about.restarting": "Restarting…",
+  "settings.about.restartDone": "Engine restarted",
+  "settings.about.restartHint":
+    "Restarting interrupts running tasks; browser tools, MCP and similar changes take effect after a restart (the tray menu has the same entry).",
+  "settings.about.openAppDir": "Open app folder",
+  "settings.about.openDataDir": "Open data folder",
   "settings.about.openExtension": "Open extension folder",
 
   "account.server.title": "Self-hosted",
@@ -424,6 +429,8 @@ export const en: Record<MessageKey, string> = {
   "engine.attempt": "attempt {attempt}",
   "engine.logTail": "Log detail",
   "engine.restart": "Restart engine",
+  "engine.restarting": "Restarting…",
+  "engine.restartDone": "Engine restarted",
   "engine.restartFailed": "Restart failed: {reason}",
   "engine.logs": "Logs",
 

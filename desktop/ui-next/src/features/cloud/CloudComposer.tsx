@@ -4,7 +4,7 @@
 // 模型切换(OptionMenu 分组,经控制流 switch_model)+ 上下文用量环
 // (h.chat.usage,云端 usage_update 帧与本地同构)+ 发送。
 // 发送/上传/切换/错误通道全在 useCloudTask 的 handle 上,本组件纯视图。
-import { Paperclip, SendHorizontal, X } from "lucide-react";
+import { IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 
 import { ComposerCard, ErrorBar, RunBar, SlashPanel, UsageRing, useAutosizeTextarea } from "@/features/chat/composer/composerKit";
@@ -165,7 +165,7 @@ export function CloudComposer({
                   className="btn btn-ghost btn-circle btn-xs"
                   onClick={() => h.removeAtt(i)}
                 >
-                  <X size={12} strokeWidth={1.75} aria-hidden />
+                  <IconX size={12} stroke={1.75} aria-hidden />
                 </button>
               </span>
             ))}
@@ -214,7 +214,7 @@ export function CloudComposer({
             disabled={pending}
             onClick={() => fileRef.current?.click()}
           >
-            <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+            <IconPaperclip size={15} stroke={1.75} aria-hidden />
           </button>
           <span className="min-w-0 flex-1" />
 
@@ -247,7 +247,7 @@ export function CloudComposer({
             disabled={pending || !h.input.trim()}
             onClick={onSend}
           >
-            <SendHorizontal size={16} strokeWidth={1.75} aria-hidden />
+            <IconSend size={16} stroke={1.75} aria-hidden />
           </button>
         </div>
       </ComposerCard>

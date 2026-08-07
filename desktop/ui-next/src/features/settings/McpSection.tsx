@@ -1,7 +1,7 @@
 // MCP 服务器编辑:与模型列表同一套行内展开交互与脏状态(同一份草稿)。
 // 条目形态 = settingsForm.McpEntry(与内核 mcp.json 的 mcpServers 同构),
 // 表单外字段进 extra 随保存透传。
-import { ChevronDown, Plus } from "lucide-react";
+import { IconChevronDown, IconPlus } from "@tabler/icons-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -36,7 +36,7 @@ export function McpSection({
         <div className="flex flex-col items-center gap-3 rounded-box border border-dashed border-base-300 px-6 py-10">
           <p className="text-center text-xs text-base-content/50">{t("settings.mcp.empty")}</p>
           <button type="button" className="btn btn-sm" onClick={add}>
-            <Plus size={14} strokeWidth={2} aria-hidden />
+            <IconPlus size={14} stroke={2} aria-hidden />
             {t("settings.mcp.add")}
           </button>
         </div>
@@ -74,9 +74,9 @@ export function McpSection({
               >
                 {t("settings.mcp.delete")}
               </button>
-              <ChevronDown
+              <IconChevronDown
                 size={14}
-                strokeWidth={1.75}
+                stroke={1.75}
                 aria-hidden
                 className={`shrink-0 text-base-content/40 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
               />
@@ -159,7 +159,7 @@ export function McpSection({
       )}
       {draft.mcps.length > 0 && (
         <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
-          <Plus size={14} strokeWidth={2} aria-hidden />
+          <IconPlus size={14} stroke={2} aria-hidden />
           {t("settings.mcp.add")}
         </button>
       )}

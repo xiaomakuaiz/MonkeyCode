@@ -181,8 +181,11 @@ export const zh = {
   "settings.about.install": "下载更新",
   "settings.about.installing": "更新中…",
   "settings.about.checkFailed": "检查更新失败",
-  "settings.about.exportLog": "导出日志",
-  "settings.about.exported": "日志已导出:{path}",
+  "settings.about.restartHint": "重启会中断正在运行的任务;浏览器工具、MCP 等改动需重启后生效(托盘菜单里也有同一入口)。",
+  // 关于页的隐藏排障入口(连点版本号解锁);「打开扩展目录」的常驻入口在
+  // 设置·浏览器分区,键沿用同一条
+  "settings.about.openAppDir": "打开程序目录",
+  "settings.about.openDataDir": "打开存储目录",
   "settings.about.openExtension": "打开扩展目录",
 
   "account.server.title": "自建部署",
@@ -417,6 +420,8 @@ export const zh = {
   "engine.attempt": "第 {attempt} 次",
   "engine.logTail": "日志详情",
   "engine.restart": "重启引擎",
+  "engine.restarting": "重启中…",
+  "engine.restartDone": "引擎已重启",
   "engine.restartFailed": "重启失败:{reason}",
   "engine.logs": "日志",
 

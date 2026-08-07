@@ -6,7 +6,7 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { Brain, Check, ChevronDown, Globe, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
+import { IconAdjustmentsHorizontal, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
@@ -97,7 +97,7 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
       >
         <ThemeSwatch theme={theme} />
         <span className="min-w-0 flex-1 truncate text-start">{theme}</span>
-        <ChevronDown size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 text-base-content/50 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+        <IconChevronDown size={14} stroke={1.75} aria-hidden className={`shrink-0 text-base-content/50 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
         <ul
@@ -116,7 +116,7 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
               >
                 <ThemeSwatch theme={v} />
                 <span className="min-w-0 flex-1 truncate text-xs">{v}</span>
-                {v === theme && <Check size={14} strokeWidth={2} aria-hidden className="shrink-0" />}
+                {v === theme && <IconCheck size={14} stroke={2} aria-hidden className="shrink-0" />}
               </button>
             </li>
           ))}
@@ -402,18 +402,18 @@ export function SettingsView({
     }
   };
 
-  const items: Array<{ id: Section; label: string; desc: string; icon: LucideIcon }> = [
-    { id: "general", label: t("settings.nav.general"), desc: t("settings.desc.general"), icon: SlidersHorizontal },
-    { id: "account", label: t("settings.nav.account"), desc: t("settings.desc.account"), icon: UserRound },
-    { id: "models", label: t("settings.nav.models"), desc: t("settings.desc.models"), icon: Brain },
-    { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: Server },
+  const items: Array<{ id: Section; label: string; desc: string; icon: TablerIcon }> = [
+    { id: "general", label: t("settings.nav.general"), desc: t("settings.desc.general"), icon: IconAdjustmentsHorizontal },
+    { id: "account", label: t("settings.nav.account"), desc: t("settings.desc.account"), icon: IconUser },
+    { id: "models", label: t("settings.nav.models"), desc: t("settings.desc.models"), icon: IconBrain },
+    { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: IconServer },
     ...(browserExt
-      ? [{ id: "browser" as const, label: t("settings.nav.browser"), desc: t("settings.desc.browser"), icon: Globe }]
+      ? [{ id: "browser" as const, label: t("settings.nav.browser"), desc: t("settings.desc.browser"), icon: IconWorld }]
       : []),
     ...(isWindowsShell()
-      ? [{ id: "env" as const, label: t("settings.nav.env"), desc: t("settings.desc.env"), icon: SquareTerminal }]
+      ? [{ id: "env" as const, label: t("settings.nav.env"), desc: t("settings.desc.env"), icon: IconTerminal2 }]
       : []),
-    { id: "about", label: t("settings.nav.about"), desc: t("settings.desc.about"), icon: Info },
+    { id: "about", label: t("settings.nav.about"), desc: t("settings.desc.about"), icon: IconInfoCircle },
   ];
   const active = items.find((it) => it.id === section);
 
@@ -471,7 +471,7 @@ export function SettingsView({
                   aria-current={section === it.id ? "page" : undefined}
                   onClick={() => setSection(it.id)}
                 >
-                  <it.icon size={15} strokeWidth={1.75} aria-hidden className="text-base-content/60" />
+                  <it.icon size={15} stroke={1.75} aria-hidden className="text-base-content/60" />
                   {it.label}
                 </button>
               </li>

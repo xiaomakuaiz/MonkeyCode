@@ -2,7 +2,7 @@
 // 复用——同一套动作词汇与乐观回写只维护一份,两处渲染不漂移。
 // 答复后先本地乐观置态(按钮换成结果徽标),permission-resolved 帧随后
 // 带权威 outcome 回写 ChatState(归约层已处理);发送失败回滚可重点。
-import { Pause } from "lucide-react";
+import { IconHandStop } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -108,7 +108,7 @@ export function PermCard({
   }
   return (
     <div role="alert" className="alert alert-warning alert-soft items-start" data-perm-id={item.id}>
-      <Pause size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0" />
+      <IconHandStop size={14} stroke={1.75} aria-hidden className="mt-0.5 shrink-0" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center gap-2 text-xs font-semibold">
           <span>{t("chat.perm.needConfirm")}</span>

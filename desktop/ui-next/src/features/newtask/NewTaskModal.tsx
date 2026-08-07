@@ -18,7 +18,7 @@
 //   运行环境过滤(lib/util/workdir);目录预填 = 过滤后首项,无则默认目录
 // - 模型记忆 mc.lastTaskModel(本地/对话共用);旧工程无 lastDir 持久化键,
 //   不发明新键
-import { Check, ChevronDown, Cloud, File as FileIcon, Folder, FolderGit2, FolderOpen, MessagesSquare, Paperclip, SendHorizontal, X } from "lucide-react";
+import { IconCheck, IconChevronDown, IconCloud, IconFile as FileIcon, IconFolder, IconFolderCode, IconFolderOpen, IconMessages, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import {
   useEffect,
   useRef,
@@ -335,9 +335,9 @@ export function NewTaskModal({
   const recents = (recentDirs ?? []).filter((p) => workdirMatchesEnv(p, kernelEnv, isWindowsShell())).slice(0, 6);
   const dirName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
   const KIND_META = [
-    { k: "local" as const, icon: FolderGit2, label: t("create.kind.local") },
-    { k: "chat" as const, icon: MessagesSquare, label: t("create.kind.chat") },
-    { k: "cloud" as const, icon: Cloud, label: t("create.kind.cloud") },
+    { k: "local" as const, icon: IconFolderCode, label: t("create.kind.local") },
+    { k: "chat" as const, icon: IconMessages, label: t("create.kind.chat") },
+    { k: "cloud" as const, icon: IconCloud, label: t("create.kind.cloud") },
   ];
   const onTextKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || e.shiftKey) return;
@@ -366,7 +366,7 @@ export function NewTaskModal({
           className="btn btn-ghost btn-square btn-sm"
           onClick={onClose}
         >
-          <X size={16} strokeWidth={1.75} aria-hidden />
+          <IconX size={16} stroke={1.75} aria-hidden />
         </button>
       </header>
       {/* 向导列(对齐旧工程新建任务屏):logo+标语的 hero → 类型页签 → 一张
@@ -392,7 +392,7 @@ export function NewTaskModal({
                 className={`tab gap-1.5 px-4 font-semibold transition-colors duration-150 ${kind === k ? "tab-active" : ""}`}
                 onClick={() => setKind(k)}
               >
-                <Icon size={14} strokeWidth={1.75} aria-hidden />
+                <Icon size={14} stroke={1.75} aria-hidden />
                 {label}
               </button>
             ))}
@@ -424,7 +424,7 @@ export function NewTaskModal({
                       aria-expanded={dirMenu}
                       onClick={() => setDirMenu(!dirMenu)}
                     >
-                      <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/60" />
+                      <IconFolder size={14} stroke={1.75} aria-hidden className="shrink-0 text-base-content/60" />
                       {dir.trim() ? (
                         <>
                           <span className="shrink-0 text-xs text-base-content/50">{t("create.dirPre")}</span>
@@ -434,9 +434,9 @@ export function NewTaskModal({
                       ) : (
                         <span className="text-xs text-base-content/50">{t("create.workdirPlaceholder")}</span>
                       )}
-                      <ChevronDown
+                      <IconChevronDown
                         size={12}
-                        strokeWidth={1.75}
+                        stroke={1.75}
                         aria-hidden
                         className={`shrink-0 text-base-content/50 transition-transform duration-150 ${dirMenu ? "rotate-180" : ""}`}
                       />
@@ -460,12 +460,12 @@ export function NewTaskModal({
                               className={`btn btn-ghost btn-sm h-auto w-full justify-start gap-2 px-2 py-1.5 font-normal ${p === dir ? "btn-active" : ""}`}
                               onClick={() => pickDir(p)}
                             >
-                              <Folder size={13} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                              <IconFolder size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                               <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
                                 <span className="max-w-full truncate text-xs font-medium">{dirName(p)}</span>
                                 <span className="max-w-full truncate font-mono text-[10px] text-base-content/50">{p}</span>
                               </span>
-                              {p === dir && <Check size={12} strokeWidth={2} aria-hidden className="shrink-0 text-primary" />}
+                              {p === dir && <IconCheck size={12} stroke={2} aria-hidden className="shrink-0 text-primary" />}
                             </button>
                           </li>
                         ))}
@@ -481,7 +481,7 @@ export function NewTaskModal({
                               });
                             }}
                           >
-                            <FolderOpen size={13} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                            <IconFolderOpen size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                             {t("create.pickOther")}
                           </button>
                         </li>
@@ -513,7 +513,7 @@ export function NewTaskModal({
                 ) : (
                   /* 与本地页文件夹触发器同高(mt-2 + h-8):切页签卡头不跳动 */
                   <div className="mx-2 mt-2 flex h-8 items-center gap-2 px-2 text-xs text-base-content/50">
-                    <MessagesSquare size={13} strokeWidth={1.75} aria-hidden />
+                    <IconMessages size={13} stroke={1.75} aria-hidden />
                     {t("create.hint.chat")}
                   </div>
                 )}
@@ -547,7 +547,7 @@ export function NewTaskModal({
                             title={a.file.name}
                             className="flex h-8 max-w-56 items-center gap-1.5 rounded-box border border-base-300 bg-base-200 px-2.5 text-xs"
                           >
-                            <FileIcon size={12} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                            <FileIcon size={12} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                             <span className="min-w-0 truncate">{a.file.name}</span>
                           </span>
                         )}
@@ -557,7 +557,7 @@ export function NewTaskModal({
                           className="btn btn-circle btn-xs absolute -end-1.5 -top-1.5 size-4.5 min-h-0 border-base-300 bg-base-100 p-0"
                           onClick={() => removeAtt(i)}
                         >
-                          <X size={10} strokeWidth={2} aria-hidden />
+                          <IconX size={10} stroke={2} aria-hidden />
                         </button>
                       </li>
                     ))}
@@ -571,7 +571,7 @@ export function NewTaskModal({
                     className="btn btn-ghost btn-square btn-sm text-base-content/60"
                     onClick={pickFiles}
                   >
-                    <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+                    <IconPaperclip size={15} stroke={1.75} aria-hidden />
                   </button>
                   {/* 模型/思考档与会话 composer 同一组件(features/chat/composer/
                       pickers):左置触发器,菜单向上首端对齐 */}
@@ -596,7 +596,7 @@ export function NewTaskModal({
                   <button type="button" className="btn btn-primary btn-sm gap-1.5" disabled={busy} onClick={() => void submit()}>
                     {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
                     {t("create.submit")}
-                    {!busy && <SendHorizontal size={12} strokeWidth={2} aria-hidden />}
+                    {!busy && <IconSend size={12} stroke={2} aria-hidden />}
                   </button>
                 </div>
               </>

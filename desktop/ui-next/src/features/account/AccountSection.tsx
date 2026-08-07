@@ -11,7 +11,7 @@
 //   SettingsView.applySync 并入草稿;干净表单+无任务在跑时那边自动保存,
 //   否则回退保存条——结果行按 autoSaved/blocked 说明白落到哪一步了
 //   (密钥复用 knownKeys 联动留后续版本)。
-import { Check, Copy } from "lucide-react";
+import { IconCheck, IconCopy } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -71,9 +71,9 @@ function UserIdChip({ id }: { id: string }) {
       onClick={copy}
     >
       {copied ? (
-        <Check size={11} strokeWidth={2} aria-hidden className="shrink-0 text-success" />
+        <IconCheck size={11} stroke={2} aria-hidden className="shrink-0 text-success" />
       ) : (
-        <Copy size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
+        <IconCopy size={11} stroke={1.75} aria-hidden className="shrink-0" />
       )}
       <span className="truncate">{maskUserId(id)}</span>
     </button>

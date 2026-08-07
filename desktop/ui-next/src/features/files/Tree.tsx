@@ -1,7 +1,7 @@
 // 文件树:目录懒加载(点开才拉子层),子项缓存 + 展开集合 + 目录粒度加载态
 // (骨架屏),缩进表达层级(每层 16px,动态 px 走内联样式)。已删除文件只
 // 属于「改动」页;这里只展示当前真实存在的文件,改动状态以徽标标注。
-import { ChevronRight, Files, Folder, FolderOpen } from "lucide-react";
+import { IconChevronRight, IconFiles, IconFolder, IconFolderOpen } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -111,9 +111,9 @@ export function Tree({
           >
             <span className="flex w-3 shrink-0 justify-center">
               {en.isDir && (
-                <ChevronRight
+                <IconChevronRight
                   size={12}
-                  strokeWidth={1.75}
+                  stroke={1.75}
                   aria-hidden
                   className={`text-base-content/40 transition-transform ${open ? "rotate-90" : ""}`}
                 />
@@ -124,14 +124,14 @@ export function Tree({
                 谁是谁(用户报障 2026-08-06「太丑」) */}
             {en.isDir ? (
               open ? (
-                <FolderOpen size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary/70" />
+                <IconFolderOpen size={14} stroke={1.75} aria-hidden className="shrink-0 text-primary/70" />
               ) : (
-                <Folder size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-primary/60" />
+                <IconFolder size={14} stroke={1.75} aria-hidden className="shrink-0 text-primary/60" />
               )
             ) : (
               (() => {
                 const spec = fileIconOf(en.name);
-                return <spec.icon size={14} strokeWidth={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
+                return <spec.icon size={14} stroke={1.75} aria-hidden className={`shrink-0 ${spec.tone}`} />;
               })()
             )}
             <span className="min-w-0 flex-1 truncate">{en.name}</span>
@@ -172,7 +172,7 @@ export function Tree({
       {rootItems && rootItems.length === 0 ? (
         // 空态统一形态:图标 + 标题档,居中(整块面板态,不进 menu 行)
         <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
-          <Files size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+          <IconFiles size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
           <div className="text-sm font-semibold">{t("files.tree.emptyRoot")}</div>
         </div>
       ) : (

@@ -3,7 +3,7 @@
 // 失败场景。空列表渲染"未发现问题"完成态,而不是空白卡。
 // 字段宽容解析(对表旧工程 findings.ts):旧 journal/异构引擎缺字段时
 // 行内自然降级,不整卡放弃。
-import { ShieldCheck } from "lucide-react";
+import { IconShieldCheck } from "@tabler/icons-react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -171,7 +171,7 @@ export function FindingsCard({
     // 空态统一形态:图标 + 标题档,居中
     return (
       <div className="flex flex-col items-center gap-1.5 px-3 py-8 text-center">
-        <ShieldCheck size={20} strokeWidth={1.75} className="text-base-content/30" aria-hidden />
+        <IconShieldCheck size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
         <div className="text-sm font-semibold">{t("chat.findings.empty")}</div>
       </div>
     );

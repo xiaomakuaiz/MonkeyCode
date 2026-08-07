@@ -10,7 +10,7 @@
 //   refreshToken 自增(调用方在 ChatState.turnEnded 时递增)则重拉。
 // - Esc(window capture):抽屉开着只管自己——预览开着先关预览,再一次
 //   才关抽屉;层级协调交调用方。
-import { FolderOpen, X } from "lucide-react";
+import { IconFolderOpen, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -326,7 +326,7 @@ export function FilesDrawer({
             onClick={() => void reveal("")}
             className="btn btn-ghost btn-xs ml-auto gap-1.5 text-base-content/70"
           >
-            <FolderOpen size={13} strokeWidth={1.75} aria-hidden />
+            <IconFolderOpen size={13} stroke={1.75} aria-hidden />
             {isMacShell() ? t("files.revealRootMac") : t("files.revealRoot")}
           </button>
           <button
@@ -336,7 +336,7 @@ export function FilesDrawer({
             onClick={onClose}
             className="btn btn-ghost btn-square btn-xs"
           >
-            <X size={14} strokeWidth={1.75} aria-hidden />
+            <IconX size={14} stroke={1.75} aria-hidden />
           </button>
         </header>
         {changesErr && (

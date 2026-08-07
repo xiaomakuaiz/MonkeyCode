@@ -9,7 +9,7 @@
 // 寻址键,任何展示面都必须剥;编辑表单里的「名称」字段仍是原始键);
 // 列表按来源分组(会员→百智云→自定义,modelSourceRank 单一出处),全部
 // 为手工条目时不出组头。
-import { ChevronDown, Plus } from "lucide-react";
+import { IconChevronDown, IconPlus } from "@tabler/icons-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -158,9 +158,9 @@ export function ModelsSection({
                 </button>
               )}
               {!managed && (
-                <ChevronDown
+                <IconChevronDown
                   size={14}
-                  strokeWidth={1.75}
+                  stroke={1.75}
                   aria-hidden
                   className={`shrink-0 text-base-content/40 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
                 />
@@ -288,7 +288,7 @@ export function ModelsSection({
         <div className="flex flex-col items-center gap-3 rounded-box border border-dashed border-base-300 px-6 py-10">
           <p className="text-center text-xs text-base-content/50">{t("settings.models.empty")}</p>
           <button type="button" className="btn btn-sm" onClick={add}>
-            <Plus size={14} strokeWidth={2} aria-hidden />
+            <IconPlus size={14} stroke={2} aria-hidden />
             {t("settings.models.add")}
           </button>
         </div>
@@ -314,9 +314,9 @@ export function ModelsSection({
                 className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 px-1 text-xs font-bold text-base-content/60 transition-colors hover:text-base-content"
                 onClick={() => toggleGroup(g.key)}
               >
-                <ChevronDown
+                <IconChevronDown
                   size={13}
-                  strokeWidth={2}
+                  stroke={2}
                   aria-hidden
                   className={`shrink-0 transition-transform duration-150 ${groupOpen ? "" : "-rotate-90"}`}
                 />
@@ -348,7 +348,7 @@ export function ModelsSection({
       })}
       {draft.models.length > 0 && (
         <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
-          <Plus size={14} strokeWidth={2} aria-hidden />
+          <IconPlus size={14} stroke={2} aria-hidden />
           {t("settings.models.add")}
         </button>
       )}

@@ -1,15 +1,23 @@
-// 关于:宿主/内核版本对照 + 检查更新(复用 lib/ipc/update)+ 导出引擎日志 +
-// 打开扩展目录。更新安装成功后壳自行重启,installing 态不回收;安装失败
-// 复位忙态并外显失败文案(与侧栏 useUpdate 同一语义);导出/打开的失败是
-// 壳的中文 Err,直接外显。
+// 关于:宿主/内核版本对照 + 检查更新(复用 lib/ipc/update)。更新安装成功后
+// 壳自行重启,installing 态不回收;安装失败复位忙态并外显失败文案(与侧栏
+// useUpdate 同一语义)。
+//
+// 两个排障入口(打开程序目录 / 打开存储目录)常态不展示,连点版本号 5 次
+// 解锁,解锁只在本次挂载内有效(用户定案 2026-08-07):它们是电话指引支持
+// 同学用的,不是给普通用户的常驻按钮。原「导出日志」「打开扩展目录」按此
+// 定案撤下——日志就在存储目录里(ohmyagent/logs/),扩展目录的入口在
+// 设置·浏览器分区还在。
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { exportEngineLog, openExtensionDir } from "@/lib/ipc/config";
-import { hostInfo, type HostInfo } from "@/lib/ipc/host";
+import { engineRestart } from "@/lib/ipc/engine";
+import { hostInfo, openAppDir, openLogDir, type HostInfo } from "@/lib/ipc/host";
 import { updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** 解锁隐藏排障入口所需的版本号连点次数(电话里说得清的量级)。 */
+const UNLOCK_TAPS = 5;
 
 export function AboutSection() {
   const { t } = useI18n();
@@ -17,6 +25,11 @@ export function AboutSection() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [phase, setPhase] = useState<"idle" | "checking" | "installing">("idle");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  // 连点解锁计数:不落盘、不跨挂载(离开设置页即复位)——隐藏入口就该
+  // 每次都要重新解一遍,免得某次排障之后按钮永久留在别人的关于页上
+  const [taps, setTaps] = useState(0);
+  const unlocked = taps >= UNLOCK_TAPS;
+  const [restarting, setRestarting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -57,23 +70,19 @@ export function AboutSection() {
     }
   };
 
-  const exportLog = async () => {
+  // 重启引擎:引擎横幅只在崩溃/启动失败时才出,正常跑着时界面上原本没有
+  // 任何入口,而「保存设置或重启引擎即可生效」这类提示到处都在指它
+  // (2026-08-07 用户报障「哪里可以重启引擎」)。托盘菜单里另有一份
+  const restartEngine = async () => {
+    setRestarting(true);
     setMsg(null);
     try {
-      const dest = await exportEngineLog();
-      if (dest) setMsg({ text: t("settings.about.exported", { path: dest }) });
-      // null = 用户取消/浏览器模式:静默
+      await engineRestart();
+      setMsg({ text: t("engine.restartDone") });
     } catch (e) {
       setMsg({ text: errMsg(e), error: true });
-    }
-  };
-
-  const openExt = async () => {
-    setMsg(null);
-    try {
-      await openExtensionDir();
-    } catch (e) {
-      setMsg({ text: errMsg(e), error: true });
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -95,12 +104,18 @@ export function AboutSection() {
         <img src="/logo.png" alt="" aria-hidden className="h-12 w-12 rounded-2xl shadow-sm" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="text-sm font-bold">{t("app.name")}</span>
-          <span className="truncate font-mono text-xs text-base-content/60">
+          {/* 版本行即解锁热区:连点 5 次现出排障入口。按钮形态但不带任何
+              视觉暗示(纯文本、无 hover 态),不解锁的人看不出这里能点 */}
+          <button
+            type="button"
+            className="cursor-default truncate text-start font-mono text-xs text-base-content/60"
+            onClick={() => setTaps((n) => n + 1)}
+          >
             {t("settings.about.version", {
               version: info?.version ?? "—",
               engine: info?.engine_version ?? t("settings.about.engineNotReady"),
             })}
-          </span>
+          </button>
         </div>
         <button
           type="button"
@@ -121,13 +136,23 @@ export function AboutSection() {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-sm" onClick={() => void exportLog()}>
-          {t("settings.about.exportLog")}
+        <button type="button" className="btn btn-sm" disabled={restarting} onClick={() => void restartEngine()}>
+          {restarting && <span className="loading loading-spinner loading-xs" aria-hidden />}
+          {restarting ? t("settings.about.restarting") : t("settings.about.restart")}
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => void openExt()}>
-          {t("settings.about.openExtension")}
-        </button>
+        {/* 连点版本号解锁的排障入口(常态不占位) */}
+        {unlocked && (
+          <>
+            <button type="button" className="btn btn-sm" onClick={() => void openAppDir()}>
+              {t("settings.about.openAppDir")}
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => void openLogDir()}>
+              {t("settings.about.openDataDir")}
+            </button>
+          </>
+        )}
       </div>
+      <p className="px-1 text-xs text-base-content/50">{t("settings.about.restartHint")}</p>
     </section>
   );
 }

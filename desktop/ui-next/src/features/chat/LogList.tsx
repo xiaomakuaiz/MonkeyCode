@@ -3,7 +3,7 @@
 // key = itemKey(state, i)——"加载更早"前插时 keyBase 左移,已渲染项不重挂载。
 // 审批锚定:perm 带 toolCallId 且流里有同 id 工具卡时,按钮行嵌进那张卡
 // (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
-import { ChevronRight, File as FileIcon, Sparkles } from "lucide-react";
+import { IconChevronRight, IconFile as FileIcon, IconSparkles } from "@tabler/icons-react";
 import { memo, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
@@ -74,7 +74,7 @@ function UserBubble({
                 title={t("chat.att.openTip", { name: a.filename })}
                 onClick={() => openExternal(a.url)}
               >
-                <FileIcon size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                <FileIcon size={12} stroke={1.75} aria-hidden className="shrink-0" />
                 <span className="min-w-0 truncate">{a.filename}</span>
               </button>
             ))}
@@ -89,7 +89,7 @@ function UserBubble({
                 title={t("chat.att.downloadTip", { name: p })}
                 onClick={() => downloadUpload(() => uploadUrl!(p), p.split("/").pop() || p)}
               >
-                <FileIcon size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                <FileIcon size={12} stroke={1.75} aria-hidden className="shrink-0" />
                 <span className="min-w-0 truncate">{p.split("/").pop() || p}</span>
               </button>
             ))}
@@ -122,18 +122,18 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
     <details className="group collapse border border-base-300 bg-base-200">
       {/* ps-2.5 是对齐算出来的,不是随手取的:daisyUI .collapse-title 自带
           padding:1rem,只覆 py/pe 会留下 16px 的左内距,而工具卡/组头是 px-3
-          (12px)+ 8px 状态点 → 点心在 16px。这里 12px 的 Sparkles 要让图标中心
+          (12px)+ 8px 状态点 → 点心在 16px。这里 12px 的 IconSparkles 要让图标中心
           也落 16px,左内距得是 16-6=10px;文字起点随之 10+12+gap-1.5 = 28px,
           与工具行的 12+8+gap-2 = 28px 齐平(用户报障 2026-08-06:两种行首图标错位) */}
       <summary className="collapse-title flex min-h-0 items-center gap-1.5 py-2 ps-2.5 pe-3 text-xs text-base-content/60">
-        <Sparkles size={12} strokeWidth={1.75} aria-hidden className="shrink-0" />
+        <IconSparkles size={12} stroke={1.75} aria-hidden className="shrink-0" />
         <span className="shrink-0">{t("chat.thought")}</span>
         {/* 摘要行走 MarkdownInline(与 FindingsCard 的发现标题同件):引擎的
             思考首行几乎都是 `**小标题**`,当纯文本贴出来就是满屏字面量星号 */}
         <MarkdownInline source={summary} className="min-w-0 flex-1 truncate opacity-70" />
-        <ChevronRight
+        <IconChevronRight
           size={12}
-          strokeWidth={1.75}
+          stroke={1.75}
           aria-hidden
           className="shrink-0 text-base-content/40 transition-transform group-open:rotate-90"
         />
@@ -406,9 +406,9 @@ export const LogList = memo(function LogList({
                 {failCount > 0 && (
                   <span className="shrink-0 text-error">{t("chat.tool.groupFailed", { n: failCount })}</span>
                 )}
-                <ChevronRight
+                <IconChevronRight
                   size={12}
-                  strokeWidth={1.75}
+                  stroke={1.75}
                   aria-hidden
                   className={`shrink-0 text-base-content/40 transition-transform ${expanded ? "rotate-90" : ""}`}
                 />

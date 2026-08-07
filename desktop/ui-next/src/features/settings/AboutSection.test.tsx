@@ -9,9 +9,11 @@ afterEach(() => {
 });
 
 function stubShell({ failInstall }: { failInstall?: string } = {}) {
+  const calls: string[] = [];
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
       invoke: (cmd: string) => {
+        calls.push(cmd);
         if (cmd === "host_info") return Promise.resolve({ version: "1.0", engine_version: "0.9" });
         if (cmd === "update_check") return Promise.resolve({ available: true, current: "1.0", latest: "1.1" });
         if (cmd === "update_install" && failInstall) return Promise.reject(new Error(failInstall));
@@ -21,6 +23,7 @@ function stubShell({ failInstall }: { failInstall?: string } = {}) {
     },
     event: { listen: () => Promise.resolve(() => {}) },
   };
+  return { calls };
 }
 
 describe("关于页更新(H5)", () => {
@@ -43,5 +46,31 @@ describe("关于页更新(H5)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "下载更新" }));
     const busy = screen.getByRole("button", { name: /更新中/ });
     expect((busy as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("隐藏排障入口(连点版本号解锁)", () => {
+  it("常态只有「检查更新」:导出日志/打开扩展目录已撤,两个目录入口不出现", async () => {
+    stubShell();
+    render(<AboutSection />);
+    await screen.findByText(/应用 1\.0/);
+    expect(screen.queryByRole("button", { name: "导出日志" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "打开扩展目录" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "打开程序目录" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "打开存储目录" })).toBeNull();
+  });
+
+  it("连点版本号 5 次:两个入口现身,分别走 open_app_dir / open_log_dir", async () => {
+    const { calls } = stubShell();
+    render(<AboutSection />);
+    const version = await screen.findByRole("button", { name: /应用 1\.0/ });
+    for (let i = 0; i < 4; i++) await userEvent.click(version);
+    expect(screen.queryByRole("button", { name: "打开程序目录" })).toBeNull(); // 差一次不解锁
+    await userEvent.click(version);
+
+    await userEvent.click(screen.getByRole("button", { name: "打开程序目录" }));
+    await userEvent.click(screen.getByRole("button", { name: "打开存储目录" }));
+    await waitFor(() => expect(calls).toContain("open_app_dir"));
+    expect(calls).toContain("open_log_dir");
   });
 });

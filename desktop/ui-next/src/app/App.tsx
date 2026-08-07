@@ -7,7 +7,7 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { CircleAlert, CircleCheck, CircleHelp, Cloud, FolderGit2, Globe, MessagesSquare, SendHorizontal, Settings, X } from "lucide-react";
+import { IconAlertCircle, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
@@ -44,11 +44,12 @@ import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
 import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
-// 统一图标族:lucide(一致的描边宽度与圆角语言)
-const SPACE_ICONS: Record<Space, typeof FolderGit2> = {
-  local: FolderGit2,
-  cloud: Cloud,
-  chat: MessagesSquare,
+// 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
+// 一律 Icon 前缀,线宽属性是 stroke 不是 strokeWidth)
+const SPACE_ICONS: Record<Space, typeof IconFolderCode> = {
+  local: IconFolderCode,
+  cloud: IconCloud,
+  chat: IconMessages,
 };
 
 const NOTICE_TONE: Record<NoticeKind, string> = {
@@ -58,12 +59,12 @@ const NOTICE_TONE: Record<NoticeKind, string> = {
   queued: "alert-success",
 };
 
-/** kind → 语义图标(与 composer 反馈条同一套视觉语言:14px lucide)。 */
-const NOTICE_ICON: Record<NoticeKind, typeof CircleHelp> = {
-  ask: CircleHelp,
-  done: CircleCheck,
-  error: CircleAlert,
-  queued: SendHorizontal,
+/** kind → 语义图标(与 composer 反馈条同一套视觉语言:14px tabler)。 */
+const NOTICE_ICON: Record<NoticeKind, typeof IconHelpCircle> = {
+  ask: IconHelpCircle,
+  done: IconCircleCheck,
+  error: IconAlertCircle,
+  queued: IconSend,
 };
 
 const NOTICE_TEXT: Record<NoticeKind, MessageKey> = {
@@ -126,7 +127,7 @@ function SpaceRail({
               >
                 {(() => {
                   const Icon = SPACE_ICONS[s];
-                  return <Icon size={18} strokeWidth={1.75} aria-hidden />;
+                  return <Icon size={18} stroke={1.75} aria-hidden />;
                 })()}
               </button>
             </div>
@@ -143,7 +144,7 @@ function SpaceRail({
             className={`btn btn-ghost btn-square size-11 ${settingsOpen ? "btn-active" : ""}`}
             onClick={onToggleSettings}
           >
-            <Settings size={18} strokeWidth={1.75} aria-hidden />
+            <IconSettings size={18} stroke={1.75} aria-hidden />
           </button>
         </div>
       </div>
@@ -544,9 +545,9 @@ export function App() {
               className={`alert ${n.kind === "warn" ? "alert-warning" : "alert-success"} alert-soft py-2 text-xs shadow-sm`}
             >
               {n.kind === "warn" ? (
-                <CircleAlert size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                <IconAlertCircle size={14} stroke={1.75} aria-hidden className="shrink-0" />
               ) : (
-                <Globe size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                <IconWorld size={14} stroke={1.75} aria-hidden className="shrink-0" />
               )}
               <span className="max-w-64 min-w-0">{t(n.key)}</span>
               <button
@@ -555,7 +556,7 @@ export function App() {
                 className="btn btn-ghost btn-square btn-xs"
                 onClick={() => setShellNotices((list) => list.filter((x) => x.id !== n.id))}
               >
-                <X size={14} strokeWidth={1.75} aria-hidden />
+                <IconX size={14} stroke={1.75} aria-hidden />
               </button>
             </div>
           ))}
@@ -570,7 +571,7 @@ export function App() {
               className={`alert ${NOTICE_TONE[n.kind]} alert-soft cursor-pointer py-2 text-xs shadow-sm`}
               onClick={() => void openSessionById(n.sessionId)}
             >
-              <Icon size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+              <Icon size={14} stroke={1.75} aria-hidden className="shrink-0" />
               <button
                 type="button"
                 className="link link-hover max-w-64 min-w-0 truncate text-left"
@@ -590,7 +591,7 @@ export function App() {
                   setNotices((list) => list.filter((x) => x.sessionId !== n.sessionId));
                 }}
               >
-                <X size={14} strokeWidth={1.75} aria-hidden />
+                <IconX size={14} stroke={1.75} aria-hidden />
               </button>
             </div>
             );
