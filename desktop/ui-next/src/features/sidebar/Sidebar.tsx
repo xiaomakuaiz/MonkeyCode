@@ -173,8 +173,11 @@ function ProjectDetails({
     },
   ];
   return (
-    // 组间距 mt-1(用户定案 2026-08-05:mt-2 太散)
-    <li className="mt-1 first:mt-0">
+    // 组间距 mt-4(用户报障 2026-08-07「亲密性不够,像一路排下来」):daisyUI
+    // 给每行/组头 padding-block .375rem,原 mt-1 下「组头↔首行 12px、行↔行
+    // 12px、组↔组 16px」三档几乎等距,读不出组;拉到 mt-4 后组间空白 28px,
+    // 与组内 12px 拉开一档(组头再靠 pb-0.5 贴住首行,见下)
+    <li className="mt-4 first:mt-0">
       <details
         open={!collapsed}
         onToggle={(e) => {
@@ -187,8 +190,10 @@ function ProjectDetails({
       >
         {/* 区块标签形态:summary 由 grid 覆写为 flex(名称伸展、徽标/＋殿后);
             原生折叠箭头整个去掉(用户定案 2026-08-04),开合只靠点击组头 */}
+        {/* pb-0.5 收掉组头的下内距(daisyUI 默认 .375rem):组头要贴住自己的
+            首行,否则「组头↔首行」与「行↔行」同距,层级只剩缩进一个信号 */}
         <summary
-          className={`group flex items-center after:hidden ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
+          className={`group flex items-center pb-0.5 after:hidden ${archivedProject ? "ps-6" : ""} ${dropTarget ? "border-t-2 border-primary" : ""}`}
           title={[group.key, t("sidebar.project.hint"), drag ? t("sidebar.project.dragHint") : ""].filter(Boolean).join("\n")}
           draggable={!!drag}
           onDragStart={() => drag?.onDragStart(group.key)}
@@ -241,7 +246,7 @@ function ProjectDetails({
               }}>
                 {/* Archive 图标行首(与任务行状态槽同列),去 menu 默认尾箭头 */}
                 <summary
-                  className={`flex items-center gap-2 ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
+                  className={`flex items-center gap-2 pb-0.5 ${archivedProject ? "ps-9" : "ps-6"} text-xs text-base-content/40 after:hidden`}
                 >
                   {/* 图标裸放 flex 行(与项目组头 Folder 同构):12px 图标不需要
                       定宽槽,多包一层反而竖向对不齐(用户报偏下) */}
