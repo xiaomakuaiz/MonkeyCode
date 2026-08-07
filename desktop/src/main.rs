@@ -154,10 +154,26 @@ fn open_extension_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// 在文件管理器中定位引擎日志目录(app_config_dir:ohmyagent.log、
-/// ohmyagent.log.prev 与崩溃留存 ohmyagent.crash-N.log 都在这)。
-/// 启动失败页与设置页共用:引擎起不来时,横幅里的 15 行 tail 往往不够,
-/// 得让用户能一步拿到完整日志。
+/// 在文件管理器中定位**程序本体**(关于页的隐藏排障入口)。
+/// macOS 的可执行文件埋在 <应用>.app/Contents/MacOS/ 里,直接揭示它等于把
+/// 用户丢进包内部——往上找到 .app 那一层揭示应用本体;其他平台揭示 exe
+/// 自身(reveal_item_in_dir 会在其所在目录里高亮它)。
+#[tauri::command]
+fn open_app_dir() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("无法定位程序路径: {e}"))?;
+    let target = exe
+        .ancestors()
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("app"))
+        .unwrap_or(exe.as_path());
+    tauri_plugin_opener::reveal_item_in_dir(target).map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// 在文件管理器中定位应用存储目录(app_config_dir)。这里同时是引擎日志的
+/// 落点(ohmyagent.log[.prev]、崩溃留存 ohmyagent.crash-N.log,以及引擎自己
+/// 按运行分文件写的 ohmyagent/logs/*.log)与配置/会话/cookie 的家,所以
+/// 引擎横幅的「打开日志目录」与关于页的「打开存储目录」是同一处、同一命令。
+/// 引擎起不来时横幅里的 15 行 tail 往往不够,得让用户一步拿到完整现场。
 #[tauri::command]
 fn open_log_dir(app: AppHandle) -> Result<String, String> {
     let dir = config::config_dir(&app)?;
@@ -171,14 +187,20 @@ fn open_log_dir(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 async fn export_engine_log(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let src = config::config_dir(&app)?.join("ohmyagent.log");
-    if !src.is_file() {
-        return Err("引擎日志不存在(引擎尚未启动过)".into());
-    }
+    let cfg_dir = config::config_dir(&app)?;
+    // 引擎自己的运行日志优先,壳接的 stderr 只是兜底(driver::engine_log_file)
+    let Some(src) = driver::engine_log_file(&cfg_dir) else {
+        return Err("暂无引擎日志(引擎尚未启动过,或本轮运行没有任何输出)".into());
+    };
+    let file_name = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ohmyagent.log")
+        .to_string();
     // 起始目录落系统「下载」:不给 set_directory 时,对话框的落点由平台
     // 自行决定(Windows 上是进程 CWD——安装目录,用户根本找不到自己存哪了),
     // 与云端文件下载的 pickSaveFile 同一口径;拿不到目录就交回平台默认
-    let mut picker = app.dialog().file().set_file_name("ohmyagent.log");
+    let mut picker = app.dialog().file().set_file_name(&file_name);
     if let Ok(dir) = app.path().download_dir() {
         picker = picker.set_directory(dir);
     }
@@ -1180,6 +1202,7 @@ fn main() {
             update_check,
             update_install,
             open_extension_dir,
+            open_app_dir,
             open_log_dir,
             export_engine_log,
             list_wsl_distros,
@@ -1417,9 +1440,13 @@ fn setup_tray(app: &AppHandle, pet_enabled: bool, sound_enabled: bool) -> tauri:
     )?;
     // 设置页切换时要回改这个勾选项(见 apply_sound_enabled)
     *app.state::<TraySoundItem>().0.lock_ok() = Some(sound.clone());
+    // 重启引擎:引擎正常跑着时界面上原本没有任何入口(横幅只在崩溃/启动
+     // 失败时才出),而「改了设置外的东西要重启才生效」的提示到处都在指它。
+    // 托盘这一份还兼顾引擎卡死到 UI 都不响应的场景(2026-08-07 用户报障)
+    let restart_engine = MenuItem::with_id(app, "restart-engine", "重启引擎", true, None::<&str>)?;
     let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &settings, &pet, &sound, &update, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &pet, &sound, &restart_engine, &update, &quit])?;
     let tray = TrayIconBuilder::new()
         .icon(tray_icon())
         .tooltip("MonkeyCode")
@@ -1452,6 +1479,16 @@ fn setup_tray(app: &AppHandle, pet_enabled: bool, sound_enabled: bool) -> tauri:
             "toggle-sound" => {
                 let enabled = !app.state::<SoundEnabled>().0.load(Ordering::Relaxed);
                 apply_sound_enabled(app, enabled);
+            }
+            // 与命令 engine_restart 同一例程:失败只进壳日志(托盘没有外显位),
+            // UI 侧照常经 engine-status 事件看到状态流转
+            "restart-engine" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = engine_restart(app).await {
+                        eprintln!("[desktop] 托盘重启引擎失败: {e}");
+                    }
+                });
             }
             "check-update" => {
                 let app = app.clone();
