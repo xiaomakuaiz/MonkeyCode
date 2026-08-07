@@ -3,7 +3,7 @@
 // 输入卡外框 / textarea 自适应高度 / 斜杠指令面板。类名是从 Composer 原样
 // 搬迁的定稿形态(-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),
 // 改形态只改这里。
-import { IconAlertCircle, IconPlayerStop, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
 import { useEffect, type CSSProperties, type ReactNode, type RefObject } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -51,7 +51,10 @@ export function RunBar({
         className="btn btn-ghost btn-square btn-xs text-error"
         onClick={onStop}
       >
-        <IconPlayerStop size={16} stroke={1.75} aria-hidden />
+        {/* 实心方块:空心描边在 16px 上就是个「空盒子」,既不像按钮也读不出
+            「停止」(用户反馈 2026-08-07「太丑了,就是一个方块」)。实心是
+            播放器停止键的通行形态,也是各家「停止生成」的既定语汇 */}
+        <IconPlayerStopFilled size={15} aria-hidden />
       </button>
     </div>
   );

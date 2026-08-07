@@ -89,6 +89,7 @@ export function CloudComposer({
       // IME 组合期(或 WKWebView 上组合刚结束 100ms 窗口内)的 Enter 是选字
       if (imeRef.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) return;
       e.preventDefault();
+      if (inFlight) return; // 上一条还在拨号:回车与按钮同待遇
       onSend();
     }
   };
@@ -113,6 +114,10 @@ export function CloudComposer({
     // 复位 value:同一文件再次选择也要触发 change
     if (fileRef.current) fileRef.current.value = "";
   };
+
+  // 发送在途:mode=new 连接还在拨号(休眠机器要先唤醒,以分钟计),
+  // 云端尚未回显这条。此间禁止再次发送(见 useCloudTask.send 的同名拦截)
+  const inFlight = h.sending !== null;
 
   // 运行条 detail:云端没有轮次概念,给累计 tokens(详情统计,轮询刷新)
   const tokens = h.meta?.stats?.total_tokens ?? 0;
@@ -185,7 +190,14 @@ export function CloudComposer({
           aria-label={t("chat.composer")}
           className="textarea min-h-10 w-full resize-none border-0 bg-transparent text-sm shadow-none focus:outline-none"
           rows={2}
-          placeholder={pending ? t("cloud.view.composerPending") : t("cloud.view.composerPlaceholder")}
+          placeholder={
+            pending
+              ? t("cloud.view.composerPending")
+              : h.waking
+                ? // 唤醒期不禁输入:消息会随连接建立自动送达,先说清楚免得白等
+                  t("cloud.view.composerWaking")
+                : t("cloud.view.composerPlaceholder")
+          }
           value={h.input}
           onChange={(e) => h.setInput(e.target.value)}
           onCompositionEnd={(e) => imeRef.current.markEnd(e.timeStamp)}
@@ -239,15 +251,21 @@ export function CloudComposer({
               tip={t("chat.usageTip", { pct: usagePct, used: fmtK(usage.used), size: fmtK(usage.size) })}
             />
           )}
+          {/* 发送在途(mode=new 连接在拨号/唤醒机器):按钮转圈并禁用——
+              再点一次会掐掉在途连接,首条被弹回输入框挤掉刚打的字 */}
           <button
             type="button"
             aria-label={t("chat.send")}
-            title={t("chat.sendTip")}
+            title={inFlight ? t("cloud.send.pending") : t("chat.sendTip")}
             className="btn btn-primary btn-square btn-sm shrink-0"
-            disabled={pending || !h.input.trim()}
+            disabled={pending || inFlight || !h.input.trim()}
             onClick={onSend}
           >
-            <IconSend size={16} stroke={1.75} aria-hidden />
+            {inFlight ? (
+              <span className="loading loading-spinner loading-xs" aria-hidden />
+            ) : (
+              <IconSend size={16} stroke={1.75} aria-hidden />
+            )}
           </button>
         </div>
       </ComposerCard>

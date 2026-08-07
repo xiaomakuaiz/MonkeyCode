@@ -47,7 +47,7 @@ describe("usageVM:面板派生", () => {
       credits: "12", // 12345 / 1000 取整
       quota: { total: 3_000_000, remaining: 1_500_000, ratio: 0.5, remainingText: "1.5M", totalText: "3.0M" },
       checkedIn: false,
-      invite: { count: 2, link: "https://mc.example/?ic=u1" },
+      invite: { count: 2, link: "https://mc.example/?ic=u1", avatars: [{ key: "i1", url: "", initial: "甲" }] },
     });
   });
 
@@ -72,6 +72,37 @@ describe("usageVM:面板派生", () => {
 
   it("checked_in 缺席 → checkedIn null(签到入口不出现,不误报未签)", () => {
     expect(usageVM({ ...full, checked_in: null })?.checkedIn).toBeNull();
+  });
+
+  it("邀请人头像:相对地址按 base_url 补全,绝对/data: 原样,无 base 或无地址给空串(渲染侧退首字母)", () => {
+    const vm = usageVM(
+      {
+        ...full,
+        invitations: {
+          count: 4,
+          items: [
+            { id: "a", name: "甲", avatar_url: "/av/a.png" },
+            { id: "b", name: "乙", avatar_url: "https://cdn/x.png" },
+            { id: "c", name: "丙" },
+            { id: "d" },
+          ],
+        },
+      },
+      "u1",
+    );
+    expect(vm?.invite?.avatars).toEqual([
+      { key: "a", url: "https://mc.example/av/a.png", initial: "甲" },
+      { key: "b", url: "https://cdn/x.png", initial: "乙" },
+      { key: "c", url: "", initial: "丙" },
+      { key: "d", url: "", initial: "?" }, // 无名回落 ?
+    ]);
+    // 没有 base 就不拼:宁可退首字母,也不请求一个必然 404 的地址
+    expect(usageVM({ ...full, base_url: "", invitations: { items: [{ id: "a", avatar_url: "/av/a.png" }] } })?.invite?.avatars[0]?.url).toBe("");
+  });
+
+  it("头像最多取 5 个(再多一行叠不下,人数由 count 兜着)", () => {
+    const items = Array.from({ length: 9 }, (_, i) => ({ id: `x${i}`, name: "甲" }));
+    expect(usageVM({ ...full, invitations: { count: 9, items } })?.invite?.avatars.length).toBe(5);
   });
 
   it("邀请链接:缺基址或账号 id 都拼不出(空串);count 缺席回落 items 长度", () => {

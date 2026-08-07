@@ -7,7 +7,7 @@
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
 import { IconAdjustmentsHorizontal, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
 import {
@@ -21,7 +21,8 @@ import {
 } from "@/lib/ipc/config";
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
-import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
+import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
+import { customThemeVars, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
 import { engineCaps } from "@/lib/ipc/approvals";
@@ -62,7 +63,94 @@ function SettingRow({ label, hint, children }: { label: string; hint?: string; c
 /** 主题条目色板(daisyUI 官方 theme picker 同款手法):data-theme 让子树
  * 取该主题的变量,4 个色点(正文/主/次/强调)在该主题的 base-100 底上
  * ——每个主题的性格一眼可辨,不用逐个切换试。 */
-function ThemeSwatch({ theme }: { theme: string }) {
+/** 色板的内联覆盖:只取自定义属性(`--*`)。React 的 style 对象对标准属性要
+ * 驼峰键,"color-scheme" 这种连字符键会被丢掉——而 4 个圆点的预览也用不上它。 */
+function swatchVars(c: CustomTheme): CSSProperties {
+  return Object.fromEntries(Object.entries(customThemeVars(c)).filter(([k]) => k.startsWith("--"))) as CSSProperties;
+}
+
+/** 自定义主题编辑器:派生式——基础主题提供其余十几个变量,这里只改关键几项。
+ * 无「保存」钮:外观设置是「切换立即生效并记在本机」口径(settings.appearance.hint),
+ * 与主题下拉「点选即时换肤」一致,每次改动直接落盘 + 应用。 */
+function CustomThemeEditor({ value, onChange }: { value: CustomTheme; onChange: (v: CustomTheme) => void }) {
+  const { t } = useI18n();
+  const set = (patch: Partial<CustomTheme>) => onChange({ ...value, ...patch });
+  const color = (label: string, key: "primary" | "base100") => (
+    <label className="flex items-center gap-2 text-xs">
+      <input
+        type="color"
+        aria-label={label}
+        className="h-6 w-9 shrink-0 cursor-pointer rounded border border-base-300 bg-base-100 p-0.5"
+        value={value[key]}
+        onChange={(e) => set({ [key]: e.target.value } as Partial<CustomTheme>)}
+      />
+      <span className="text-base-content/70">{label}</span>
+    </label>
+  );
+  const slider = (label: string, key: "radius" | "border", range: { min: number; max: number; step: number }, fmt: (v: number) => string) => (
+    <label className="flex items-center gap-2 text-xs">
+      <span className="w-8 shrink-0 text-base-content/70">{label}</span>
+      <input
+        type="range"
+        aria-label={label}
+        className="range range-xs min-w-0 flex-1"
+        min={range.min}
+        max={range.max}
+        step={range.step}
+        value={value[key]}
+        onChange={(e) => set({ [key]: Number(e.target.value) } as Partial<CustomTheme>)}
+      />
+      <span className="w-12 shrink-0 text-end font-mono text-base-content/50 tabular-nums">{fmt(value[key])}</span>
+    </label>
+  );
+  return (
+    <div className="flex flex-col gap-2.5 px-4 pt-1 pb-3">
+      <label className="flex items-center gap-2 text-xs">
+        <span className="shrink-0 text-base-content/70">{t("settings.appearance.customBase")}</span>
+        <select
+          aria-label={t("settings.appearance.customBase")}
+          className="select select-xs min-w-0 flex-1"
+          value={value.base}
+          onChange={(e) => set({ base: e.target.value })}
+        >
+          {THEMES.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        {color(t("settings.appearance.customPrimary"), "primary")}
+        {color(t("settings.appearance.customBase100"), "base100")}
+      </div>
+      {slider(t("settings.appearance.customRadius"), "radius", RADIUS_RANGE, (v) => `${v}rem`)}
+      {slider(t("settings.appearance.customBorder"), "border", BORDER_RANGE, (v) => `${v}px`)}
+      <p className="text-xs text-base-content/50">{t("settings.appearance.customHint")}</p>
+    </div>
+  );
+}
+
+/** 色板预览。daisyUI 的主题选择器是 [data-theme="X"] 而非 :root 限定,所以
+ * 挂在 span 上就能就地预览一整套主题;自定义那档同理——落基础主题名 + 覆盖
+ * 属性,再把覆盖块内联到本元素上(全局注入的那份只在选中自定义时存在,
+ * 菜单里没选中时也要能预览)。 */
+function ThemeSwatch({ theme, custom }: { theme: string; custom?: CustomTheme | null }) {
+  if (custom) {
+    return (
+      <span
+        data-theme={custom.base}
+        aria-hidden
+        style={swatchVars(custom)}
+        className="grid shrink-0 grid-cols-2 gap-0.5 rounded-md bg-base-100 p-1 shadow-sm"
+      >
+        <span className="size-1.5 rounded-full bg-base-content" />
+        <span className="size-1.5 rounded-full bg-primary" />
+        <span className="size-1.5 rounded-full bg-secondary" />
+        <span className="size-1.5 rounded-full bg-accent" />
+      </span>
+    );
+  }
   return (
     <span data-theme={theme} aria-hidden className="grid shrink-0 grid-cols-2 gap-0.5 rounded-md bg-base-100 p-1 shadow-sm">
       <span className="size-1.5 rounded-full bg-base-content" />
@@ -78,7 +166,7 @@ function ThemeSwatch({ theme }: { theme: string }) {
  * select 的 option 塞不进色板,只能一排裸名——「丑」的根源,故自绘。
  * 点选即时换肤**不关**菜单(试玩几个再走,官方同款);外点/Esc/再点触发器关。
  * 品牌主题(monkeycode/monkeycode-dark)恒居列表头两位(THEMES 序)。 */
-function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => void }) {
+function ThemePicker({ theme, custom, onPick }: { theme: Theme; custom: CustomTheme; onPick: (v: Theme) => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -95,8 +183,10 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
         className="btn btn-sm w-52 justify-start font-normal"
         onClick={() => setOpen(!open)}
       >
-        <ThemeSwatch theme={theme} />
-        <span className="min-w-0 flex-1 truncate text-start">{theme}</span>
+        <ThemeSwatch theme={theme} custom={theme === CUSTOM_THEME ? custom : null} />
+        <span className="min-w-0 flex-1 truncate text-start">
+          {theme === CUSTOM_THEME ? t("settings.appearance.custom") : theme}
+        </span>
         <IconChevronDown size={14} stroke={1.75} aria-hidden className={`shrink-0 text-base-content/50 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
@@ -105,6 +195,22 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
           aria-label={t("settings.appearance.theme")}
           className="dropdown-content menu z-30 mt-1 max-h-80 w-52 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
         >
+          {/* 自定义置顶且与内置清单以分隔线隔开:它不是第 36 套主题,是「基于
+              某套主题改几项」,混在字母序里会被当成一个叫 mc-custom 的主题 */}
+          <li>
+            <button
+              type="button"
+              role="option"
+              aria-selected={theme === CUSTOM_THEME}
+              className={`flex items-center gap-2 ${theme === CUSTOM_THEME ? "menu-active" : ""}`}
+              onClick={() => onPick(CUSTOM_THEME)}
+            >
+              <ThemeSwatch theme={CUSTOM_THEME} custom={custom} />
+              <span className="min-w-0 flex-1 truncate text-xs">{t("settings.appearance.custom")}</span>
+              {theme === CUSTOM_THEME && <IconCheck size={14} stroke={2} aria-hidden className="shrink-0" />}
+            </button>
+          </li>
+          <li className="menu-disabled border-t border-base-300 pt-1" aria-hidden />
           {THEMES.map((v) => (
             <li key={v}>
               <button
@@ -130,6 +236,8 @@ function ThemePicker({ theme, onPick }: { theme: Theme; onPick: (v: Theme) => vo
 function GeneralSection() {
   const { t, locale } = useI18n();
   const [theme, setThemeState] = useState<Theme>(readTheme);
+  // 没配过就给一份默认草稿:编辑器要有初值,选中「自定义」当场就该看到效果
+  const [custom, setCustom] = useState<CustomTheme>(() => readCustomTheme() ?? DEFAULT_CUSTOM);
   const [soundOn, setSoundOn] = useState(true);
 
   useEffect(() => {
@@ -152,8 +260,18 @@ function GeneralSection() {
   };
 
   const pickTheme = (next: Theme) => {
-    setTheme(next);
+    // 切到自定义走 setCustomTheme:它同时落配置 + 渲染好的 CSS(首帧防闪要用),
+    // 而 setTheme 只写主题名——选了自定义却没落 CSS 的话,下次启动首帧会是
+    // 基础主题的模样
+    if (next === CUSTOM_THEME) setCustomTheme(custom);
+    else setTheme(next);
     setThemeState(next);
+  };
+  // 编辑即生效:与主题下拉「点选即时换肤」同口径,不设保存钮
+  const editCustom = (next: CustomTheme) => {
+    setCustom(next);
+    setCustomTheme(next);
+    setThemeState(CUSTOM_THEME);
   };
   const seg = (label: string, on: boolean, onClick: () => void) => (
     <button key={label} type="button" className={`btn btn-sm join-item ${on ? "btn-active" : "text-base-content/60"}`} onClick={onClick}>
@@ -164,9 +282,14 @@ function GeneralSection() {
   return (
     <section aria-label={t("settings.nav.general")} className="flex flex-col gap-2">
       <div className="divide-y divide-base-300 rounded-box border border-base-300">
-        <SettingRow label={t("settings.appearance.theme")}>
-          <ThemePicker theme={theme} onPick={pickTheme} />
-        </SettingRow>
+        {/* 自定义编辑器与主题行同格(不另起 SettingRow):它是这一行的展开态,
+            分成两行会读成两个并列设置 */}
+        <div>
+          <SettingRow label={t("settings.appearance.theme")}>
+            <ThemePicker theme={theme} custom={custom} onPick={pickTheme} />
+          </SettingRow>
+          {theme === CUSTOM_THEME && <CustomThemeEditor value={custom} onChange={editCustom} />}
+        </div>
         <SettingRow label={t("settings.appearance.language")}>
           <div role="radiogroup" aria-label={t("settings.appearance.language")} className="join shrink-0">
             {LOCALES.map((l) => seg(l.label, locale === l.value, () => setLocale(l.value)))}

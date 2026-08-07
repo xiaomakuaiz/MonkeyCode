@@ -715,4 +715,47 @@ describe("CloudTaskView", () => {
     expect(call.kind).toBe("switch_model");
     expect(JSON.parse(b64decode(call.data))).toMatchObject({ model_id: "m2", load_session: true });
   });
+
+  it("休眠机器:唤醒态状态条 + 发送后占位气泡,云端回显即让位", async () => {
+    // 拨号挂起 = 真实的唤醒窗口(服务端在建连时唤醒 VM,以分钟计)
+    const opens: Array<() => void> = [];
+    const listeners = stubShellWs((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({
+            id: "t17",
+            status: "processing",
+            virtualmachine: { id: "vm1", status: "hibernated" },
+          });
+        case "mc_task_options":
+          return Promise.resolve({ models: [] });
+        case "cloud_ws_open":
+          return new Promise<unknown>((res) => opens.push(() => res({})));
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t17", status: "processing" }} />);
+    // attach 在拨号 + 服务端说 VM 休眠 → 状态条与空态都讲「唤醒」,不是「连接云端」
+    await waitFor(() => expect(screen.getAllByText(/正在唤醒云端机器/).length).toBeGreaterThan(0));
+    expect(screen.queryByText(/正在连接云端任务/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("消息输入"), { target: { value: "醒了就跑这条" } });
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    // 占位气泡立刻上屏(否则输入框一清、日志无变化,用户以为消息丢了)
+    const ghost = await screen.findByText("醒了就跑这条");
+    expect(ghost.closest("[data-pending-send]")).toBeTruthy();
+    // 在途期间不许再发:按钮禁用(再点会掐掉在途连接,首条被弹回挤掉草稿)
+    await waitFor(() => expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true));
+
+    // 机器醒了:mode=new 连上并回显这条 → 占位让位给真气泡
+    opens.forEach((r) => r());
+    await waitFor(() => expect([...listeners.keys()].some((k) => k.startsWith("ws-msg:"))).toBe(true));
+    const msgKey = [...listeners.keys()].filter((k) => k.startsWith("ws-msg:")).pop()!;
+    listeners.get(msgKey)?.({
+      payload: JSON.stringify({ type: "user-input", seq: 1, timestamp: 1000, data: { content: b64encode("醒了就跑这条") } }),
+    });
+    await waitFor(() => expect(document.querySelector("[data-pending-send]")).toBeNull());
+    expect(screen.getByText("醒了就跑这条")).toBeTruthy();
+  });
 });

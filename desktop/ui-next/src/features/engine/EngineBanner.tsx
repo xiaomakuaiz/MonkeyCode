@@ -104,7 +104,13 @@ export function EngineBanner() {
         {restarting && <span className="loading loading-spinner loading-xs" aria-hidden />}
         {t("engine.restart")}
       </button>
-      <button type="button" className="btn btn-ghost btn-xs" onClick={() => void openLogDir()}>
+      {/* 打开目录失败就地转成重启错误位外显(横幅上没有第二个报错位),
+          不吞——吞掉就是「点了没反应」 */}
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs"
+        onClick={() => void openLogDir().catch((e) => setRestartError(e instanceof Error ? e.message : String(e)))}
+      >
         {t("engine.logs")}
       </button>
     </div>

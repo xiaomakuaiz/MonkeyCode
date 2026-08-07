@@ -9,6 +9,16 @@ import type { RepoEntry } from "@/lib/ipc/repo";
 import { fileIconOf } from "./fileIcon";
 import { fmtSize, statusMeta } from "./status";
 
+/** 某目录子树内的改动条目数(含各级子目录)。改动表的键是工作区相对路径,
+ *  前缀比对即可;必须带上分隔符,否则 `src` 会把 `src2/a.ts` 也算进去。 */
+export function countChangesUnder(changeStatus: ReadonlyMap<string, string> | undefined, dir: string): number {
+  if (!changeStatus || changeStatus.size === 0) return 0;
+  const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+  let n = 0;
+  for (const path of changeStatus.keys()) if (path.startsWith(prefix)) n += 1;
+  return n;
+}
+
 export function Tree({
   listDir,
   onOpenFile,
@@ -100,6 +110,9 @@ export function Tree({
     for (const en of items) {
       const open = en.isDir && expanded.has(en.path);
       const meta = !en.isDir && changeStatus ? statusMeta(changeStatus.get(en.path) ?? "") : undefined;
+      // 目录行:聚合子树里的改动数(旧 UI dirChangeBadges)。折叠着的目录
+      // 不给这个数就完全看不出里面有没有改动,只能逐层点开找
+      const dirChanges = en.isDir ? countChangesUnder(changeStatus, en.path) : 0;
       rows.push(
         <li key={en.path}>
           <button
@@ -137,12 +150,19 @@ export function Tree({
             <span className="min-w-0 flex-1 truncate">{en.name}</span>
             {meta ? (
               <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
-            ) : (
-              !en.isDir && (
-                <span className="shrink-0 font-mono text-[10px] text-base-content/35 tabular-nums">
-                  {fmtSize(en.size)}
+            ) : en.isDir ? (
+              dirChanges > 0 && (
+                <span
+                  title={t("files.dirChanges", { n: String(dirChanges) })}
+                  className="badge badge-soft badge-primary badge-xs shrink-0 tabular-nums"
+                >
+                  {dirChanges}
                 </span>
               )
+            ) : (
+              <span className="shrink-0 font-mono text-[10px] text-base-content/35 tabular-nums">
+                {fmtSize(en.size)}
+              </span>
             )}
           </button>
         </li>,

@@ -110,20 +110,19 @@ export function sessionIdFromUiIntent(intent: unknown): string | null {
 }
 
 /** 打开应用存储目录 = 引擎日志目录(app_config_dir,壳侧同一命令:配置、
- *  会话、cookie 与引擎日志都在这);文件管理器定位,浏览器模式 no-op。 */
+ *  会话、cookie 与引擎日志都在这);浏览器模式 no-op。
+ *  **失败要抛**:此前这里吞掉 Err,壳报什么错都表现为「点了没反应」,
+ *  连"命令不存在(壳还是旧版)"都看不出来(2026-08-07 用户报障)。 */
 export function openLogDir(): Promise<void> {
   if (!inDesktopShell()) return Promise.resolve();
-  return invoke<string>("open_log_dir")
-    .then(() => {})
-    .catch(() => {});
+  return invoke<string>("open_log_dir").then(() => {});
 }
 
-/** 打开程序本体所在处(macOS 为 .app,其余平台为可执行文件);浏览器模式 no-op。 */
+/** 在文件管理器中选中程序本体(macOS 为 .app,其余平台为可执行文件);
+ *  浏览器模式 no-op。失败要抛,理由同 openLogDir。 */
 export function openAppDir(): Promise<void> {
   if (!inDesktopShell()) return Promise.resolve();
-  return invoke<string>("open_app_dir")
-    .then(() => {})
-    .catch(() => {});
+  return invoke<string>("open_app_dir").then(() => {});
 }
 
 /** WSL 模式下工作目录的家目录基座:guest 家目录的宿主视角
@@ -139,11 +138,15 @@ export async function wslWorkdirBase(): Promise<string | null> {
 }
 
 /** 系统目录选择;取消/浏览器模式返回 null。 */
-export async function pickDirectory(): Promise<string | null> {
+export async function pickDirectory(defaultPath?: string): Promise<string | null> {
   if (!inDesktopShell()) return null;
   try {
     const res = await invoke<string | string[] | null>("plugin:dialog|open", {
-      options: { directory: true },
+      // defaultPath 决定对话框开在哪:不给的话落点由平台自定(Windows 上是
+      // 进程 CWD = 安装目录),WSL 模式下更会开在 Windows 侧、选出来的路径
+      // 压根不属于当前运行环境(2026-08-07 对表旧 UI 补回;与导出引擎日志
+      // 落「下载」目录同一口径)
+      options: { directory: true, multiple: false, ...(defaultPath ? { defaultPath } : {}) },
     });
     if (typeof res === "string") return res;
     if (Array.isArray(res)) return res[0] ?? null;
@@ -151,4 +154,23 @@ export async function pickDirectory(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** 目录对话框的初始位置,按当前内核运行环境定:
+ *  - WSL 模式:引擎 prepare 时采集的 guest 家目录(wsl_workdir_base),
+ *    引擎没起来就退回按配置推出的发行版 UNC 根 \\wsl$\<发行版>;
+ *  - 本机模式 / 读取失败:返回 undefined(交回平台默认,不硬塞一个位置)。
+ *  不给这个值的话,WSL 用户点「选择其他文件夹」会开在 Windows 侧,选出来的
+ *  路径不属于当前运行环境,建任务必然失败(2026-08-07 对表旧 UI 补回)。 */
+export async function workdirPickBase(): Promise<string | undefined> {
+  const base = await wslWorkdirBase();
+  if (base) return base;
+  try {
+    const env = (await invoke<{ kernel_env?: string } | null>("get_config"))?.kernel_env ?? "";
+    // UNC 要两道反斜杠开头:模板串里每道写成 \\
+    if (env.startsWith("wsl:") && env.length > 4) return `\\\\wsl$\\${env.slice(4)}`;
+  } catch {
+    // 非壳/读不到配置:不指定初始位置
+  }
+  return undefined;
 }

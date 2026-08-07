@@ -24,6 +24,26 @@ const posInt = (v: string): number | undefined => {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 };
 
+/** 折叠行的高级项摘要:只列**显式配置过**的项(缺省值不占位置——
+ *  「跟默认一样」不值得占一行的横向预算)。 */
+function advSummary(m: HostModel, t: ReturnType<typeof useI18n>["t"]): string {
+  const parts = [
+    m.context_window ? t("settings.models.sum.ctx", { n: m.context_window.toLocaleString() }) : "",
+    m.max_output ? t("settings.models.sum.out", { n: m.max_output.toLocaleString() }) : "",
+    m.think ? t("settings.models.sum.think", { level: t(THINK_LABEL_KEY[m.think] ?? "settings.models.think.default") }) : "",
+    m.vision ? t("settings.models.sum.vision") : "",
+  ].filter(Boolean);
+  return parts.length ? `(${parts.join("，")})` : "";
+}
+
+/** 思考档值 → 词条键(与下方选择器同一张表) */
+const THINK_LABEL_KEY: Record<string, "settings.models.think.off" | "settings.models.think.low" | "settings.models.think.medium" | "settings.models.think.high"> = {
+  off: "settings.models.think.off",
+  low: "settings.models.think.low",
+  medium: "settings.models.think.medium",
+  high: "settings.models.think.high",
+};
+
 export function ModelsSection({
   draft,
   onDraft,
@@ -104,6 +124,12 @@ export function ModelsSection({
         {!noTier && d.tier && <span className="badge badge-ghost badge-sm shrink-0">{d.tier}</span>}
         {m.locked && <span className="badge badge-warning badge-soft badge-sm shrink-0">{t("settings.models.lockedBadge")}</span>}
         {!m.source && m.model && <span className="min-w-0 truncate font-mono text-xs text-base-content/50">{m.model}</span>}
+        {/* 折叠态补一句高级项摘要(旧 UI advSummary):配置过的值收起来就
+            完全不可见,用户改完一合上根本认不出这行跟别行有什么不同。
+            展开时不出——下面的表单里逐项都在,重复一遍是噪音 */}
+        {!open && advSummary(m, t) && (
+          <span className="min-w-0 shrink truncate text-xs text-base-content/45">{advSummary(m, t)}</span>
+        )}
       </>
     );
     return (

@@ -3,7 +3,12 @@
 // 把错误文案交给视图外显——吞掉就是按钮永远转圈。
 import { useEffect, useState } from "react";
 
-import { shouldCheckUpdate, updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
+import { takeUpdateCheck, updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
+
+/** 兜底复查间隔:窗口一直开着、从没失去过焦点(挂着跑长任务正是如此)就
+ *  永远等不到前台事件,只靠 focus 触发等于不查。被闸门挡掉只是顺延到下一
+ *  次 tick,不会重复请求。 */
+const FALLBACK_MS = 4 * 3600_000;
 
 export function useUpdate(): {
   update: UpdateInfo | null;
@@ -18,21 +23,21 @@ export function useUpdate(): {
 
   useEffect(() => {
     let alive = true;
-    let lastAt: number | null = null;
+    // 三个触发点共用全局闸门(lib/ipc/update):挂载、窗口回焦、4 小时兜底。
+    // 关于页的手动检查也记同一笔账,查完切个窗口回来不会再查一遍
     const check = () => {
-      lastAt = Date.now();
+      if (!takeUpdateCheck()) return;
       void updateCheck().then((info) => {
         if (alive && info?.available) setUpdate(info);
       });
     };
     check();
-    const onFocus = () => {
-      if (shouldCheckUpdate(Date.now(), lastAt)) check();
-    };
-    window.addEventListener("focus", onFocus);
+    window.addEventListener("focus", check);
+    const timer = window.setInterval(check, FALLBACK_MS);
     return () => {
       alive = false;
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", check);
+      window.clearInterval(timer);
     };
   }, []);
 

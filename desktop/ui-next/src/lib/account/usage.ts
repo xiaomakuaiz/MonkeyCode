@@ -36,10 +36,29 @@ export interface UsageVM {
   /** 当天是否已签到;null = 没取到,签到入口整个不出现(不催、不误报) */
   checkedIn: boolean | null;
   /** 邀请概况;端点缺席 null。link 拼不出(缺基址或账号 id)为空串 */
-  invite: { count: number; link: string } | null;
+  invite: { count: number; link: string; avatars: UsageAvatar[] } | null;
 }
 
 const clamp = (v: number, total: number) => Math.min(Math.max(v, 0), total);
+
+/** 邀请人头像:url 空(没头像/拼不出绝对地址/加载失败)时用 initial 兜底。 */
+export interface UsageAvatar {
+  key: string;
+  url: string;
+  /** 名字首字母大写;取不到用 ? */
+  initial: string;
+}
+
+/** 资源地址补全:服务端给的头像可能是相对路径(`/avatar/x.png`),要按
+ *  base_url 拼成绝对地址才加载得到;已经是绝对地址或 data: 的原样返回,
+ *  没有 base 就返回空串——宁可退到首字母,也不请求一个必然 404 的地址。 */
+export function resolveAssetUrl(base: string, url?: string): string {
+  const u = (url || "").trim();
+  if (!u) return "";
+  if (/^(https?:)?\/\//i.test(u) || u.startsWith("data:")) return u;
+  if (!base) return "";
+  return u.startsWith("/") ? `${base}${u}` : `${base}/${u}`;
+}
 
 /** userId 来自 mc_status 的云端账号,用于拼邀请链接;缺失时 link 为空串。 */
 export function usageVM(usage: McUsage | null | undefined, userId?: string): UsageVM | null {
@@ -73,6 +92,12 @@ export function usageVM(usage: McUsage | null | undefined, userId?: string): Usa
   const invite = invitations
     ? {
         count: invitations.count ?? invitations.items?.length ?? 0,
+        // 头像最多取 5 个:再多在一行里叠不下,人数由 count 兜着
+        avatars: (invitations.items ?? []).slice(0, 5).map((it, i) => ({
+          key: it.id || `${i}`,
+          url: resolveAssetUrl(base, it.avatar_url),
+          initial: (it.name || "?").trim().charAt(0).toUpperCase() || "?",
+        })),
         // 与移动端同款邀请链接;基址或账号 id 缺一不可,拼不出就不给入口
         link: base && userId ? `${base}/?ic=${userId}` : "",
       }

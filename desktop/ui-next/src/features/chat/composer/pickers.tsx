@@ -12,6 +12,7 @@ import { IconChevronDown } from "@tabler/icons-react";
 import { useRef, useState } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
+import { useUpwardMenuHeight } from "@/lib/util/menuHeight";
 import type { ModelInfo } from "@/lib/ipc/sessions";
 import {
   filterModels,
@@ -48,6 +49,7 @@ function Trigger({
   title,
   ariaLabel,
   className,
+  anchorRef,
   onToggle,
   children,
 }: {
@@ -56,11 +58,14 @@ function Trigger({
   title?: string;
   ariaLabel?: string;
   className?: string;
+  /** 量「向上还能长多高」的锚点(useUpwardMenuHeight) */
+  anchorRef?: React.Ref<HTMLButtonElement>;
   onToggle: () => void;
   children: React.ReactNode;
 }) {
   return (
     <button
+      ref={anchorRef}
       type="button"
       disabled={disabled}
       title={title}
@@ -100,6 +105,9 @@ export function ModelMenu({
   const [filter, setFilter] = useState("");
   const boxRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, boxRef, () => setOpen(false));
+  // 向上弹:高度按锚点到最近上边界(标题栏/视图头)的真实距离算,
+  // 写死上限在矮窗口下会把菜单顶出视口(lib/util/menuHeight)
+  const { anchorRef, maxHeight: menuMax } = useUpwardMenuHeight<HTMLButtonElement>(open);
 
   // 模型菜单派生(纯逻辑在 lib/models/modelMenu):过滤框在模型多时才有
   // 意义;tab 行只要 ≥2 来源就恒显(它是来源间唯一导航);过滤在 tab 内;
@@ -166,6 +174,7 @@ export function ModelMenu({
         title={title}
         ariaLabel={ariaLabel}
         className="max-w-52"
+        anchorRef={anchorRef}
         onToggle={() => (open ? setOpen(false) : openMenu())}
       >
         <span className="min-w-0 truncate">{modelDisplayByName(models, current).label || t("chat.model.label")}</span>
@@ -173,7 +182,10 @@ export function ModelMenu({
       {open && (
         // dropdown-content 换 div 外壳:过滤框/来源 tab 固定在顶,
         // 条目列表单独内滚(菜单长了不能把导航滚出视野)
-        <div className="dropdown-content flex max-h-72 w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+        <div
+          style={{ maxHeight: menuMax }}
+          className="dropdown-content flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+        >
           {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
               反而抢走键盘上下文(用户定案) */}
           {showExtras && (
@@ -333,6 +345,9 @@ export function OptionMenu({
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, boxRef, () => setOpen(false));
+  // 向上弹:高度按锚点到最近上边界(标题栏/视图头)的真实距离算,
+  // 写死上限在矮窗口下会把菜单顶出视口(lib/util/menuHeight)
+  const { anchorRef, maxHeight: menuMax } = useUpwardMenuHeight<HTMLButtonElement>(open);
   const flat = options ?? sections?.flatMap((s) => s.options) ?? [];
   const currentLabel = triggerLabel ?? flat.find((o) => o.value === value)?.label ?? ariaLabel;
   const itemOf = (o: OptionItem) => (
@@ -363,6 +378,7 @@ export function OptionMenu({
         title={title ?? currentLabel}
         ariaLabel={ariaLabel}
         className="max-w-48"
+        anchorRef={anchorRef}
         onToggle={() => setOpen(!open)}
       >
         <span className="min-w-0 truncate">{currentLabel}</span>
@@ -370,7 +386,8 @@ export function OptionMenu({
       {open && (
         <ul
           aria-label={ariaLabel}
-          className="dropdown-content menu max-h-72 w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+          style={{ maxHeight: menuMax }}
+          className="dropdown-content menu w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
         >
           {/* 节头 text-xs:与 ModelMenu 同理(menu-title 默认比条目大,倒挂) */}
           {sections

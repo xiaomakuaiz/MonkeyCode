@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { engineRestart } from "@/lib/ipc/engine";
 import { hostInfo, openAppDir, openLogDir, type HostInfo } from "@/lib/ipc/host";
-import { updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
+import { recordUpdateCheck, updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -44,6 +44,9 @@ export function AboutSection() {
   const check = async () => {
     setPhase("checking");
     setMsg(null);
+    // 手动检查不过闸门(用户明确要查就得查),但记一笔账:紧接着切个窗口
+    // 回来不该再自动查一遍(旧 UI updateGate.record 同款)
+    recordUpdateCheck();
     const s = await updateCheck(); // 失败/浏览器模式均为 null(update.ts 收口)
     setPhase("idle");
     if (!s) {
@@ -83,6 +86,15 @@ export function AboutSection() {
       setMsg({ text: errMsg(e), error: true });
     } finally {
       setRestarting(false);
+    }
+  };
+
+  const openDir = async (fn: () => Promise<void>) => {
+    setMsg(null);
+    try {
+      await fn();
+    } catch (e) {
+      setMsg({ text: errMsg(e), error: true });
     }
   };
 
@@ -140,13 +152,14 @@ export function AboutSection() {
           {restarting && <span className="loading loading-spinner loading-xs" aria-hidden />}
           {restarting ? t("engine.restarting") : t("engine.restart")}
         </button>
-        {/* 连点版本号解锁的排障入口(常态不占位) */}
+        {/* 连点版本号解锁的排障入口(常态不占位)。失败就地外显:壳的 Err
+            是中文,吞掉就成了「点了没反应」 */}
         {unlocked && (
           <>
-            <button type="button" className="btn btn-sm" onClick={() => void openAppDir()}>
+            <button type="button" className="btn btn-sm" onClick={() => void openDir(openAppDir)}>
               {t("settings.about.openAppDir")}
             </button>
-            <button type="button" className="btn btn-sm" onClick={() => void openLogDir()}>
+            <button type="button" className="btn btn-sm" onClick={() => void openDir(openLogDir)}>
               {t("settings.about.openDataDir")}
             </button>
           </>

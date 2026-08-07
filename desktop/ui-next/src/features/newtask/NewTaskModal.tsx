@@ -30,7 +30,7 @@ import {
 
 import { useI18n } from "@/lib/i18n";
 import { getConfig } from "@/lib/ipc/config";
-import { isWindowsShell, pickDirectory, wslWorkdirBase } from "@/lib/ipc/host";
+import { isWindowsShell, pickDirectory, workdirPickBase, wslWorkdirBase } from "@/lib/ipc/host";
 import { modelsList, sessionCreate, sessionSend, type ModelInfo, type SessionKind, type SessionMeta } from "@/lib/ipc/sessions";
 import {
   isImagePath,
@@ -476,9 +476,13 @@ export function NewTaskModal({
                             className="btn btn-ghost btn-sm w-full justify-start gap-2 px-2 font-normal text-base-content/70"
                             onClick={() => {
                               setDirMenu(false);
-                              void pickDirectory().then((picked) => {
-                                if (picked) pickDir(picked);
-                              });
+                              // 起始目录跟当前运行环境走(WSL 模式开在发行版内,
+                              // 不给的话对话框会开在 Windows 侧)
+                              void workdirPickBase()
+                                .then((base) => pickDirectory(base))
+                                .then((picked) => {
+                                  if (picked) pickDir(picked);
+                                });
                             }}
                           >
                             <IconFolderOpen size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />

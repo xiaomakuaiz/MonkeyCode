@@ -109,7 +109,20 @@ export interface CloudTaskHandle {
   ports: PortInfo[] | null;
   /** 拉一次开放端口(⋯ 菜单打开时触发;结束态/无 VM 不拉) */
   fetchPorts(): void;
+  /** 已发出但云端还没回显的那条输入(mode=new 连接在途)。视图据此渲染
+   * 「发送中」占位气泡——服务端回显要等 WS 连上(休眠机器要先唤醒,以分钟
+   * 计),不占位的话输入框一清、日志无变化,用户会以为消息丢了 */
+  sending: { content: string; attachments: { url: string; filename: string }[] } | null;
+  /** 云端机器正在唤醒:服务端说 VM 休眠/离线,且我们正在连它。
+   * 「连接中」与「唤醒中」的等待量级差一个数量级(秒 vs 分钟),文案要分开 */
+  waking: boolean;
+  /** VM 状态原值(unknown/pending/online/offline/hibernated) */
+  vmStatus: string;
 }
+
+/** 服务端认定「机器不在线,连它要先唤醒」的 VM 状态(与后端
+ * VirtualMachineStatus 同名值;空值 = 详情还没到,不妄断)。 */
+const ASLEEP_VM = new Set(["hibernated", "offline"]);
 
 export function useCloudTask(
   task: CloudTask,
@@ -125,6 +138,15 @@ export function useCloudTask(
   const [input, setInput] = useState("");
   const [atts, setAtts] = useState<CloudUploadedAtt[]>([]);
   const [uploading, setUploading] = useState(0);
+  // 已发出、等云端回显的那条输入(mode=new 在途)。ref 与 state 并存:
+  // onFrames 在连接回调闭包里跑,读 state 是陈旧的
+  const [sending, setSending] = useState<CloudTaskHandle["sending"]>(null);
+  const sendingRef = useRef(false);
+  const clearSending = () => {
+    if (!sendingRef.current) return;
+    sendingRef.current = false;
+    setSending(null);
+  };
   // 附件占位计数走 ref:addFiles 的串行 async 循环里 state 闭包是陈旧的
   const attCountRef = useRef(0);
   // 斜杠指令清单粘住最近一次非空:清单是事件驱动的(available_commands_update),
@@ -161,6 +183,11 @@ export function useCloudTask(
   const taskStatus = meta?.status ?? task.status ?? "pending";
   const ended = taskStatus === "finished" || taskStatus === "error";
   const vmId = meta?.virtualmachine?.id ?? "";
+  const vmStatus = meta?.virtualmachine?.status ?? "";
+  // 唤醒中 = 服务端说机器休眠/离线,而我们正在连它(发送在途或流在拨号)。
+  // 只在服务端明说休眠时才敢讲「唤醒」;详情没到(vmStatus 空)按普通连接
+  const waking =
+    ASLEEP_VM.has(vmStatus) && !connected && (sending !== null || status?.kind === "connecting" || status?.kind === "reconnecting");
   const label = task.title || task.summary || task.content || meta?.title || meta?.summary || t("cloud.list.untitled");
 
   const refreshInfo = useCallback(async (): Promise<CloudTaskDetail | null> => {
@@ -190,6 +217,9 @@ export function useCloudTask(
         frames.push(f);
       }
       if (!frames.length) return;
+      // 云端开始回显(第一批实时帧里就有服务端回写的这条 user 消息):
+      // 占位气泡让位给真气泡
+      clearSending();
       liveRef.current.push(...frames);
       setChat((s) => reduceBatch(s, frames));
       if (turnEnded) {
@@ -215,11 +245,15 @@ export function useCloudTask(
       connRef.current = null;
       setConnected(false);
       setIdle(true);
+      // 连接以「空闲」收束却一帧未回:发送态不能悬着(否则占位气泡永远转圈)。
+      // 内容已经出门,不退回输入框——退回会造成重复发送
+      clearSending();
     },
     // mode=new 首条输入未送达(拨号失败/零回显被关):草稿与附件都交还,
     // 绝不静默丢;重建 attach 拿回观察通道(被拒大多因为轮在跑)
     onSendFailed: (failed) => {
       connRef.current = null;
+      clearSending(); // 内容回到输入框,占位气泡随之撤
       setInput((cur) => (cur ? failed.content + "\n" + cur : failed.content));
       const back = (failed.attachments ?? []).map((a) => ({ ...a, isImage: isImageFilename(a.filename) }));
       if (back.length) {
@@ -245,6 +279,8 @@ export function useCloudTask(
     setAtts([]);
     attCountRef.current = 0;
     setIdle(false);
+    sendingRef.current = false;
+    setSending(null);
     let alive = true;
     void (async () => {
       const info = await refreshInfo();
@@ -305,6 +341,12 @@ export function useCloudTask(
     // 缺了这个分隔符整条会被当普通文本(与旧 UI 同一口径)
     const text = withCommandSeparator(input, commands);
     if (!text.trim() || ended) return;
+    if (sendingRef.current) {
+      // 上一条还在拨号(唤醒机器可能要几分钟):再发一次会 close 掉在途连接,
+      // 首条经 onSendFailed 弹回输入框、把用户刚打的字挤掉。拦下并说明
+      setErr(t("cloud.err.sendInFlight"));
+      return;
+    }
     if (chat.running) {
       // 简版:执行中不排队,提示并保留草稿(服务端运行互斥,抢发必被拒)
       setErr(t("cloud.err.roundRunning"));
@@ -327,6 +369,9 @@ export function useCloudTask(
     connRef.current?.close();
     attachIdleRef.current = true; // 由新连接接管;失败时 onSendFailed 重新武装
     setIdle(false);
+    // 占位气泡立刻上屏:云端回显要等 WS 连上(休眠机器先唤醒,以分钟计)
+    sendingRef.current = true;
+    setSending({ content: text, attachments });
     // content 交明文:内层 base64 由 stream 状态机统一包(双重编码会乱码)
     connRef.current = connectCloudStream(id, "new", makeHandlers(), { content: text, attachments });
   };
@@ -507,5 +552,8 @@ export function useCloudTask(
     commands,
     ports,
     fetchPorts,
+    sending,
+    waking,
+    vmStatus,
   };
 }

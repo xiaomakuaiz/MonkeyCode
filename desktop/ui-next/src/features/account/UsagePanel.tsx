@@ -6,12 +6,41 @@
 import { IconCheck, IconCopy, IconCrown } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CHECKIN_REWARD, INVITE_REWARD, usageVM } from "@/lib/account/usage";
+import { CHECKIN_REWARD, INVITE_REWARD, usageVM, type UsageAvatar } from "@/lib/account/usage";
 import { useI18n } from "@/lib/i18n";
 import { mcCheckin, mcUsage, type McUsage } from "@/lib/ipc/account";
 import { copyText } from "@/lib/util/clipboard";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** 邀请人头像堆(旧 UI InviteeStack):负 margin 叠放,后一个压前一个。
+ *  头像加载失败(相对地址拼不出/资源没了)当场回落首字母底片——不给
+ *  破图,也不留空位。纯装饰,人数由旁边的文字承担,故整体 aria-hidden。 */
+function InviteeStack({ avatars }: { avatars: UsageAvatar[] }) {
+  const [broken, setBroken] = useState<Record<string, boolean>>({});
+  if (avatars.length === 0) return null;
+  return (
+    <span aria-hidden className="flex shrink-0 items-center">
+      {avatars.map((a) => (
+        <span
+          key={a.key}
+          className="-ms-1.5 flex size-6 items-center justify-center overflow-hidden rounded-full border border-base-100 bg-base-300 text-[10px] font-semibold text-base-content/60 first:ms-0"
+        >
+          {a.url && !broken[a.key] ? (
+            <img
+              src={a.url}
+              alt=""
+              className="size-full object-cover"
+              onError={() => setBroken((m) => ({ ...m, [a.key]: true }))}
+            />
+          ) : (
+            a.initial
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export function UsagePanel({ userId }: { userId?: string }) {
   const { t } = useI18n();
@@ -139,6 +168,7 @@ export function UsagePanel({ userId }: { userId?: string }) {
           <span className="flex-1" />
           {vm.invite && (
             <span className="flex min-w-0 items-center gap-2.5">
+              <InviteeStack avatars={vm.invite.avatars} />
               <span className="flex min-w-0 flex-col gap-0.5 text-end">
                 <span className="text-xs font-semibold text-base-content/70">
                   {t("account.usage.invite", { count: vm.invite.count })}

@@ -1,8 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resetUpdateGate } from "@/lib/ipc/update";
 import { useUpdate } from "./useUpdate";
 
+// 闸门是模块级单例(自动检查与设置页手动检查共用一笔账),用例之间必须清账,
+// 否则第一个用例查过之后,后面的都会被 30 分钟闸门挡掉
+beforeEach(resetUpdateGate);
 afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
