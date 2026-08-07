@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { customThemeCss, customThemeVars, paletteVars, parseCustomTheme, randomSeed, randomTheme, roleHex, CUSTOM_ATTR, COLOR_ROLES, DEFAULT_CUSTOM, type CustomTheme } from "./customTheme";
@@ -129,6 +131,15 @@ describe("逐项覆盖(对齐官方生成器的 9 个角色色)", () => {
 });
 
 describe("customThemeVars / customThemeCss", () => {
+  it("覆盖面与 daisyUI 主题定义**逐项**对齐:漏一项就会退回 light/dark 的原值", () => {
+    // 拿一套真实内置主题当基准。升级 daisyUI 若新增变量,这条会挂——否则
+    // 自定义主题会静默少覆盖一项,表现为"改了主题这里不跟着变"
+    const css = readFileSync(fileURLToPath(new URL("../../node_modules/daisyui/theme/valentine.css", import.meta.url)), "utf-8");
+    const themeVars = [...css.matchAll(/(--[\w-]+|color-scheme)\s*:/g)].map((m) => m[1]!);
+    const mine = Object.keys(customThemeVars(DEFAULT_CUSTOM));
+    expect([...mine].sort()).toEqual([...new Set(themeVars)].sort());
+  });
+
   it("除调色板外还带 color-scheme 与圆角/边框", () => {
     const vars = customThemeVars(DEFAULT_CUSTOM);
     expect(vars["color-scheme"]).toBe("light");
