@@ -70,6 +70,7 @@ export function NewTaskModal({
   recentDirs,
   initialDir,
   initialCloudProject,
+  initialKind,
 }: {
   open: boolean;
   onClose: () => void;
@@ -82,6 +83,10 @@ export function NewTaskModal({
   initialDir?: string;
   /** 云端项目组头「在此项目新建任务」:定位 cloud 页签并预选该项目 */
   initialCloudProject?: CloudProject | null;
+  /** 默认落哪个页签 = 侧栏当前所在的空间(rail 选着「本地会话」时点 ＋,
+   *  开出来就该是会话页签,而不是每次都退回本地任务)。带目录/带云端项目
+   *  的预填是更强的意图,优先级在它之上 */
+  initialKind?: SessionKind | "cloud";
 }) {
   const { t } = useI18n();
   const [kind, setKind] = useState<SessionKind | "cloud">("local");
@@ -125,12 +130,15 @@ export function NewTaskModal({
     });
     dragDepth.current = 0;
     setDragging(false);
+    // 页签优先级:预填目录(项目组头「+」)> 预选云端项目 > 侧栏当前空间
     if (initialDir) {
       setKind("local");
       setDir(initialDir);
       dirTouched.current = true;
     } else if (initialCloudProject) {
       setKind("cloud");
+    } else {
+      setKind(initialKind ?? "local");
     }
     void modelsList().then((list) => {
       if (!alive) return;
@@ -157,7 +165,7 @@ export function NewTaskModal({
     return () => {
       alive = false;
     };
-  }, [open, initialDir, initialCloudProject]);
+  }, [open, initialDir, initialCloudProject, initialKind]);
 
   const pickDir = (p: string) => {
     dirTouched.current = true;

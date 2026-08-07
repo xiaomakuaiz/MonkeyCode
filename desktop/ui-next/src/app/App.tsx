@@ -511,6 +511,8 @@ export function App() {
             open
             initialDir={creating.dir}
             initialCloudProject={creating.cloudProject}
+            // 侧栏 ＋ 属于当前空间:rail 停在哪个空间,新建就默认开哪个页签
+            initialKind={space}
             recentDirs={recentDirs}
             onClose={() => setCreating(null)}
             onCreated={(meta) => {

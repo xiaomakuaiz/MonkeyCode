@@ -354,3 +354,44 @@ describe("引擎重启后的重开要撞得过壳的 apply 闸门", () => {
     await waitFor(() => expect(shell.count("session_open")).toBe(4), { timeout: 3000 });
   });
 });
+
+describe("侧栏 ＋ 的默认页签跟随当前空间", () => {
+  const openCreate = async () => userEvent.click(await screen.findByRole("button", { name: "新建任务" }));
+  const tabOn = (name: string) =>
+    (screen.getByRole("tab", { name }) as HTMLElement).getAttribute("aria-selected") === "true";
+
+  it("停在「本地会话」空间时点 ＋:开出来就是会话页签", async () => {
+    localStorage.setItem("mc.sidebarSpace", "chat");
+    stubShell();
+    render(<App />);
+    await openCreate();
+    expect(tabOn("本地会话")).toBe(true);
+    expect(tabOn("本地任务")).toBe(false);
+  });
+
+  it("停在「云端任务」空间时点 ＋:开出来是云端页签", async () => {
+    localStorage.setItem("mc.sidebarSpace", "cloud");
+    stubShell();
+    render(<App />);
+    await openCreate();
+    expect(tabOn("云端任务")).toBe(true);
+  });
+
+  it("本地空间照旧落本地任务页签", async () => {
+    localStorage.setItem("mc.sidebarSpace", "local");
+    stubShell();
+    render(<App />);
+    await openCreate();
+    expect(tabOn("本地任务")).toBe(true);
+  });
+
+  it("项目组头「+」带目录:比空间更强,即便停在会话空间也落本地任务页签", async () => {
+    localStorage.setItem("mc.sidebarSpace", "chat");
+    stubShell({ sessions: [sess({ id: "s1", workdir: "/proj/alpha" })] });
+    render(<App />);
+    // 组头的 ＋ 只在本地空间可见,先切过去
+    await userEvent.click(screen.getByRole("button", { name: "本地任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "在此项目新建任务" }));
+    expect(tabOn("本地任务")).toBe(true);
+  });
+});

@@ -48,7 +48,7 @@ function isBuiltin(value: string | null): value is BuiltinTheme {
 /** 读自定义主题配置;没配过/脏到解析不了返回 null。 */
 export function readCustomTheme(): CustomTheme | null {
   try {
-    return parseCustomTheme(localStorage.getItem(CUSTOM_KEY), isBuiltin);
+    return parseCustomTheme(localStorage.getItem(CUSTOM_KEY));
   } catch {
     return null;
   }
