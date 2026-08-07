@@ -30,6 +30,7 @@ import {
 } from "@/lib/ipc/account";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { copyText } from "@/lib/util/clipboard";
+import type { SettingsDraft } from "@/features/settings/settingsForm";
 import { LoginPanel, PasswordForm } from "./LoginPanel";
 import { UsagePanel } from "./UsagePanel";
 
@@ -122,6 +123,7 @@ function MsgLine({ msg }: { msg: Msg }) {
  *  动作钮靠右;扩展内容(用量面板/提示行)另起一行。 */
 function AccountCard({
   logo,
+  onLogoClick,
   title,
   badge,
   subtitle,
@@ -129,6 +131,8 @@ function AccountCard({
   children,
 }: {
   logo: string;
+  /** 连点 logo 的彩蛋钩子(自建部署配置解锁;不传即普通装饰图) */
+  onLogoClick?: () => void;
   title: string;
   badge?: ReactNode;
   subtitle?: ReactNode;
@@ -139,7 +143,15 @@ function AccountCard({
     <div className="card card-border bg-base-100">
       <div className="flex flex-col gap-3 p-4">
         <div className="flex items-center gap-3">
-          <img src={logo} alt="" aria-hidden draggable={false} className="h-9 w-9 shrink-0 rounded-lg" />
+          {/* 彩蛋钩子挂在图上就够:它不是功能入口,不进 tab 序、不报可及名 */}
+          <img
+            src={logo}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="h-9 w-9 shrink-0 rounded-lg"
+            onClick={onLogoClick}
+          />
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex items-center gap-2">
               <span className="truncate text-sm font-semibold">{title}</span>
@@ -255,6 +267,7 @@ function McCard({
   onLoggedIn,
   onResult,
   autoSyncToken = 0,
+  onLogoClick,
 }: {
   status: McStatus | null;
   /** 百智云是否已登录:决定「连接」主钮出不出(桥接要拿百智云会话去换
@@ -267,6 +280,8 @@ function McCard({
   onLoggedIn: () => void;
   /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
   onResult?: (r: McModelsSyncResult) => SyncApplied | undefined | void;
+  /** 连点卡图标的彩蛋钩子(自建部署配置解锁),由分区计数 */
+  onLogoClick?: () => void;
   /** 登录/桥接真实事件的自动同步信号(语义同 BaizhiCard.autoSyncToken) */
   autoSyncToken?: number;
 }) {
@@ -333,6 +348,7 @@ function McCard({
     return (
       <AccountCard
         logo="/logo.png"
+        onLogoClick={onLogoClick}
         title={t("account.notConnected")}
         subtitle={
           <span className="truncate">
@@ -389,6 +405,7 @@ function McCard({
   return (
     <AccountCard
       logo="/logo.png"
+      onLogoClick={onLogoClick}
       // 组头已表明「MonkeyCode 云端」,卡头显登录身份
       title={userName}
       badge={<span className="badge badge-success badge-soft badge-xs shrink-0">{t("account.loggedIn")}</span>}
@@ -433,14 +450,96 @@ function McCard({
   );
 }
 
+const SERVER_CFG_KEY = "mc.serverConfigUnlocked";
+const UNLOCK_CLICKS = 6;
+
+/** 自建/私有化部署地址(账号分区末尾的高级块)。默认隐藏:连点 MonkeyCode
+ *  卡图标 6 次解锁,解锁态持久;已配置过任一项的用户恒可见——否则升级后
+ *  自己的配置凭空消失(旧 UI 同款门禁)。三项都进保存条,但壳在启动时才
+ *  构造云端服务,故保存后还要**重启应用**才生效。 */
+function ServerConfigBlock({
+  draft,
+  onDraft,
+}: {
+  draft: SettingsDraft;
+  onDraft: (up: (d: SettingsDraft) => SettingsDraft) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.server.title")}</h3>
+      <div className="card card-border bg-base-100">
+        <div className="flex flex-col gap-3 p-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium">{t("account.server.baseUrl")}</span>
+            <input
+              className="input input-sm w-full font-mono"
+              value={draft.mcBaseUrl}
+              placeholder={t("account.server.baseUrlPlaceholder")}
+              onChange={(e) => onDraft((d) => ({ ...d, mcBaseUrl: e.target.value }))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium">{t("account.server.basicAuth")}</span>
+            <input
+              type="password"
+              className="input input-sm w-full font-mono"
+              value={draft.mcBasicAuth}
+              placeholder="user:pass"
+              title={t("account.server.basicAuthHint")}
+              onChange={(e) => onDraft((d) => ({ ...d, mcBasicAuth: e.target.value }))}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium">{t("account.server.llmBaseUrl")}</span>
+            <input
+              className="input input-sm w-full font-mono"
+              value={draft.mcLlmBaseUrl}
+              placeholder={t("account.server.llmBaseUrlPlaceholder")}
+              title={t("account.server.llmBaseUrlHint")}
+              onChange={(e) => onDraft((d) => ({ ...d, mcLlmBaseUrl: e.target.value }))}
+            />
+          </label>
+          <p className="text-xs leading-relaxed text-base-content/60">{t("account.server.hint")}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AccountSection({
   onSyncResult,
+  draft,
+  onDraft,
 }: {
   /** 同步结果并入设置草稿(SettingsView.applySync);回执含跳过名单与自动保存结论 */
   onSyncResult?: (r: BaizhiSyncResult | McModelsSyncResult) => SyncApplied | undefined | void;
+  /** 设置草稿:自建部署三项在本分区编辑(缺席则不渲染高级块) */
+  draft?: SettingsDraft | null;
+  onDraft?: (up: (d: SettingsDraft) => SettingsDraft) => void;
 } = {}) {
   const { t } = useI18n();
   const inShell = inDesktopShell();
+  // 自建部署块的解锁态:存量配置恒可见,否则连点 logo 6 次解锁并落盘
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem(SERVER_CFG_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const logoClicks = useRef(0);
+  const onLogoClick = () => {
+    if (++logoClicks.current < UNLOCK_CLICKS) return;
+    setUnlocked(true);
+    try {
+      localStorage.setItem(SERVER_CFG_KEY, "1");
+    } catch {
+      // 存储不可写:本次会话仍解锁,不值得外显
+    }
+  };
+  const configured = !!(draft && (draft.mcBaseUrl.trim() || draft.mcBasicAuth.trim() || draft.mcLlmBaseUrl.trim()));
+  const showServerCfg = !!draft && !!onDraft && (unlocked || configured);
   const [bz, setBz] = useState<BaizhiStatus | null>(null);
   const [mc, setMc] = useState<McStatus | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -548,8 +647,10 @@ export function AccountSection({
               onLoggedIn={() => void onMcLoggedIn()}
               onResult={onSyncResult}
               autoSyncToken={mcSyncToken}
+              onLogoClick={onLogoClick}
             />
           </div>
+          {showServerCfg && <ServerConfigBlock draft={draft!} onDraft={onDraft!} />}
         </>
       )}
     </section>

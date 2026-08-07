@@ -8,18 +8,40 @@
 // - 首条消息(可空):创建成功后经 session_send(user-input, content=b64)发出;
 //   发送失败只 console.warn 不阻断——会话已建,onCreated 正常进入,用户可在
 //   会话里重发(取舍:失败极罕见,不值得为它加一条跨组件的草稿回传通道)
+// - 附件(本地/对话可用,云端任务不支持):此处只**暂存 File**,上传要等
+//   会话存在(upload_begin 按 sessionId 寻址),故在 sessionCreate 之后、
+//   首条消息之前逐个上传,再把「[图片]/[文件] <相对路径>」附件行并进正文
+//   (与 composer 同一条 attLine 约定)。单个附件上传失败与上面同一取舍:
+//   console.warn 后带着其余附件继续,不把已建好的会话卡在弹窗里
 // - think 档随 session_create 的 think 参数下发(""=跟随模型默认)
 // - 最近目录来自 props.recentDirs(App 从 sessions 的 workdir 派生),按内核
 //   运行环境过滤(lib/util/workdir);目录预填 = 过滤后首项,无则默认目录
 // - 模型记忆 mc.lastTaskModel(本地/对话共用);旧工程无 lastDir 持久化键,
 //   不发明新键
-import { Check, ChevronDown, Cloud, Folder, FolderGit2, FolderOpen, MessagesSquare, SendHorizontal, X } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Check, ChevronDown, Cloud, File as FileIcon, Folder, FolderGit2, FolderOpen, MessagesSquare, Paperclip, SendHorizontal, X } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { getConfig } from "@/lib/ipc/config";
 import { isWindowsShell, pickDirectory, wslWorkdirBase } from "@/lib/ipc/host";
 import { modelsList, sessionCreate, sessionSend, type ModelInfo, type SessionKind, type SessionMeta } from "@/lib/ipc/sessions";
+import {
+  isImagePath,
+  nativePathOf,
+  onNativeFileDrop,
+  pickAttachmentPaths,
+  pathBackedFile,
+  uploadFilePath,
+  uploadFileStream,
+} from "@/lib/ipc/uploads";
+import { attLineOf } from "@/lib/protocol/attLine";
 import { b64encode } from "@/lib/protocol/codec";
 import { THINK_LABELS } from "@/lib/protocol/reduce";
 import { createImeGuard } from "@/lib/util/slash";
@@ -27,12 +49,18 @@ import { readLastTaskModel, rememberLastTaskModel } from "@/lib/util/prefs";
 import { DEFAULT_DIR, defaultWorkdir, workdirMatchesEnv } from "@/lib/util/workdir";
 import { ModelMenu, ThinkMenu } from "@/features/chat/composer/pickers";
 import { NewCloudTask } from "@/features/cloud/NewCloudTask";
-import type { CloudTaskDetail } from "@/lib/ipc/cloudtasks";
+import type { CloudProject, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
 
 export { DEFAULT_DIR };
 
 /** 档位全集以 THINK_LABELS(protocol/reduce)为准(""=跟随模型默认领跑)。 */
 const THINK_OPTIONS = Object.keys(THINK_LABELS);
+
+/** 暂存的附件:File 本体 + 图片预览 URL(非图片无);上传发生在建会话之后。 */
+interface StagedAtt {
+  file: File;
+  preview?: string;
+}
 
 export function NewTaskModal({
   open,
@@ -41,6 +69,7 @@ export function NewTaskModal({
   onCloudCreated,
   recentDirs,
   initialDir,
+  initialCloudProject,
 }: {
   open: boolean;
   onClose: () => void;
@@ -51,6 +80,8 @@ export function NewTaskModal({
   recentDirs?: string[];
   /** 「在此项目新建任务」预填目录:定位 local 页签,且不被异步最近目录覆盖 */
   initialDir?: string;
+  /** 云端项目组头「在此项目新建任务」:定位 cloud 页签并预选该项目 */
+  initialCloudProject?: CloudProject | null;
 }) {
   const { t } = useI18n();
   const [kind, setKind] = useState<SessionKind | "cloud">("local");
@@ -65,6 +96,11 @@ export function NewTaskModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [offerCreate, setOfferCreate] = useState(false);
+  // 附件暂存(本地/对话;云端任务不支持)。dragDepth:dragenter/leave 在
+  // 子元素间反复触发,计数配对才不会一进子元素就把高亮闪掉
+  const [atts, setAtts] = useState<StagedAtt[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   // 用户改过目录后,异步到达的预填不再覆盖
   const dirTouched = useRef(false);
   // Enter 直接创建(Shift+Enter 换行);IME 组合中的 Enter 是选字,不触发
@@ -83,10 +119,18 @@ export function NewTaskModal({
     setThink("");
     setError("");
     setOfferCreate(false);
+    setAtts((prev) => {
+      for (const a of prev) if (a.preview) URL.revokeObjectURL(a.preview);
+      return [];
+    });
+    dragDepth.current = 0;
+    setDragging(false);
     if (initialDir) {
       setKind("local");
       setDir(initialDir);
       dirTouched.current = true;
+    } else if (initialCloudProject) {
+      setKind("cloud");
     }
     void modelsList().then((list) => {
       if (!alive) return;
@@ -113,7 +157,7 @@ export function NewTaskModal({
     return () => {
       alive = false;
     };
-  }, [open, initialDir]);
+  }, [open, initialDir, initialCloudProject]);
 
   const pickDir = (p: string) => {
     dirTouched.current = true;
@@ -121,6 +165,116 @@ export function NewTaskModal({
     setDirMenu(false);
     setError("");
     setOfferCreate(false);
+  };
+
+  // ==== 附件暂存 ====
+  const addFiles = (files: File[]) => {
+    if (!files.length) return;
+    setAtts((list) => [
+      ...list,
+      ...files.map((file) => ({
+        file,
+        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+      })),
+    ]);
+  };
+  const removeAtt = (index: number) => {
+    setAtts((list) => {
+      const gone = list[index];
+      if (gone?.preview) URL.revokeObjectURL(gone.preview); // 预览 URL 随移除释放
+      return list.filter((_, i) => i !== index);
+    });
+  };
+  // 卸载时释放尚未撤销的预览 URL(快照挂 ref,effect 只在卸载跑一次)
+  const attsRef = useRef(atts);
+  attsRef.current = atts;
+  useEffect(
+    () => () => {
+      for (const a of attsRef.current) if (a.preview) URL.revokeObjectURL(a.preview);
+    },
+    [],
+  );
+
+  // 系统对话框选文件:拿到的是本地路径,包成 path-backed 占位 File 走同一
+  // 条管线(上传时 nativePathOf 分流为路径直拷,不搬字节)
+  const pickFiles = () => {
+    void pickAttachmentPaths(t("create.attach")).then((paths) => {
+      addFiles(
+        paths.map((p) => {
+          const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+          return pathBackedFile(p, name, isImagePath(p) ? "image/*" : "");
+        }),
+      );
+    });
+  };
+
+  const onPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    // 只吃剪贴板里的 file item(截图/复制的文件);纯文本粘贴照旧
+    const files = [...(e.clipboardData?.items ?? [])]
+      .filter((it) => it.kind === "file")
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (!files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  };
+
+  // 拖拽落区:云端页签不收(云端任务不支持附件)
+  const dropEnabled = kind !== "cloud";
+  const onDragEnter = (e: ReactDragEvent<HTMLElement>) => {
+    if (!dropEnabled) return;
+    if (![...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onDragLeave = (e: ReactDragEvent<HTMLElement>) => {
+    if (!dropEnabled) return;
+    e.preventDefault();
+    if (--dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  };
+  const onDrop = (e: ReactDragEvent<HTMLElement>) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    if (!dropEnabled) return;
+    addFiles([...(e.dataTransfer?.files ?? [])]);
+  };
+  // Linux 壳:WebKitGTK 的 HTML5 拖拽拿不到 File,走壳原生 tauri://drag-*
+  // (mac/Windows 壳禁用原生处理器,监听永不触发)。dropEnabled 判定放回调内:
+  // 订阅始终挂着,切页签时不会漏掉拖拽中的事件
+  const dropEnabledRef = useRef(dropEnabled);
+  dropEnabledRef.current = dropEnabled;
+  useEffect(
+    () =>
+      onNativeFileDrop({
+        onDragging: (on) => setDragging(on && dropEnabledRef.current),
+        onFiles: (files) => dropEnabledRef.current && addFiles(files),
+        onError: (m) => setError(m),
+      }),
+    [],
+  );
+
+  /** 附件上传要等会话存在(upload_begin 按 sessionId 寻址):建完会话逐个上传,
+   *  返回可并入首条消息的附件行。单个失败不阻断其余(理由见文件头注)。 */
+  const uploadAtts = async (sessionId: string): Promise<string[]> => {
+    const lines: string[] = [];
+    for (const { file } of atts) {
+      try {
+        // 壳原生拖放给的是 path-backed 占位 File:走路径直拷,不搬字节
+        const native = nativePathOf(file);
+        const { path } = native
+          ? await uploadFilePath(sessionId, native)
+          : await uploadFileStream(sessionId, file);
+        lines.push(attLineOf(path, file.type.startsWith("image/") || isImagePath(path)));
+      } catch (e) {
+        console.warn("附件上传失败(会话已创建,可在会话内重新拖入):", file.name, e);
+      }
+    }
+    return lines;
   };
 
   const submit = async (forceCreateDir = false) => {
@@ -143,7 +297,9 @@ export function NewTaskModal({
         think,
       });
       if (model) rememberLastTaskModel(model);
-      const first = text.trim();
+      // 附件行与 composer 同口径并入正文(壳只解 content):正文在前、附件行在后
+      const attLines = atts.length ? await uploadAtts(meta.id) : [];
+      const first = [text.trim(), ...attLines].filter(Boolean).join("\n");
       if (first) {
         // 随建随发;失败不阻断打开会话(会话已建,用户可在会话内重发)
         try {
@@ -190,7 +346,18 @@ export function NewTaskModal({
     void submit();
   };
   return (
-    <main className="flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-base-100">
+    <main
+      className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-base-100"
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => dropEnabled && e.preventDefault()}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-box border-2 border-dashed border-primary bg-primary/10 text-sm font-semibold text-primary">
+          {t("chat.dropHint")}
+        </div>
+      )}
       <header data-view-header="" data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-2 border-b border-base-300 px-4">
         <h1 data-tauri-drag-region="" className="min-w-0 flex-1 truncate text-sm font-semibold">{t("create.title")}</h1>
         <button
@@ -233,6 +400,7 @@ export function NewTaskModal({
           <div className="relative flex flex-col rounded-2xl border border-base-300 bg-base-100 shadow-lg transition-colors focus-within:border-base-content/25">
             {kind === "cloud" ? (
               <NewCloudTask
+                initialProject={initialCloudProject}
                 onCreated={(task) => {
                   onCloudCreated?.(task);
                   onClose();
@@ -358,9 +526,53 @@ export function NewTaskModal({
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   onCompositionEnd={(e) => ime.current.markEnd(e.timeStamp)}
+                  onPaste={onPaste}
                   onKeyDown={onTextKey}
                 />
+                {/* 附件 chips(与 composer 同款):图片出缩略图,其余出文件名条,
+                    右上角小 × 移除。上传要等会话建好,这里只是暂存的可视回执 */}
+                {atts.length > 0 && (
+                  <ul aria-label={t("create.attachments")} className="flex flex-wrap gap-2 px-4 pb-1">
+                    {atts.map((a, i) => (
+                      <li key={`${a.file.name}-${i}`} className="relative flex">
+                        {a.preview ? (
+                          <img
+                            src={a.preview}
+                            alt={a.file.name}
+                            title={a.file.name}
+                            className="size-13 rounded-box border border-base-300 object-cover"
+                          />
+                        ) : (
+                          <span
+                            title={a.file.name}
+                            className="flex h-8 max-w-56 items-center gap-1.5 rounded-box border border-base-300 bg-base-200 px-2.5 text-xs"
+                          >
+                            <FileIcon size={12} strokeWidth={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                            <span className="min-w-0 truncate">{a.file.name}</span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          aria-label={t("create.attachRemove", { name: a.file.name })}
+                          className="btn btn-circle btn-xs absolute -end-1.5 -top-1.5 size-4.5 min-h-0 border-base-300 bg-base-100 p-0"
+                          onClick={() => removeAtt(i)}
+                        >
+                          <X size={10} strokeWidth={2} aria-hidden />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <div className="flex items-center gap-1 px-2.5 pb-2.5">
+                  <button
+                    type="button"
+                    aria-label={t("create.attach")}
+                    title={t("create.attach")}
+                    className="btn btn-ghost btn-square btn-sm text-base-content/60"
+                    onClick={pickFiles}
+                  >
+                    <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+                  </button>
                   {/* 模型/思考档与会话 composer 同一组件(features/chat/composer/
                       pickers):左置触发器,菜单向上首端对齐 */}
                   <ModelMenu

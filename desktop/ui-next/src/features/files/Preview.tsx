@@ -2,9 +2,10 @@
 // (loading/error/ready),ready 再按模式分流——文件(空/二进制占位、
 // 代码高亮)与 diff(空 diff 占位、unified diff 渲染)。超限文件在壳侧
 // 以 {error} 拒绝,走 error 态外显原因。
-import { X } from "lucide-react";
+import { FolderOpen, X } from "lucide-react";
 
 import { useI18n } from "@/lib/i18n";
+import { isMacShell } from "@/lib/ipc/host";
 import { CodeView } from "./CodeView";
 import { DiffView } from "./DiffView";
 import { basename, statusMeta } from "./status";
@@ -19,7 +20,18 @@ export interface PreviewModel {
   text: string;
 }
 
-export function Preview({ model, status, onClose }: { model: PreviewModel; status?: string; onClose: () => void }) {
+export function Preview({
+  model,
+  status,
+  onReveal,
+  onClose,
+}: {
+  model: PreviewModel;
+  status?: string;
+  /** 在系统文件管理器中定位此文件(缺省则不渲染该入口) */
+  onReveal?: () => void;
+  onClose: () => void;
+}) {
   const { t } = useI18n();
   const meta = status ? statusMeta(status) : undefined;
   return (
@@ -28,6 +40,17 @@ export function Preview({ model, status, onClose }: { model: PreviewModel; statu
         <span className="shrink-0 font-mono text-xs font-semibold">{basename(model.path)}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-base-content/45">{model.path}</span>
         {meta && <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>}
+        {onReveal && (
+          <button
+            type="button"
+            aria-label={isMacShell() ? t("files.revealFileMac") : t("files.revealFile")}
+            title={isMacShell() ? t("files.revealFileMac") : t("files.revealFile")}
+            onClick={onReveal}
+            className="btn btn-ghost btn-square btn-xs shrink-0"
+          >
+            <FolderOpen size={13} strokeWidth={1.75} aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           aria-label={t("files.preview.close")}

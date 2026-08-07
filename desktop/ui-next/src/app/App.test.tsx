@@ -251,3 +251,37 @@ describe("H9 意图消费", () => {
     await waitFor(() => expect(shell.count("take_ui_intent")).toBe(3));
   });
 });
+
+describe("壳级提示(浏览器工具装载)", () => {
+  it("browser-mcp-reloaded 出成功提示并自动消失;超时事件是警示且留到手动关闭", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const shell = stubShell();
+      render(<App />);
+
+      act(() => shell.emit("browser-mcp-reloaded", undefined));
+      expect(await screen.findByText("浏览器工具已装载,引擎已按新配置重连")).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(6100);
+      });
+      expect(screen.queryByText("浏览器工具已装载,引擎已按新配置重连")).toBeNull();
+
+      act(() => shell.emit("browser-mcp-refresh-timeout", undefined));
+      const warn = await screen.findByText(/浏览器工具尚未装载/);
+      await act(async () => {
+        vi.advanceTimersByTime(20_000);
+      });
+      expect(screen.getByText(/浏览器工具尚未装载/)).toBe(warn); // 警示不自灭
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("同一条重复推送只留最新一份,不叠成两条", async () => {
+    const shell = stubShell();
+    render(<App />);
+    act(() => shell.emit("browser-mcp-refresh-timeout", undefined));
+    act(() => shell.emit("browser-mcp-refresh-timeout", undefined));
+    expect((await screen.findAllByText(/浏览器工具尚未装载/)).length).toBe(1);
+  });
+});

@@ -231,3 +231,63 @@ describe("新建任务", () => {
     expect(menu.textContent).not.toContain("relative");
   });
 });
+
+describe("首条消息附件", () => {
+  it("粘贴文件进暂存 chips;创建后先上传再把附件行并进首条消息", async () => {
+    // 上传走分块通道:begin/chunk/finish,壳最终返回工作区相对路径
+    const calls = stubShell({
+      upload_begin: () => Promise.resolve({ id: "u1" }),
+      upload_chunk: () => Promise.resolve(null),
+      upload_finish: () => Promise.resolve({ path: ".monkeycode/uploads/shot.png" }),
+    });
+    render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    const box = await screen.findByRole("textbox", { name: "首条消息" });
+    await userEvent.type(box, "看这张图");
+
+    const file = new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" });
+    await userEvent.paste(
+      { getData: () => "", items: [{ kind: "file", type: "image/png", getAsFile: () => file }] } as never,
+    );
+    expect(await screen.findByAltText("shot.png")).toBeDefined();
+
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "session_send")).toBe(true));
+    // 上传发生在建会话之后(upload_begin 按 sessionId 寻址)
+    const order = calls.map((c) => c.cmd);
+    expect(order.indexOf("upload_begin")).toBeGreaterThan(order.indexOf("session_create"));
+    const sent = calls.find((c) => c.cmd === "session_send");
+    expect((sent?.args?.payload as { content: string }).content).toBe(
+      b64encode("看这张图\n[图片] .monkeycode/uploads/shot.png"),
+    );
+  });
+
+  it("移除 chip 后不再上传;附件上传失败不阻断建会话与发送", async () => {
+    const calls = stubShell({ upload_begin: () => Promise.reject(new Error("磁盘满")) });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    const box = await screen.findByRole("textbox", { name: "首条消息" });
+    await userEvent.type(box, "带个附件");
+
+    const doc = new File([new Uint8Array([1])], "a.txt", { type: "text/plain" });
+    const gone = new File([new Uint8Array([1])], "b.txt", { type: "text/plain" });
+    await userEvent.paste(
+      {
+        getData: () => "",
+        items: [
+          { kind: "file", type: "text/plain", getAsFile: () => doc },
+          { kind: "file", type: "text/plain", getAsFile: () => gone },
+        ],
+      } as never,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "移除附件 b.txt" }));
+    expect(screen.queryByTitle("b.txt")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    // 失败的附件被跳过,正文照发(会话已建,不把用户卡在弹窗里)
+    const sent = calls.find((c) => c.cmd === "session_send");
+    expect((sent?.args?.payload as { content: string }).content).toBe(b64encode("带个附件"));
+    expect(calls.filter((c) => c.cmd === "upload_begin").length).toBe(1); // 只剩一个附件
+  });
+});

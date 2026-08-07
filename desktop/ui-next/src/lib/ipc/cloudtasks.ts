@@ -116,7 +116,8 @@ export interface McTaskOptions {
   models: McCloudModel[];
   images: McCloudImage[];
   hosts: McCloudHost[];
-  projects: unknown[];
+  /** 可关联的云端项目(建任务时选它 = 复用已克隆的仓库) */
+  projects: CloudProject[];
   plan: string; // basic | pro | ultra | flagship | ""
   /** 服务端下发的建任务档位(host_id/cli_name/resource/skill_ids);当前
    * 真实云端无此字段,壳内常量兜底(mc_task_create 侧取用)。 */

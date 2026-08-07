@@ -10,12 +10,13 @@
 //   refreshToken 自增(调用方在 ChatState.turnEnded 时递增)则重拉。
 // - Esc(window capture):抽屉开着只管自己——预览开着先关预览,再一次
 //   才关抽屉;层级协调交调用方。
-import { X } from "lucide-react";
+import { FolderOpen, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { isWindowsShell } from "@/lib/ipc/host";
-import { repoChanges, repoFileDiff, repoListDir, repoReadFile, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
+import { isMacShell, isWindowsShell } from "@/lib/ipc/host";
+import { repoChanges, repoFileDiff, repoListDir, repoReadFile, repoReveal, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
+import { copyText } from "@/lib/util/clipboard";
 import { Changes } from "./Changes";
 import { Preview, type PreviewModel } from "./Preview";
 import { Tree } from "./Tree";
@@ -58,13 +59,26 @@ function persist(key: string, v: number): void {
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** 工作区相对路径 → 绝对路径(Windows workdir 用反斜杠时统一分隔符);
+ *  定位失败的兜底复制用它。rel 为空即工作区根。 */
+function absPath(workdir: string, rel: string): string {
+  if (!rel) return workdir;
+  if (!workdir) return rel;
+  const sep = workdir.includes("\\") ? "\\" : "/";
+  const tail = sep === "\\" ? rel.split("/").join(sep) : rel;
+  return workdir.endsWith(sep) ? workdir + tail : workdir + sep + tail;
+}
+
 export function FilesDrawer({
   sessionId,
+  workdir = "",
   onClose,
   initialTab = "files",
   refreshToken = 0,
 }: {
   sessionId: string;
+  /** 会话工作目录:定位失败时兜底复制的绝对路径由它拼(缺省则只复制相对路径) */
+  workdir?: string;
   onClose: () => void;
   /** 打开时落在哪个 tab(聊天区改动徽标可直达「改动」) */
   initialTab?: Tab;
@@ -81,6 +95,8 @@ export function FilesDrawer({
   const [split, setSplit] = useState(readSplit);
   const [draggingW, setDraggingW] = useState(false);
   const [draggingS, setDraggingS] = useState(false);
+  // 定位失败的兜底提示(成功无声——文件管理器窗口自己会跳出来)
+  const [revealMsg, setRevealMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const listRef = useRef<HTMLDivElement>(null); // 分栏拖拽的定位基准
   const reqRef = useRef(0); // 切文件/tab/关闭时使旧异步读取结果失效
 
@@ -239,6 +255,23 @@ export function FilesDrawer({
   const changeStatus = useMemo(() => new Map((changes ?? []).map((c) => [c.path, c.status] as const)), [changes]);
   const listDir = useCallback((dir: string) => repoListDir(sessionId, dir), [sessionId]);
 
+  // 在系统文件管理器中定位(rel "" = 工作区根):壳内 open/explorer/xdg-open。
+  // 失败兜底复制绝对路径——「打不开」时用户至少还能自己粘过去(旧 UI 同口径)。
+  // 结果留在抽屉自己的提示行:抽屉是浮层,没有会话内的提示条可借
+  const reveal = useCallback(
+    async (rel: string) => {
+      setRevealMsg(null);
+      try {
+        await repoReveal(sessionId, rel);
+      } catch (e) {
+        const p = absPath(workdir, rel);
+        copyText(p);
+        setRevealMsg({ text: t("files.revealFailed", { reason: errText(e), path: p }), error: true });
+      }
+    },
+    [sessionId, workdir, t],
+  );
+
   const listClass = preview
     ? `min-h-0 shrink-0 overflow-x-hidden overflow-y-auto py-1 max-h-[calc(100%-190px)] ${split > 0 ? "" : "h-[38%]"}`
     : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1";
@@ -285,12 +318,23 @@ export function FilesDrawer({
               </button>
             )}
           </div>
+          {/* 工作区根定位:抽屉是「工作区资源管理器」,跳出去接着用系统
+              文件管理器是它的份内出口(旧 UI 头部同款按钮) */}
+          <button
+            type="button"
+            title={workdir || t("files.revealRoot")}
+            onClick={() => void reveal("")}
+            className="btn btn-ghost btn-xs ml-auto gap-1.5 text-base-content/70"
+          >
+            <FolderOpen size={13} strokeWidth={1.75} aria-hidden />
+            {isMacShell() ? t("files.revealRootMac") : t("files.revealRoot")}
+          </button>
           <button
             type="button"
             aria-label={t("files.close")}
             title={t("files.close")}
             onClick={onClose}
-            className="btn btn-ghost btn-square btn-xs ml-auto"
+            className="btn btn-ghost btn-square btn-xs"
           >
             <X size={14} strokeWidth={1.75} aria-hidden />
           </button>
@@ -298,6 +342,11 @@ export function FilesDrawer({
         {changesErr && (
           <p role="alert" className="shrink-0 px-4 py-2 text-xs text-error">
             {changesErr}
+          </p>
+        )}
+        {revealMsg && (
+          <p role="alert" className="shrink-0 px-4 py-2 text-xs break-all text-error">
+            {revealMsg.text}
           </p>
         )}
         <div ref={listRef} className={listClass} style={preview && split > 0 ? { height: split } : undefined}>
@@ -316,7 +365,12 @@ export function FilesDrawer({
               onMouseDown={startSplitDrag}
               className={`h-1.5 shrink-0 cursor-row-resize ${draggingS ? "bg-primary/40" : "hover:bg-primary/20"}`}
             />
-            <Preview model={preview} status={changeStatus.get(preview.path)} onClose={closePreview} />
+            <Preview
+              model={preview}
+              status={changeStatus.get(preview.path)}
+              onReveal={() => void reveal(preview.path)}
+              onClose={closePreview}
+            />
           </>
         )}
       </section>

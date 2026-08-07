@@ -109,3 +109,31 @@ export async function openExtensionDir(): Promise<string | null> {
   if (!inDesktopShell()) return null;
   return invoke<string>("open_extension_dir");
 }
+
+/** browser_status 应答:扩展桥的监听/配对/连接状态(设置·浏览器分区展示)。
+ *  字段对表壳侧 browser::bridge 的 status()。 */
+export interface BrowserExtStatus {
+  /** 桥已监听(false 时 error 给不可用原因) */
+  enabled: boolean;
+  /** 本地连接地址(扩展填端口时用) */
+  addr?: string;
+  error?: string;
+  paired: boolean;
+  connected: boolean;
+  browser_name?: string;
+  browser_version?: string;
+  /** 未配对时的一次性配对码(用户填进扩展完成配对) */
+  pairing_code?: string;
+}
+
+/** 扩展桥状态快照;浏览器模式返回 null(分区据此降级提示)。 */
+export async function browserExtStatus(): Promise<BrowserExtStatus | null> {
+  if (!inDesktopShell()) return null;
+  return invoke<BrowserExtStatus>("browser_status");
+}
+
+/** 重新配对:壳清掉受控 tab 集合并换发一次性配对码,返回新状态。 */
+export async function browserExtRepair(): Promise<BrowserExtStatus | null> {
+  if (!inDesktopShell()) return null;
+  return invoke<BrowserExtStatus>("browser_repair");
+}

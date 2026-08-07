@@ -8,7 +8,7 @@
 // UI 契约键);query 非空过滤并强制展开(未拉过的组顺势懒拉)。
 // 数据 hook(useCloudTasks/useCloudProjects)由 Sidebar 顶层调用后注入
 // props——概览统计与列表共用同一份 feed,enabled 仅云端空间为真。
-import { Cloud, Folder, History } from "lucide-react";
+import { Cloud, Folder, History, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { GroupLabel, ListRow, SectionFold } from "@/features/sidebar/listKit";
@@ -225,6 +225,7 @@ export function CloudTaskList({
   onDeleted,
   query = "",
   onOpenSettings,
+  onNewTaskIn,
 }: {
   /** 列表数据源(useCloudTasks;Sidebar 供数——概览统计与列表同一份) */
   feed: CloudTasksFeed;
@@ -240,6 +241,8 @@ export function CloudTaskList({
   query?: string;
   /** 未连接空态的「去设置连接」入口(App 打开设置页) */
   onOpenSettings?: () => void;
+  /** 项目组头「在此项目新建任务」:App 打开新建视图并预选该云端项目 */
+  onNewTaskIn?: (project: CloudProject) => void;
 }) {
   const { t } = useI18n();
   const forceOpen = query !== "";
@@ -375,7 +378,7 @@ export function CloudTaskList({
     );
   };
 
-  const projectGroup = (projectId: string, name: string) => {
+  const projectGroup = (project: CloudProject, projectId: string, name: string) => {
     const isOpen = forceOpen || openGroups.has(projectId);
     return (
     <li key={projectId} className="mt-1 first:mt-0">
@@ -395,9 +398,26 @@ export function CloudTaskList({
           if (open) loadGroup(projectId);
         }}
       >
-        {/* 区块标签形态(与本地组头同一件):无折叠箭头,开合只靠点击组头 */}
-        <summary title={name} className="flex items-center after:hidden">
+        {/* 区块标签形态(与本地组头同一件):无折叠箭头,开合只靠点击组头。
+            快捷「+」与本地组头同构:常驻占位、hover 只切可见性(插入式显隐
+            会挤动项目名) */}
+        <summary title={name} className="group flex items-center after:hidden">
           <GroupLabel icon={Folder} name={name} />
+          {onNewTaskIn && (
+            <button
+              type="button"
+              aria-label={t("cloud.list.newTaskIn")}
+              title={t("cloud.list.newTaskIn")}
+              className="btn btn-ghost btn-square btn-xs invisible group-hover:visible group-focus-within:visible"
+              onClick={(e) => {
+                e.preventDefault(); // summary 的默认动作是开合,新建不该顺带折叠
+                e.stopPropagation();
+                onNewTaskIn(project);
+              }}
+            >
+              <Plus size={14} strokeWidth={1.75} aria-hidden />
+            </button>
+          )}
         </summary>
         {groupBody(projectId)}
       </details>
@@ -413,7 +433,7 @@ export function CloudTaskList({
         <TaskRow key={task.id} task={task} currentId={currentId} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
       ))}
       {projects.map((project) =>
-        projectGroup(project.id ?? "", project.name || project.full_name || t("cloud.list.untitledProject")),
+        projectGroup(project, project.id ?? "", project.name || project.full_name || t("cloud.list.untitledProject")),
       )}
       {/* 历史置底(与本地「已归档项目」同位同构):History 小节头、无计数 */}
       {historyRows.length > 0 && (

@@ -393,6 +393,8 @@ export function Sidebar({
     onRefresh?: () => void;
     /** 未连接空态的「去设置连接」:App 打开设置页(默认落账号分区) */
     onOpenSettings?: () => void;
+    /** 项目组头「在此项目新建任务」:App 打开新建视图并预选该云端项目 */
+    onNewTaskIn?: (project: import("@/lib/ipc/cloudtasks").CloudProject) => void;
   };
 }) {
   const { t } = useI18n();
@@ -460,6 +462,7 @@ export function Sidebar({
           reloadKey={cloud?.reloadKey ?? 0}
           onDeleted={cloud?.onDeleted}
           onOpenSettings={cloud?.onOpenSettings}
+          onNewTaskIn={cloud?.onNewTaskIn}
         />
       );
     }

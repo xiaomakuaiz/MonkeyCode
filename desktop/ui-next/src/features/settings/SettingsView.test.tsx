@@ -152,7 +152,10 @@ describe("脏状态机与保存条", () => {
       ],
       mcp_servers: { fetch: { url: "https://mcp" } },
       kernel_env: "",
-      mc_base_url: "https://mc.example", // 表单外字段全量写回
+      // 自建部署三项由草稿写回(未编辑即载入原值;未配置的写空串 = 官方云)
+      mc_base_url: "https://mc.example",
+      mc_basic_auth: "",
+      mc_llm_base_url: "",
     });
     await waitFor(() => expect(screen.queryByRole("button", { name: "保存" })).toBeNull());
   });

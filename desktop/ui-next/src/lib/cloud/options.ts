@@ -51,6 +51,24 @@ export function cloudHostLabel(host?: McCloudHost | null): string {
   return [host.name, host.external_ip].filter(Boolean).join(" · ") || t("cloud.new.hostFallback");
 }
 
+/** Git 地址粗校验(与旧 UI 同一条正则):只拦明显不是 Git 地址的输入,
+ * 真伪由服务端克隆时判定——本地不该替服务端猜哪些 host 合法。 */
+export function validCloudRepoUrl(value: string): boolean {
+  return /^(https?:\/\/|ssh:\/\/|git@)\S+$/i.test(value.trim());
+}
+
+/** 仓库地址 → 展示名(末段去 .git);三种形态同一条路径:
+ * https://host/owner/repo.git、ssh://host/owner/repo、git@host:owner/repo.git。 */
+export function cloudRepoLabel(value: string): string {
+  const path = value
+    .trim()
+    .replace(/^git@[^:]+:/i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+  const tail = path.split("/").pop()?.replace(/\.git$/i, "");
+  return tail || t("cloud.new.repoFallback");
+}
+
 /** 会员档位是否覆盖该模型(前缀配档,与壳侧 plan_allows_model 同规则)。 */
 function planAllowsModel(model: McCloudModel, plan?: string): boolean {
   const b = builtinName(model.model);

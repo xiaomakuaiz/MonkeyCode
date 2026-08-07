@@ -751,6 +751,7 @@ export function ChatView({
       {drawerOpen && (
         <FilesDrawer
           sessionId={meta.id}
+          workdir={meta.workdir}
           onClose={() => setDrawerOpen(false)}
           refreshToken={changesToken}
           initialTab={changesCount > 0 ? "changes" : "files"}

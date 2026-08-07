@@ -102,6 +102,13 @@ export interface SettingsDraft {
   mcps: McpEntry[];
   /** "" = 本机;"wsl:<发行版>" */
   kernelEnv: string;
+  /** 自建/私有化部署(账号分区的高级块;"" = 官方云)。壳在启动时构造云端
+   *  服务,故这三项保存后要**重启应用**才生效——文案在设置页说明 */
+  mcBaseUrl: string;
+  /** 测试环境反代的 HTTP Basic Auth("user:pass") */
+  mcBasicAuth: string;
+  /** 模型请求地址(llmproxy);"" = {服务地址}/v1 */
+  mcLlmBaseUrl: string;
 }
 
 export const emptyModel = (): HostModel => ({
@@ -122,6 +129,9 @@ export function draftFromConfig(cfg: DesktopConfig): SettingsDraft {
     defaultIdx: di >= 0 ? di : 0,
     mcps: serversToMcps(cfg.mcp_servers ?? {}),
     kernelEnv: cfg.kernel_env ?? "",
+    mcBaseUrl: cfg.mc_base_url ?? "",
+    mcBasicAuth: cfg.mc_basic_auth ?? "",
+    mcLlmBaseUrl: cfg.mc_llm_base_url ?? "",
   };
 }
 
@@ -132,8 +142,9 @@ const isBlankModel = (m: HostModel): boolean =>
 const isBlankMcp = (e: McpEntry): boolean =>
   !e.name.trim() && !e.url.trim() && !e.command.trim() && !e.args.trim() && !e.kv.trim();
 
-/** 草稿 → save_config 全量载荷:表单外的顶层字段(mc_* / 壳自有偏好)从
- *  base 原样透传;模型按白名单收敛并重算 default;MCP 序列化回 mcpServers。 */
+/** 草稿 → save_config 全量载荷:表单外的顶层字段(壳自有偏好)从 base
+ *  原样透传;模型按白名单收敛并重算 default;MCP 序列化回 mcpServers;
+ *  自建部署三项由草稿写回(trim 后落盘,空串 = 官方云)。 */
 export function buildPayload(base: DesktopConfig, draft: SettingsDraft): DesktopConfig {
   const models = draft.models
     .map((m, i) => ({ m, isDefault: i === draft.defaultIdx }))
@@ -153,7 +164,15 @@ export function buildPayload(base: DesktopConfig, draft: SettingsDraft): Desktop
       locked: m.locked,
       owner: m.owner,
     }));
-  return { ...base, models, mcp_servers: mcpsToServers(draft.mcps), kernel_env: draft.kernelEnv };
+  return {
+    ...base,
+    models,
+    mcp_servers: mcpsToServers(draft.mcps),
+    kernel_env: draft.kernelEnv,
+    mc_base_url: draft.mcBaseUrl.trim(),
+    mc_basic_auth: draft.mcBasicAuth.trim(),
+    mc_llm_base_url: draft.mcLlmBaseUrl.trim(),
+  };
 }
 
 /** 脏判定:两份载荷都出自 buildPayload(同一 base、同样的键序),

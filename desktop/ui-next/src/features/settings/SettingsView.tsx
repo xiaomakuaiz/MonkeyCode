@@ -6,7 +6,7 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { Brain, Check, ChevronDown, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
+import { Brain, Check, ChevronDown, Globe, Info, Server, SlidersHorizontal, SquareTerminal, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
@@ -24,7 +24,9 @@ import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readTheme, setTheme, THEMES, type Theme } from "@/lib/theme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
+import { engineCaps } from "@/lib/ipc/approvals";
 import { AboutSection } from "./AboutSection";
+import { BrowserSection } from "./BrowserSection";
 import { McpSection } from "./McpSection";
 import { ModelsSection } from "./ModelsSection";
 import type { BaizhiSyncResult, McModelsSyncResult } from "@/lib/ipc/account";
@@ -40,7 +42,7 @@ import {
   type SettingsDraft,
 } from "./settingsForm";
 
-type Section = "general" | "account" | "models" | "mcp" | "env" | "about";
+type Section = "general" | "account" | "models" | "mcp" | "browser" | "env" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -257,6 +259,7 @@ export function SettingsView({
   const [loadError, setLoadError] = useState("");
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [distros, setDistros] = useState<string[]>([]);
+  const [browserExt, setBrowserExt] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
 
@@ -272,6 +275,9 @@ export function SettingsView({
         if (alive) setLoadError(errMsg(e));
       });
     if (isWindowsShell()) void listWslDistros().then((list) => alive && setDistros(list));
+    // 浏览器分区按引擎能力显隐:引擎不带扩展桥时整项不出现(旧 UI 同款门禁)。
+    // caps 拿不到(浏览器模式/引擎未起)按不支持算,不给一个点进去必然报错的入口
+    void engineCaps().then((caps) => alive && setBrowserExt(caps?.browser_ext === true));
     return () => {
       alive = false;
     };
@@ -401,6 +407,9 @@ export function SettingsView({
     { id: "account", label: t("settings.nav.account"), desc: t("settings.desc.account"), icon: UserRound },
     { id: "models", label: t("settings.nav.models"), desc: t("settings.desc.models"), icon: Brain },
     { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: Server },
+    ...(browserExt
+      ? [{ id: "browser" as const, label: t("settings.nav.browser"), desc: t("settings.desc.browser"), icon: Globe }]
+      : []),
     ...(isWindowsShell()
       ? [{ id: "env" as const, label: t("settings.nav.env"), desc: t("settings.desc.env"), icon: SquareTerminal }]
       : []),
@@ -425,12 +434,16 @@ export function SettingsView({
         return <GeneralSection />;
       case "account":
         // 账号分区不吃壳配置(登录态自查、浏览器降级自带),不走 configGate;
-        // 同步结果经 applySync 并入模型/MCP 草稿
-        return <AccountSection onSyncResult={applySync} />;
+        // 同步结果经 applySync 并入模型/MCP 草稿。草稿另供自建部署高级块编辑
+        //(拿不到配置时该块自行隐去,不影响登录主路径)
+        return <AccountSection onSyncResult={applySync} draft={draft} onDraft={updateDraft} />;
       case "models":
         return draft ? <ModelsSection draft={draft} onDraft={updateDraft} /> : configGate;
       case "mcp":
         return draft ? <McpSection draft={draft} onDraft={updateDraft} /> : configGate;
+      case "browser":
+        // 配对是壳侧即时动作,不吃 config 草稿,故不走 configGate
+        return <BrowserSection />;
       case "env":
         return draft ? <EnvSection draft={draft} distros={distros} onDraft={updateDraft} /> : configGate;
       case "about":

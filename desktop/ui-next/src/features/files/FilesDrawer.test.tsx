@@ -16,7 +16,14 @@ interface CallRecord {
 }
 
 /** 壳桩:session_call 按 kind 分派(与 driver/mod.rs::session_call 同构)。 */
-function stubShell(opts: { list?: Record<string, unknown[]>; changes?: unknown; content?: string; diff?: string }) {
+function stubShell(opts: {
+  list?: Record<string, unknown[]>;
+  changes?: unknown;
+  content?: string;
+  diff?: string;
+  /** repo_reveal 的应答;缺省成功 */
+  reveal?: unknown;
+}) {
   const calls: CallRecord[] = [];
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
@@ -29,6 +36,7 @@ function stubShell(opts: { list?: Record<string, unknown[]>; changes?: unknown; 
         if (kind === "repo_file_changes") return Promise.resolve(opts.changes ?? { result: [], is_git_repo: true });
         if (kind === "repo_read_file") return Promise.resolve({ result: { content: opts.content ?? "" } });
         if (kind === "repo_file_diff") return Promise.resolve({ result: { diff: opts.diff ?? "" } });
+        if (kind === "repo_reveal") return Promise.resolve(opts.reveal ?? { result: { ok: true } });
         return Promise.resolve({ result: null });
       },
     },
@@ -212,5 +220,35 @@ describe("文件抽屉", () => {
     rerender(<FilesDrawer sessionId="s1" onClose={() => {}} refreshToken={1} />);
     await flush();
     expect(calls.filter((c) => c.kind === "repo_file_changes")).toHaveLength(2);
+  });
+});
+
+describe("在系统文件管理器中定位", () => {
+  it("头部按钮定位工作区根:repo_reveal 带空路径", async () => {
+    const calls = stubShell({ list: { "": [] } });
+    render(<FilesDrawer sessionId="s1" workdir="/proj/alpha" onClose={() => {}} />);
+    await flush();
+    await userEvent.click(screen.getByRole("button", { name: "打开文件夹" }));
+    await flush();
+    expect(calls.filter((c) => c.kind === "repo_reveal")).toEqual([{ kind: "repo_reveal", payload: { path: "" } }]);
+  });
+
+  it("预览头按钮定位当前文件;失败则复制绝对路径并外显", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const calls = stubShell({
+      list: { "": [entry("a.ts", "src/a.ts")] },
+      content: "x",
+      reveal: { error: "没有可用的文件管理器" },
+    });
+    render(<FilesDrawer sessionId="s1" workdir="/proj/alpha" onClose={() => {}} />);
+    await flush();
+    await userEvent.click(await screen.findByText("a.ts"));
+    await flush();
+    await userEvent.click(screen.getByRole("button", { name: "打开所在文件夹" }));
+    await flush();
+    expect(calls.some((c) => c.kind === "repo_reveal" && c.payload.path === "src/a.ts")).toBe(true);
+    expect(writeText).toHaveBeenCalledWith("/proj/alpha/src/a.ts");
+    expect((await screen.findAllByRole("alert")).some((n) => n.textContent?.includes("/proj/alpha/src/a.ts"))).toBe(true);
   });
 });

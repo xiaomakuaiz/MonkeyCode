@@ -7,7 +7,7 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { CircleAlert, CircleCheck, CircleHelp, Cloud, FolderGit2, MessagesSquare, SendHorizontal, Settings, X } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleHelp, Cloud, FolderGit2, Globe, MessagesSquare, SendHorizontal, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
@@ -30,7 +30,7 @@ import {
 } from "@/lib/ipc/host";
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
 import { engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
-import type { CloudTask } from "@/lib/ipc/cloudtasks";
+import type { CloudProject, CloudTask } from "@/lib/ipc/cloudtasks";
 import {
   modelsList,
   onSessionEvent,
@@ -72,6 +72,15 @@ const NOTICE_TEXT: Record<NoticeKind, MessageKey> = {
   error: "notice.error",
   queued: "notice.queued",
 };
+
+/** 壳级提示(不属于任何会话,故不进 SessionNotice 通道):浏览器工具装载
+ *  结果等。info 自动消失,warn 留到用户关掉——「工具没装上」不能一晃而过。 */
+interface ShellNotice {
+  id: number;
+  key: MessageKey;
+  kind: "info" | "warn";
+}
+const SHELL_NOTICE_MS = 6000;
 
 function SpaceRail({
   space,
@@ -192,12 +201,14 @@ export function App() {
   const [space, setSpaceState] = useState<Space>(readSpace);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(readLastSession);
-  // 新建任务视图:null=关;{dir} 可携带「在此项目新建」的预填目录
-  const [creating, setCreating] = useState<{ dir?: string } | null>(null);
+  // 新建任务视图:null=关;dir 携带「在此项目新建」的预填目录(本地),
+  // cloudProject 携带云端项目组头的预选项目(直接落云端页签)
+  const [creating, setCreating] = useState<{ dir?: string; cloudProject?: CloudProject } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);
   const [cloudReload, setCloudReload] = useState(0);
   const [notices, setNotices] = useState<SessionNotice[]>([]);
+  const [shellNotices, setShellNotices] = useState<ShellNotice[]>([]);
   const [attentionIds, setAttentionIds] = useState<Set<string>>(new Set());
   // D1:引擎自愈的重开信号(ChatView 经 useSessionFeed 依赖幂等重建连接)
   const [epoch, setEpoch] = useState(0);
@@ -207,6 +218,9 @@ export function App() {
   sessionsRef.current = sessions;
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
+  // 壳级提示的自增号与在途定时器(卸载时统一清)
+  const shellSeq = useRef(0);
+  const shellTimers = useRef<Set<number>>(new Set());
 
   const refresh = () => void sessionsList().then(setSessions);
 
@@ -269,6 +283,23 @@ export function App() {
       if (!id) return;
       void openSessionByIdRef.current(id);
     });
+    // 浏览器扩展配对后壳会重启引擎换上带 browser_* 工具的配置。两条事件都
+    // 必须外显:成功不说,用户不知道现在能用了;超时(壳等任务空闲放弃,见
+    // main.rs BROWSER_MCP_REFRESH_DEADLINE)更不能静默——配好了却没工具会被
+    // 当成配对失败。同一条只留最新一份,连着配对两次不叠成两条
+    const pushShell = (key: MessageKey, kind: ShellNotice["kind"]) => {
+      const id = ++shellSeq.current;
+      setShellNotices((list) => [...list.filter((n) => n.key !== key), { id, key, kind }]);
+      // info 档自我了断;warn 留到用户关掉(定时器记账供卸载时清空)
+      if (kind !== "info") return;
+      const timer = window.setTimeout(() => {
+        shellTimers.current.delete(timer);
+        setShellNotices((list) => list.filter((n) => n.id !== id));
+      }, SHELL_NOTICE_MS);
+      shellTimers.current.add(timer);
+    };
+    const offMcpReloaded = listen<void>("browser-mcp-reloaded", () => pushShell("browser.mcpReloaded", "info"));
+    const offMcpTimeout = listen<void>("browser-mcp-refresh-timeout", () => pushShell("browser.mcpTimeout", "warn"));
     refresh();
     // D5 首启向导:桌面壳里模型清单为空 → 自动打开设置页。只在挂载时判一次:
     // 用户关掉设置页不再纠缠,配好模型后自然不会再触发。
@@ -317,6 +348,10 @@ export function App() {
       off();
       offOpenSession();
       offOpenSettings();
+      offMcpReloaded();
+      offMcpTimeout();
+      shellTimers.current.forEach(window.clearTimeout);
+      shellTimers.current.clear();
     };
   }, []);
 
@@ -420,6 +455,10 @@ export function App() {
               setCreating(null);
               setSettingsOpen(true); // 设置初始分区即「账号」,直达连接入口
             },
+            onNewTaskIn: (project) => {
+              setSettingsOpen(false);
+              setCreating({ cloudProject: project });
+            },
           }}
           actions={{
             onSelect: select,
@@ -450,6 +489,7 @@ export function App() {
           <NewTaskModal
             open
             initialDir={creating.dir}
+            initialCloudProject={creating.cloudProject}
             recentDirs={recentDirs}
             onClose={() => setCreating(null)}
             onCreated={(meta) => {
@@ -478,9 +518,32 @@ export function App() {
           <MainArea current={space === "cloud" ? null : current} epoch={epoch} onDelete={removeSession} onPatched={refresh} />
         )}
       </div>
-      {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭 */}
-      {notices.length > 0 && (
+      {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭。
+          壳级提示(浏览器工具装载等)与会话提醒共用同一角落栈,只是不可跳转 */}
+      {(notices.length > 0 || shellNotices.length > 0) && (
         <div className="toast toast-top toast-end z-50 mt-9" aria-label={t("notice.label")}>
+          {shellNotices.map((n) => (
+            <div
+              key={n.id}
+              role={n.kind === "warn" ? "alert" : "status"}
+              className={`alert ${n.kind === "warn" ? "alert-warning" : "alert-success"} alert-soft py-2 text-xs shadow-sm`}
+            >
+              {n.kind === "warn" ? (
+                <CircleAlert size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+              ) : (
+                <Globe size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+              )}
+              <span className="max-w-64 min-w-0">{t(n.key)}</span>
+              <button
+                type="button"
+                aria-label={t("notice.dismiss")}
+                className="btn btn-ghost btn-square btn-xs"
+                onClick={() => setShellNotices((list) => list.filter((x) => x.id !== n.id))}
+              >
+                <X size={14} strokeWidth={1.75} aria-hidden />
+              </button>
+            </div>
+          ))}
           {notices.map((n) => {
             const Icon = NOTICE_ICON[n.kind];
             return (

@@ -2,11 +2,13 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { SettingsDraft } from "@/features/settings/settingsForm";
 import type { McUsage } from "@/lib/ipc/account";
 import { AccountSection } from "./AccountSection";
 
 afterEach(() => {
   vi.useRealTimers();
+  localStorage.clear();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
 
@@ -370,5 +372,57 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     expect(await screen.findByRole("button", { name: "连接 MonkeyCode 云端" })).toBeDefined();
     expect(calls.map((c) => c.cmd)).toContain("mc_logout");
     expect((await screen.findByRole("alert")).textContent).toContain("网络不可达");
+  });
+});
+
+describe("自建部署配置(彩蛋解锁)", () => {
+  const emptyDraft = (): SettingsDraft => ({
+    models: [],
+    defaultIdx: 0,
+    mcps: [],
+    kernelEnv: "",
+    mcBaseUrl: "",
+    mcBasicAuth: "",
+    mcLlmBaseUrl: "",
+  });
+
+  it("默认隐藏;连点 MonkeyCode 卡图标 6 次解锁并记住", async () => {
+    stubShell({ baizhi_status: bzOut, mc_status: mcOut });
+    const { unmount } = render(<AccountSection draft={emptyDraft()} onDraft={() => {}} />);
+    // 卡渲染出来再点(logo 是 aria-hidden 的装饰图,按 DOM 取)
+    await screen.findByText("MonkeyCode 云端");
+    expect(screen.queryByText("自建部署")).toBeNull();
+    const logo = document.querySelector('img[src="/logo.png"]')!;
+    for (let i = 0; i < 5; i++) fireEvent.click(logo);
+    expect(screen.queryByText("自建部署")).toBeNull(); // 差一下不解锁
+    fireEvent.click(logo);
+    expect(await screen.findByText("自建部署")).toBeDefined();
+    expect(localStorage.getItem("mc.serverConfigUnlocked")).toBe("1");
+
+    // 解锁态持久:重新挂载直接可见
+    unmount();
+    render(<AccountSection draft={emptyDraft()} onDraft={() => {}} />);
+    expect(await screen.findByText("自建部署")).toBeDefined();
+  });
+
+  it("已配置过任一项则恒可见(不解锁也不会让存量配置消失),编辑写回草稿", async () => {
+    stubShell({ baizhi_status: bzOut, mc_status: mcOut });
+    let draft: SettingsDraft = { ...emptyDraft(), mcBaseUrl: "https://self.host" };
+    const onDraft = (up: (d: SettingsDraft) => SettingsDraft) => {
+      draft = up(draft);
+    };
+    render(<AccountSection draft={draft} onDraft={onDraft} />);
+    expect(await screen.findByText("自建部署")).toBeDefined();
+    const input = screen.getByLabelText("模型请求地址(可选)");
+    await userEvent.type(input, "x");
+    expect(draft.mcLlmBaseUrl).toBe("x");
+  });
+
+  it("拿不到草稿(浏览器只读/配置载入失败)时整块不渲染", async () => {
+    localStorage.setItem("mc.serverConfigUnlocked", "1");
+    stubShell({ baizhi_status: bzOut, mc_status: mcOut });
+    render(<AccountSection />);
+    await screen.findByText("MonkeyCode 云端");
+    expect(screen.queryByText("自建部署")).toBeNull();
   });
 });

@@ -217,6 +217,9 @@ describe("同步并入(mergeSyncedModels / mergeSyncedMcps)", () => {
     defaultIdx,
     mcps: [],
     kernelEnv: "",
+    mcBaseUrl: "",
+    mcBasicAuth: "",
+    mcLlmBaseUrl: "",
   });
 
   it("落盘名加来源后缀(会员条目再缀配置 id);整组替换并按来源排序", () => {
