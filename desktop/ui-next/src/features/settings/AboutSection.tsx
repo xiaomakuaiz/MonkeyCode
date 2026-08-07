@@ -138,7 +138,7 @@ export function AboutSection() {
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn btn-sm" disabled={restarting} onClick={() => void restartEngine()}>
           {restarting && <span className="loading loading-spinner loading-xs" aria-hidden />}
-          {restarting ? t("settings.about.restarting") : t("settings.about.restart")}
+          {restarting ? t("engine.restarting") : t("engine.restart")}
         </button>
         {/* 连点版本号解锁的排障入口(常态不占位) */}
         {unlocked && (

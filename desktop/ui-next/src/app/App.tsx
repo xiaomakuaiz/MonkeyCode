@@ -29,7 +29,7 @@ import {
   type HostInfo,
 } from "@/lib/ipc/host";
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
-import { afterEngineReady, engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
+import { afterEngineReady, engineRestart, engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
 import type { CloudProject, CloudTask } from "@/lib/ipc/cloudtasks";
 import {
   modelsList,
@@ -80,6 +80,9 @@ interface ShellNotice {
   id: number;
   key: MessageKey;
   kind: "info" | "warn";
+  /** 提示自带的出口动作:谁的提示指了哪条路,谁就把按钮给出来。
+   *  "restart" = 重启引擎(mcpTimeout 那条文案里写的就是它) */
+  action?: "restart";
 }
 const SHELL_NOTICE_MS = 6000;
 
@@ -210,6 +213,8 @@ export function App() {
   const [cloudReload, setCloudReload] = useState(0);
   const [notices, setNotices] = useState<SessionNotice[]>([]);
   const [shellNotices, setShellNotices] = useState<ShellNotice[]>([]);
+  // 提示内「重启引擎」的在途态(同一时刻只会有一条带动作的提示)
+  const [shellRestarting, setShellRestarting] = useState(false);
   const [attentionIds, setAttentionIds] = useState<Set<string>>(new Set());
   // D1:引擎自愈的重开信号(ChatView 经 useSessionFeed 依赖幂等重建连接)
   const [epoch, setEpoch] = useState(0);
@@ -291,9 +296,9 @@ export function App() {
     // 必须外显:成功不说,用户不知道现在能用了;超时(壳等任务空闲放弃,见
     // main.rs BROWSER_MCP_REFRESH_DEADLINE)更不能静默——配好了却没工具会被
     // 当成配对失败。同一条只留最新一份,连着配对两次不叠成两条
-    const pushShell = (key: MessageKey, kind: ShellNotice["kind"]) => {
+    const pushShell = (key: MessageKey, kind: ShellNotice["kind"], action?: ShellNotice["action"]) => {
       const id = ++shellSeq.current;
-      setShellNotices((list) => [...list.filter((n) => n.key !== key), { id, key, kind }]);
+      setShellNotices((list) => [...list.filter((n) => n.key !== key), { id, key, kind, action }]);
       // info 档自我了断;warn 留到用户关掉(定时器记账供卸载时清空)
       if (kind !== "info") return;
       const timer = window.setTimeout(() => {
@@ -303,7 +308,12 @@ export function App() {
       shellTimers.current.add(timer);
     };
     const offMcpReloaded = listen<void>("browser-mcp-reloaded", () => pushShell("browser.mcpReloaded", "info"));
-    const offMcpTimeout = listen<void>("browser-mcp-refresh-timeout", () => pushShell("browser.mcpTimeout", "warn"));
+    // 超时那条的文案里写着「保存设置或重启引擎即可生效」,就把重启按钮
+    // 直接挂在提示上——引擎横幅只在崩溃/启动失败时出,正常跑着时用户在
+    // 界面上找不到重启入口(2026-08-07 用户报障)
+    const offMcpTimeout = listen<void>("browser-mcp-refresh-timeout", () =>
+      pushShell("browser.mcpTimeout", "warn", "restart"),
+    );
     refresh();
     // D5 首启向导:桌面壳里模型清单为空 → 自动打开设置页。只在挂载时判一次:
     // 用户关掉设置页不再纠缠,配好模型后自然不会再触发。
@@ -550,6 +560,23 @@ export function App() {
                 <IconWorld size={14} stroke={1.75} aria-hidden className="shrink-0" />
               )}
               <span className="max-w-64 min-w-0">{t(n.key)}</span>
+              {n.action === "restart" && (
+                // 成功即撤这条提示(问题已解决);失败不撤,由引擎横幅接手外显
+                <button
+                  type="button"
+                  className="btn btn-warning btn-xs shrink-0"
+                  disabled={shellRestarting}
+                  onClick={() => {
+                    setShellRestarting(true);
+                    void engineRestart()
+                      .then(() => setShellNotices((list) => list.filter((x) => x.id !== n.id)))
+                      .catch(() => {})
+                      .finally(() => setShellRestarting(false));
+                  }}
+                >
+                  {shellRestarting ? t("engine.restarting") : t("engine.restart")}
+                </button>
+              )}
               <button
                 type="button"
                 aria-label={t("notice.dismiss")}

@@ -183,9 +183,6 @@ export const en: Record<MessageKey, string> = {
   "settings.about.install": "Download update",
   "settings.about.installing": "Updating…",
   "settings.about.checkFailed": "Update check failed",
-  "settings.about.restart": "Restart engine",
-  "settings.about.restarting": "Restarting…",
-  "settings.about.restartDone": "Engine restarted",
   "settings.about.restartHint":
     "Restarting interrupts running tasks; browser tools, MCP and similar changes take effect after a restart (the tray menu has the same entry).",
   "settings.about.openAppDir": "Open app folder",
