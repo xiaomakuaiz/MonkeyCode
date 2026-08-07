@@ -112,12 +112,22 @@ export function OutlineNav({
       aria-label={t("chat.outline.label")}
       className="pointer-events-none absolute inset-y-0 left-1 z-10 flex w-5 items-center"
     >
+      {/* 限高与滚动都挂在**点列自身**,不挂 dropdown 外壳:daisyUI 的
+          .dropdown 是 position:relative、.dropdown-content 是 position:absolute,
+          外壳一旦 overflow 非 visible 就会把浮出面板一起裁掉。
+          单位用 vh 不用 %:百分比 max-height 要求包含块高度确定,而 dropdown
+          外壳是内容撑高(auto),`max-h-full` 在这里会被解析成 none——限高
+          彻底失效、点列直接溢出到 composer 之下(2026-08-07 用户报障的根因;
+          旧 UI 的 .mc-outline-rail 是 nav 的直接子节点,60% 才能落地)。
+          60vh ≈ 旧 UI 的 60%,点列居中,再多也只在中间那段内滚,够不着
+          标题栏与 composer。滚条按旧 UI 藏掉(mc-no-scrollbar 在 chrome.css
+          ——那里是无层规则,组件里的工具类盖不过,见该类头注)。 */}
       <div
-        className={`dropdown dropdown-right dropdown-center pointer-events-auto max-h-[60%] ${open ? "dropdown-open" : ""}`}
+        className={`dropdown dropdown-right dropdown-center pointer-events-auto ${open ? "dropdown-open" : ""}`}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
       >
-        <div className="flex max-h-full flex-col items-center gap-1.5 overflow-hidden px-1.5 py-2">
+        <div className="mc-no-scrollbar flex max-h-[60vh] flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto px-1.5 py-2">
           {entries.map((e) => (
             // 当前点满不透明度、其余压暗:只用透明度差表达「在哪」,不换色
             <span key={e.seq} aria-hidden className={`status shrink-0${e.seq === activeSeq ? "" : " opacity-40"}`} />

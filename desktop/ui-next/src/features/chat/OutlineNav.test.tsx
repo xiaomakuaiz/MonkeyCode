@@ -91,3 +91,25 @@ describe("OutlineNav 交互", () => {
     expect(screen.getByText("第一问").closest("button")?.getAttribute("aria-current")).toBeNull();
   });
 });
+
+// 限高/滚动的载体是结构契约,不是样式偏好:挂错一层就整列溢出到 composer
+// 之下(2026-08-07 用户报障)。jsdom 量不了几何,这里钉「挂在谁身上」。
+describe("点列限高的载体", () => {
+  const many = outlineEntriesOf(
+    Array.from({ length: 40 }, (_, i) => ({ seq: i + 1, offset: i * 10, text: `问题 ${i + 1}` })),
+    [],
+  );
+
+  it("限高 + 纵滚 + 藏滚条都在点列自身,dropdown 外壳不带 overflow", () => {
+    const { container } = render(<OutlineNav entries={many} onJump={() => {}} />);
+    const shell = container.querySelector(".dropdown") as HTMLElement;
+    const rail = shell.firstElementChild as HTMLElement;
+    // 外壳一旦 overflow 非 visible 会把 position:absolute 的浮出面板一起裁掉
+    expect(shell.className).not.toMatch(/overflow-/);
+    expect(shell.className).not.toMatch(/max-h-/);
+    expect(rail.className).toContain("overflow-y-auto");
+    expect(rail.className).toContain("mc-no-scrollbar");
+    // 百分比 max-height 在内容撑高的 dropdown 里解析成 none,必须用视口单位
+    expect(rail.className).toMatch(/max-h-\[\d+vh\]/);
+  });
+});

@@ -29,6 +29,21 @@
   scrollbar-color: color-mix(in oklab, var(--color-base-content) 22%, transparent) transparent;
 }
 
+/* 无滚条的滚动容器(窄轨道用):目前只有提问大纲的点列——20px 宽的轨道
+ * 画不下 8px 滚条,滚条一出就把点挤没。
+ * ⚠️ 必须写在这里,不能在组件里用 Tailwind 工具类:本文件是**无层**引入的
+ * (main.tsx 直接 import,不在 @layer 内),而工具类在 @layer utilities 里
+ * ——无层规则整体盖过分层规则,组件侧的 `[scrollbar-width:none]` 会被上面
+ * 那条 `*` 静默吃掉(2026-08-07 排查大纲溢出时发现)。同理,任何想覆盖
+ * 上面滚条样式的地方都得回到本文件。 */
+.mc-no-scrollbar {
+  scrollbar-width: none;
+}
+.mc-no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* keyframes 配额 1/5:提问大纲跳转后目标气泡的闪光
  * (LogList 经 Tailwind 任意值 animate-[mc-flash_1s_ease] 引用)。 */
 @keyframes mc-flash {
