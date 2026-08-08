@@ -550,6 +550,8 @@ export const en: Record<MessageKey, string> = {
   "cloud.err.sendInFlight": "The previous message is still being sent (the machine may be waking up); try again shortly",
   "cloud.err.roundRunning": "A turn is running; send after it ends (draft kept)",
   "cloud.err.sendRejected": "Message not delivered; put back into the input box",
+  "cloud.err.endedWithPending": "The task ended before this message went out: “{text}”",
+  "cloud.err.wakeTimeout": "The cloud machine never came up; message not sent, put back into the input box",
   "cloud.err.cancelNotSent": "Stop command not delivered (cloud connection dropped); try again",
   "cloud.err.stopFailed": "Failed to stop task: {reason}",
   "cloud.err.loadFailed": "Failed to load: {reason}",

@@ -716,10 +716,14 @@ describe("CloudTaskView", () => {
     expect(JSON.parse(b64decode(call.data))).toMatchObject({ model_id: "m2", load_session: true });
   });
 
-  it("休眠机器:唤醒态状态条 + 发送后占位气泡,云端回显即让位", async () => {
-    // 拨号挂起 = 真实的唤醒窗口(服务端在建连时唤醒 VM,以分钟计)
-    const opens: Array<() => void> = [];
-    const listeners = stubShellWs((cmd) => {
+  // ==== 休眠唤醒(2026-08-08 用户报障:「vm 还在 resume,我却还能发新消息」)====
+  // 机制:唤醒休眠 VM 的唯一触发点是**控制流建连**(后端 task_control.go),
+  // 任务流连的是后端、机器睡着照样秒连。故此处三条各钉一段:①进任务即建控制
+  // 流(唤醒被触发);②唤醒判据取详情的 vm 状态而非连接状态;③唤醒期发送押后。
+
+  it("休眠机器:进任务即建控制流(这是唯一会唤醒 VM 的通道)", async () => {
+    const kinds: string[] = [];
+    stubShellWs((cmd, args) => {
       switch (cmd) {
         case "mc_task_info":
           return Promise.resolve({
@@ -727,35 +731,165 @@ describe("CloudTaskView", () => {
             status: "processing",
             virtualmachine: { id: "vm1", status: "hibernated" },
           });
-        case "mc_task_options":
-          return Promise.resolve({ models: [] });
         case "cloud_ws_open":
-          return new Promise<unknown>((res) => opens.push(() => res({})));
+          kinds.push(String(args?.kind ?? ""));
+          return Promise.resolve({});
         default:
           return Promise.resolve({});
       }
     });
     render(<CloudTaskView task={{ id: "t17", status: "processing" }} />);
-    // attach 在拨号 + 服务端说 VM 休眠 → 状态条与空态都讲「唤醒」,不是「连接云端」
+    // 没有这条,休眠任务打开后根本没人去唤醒机器(旧实现只在切模型/端口/文件时临时连)
+    await waitFor(() => expect(kinds).toContain("control"));
+  });
+
+  it("休眠机器:任务流已连上也照样显唤醒态(判据取 vm 状态,不看连接状态)", async () => {
+    const listeners = stubShellWs((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({
+            id: "t18",
+            status: "processing",
+            virtualmachine: { id: "vm1", status: "hibernated" },
+          });
+        // cloud_ws_open 立即 resolve = 任务流秒连(真实情形:它连的是后端,不是那台机器)
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t18", status: "processing" }} />);
+    await waitFor(() => expect([...listeners.keys()].some((k) => k.startsWith("ws-msg:"))).toBe(true));
+    // 连接健康(connected)但机器休眠:状态条/空态仍要讲「唤醒」,不能一片安静
     await waitFor(() => expect(screen.getAllByText(/正在唤醒云端机器/).length).toBeGreaterThan(0));
     expect(screen.queryByText(/正在连接云端任务/)).toBeNull();
+    // 输入框可用(唤醒期能打字,消息押后),占位文案说清会自动发出
+    expect((screen.getByLabelText("消息输入") as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
+  it("休眠机器:发送押后不上行,vm 转 online 后自动送出并让位给真气泡", async () => {
+    let vmStatus = "hibernated";
+    const streamModes: string[] = [];
+    const wsSends: { pipe?: unknown; text?: unknown }[] = [];
+    const listeners = stubShellWs((cmd, args) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({
+            id: "t19",
+            status: "processing",
+            virtualmachine: { id: "vm1", status: vmStatus },
+          });
+        case "mc_task_options":
+          return Promise.resolve({ models: [] });
+        case "cloud_ws_open":
+          if (args?.kind === "stream") streamModes.push(String((args?.params as { mode?: string })?.mode ?? ""));
+          return Promise.resolve({});
+        case "cloud_ws_send":
+          wsSends.push(args ?? {});
+          return Promise.resolve({});
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t19", status: "processing" }} />);
+    await waitFor(() => expect(streamModes).toContain("attach"));
 
     fireEvent.change(screen.getByLabelText("消息输入"), { target: { value: "醒了就跑这条" } });
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
-    // 占位气泡立刻上屏(否则输入框一清、日志无变化,用户以为消息丢了)
+    // 占位气泡立刻上屏(否则输入框一清、日志无变化,用户以为消息丢了),
+    // 文案是「唤醒中,连上后自动发出」而不是「等待云端回应」
     const ghost = await screen.findByText("醒了就跑这条");
     expect(ghost.closest("[data-pending-send]")).toBeTruthy();
-    // 在途期间不许再发:按钮禁用(再点会掐掉在途连接,首条被弹回挤掉草稿)
+    expect(screen.getByText("云端机器唤醒中,连上后自动发出…")).toBeTruthy();
+    // 押后期间不许再发(按钮禁用),更关键的是**没有** mode=new 上行:
+    // 机器睡着时上行只会被后端回显一下就石沉大海
     await waitFor(() => expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(true));
+    expect(streamModes).not.toContain("new");
+    expect(wsSends.map((s) => JSON.parse(String(s.text)) as { type: string }).some((f) => f.type === "user-input")).toBe(false);
 
-    // 机器醒了:mode=new 连上并回显这条 → 占位让位给真气泡
-    opens.forEach((r) => r());
-    await waitFor(() => expect([...listeners.keys()].some((k) => k.startsWith("ws-msg:"))).toBe(true));
+    // 机器醒了:轮询(唤醒期 3s)看到 online → 这才建 mode=new 并上行
+    vmStatus = "online";
+    await vi.waitFor(() => expect(streamModes).toContain("new"), { timeout: 5000, interval: 50 });
+    await waitFor(() => {
+      const sent = wsSends
+        .map((s) => JSON.parse(String(s.text)) as { type: string; data: string })
+        .find((f) => f.type === "user-input");
+      expect(sent).toBeTruthy();
+      expect(b64decode((JSON.parse(b64decode(sent!.data)) as { content: string }).content)).toBe("醒了就跑这条");
+    });
+
+    // 云端回显这条 → 占位让位给真气泡
     const msgKey = [...listeners.keys()].filter((k) => k.startsWith("ws-msg:")).pop()!;
     listeners.get(msgKey)?.({
       payload: JSON.stringify({ type: "user-input", seq: 1, timestamp: 1000, data: { content: b64encode("醒了就跑这条") } }),
     });
     await waitFor(() => expect(document.querySelector("[data-pending-send]")).toBeNull());
     expect(screen.getByText("醒了就跑这条")).toBeTruthy();
+  });
+
+  it("机器迟迟不就绪:押后到上限即交还草稿,不把消息永远压在本地转圈", async () => {
+    // 假时钟直接推进到上限(真等 5 分钟没意义);全程 fireEvent + advanceTimersByTimeAsync,
+    // 不用 waitFor/userEvent——它们各自挂着真实计时器,与假时钟互相卡死
+    vi.useFakeTimers();
+    try {
+      const streamModes: string[] = [];
+      stubShellWs((cmd, args) => {
+        switch (cmd) {
+          case "mc_task_info":
+            // 唤醒失败/虚拟机回收:状态一直不翻到 online
+            return Promise.resolve({ id: "t21", status: "processing", virtualmachine: { id: "vm1", status: "hibernated" } });
+          case "cloud_ws_open":
+            if (args?.kind === "stream") streamModes.push(String((args?.params as { mode?: string })?.mode ?? ""));
+            return Promise.resolve({});
+          default:
+            return Promise.resolve({});
+        }
+      });
+      render(<CloudTaskView task={{ id: "t21", status: "processing" }} />);
+      await vi.advanceTimersByTimeAsync(50); // 详情落地 + attach 建连
+
+      fireEvent.change(screen.getByLabelText("消息输入"), { target: { value: "等不到就还我" } });
+      fireEvent.click(screen.getByRole("button", { name: "发送" }));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(document.querySelector("[data-pending-send]")).toBeTruthy();
+
+      await vi.advanceTimersByTimeAsync(300_000); // 押后上限
+      // 草稿回到输入框(不是"到点照发":此刻上行只会被后端回显一下就丢,
+      // 看起来像发成功了,比转圈更坏),占位撤下,原因外显
+      expect((screen.getByLabelText("消息输入") as HTMLTextAreaElement).value).toBe("等不到就还我");
+      expect(document.querySelector("[data-pending-send]")).toBeNull();
+      expect(screen.getByText("云端机器迟迟没就绪,消息未发出,已放回输入框")).toBeTruthy();
+      expect(streamModes).not.toContain("new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("押后期间任务结束:占位撤下,未发出的内容外显不静默丢", async () => {
+    let taskStatus = "processing";
+    stubShellWs((cmd) => {
+      switch (cmd) {
+        case "mc_task_info":
+          return Promise.resolve({
+            id: "t20",
+            status: taskStatus,
+            virtualmachine: { id: "vm1", status: "hibernated" },
+          });
+        case "mc_task_rounds":
+          return Promise.resolve({ frames: [], next_cursor: "", has_more: false });
+        default:
+          return Promise.resolve({});
+      }
+    });
+    render(<CloudTaskView task={{ id: "t20", status: "processing" }} />);
+    fireEvent.change(await screen.findByLabelText("消息输入"), { target: { value: "还没来得及发" } });
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByText("云端机器唤醒中,连上后自动发出…");
+
+    taskStatus = "finished"; // 云端跑完 / 被别处终止
+    await vi.waitFor(() => expect(screen.getByText(/任务已结束,这条还没来得及发出/)).toBeTruthy(), {
+      timeout: 5000,
+      interval: 50,
+    });
+    expect(document.querySelector("[data-pending-send]")).toBeNull();
   });
 });

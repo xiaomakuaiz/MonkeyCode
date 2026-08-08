@@ -542,6 +542,8 @@ export const zh = {
   "cloud.err.sendInFlight": "上一条还在发送中(云端机器可能正在唤醒),稍候再发",
   "cloud.err.roundRunning": "本轮执行中,结束后再发送(草稿已保留)",
   "cloud.err.sendRejected": "消息未送达,已放回输入框",
+  "cloud.err.endedWithPending": "任务已结束,这条还没来得及发出:「{text}」",
+  "cloud.err.wakeTimeout": "云端机器迟迟没就绪,消息未发出,已放回输入框",
   "cloud.err.cancelNotSent": "停止指令未送达(云端连接中断),请重试",
   "cloud.err.stopFailed": "终止任务失败:{reason}",
   "cloud.err.loadFailed": "加载失败:{reason}",

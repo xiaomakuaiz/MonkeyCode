@@ -2,8 +2,18 @@
 //   结束态(finished/error) → REST rounds 只读回放,"加载更早"按 cursor 往前翻;
 //   启动中(pending)        → 轮询详情展示 VM 准备时间线,转 processing 后接流;
 //   运行中(processing)     → WS attach(内核代理)回放当前轮 + 实时归约。
-// 发送(简版):空闲直发——关掉观察连接,建 mode=new 连接(连上即上行首条
-// 输入,经 stream 内部 send);失败经 onSendFailed 交还草稿,绝不静默丢。
+//
+// 云端机器的唤醒与保活靠**常驻控制流**(与 web 控制台 / 移动端 / 旧桌面 UI 同一
+// 机制):后端只在控制流 WS 建连时才 Resume 休眠 VM 并持续续期空闲计时器
+// (backend task_control.go::Control);任务流 WS 连的是后端,VM 睡着照样秒连,
+// 它既不唤醒机器也不知道机器醒没醒。所以本 hook 进任务即建一条控制连接,
+// 「机器就绪与否」一律取详情接口的 virtualmachine.status,不拿连接状态当代理。
+//
+// 发送:机器就绪(vm online)时直发——关掉观察连接,建 mode=new 连接(连上即
+// 上行首条输入,经 stream 内部 send);机器未就绪(休眠/唤醒中)则**押后**:
+// 内容挂成占位气泡,等轮询看到 vm online 再上行(现在直发只会掉进黑洞——后端
+// 收到 user-input 先原样回显、再 Continue 到睡着的机器上失败,只写一行日志)。
+// 失败经 onSendFailed 交还草稿,绝不静默丢。
 // 执行中不排队(与旧 UI 投递队列的差异,刻意的简化):提示后保留草稿。
 //
 // 协议状态机(重连/退避/收束判定)全部在 lib/cloud/stream,本 hook 只做
@@ -11,12 +21,13 @@
 // 契约:App 必须以 task.id 为 key 挂载视图(id 在一次挂载内不变)。
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { connectCloudControl, WAKE_CALL_TIMEOUT_MS } from "@/lib/cloud/control";
+import { connectCloudControl, WAKE_CALL_TIMEOUT_MS, type CloudControl } from "@/lib/cloud/control";
 import { groupCloudModels, type McCloudModelGroup } from "@/lib/cloud/options";
 import { chronoRounds } from "@/lib/cloud/rounds";
 import {
   connectCloudStream,
   type CloudStreamConn,
+  type CloudUserInput,
   type StreamHandlers,
   type StreamStatus,
 } from "@/lib/cloud/stream";
@@ -109,20 +120,22 @@ export interface CloudTaskHandle {
   ports: PortInfo[] | null;
   /** 拉一次开放端口(⋯ 菜单打开时触发;结束态/无 VM 不拉) */
   fetchPorts(): void;
-  /** 已发出但云端还没回显的那条输入(mode=new 连接在途)。视图据此渲染
-   * 「发送中」占位气泡——服务端回显要等 WS 连上(休眠机器要先唤醒,以分钟
-   * 计),不占位的话输入框一清、日志无变化,用户会以为消息丢了 */
+  /** 还没被云端回显的那条输入(押在本地等机器醒 / mode=new 连接在途)。
+   * 视图据此渲染「发送中」占位气泡——不占位的话输入框一清、日志无变化,
+   * 用户会以为消息丢了 */
   sending: { content: string; attachments: { url: string; filename: string }[] } | null;
-  /** 云端机器正在唤醒:服务端说 VM 休眠/离线,且我们正在连它。
-   * 「连接中」与「唤醒中」的等待量级差一个数量级(秒 vs 分钟),文案要分开 */
+  /** 云端机器没就绪:任务在跑但服务端说 VM 不在线(休眠/离线/正在起)。
+   * 此间发送押后,等唤醒完成自动送出;「连接中」与「唤醒中」的等待量级差
+   * 一个数量级(秒 vs 分钟),文案要分开 */
   waking: boolean;
   /** VM 状态原值(unknown/pending/online/offline/hibernated) */
   vmStatus: string;
 }
 
-/** 服务端认定「机器不在线,连它要先唤醒」的 VM 状态(与后端
- * VirtualMachineStatus 同名值;空值 = 详情还没到,不妄断)。 */
-const ASLEEP_VM = new Set(["hibernated", "offline"]);
+/** 押后等待唤醒的上限:冷唤醒以分钟计(自家文案写的是 1~2 分钟),给到 5 分钟
+ * 还没 online 就不是"在唤醒"而是起不来了(唤醒失败/虚拟机已回收)——交还草稿
+ * 并外显,不把消息永远压在本地转圈。 */
+const WAKE_WAIT_MAX_MS = 300_000;
 
 export function useCloudTask(
   task: CloudTask,
@@ -138,14 +151,34 @@ export function useCloudTask(
   const [input, setInput] = useState("");
   const [atts, setAtts] = useState<CloudUploadedAtt[]>([]);
   const [uploading, setUploading] = useState(0);
-  // 已发出、等云端回显的那条输入(mode=new 在途)。ref 与 state 并存:
-  // onFrames 在连接回调闭包里跑,读 state 是陈旧的
+  // 等云端回显的那条输入。ref 与 state 并存:onFrames 在连接回调闭包里跑,
+  // 读 state 是陈旧的
   const [sending, setSending] = useState<CloudTaskHandle["sending"]>(null);
   const sendingRef = useRef(false);
+  // 出件箱单槽:已按发送但**还没上行**的那条(机器没就绪时押在这)。
+  // 与 sending 的区别是"到底出没出门"——出了门只能等回显,没出门要等唤醒
+  const outboxRef = useRef<{ content: string; attachments: { url: string; filename: string }[] } | null>(null);
+  // 押后的兜底闸:机器迟迟不 online(唤醒失败/虚拟机已回收)时,消息不能
+  // 永远压在本地转圈。到点交还草稿并外显——不是"到点照发":此刻上行只会被
+  // 后端回显一下就丢,看起来像发成功了,比转圈更坏
+  const wakeTimerRef = useRef(0);
+  const clearWakeTimer = () => {
+    if (!wakeTimerRef.current) return;
+    window.clearTimeout(wakeTimerRef.current);
+    wakeTimerRef.current = 0;
+  };
   const clearSending = () => {
+    outboxRef.current = null;
+    clearWakeTimer();
     if (!sendingRef.current) return;
     sendingRef.current = false;
     setSending(null);
+  };
+  /** 连接侧「这条已经有着落了」的收尾:押在出件箱里那条还没出门,任何连接
+   * 事件都不能替它签收(否则回放来一帧、或 attach 空闲收束,占位气泡就没了,
+   * 消息永久卡在本地)——只在真上行过之后才让位。 */
+  const clearSentPlaceholder = () => {
+    if (!outboxRef.current) clearSending();
   };
   // 附件占位计数走 ref:addFiles 的串行 async 循环里 state 闭包是陈旧的
   const attCountRef = useRef(0);
@@ -172,6 +205,8 @@ export function useCloudTask(
   // epoch 重新武装
   const attachIdleRef = useRef(false);
   const [attachEpoch, setAttachEpoch] = useState(0);
+  // 常驻控制连接(唤醒 + 保活;切模型/端口列表复用它,见下方 effect)
+  const ctrlRef = useRef<CloudControl | null>(null);
   const onTasksChangedRef = useRef(opts.onTasksChanged);
   onTasksChangedRef.current = opts.onTasksChanged;
 
@@ -184,10 +219,16 @@ export function useCloudTask(
   const ended = taskStatus === "finished" || taskStatus === "error";
   const vmId = meta?.virtualmachine?.id ?? "";
   const vmStatus = meta?.virtualmachine?.status ?? "";
-  // 唤醒中 = 服务端说机器休眠/离线,而我们正在连它(发送在途或流在拨号)。
-  // 只在服务端明说休眠时才敢讲「唤醒」;详情没到(vmStatus 空)按普通连接
-  const waking =
-    ASLEEP_VM.has(vmStatus) && !connected && (sending !== null || status?.kind === "connecting" || status?.kind === "reconnecting");
+  // 机器就绪 = 服务端说 online(后端 vmstatus.Resolve 只给
+  // pending/online/offline/hibernated 四值);空值 = 详情还没到,不妄断。
+  const vmReady = vmStatus === "online";
+  // 唤醒中 = 任务在跑而且**明确知道**机器不在线。判据只取详情接口的 VM 状态,
+  // **不挂连接状态**:任务流 WS 连的是后端,机器睡着它照样 connected——旧判据
+  // 挂了 connected/status,现实里恒假,唤醒文案永远不亮(2026-08-08 用户报障)。
+  // 也不枚举 hibernated/offline:唤醒过程中后端会短暂把 VM 报成 offline,
+  // 按"非 online"判定天然免疫这种中间态抖动。vmStatus 空(详情没到/任务没带
+  // VM)既不算就绪也不算唤醒中——不妄断,发送照旧直发,不会把消息押死在本地
+  const waking = taskStatus === "processing" && vmStatus !== "" && !vmReady;
   const label = task.title || task.summary || task.content || meta?.title || meta?.summary || t("cloud.list.untitled");
 
   const refreshInfo = useCallback(async (): Promise<CloudTaskDetail | null> => {
@@ -200,6 +241,19 @@ export function useCloudTask(
       return null;
     }
   }, [id]);
+
+  /** 内容交还输入框与待发条(所有"没送出去"的路径共用:mode=new 被拒、
+   * 押后等唤醒超时)。绝不静默丢——用户打的字必须回到他能再按一次发送的地方。 */
+  const returnDraft = (failed: CloudUserInput, reason: string) => {
+    clearSending(); // 内容回到输入框,占位气泡随之撤
+    setInput((cur) => (cur ? failed.content + "\n" + cur : failed.content));
+    const back = (failed.attachments ?? []).map((a) => ({ ...a, isImage: isImageFilename(a.filename) }));
+    if (back.length) {
+      attCountRef.current += back.length;
+      setAtts((cur) => [...back, ...cur]);
+    }
+    setErr(reason);
+  };
 
   /** 连接回调(每次建连新做一份闭包;引用的全是稳定 setter/ref)。 */
   const makeHandlers = (): StreamHandlers => ({
@@ -218,8 +272,8 @@ export function useCloudTask(
       }
       if (!frames.length) return;
       // 云端开始回显(第一批实时帧里就有服务端回写的这条 user 消息):
-      // 占位气泡让位给真气泡
-      clearSending();
+      // 占位气泡让位给真气泡(押后未上行的那条不算,见 clearSentPlaceholder)
+      clearSentPlaceholder();
       liveRef.current.push(...frames);
       setChat((s) => reduceBatch(s, frames));
       if (turnEnded) {
@@ -246,25 +300,32 @@ export function useCloudTask(
       setConnected(false);
       setIdle(true);
       // 连接以「空闲」收束却一帧未回:发送态不能悬着(否则占位气泡永远转圈)。
-      // 内容已经出门,不退回输入框——退回会造成重复发送
-      clearSending();
+      // 内容已经出门,不退回输入框——退回会造成重复发送。押后未上行的那条
+      // 不受影响:它等的是机器醒,不是这条连接
+      clearSentPlaceholder();
     },
     // mode=new 首条输入未送达(拨号失败/零回显被关):草稿与附件都交还,
     // 绝不静默丢;重建 attach 拿回观察通道(被拒大多因为轮在跑)
     onSendFailed: (failed) => {
       connRef.current = null;
-      clearSending(); // 内容回到输入框,占位气泡随之撤
-      setInput((cur) => (cur ? failed.content + "\n" + cur : failed.content));
-      const back = (failed.attachments ?? []).map((a) => ({ ...a, isImage: isImageFilename(a.filename) }));
-      if (back.length) {
-        attCountRef.current += back.length;
-        setAtts((cur) => [...back, ...cur]);
-      }
-      setErr(t("cloud.err.sendRejected"));
+      returnDraft(failed, t("cloud.err.sendRejected"));
       attachIdleRef.current = false;
       setAttachEpoch((e) => e + 1);
     },
   });
+
+  /** 真正上行:当前轮并入历史 → 关掉观察连接 → 建 mode=new 连接(连上即上行
+   * 首条输入,经 stream 内部 send;拨号失败/零回显被拒经 onSendFailed 交还
+   * 草稿与附件)。send 与「机器醒了」的 effect 共用这一条出门通道。 */
+  const dispatch = (outgoing: { content: string; attachments: { url: string; filename: string }[] }) => {
+    historyRef.current = [...historyRef.current, ...liveRef.current];
+    liveRef.current = [];
+    connRef.current?.close();
+    attachIdleRef.current = true; // 由新连接接管;失败时 onSendFailed 重新武装
+    setIdle(false);
+    // content 交明文:内层 base64 由 stream 状态机统一包(双重编码会乱码)
+    connRef.current = connectCloudStream(id, "new", makeHandlers(), outgoing);
+  };
 
   // 进入任务:复位 + 拉详情;结束态走 REST rounds 回放。运行中不在这里碰
   // history——由下方 attach effect 独占当前轮,避免迟到的 REST 覆盖 WS 回放。
@@ -280,6 +341,7 @@ export function useCloudTask(
     attCountRef.current = 0;
     setIdle(false);
     sendingRef.current = false;
+    outboxRef.current = null;
     setSending(null);
     let alive = true;
     void (async () => {
@@ -302,12 +364,69 @@ export function useCloudTask(
     };
   }, [id, refreshInfo]);
 
-  // 状态轮询:pending 3s(盯状态翻转),processing 10s(刷新元数据);结束停。
+  // 状态轮询:pending / 唤醒中 3s(盯状态翻转——押后的消息就等这一下),
+  // 其余 processing 10s(刷新元数据);结束停。
   useEffect(() => {
     if (ended) return;
-    const timer = setInterval(() => void refreshInfo(), taskStatus === "pending" ? 3000 : 10000);
+    const fast = taskStatus === "pending" || waking;
+    const timer = setInterval(() => void refreshInfo(), fast ? 3000 : 10000);
     return () => clearInterval(timer);
-  }, [taskStatus, ended, refreshInfo]);
+  }, [taskStatus, ended, waking, refreshInfo]);
+
+  // 常驻控制流:进任务即连。**这是唯一会唤醒休眠 VM 的通道**——后端在控制流
+  // 建连时 Resume 休眠机器,并在连接存续期间持续刷新空闲计时器保活
+  // (backend task_control.go::Control)。web 控制台与移动端进任务即连,
+  // 旧桌面 UI 同法;ui-next 此前只在切模型/端口/文件面板临时连一下,于是
+  // 打开一个休眠任务根本没人去唤醒它(2026-08-08 用户报障根因)。
+  // 代价与 web/移动端一致:任务视图开着期间机器不会休眠。
+  // 控制流自身的 offline 状态不进 err 横幅:它是后台机件,唤醒进度由 vmStatus
+  // 外显;唤醒期拨号必然连败,外显只会与「唤醒中」同屏矛盾
+  useEffect(() => {
+    if (ended || !vmId) return;
+    const ctrl = connectCloudControl(id);
+    ctrlRef.current = ctrl;
+    // 建连触发唤醒后尽快让轮询看到状态翻转(否则要等下一个 3s/10s 拍子)
+    const t = setTimeout(() => void refreshInfo(), 1500);
+    return () => {
+      clearTimeout(t);
+      ctrl.close();
+      if (ctrlRef.current === ctrl) ctrlRef.current = null;
+    };
+  }, [id, ended, vmId, refreshInfo]);
+
+  /** 借一条控制连接办事(切模型/端口列表):优先复用常驻那条——省掉每次开
+   * ⋯ 菜单都拨一条新 WS,也避免临时连接关闭时打断保活;常驻不在(结束态/
+   * 详情还没带 VM)才临时建一条,用完即关。release 只关自己建的那条。 */
+  const borrowControl = (): { ctrl: CloudControl; release: () => void } => {
+    const shared = ctrlRef.current;
+    if (shared) return { ctrl: shared, release: () => undefined };
+    const own = connectCloudControl(id);
+    return { ctrl: own, release: () => own.close() };
+  };
+
+  // 机器醒了:把押在出件箱里的那条送出去(轮询看到 vm online 即触发)。
+  // 押后期间任务被终止/结束的兜底在下方 ended effect
+  useEffect(() => {
+    if (!vmReady) return;
+    const queued = outboxRef.current;
+    if (!queued) return;
+    outboxRef.current = null;
+    dispatch(queued);
+    // dispatch 只读稳定 ref/setter,刻意不进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vmReady]);
+
+  // 押后期间任务结束(自己终止/云端跑完):占位气泡撤下,内容外显——
+  // 结束态 composer 不渲染,放回输入框没有意义,但绝不能静默丢
+  useEffect(() => {
+    if (!ended) return;
+    const queued = outboxRef.current;
+    if (!queued) return;
+    clearSending();
+    setErr(t("cloud.err.endedWithPending", { text: queued.content }));
+    // clearSending/setErr 稳定,t 随 locale 变化重跑无害
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ended]);
 
   // 运行中:WS attach 跟看。attachEpoch 驱动重建(发送失败后重新武装);
   // 已收束(attachIdleRef)或已有连接(发送切换的 mode=new)不重复建。
@@ -327,12 +446,16 @@ export function useCloudTask(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, taskStatus, attachEpoch]);
 
-  // 卸载兜底:发送切换出的 mode=new 连接不归 attach effect 管
+  // 卸载兜底:发送切换出的 mode=new 连接不归 attach effect 管;押后计时器
+  // 同理(卸载后再触发就是往已卸载组件里 setState)
   useEffect(
     () => () => {
       connRef.current?.close();
       connRef.current = null;
+      clearWakeTimer();
     },
+    // clearWakeTimer 只读稳定 ref,刻意不进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
@@ -362,18 +485,25 @@ export function useCloudTask(
     const attachments = atts.map(({ url, filename }) => ({ url, filename }));
     setAtts([]);
     attCountRef.current = 0;
-    // 直发:当前轮并入历史,关掉观察连接,mode=new 连接连上即上行首条输入
-    // (经 stream 内部 send;拨号失败/零回显被拒经 onSendFailed 交还草稿+附件)
-    historyRef.current = [...historyRef.current, ...liveRef.current];
-    liveRef.current = [];
-    connRef.current?.close();
-    attachIdleRef.current = true; // 由新连接接管;失败时 onSendFailed 重新武装
-    setIdle(false);
-    // 占位气泡立刻上屏:云端回显要等 WS 连上(休眠机器先唤醒,以分钟计)
+    const outgoing = { content: text, attachments };
+    // 占位气泡立刻上屏:内容已经离开输入框,不占位的话日志毫无变化,
+    // 用户只能猜消息是不是丢了(2026-08-06 用户报障)
     sendingRef.current = true;
-    setSending({ content: text, attachments });
-    // content 交明文:内层 base64 由 stream 状态机统一包(双重编码会乱码)
-    connRef.current = connectCloudStream(id, "new", makeHandlers(), { content: text, attachments });
+    setSending(outgoing);
+    if (waking) {
+      // 机器没就绪(休眠/唤醒中):押后,等轮询看到 vm online 再上行。
+      // 此刻直发只会掉进黑洞——后端收到 user-input 会先原样回显给我们,
+      // 再把内容 Continue 到睡着的机器上失败、只写一行日志,表现就是
+      // 「消息进了日志然后永远没有下文」(2026-08-08 用户报障)
+      outboxRef.current = outgoing;
+      wakeTimerRef.current = window.setTimeout(() => {
+        wakeTimerRef.current = 0;
+        const stuck = outboxRef.current;
+        if (stuck) returnDraft(stuck, t("cloud.err.wakeTimeout"));
+      }, WAKE_WAIT_MAX_MS);
+      return;
+    }
+    dispatch(outgoing);
   };
 
   // 附件逐个上传(与本地会话 addFiles 语义对齐:超限/失败经 err 外显,
@@ -427,29 +557,28 @@ export function useCloudTask(
     if (chat.commands.length) setCommands(chat.commands);
   }, [chat.commands]);
 
-  // 在线预览:⋯ 菜单打开时拉一次开放端口。控制流连接本身会唤醒休眠 VM,
-  // 给足唤醒余量——默认 15s 在唤醒期间必超时,菜单会误显「没有开放的端口」
+  // 在线预览:⋯ 菜单打开时拉一次开放端口。唤醒期给足余量——默认 15s 在
+  // 唤醒期间必超时,菜单会误显「没有开放的端口」
   const fetchPorts = () => {
     if (!vmId || ended) return;
     setPorts(null);
-    const ctrl = connectCloudControl(id);
+    const { ctrl, release } = borrowControl();
     ctrl
       .call<{ ports?: PortInfo[] }>("port_forward_list", {}, { timeoutMs: WAKE_CALL_TIMEOUT_MS, timeoutMsg: t("cloud.ctl.wakeTimeout") })
       .then((r) => setPorts(r.ports ?? []))
       .catch(() => setPorts([])) // 失败与「没开端口」同一呈现:菜单不留悬空 loading
-      .finally(() => ctrl.close());
+      .finally(release);
   };
 
   // 切换模型:经控制流调 switch_model(load_session=true 保留会话上下文)。
-  // 临时建一条控制连接,用完即关(ui-next 无常驻控制流;连接本身会唤醒
-  // 休眠 VM,给足唤醒余量,超时也不能断言失败——操作可能已在云端生效)
+  // 超时也不能断言失败——操作可能已在云端生效,故成败都刷新详情
   const switchModel = async (modelId: string) => {
     if (switching || !modelId || modelId === meta?.model?.id) return;
     // locked(超会员档)条目菜单层已禁选,这里兜底防旁路
     if (models?.some((g) => g.models.some((m) => m.id === modelId && m.locked))) return;
     setSwitching(true);
     setErr("");
-    const ctrl = connectCloudControl(id);
+    const { ctrl, release } = borrowControl();
     try {
       await ctrl.call(
         "switch_model",
@@ -459,7 +588,7 @@ export function useCloudTask(
     } catch (e) {
       setErr(t("cloud.model.switchFailed", { reason: e instanceof Error ? e.message : String(e) }));
     } finally {
-      ctrl.close();
+      release();
       setSwitching(false);
       void refreshInfo(); // 成败都刷新:超时路径的真实结果以详情为准
     }
