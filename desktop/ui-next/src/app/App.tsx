@@ -127,18 +127,35 @@ function SpaceRail({
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat") };
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
-      {/* 头部基线:mac 红绿灯待在 chrome 角落(h-13 = 52px,与各列头部同高);
-          其余平台一律同高空位,保证三列头部线对齐(LAYOUT §2)。
-          曾对 Windows 开特例不留空位,让第一个空间图标顶上去占那格——尺寸
-          恰好凑得上(size-11 + py-1 = 52px)所以没露馅,但三个图标整体比其余
-          平台高一格,且契约里从没写过这条。2026-08-08 删除 */}
-      {isMacShell() ? (
-        <div data-tauri-drag-region="" className="flex h-13 w-full shrink-0 items-center">
+      {/* 头部基线上的 rail 角落格(h-13 = 52px,与各列头部同高,保证三列头部线
+          对齐;LAYOUT §2)。**这一格恒存在**——曾对 Windows 开特例不留,让第一个
+          空间图标顶上去占位,尺寸恰好凑得上(size-11 + py-1 = 52px)所以没露馅,
+          但三个图标整体比其余平台高一格,契约里也没写过。2026-08-08 删除。
+
+          格子里放什么按平台分:mac 是红绿灯的家(壳走 Overlay,窗控归 UI 自绘);
+          其余平台窗控不在这儿,改放品牌标记——空着一整块深色方格在窗口左上角
+          既浪费又难看(2026-08-09 用户报障),而标记原先摆在窗框条左端,挪下来
+          正好两处空档一次填平,窗框条也回归 §1「只做 chrome」。
+          Discord/Slack 的 rail 顶就是这个形态(标记 → 分隔 → 导航)。
+          标记不可交互:系统菜单是标题栏的东西,挂到侧栏图标上会变成「双击侧栏
+          图标把应用关了」的陷阱,那条留在窗框条右键上。整格可拖拽(与 mac 同)。 */}
+      <div data-tauri-drag-region="" className="flex h-13 w-full shrink-0 items-center justify-center">
+        {isMacShell() ? (
           <MacWindowControls compact />
-        </div>
-      ) : (
-        <div className="h-13 w-full shrink-0" />
-      )}
+        ) : (
+          <img
+            src="/logo.png"
+            alt=""
+            aria-hidden
+            draggable={false}
+            data-rail-brand=""
+            data-tauri-drag-region=""
+            /* 28px:明显大过下面 18px 的空间图标,才读得出"这是标记不是第四个
+               导航项";62×52 的格子里左右各余 17px、上下各余 12px,不挤 */
+            className="h-7 w-7 rounded-lg"
+          />
+        )}
+      </div>
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
         {(["local", "cloud", "chat"] as const).map((s) => (
           <div key={s} className={s === "local" && waiting > 0 ? "indicator" : undefined}>

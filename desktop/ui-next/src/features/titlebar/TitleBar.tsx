@@ -111,24 +111,13 @@ export function TitleBar() {
       onContextMenu={sysMenu}
       className="flex h-7 shrink-0 items-stretch bg-base-300 select-none"
     >
-      {/* 整条单色、无底边线、除图标与三键外不放任何东西(LAYOUT §1 三条铁律)。
-          左端应用图标:Windows 上单击开系统菜单、双击关窗——Win95 起的老规矩,
-          VS Code / Windows Terminal 至今保留;空着一块深色方格在窗口左上角
-          看着像什么东西没加载出来。
-          **宽度取 w-rail(不是自定尺寸)**:图标要与正下方 rail 的三个空间图标
-          落在同一条竖轴上——rail 宽 62px、图标居中即 x=31,这里若用 w-8 中心就
-          在 x=16,比下面那列偏左 15px,一眼就是没对齐(2026-08-09 用户报障
-          「小猴子太偏左」)。两处共用同一个列宽令牌,窄窗改令牌也不会错位 */}
-      <button
-        type="button"
-        aria-label={t("titlebar.systemMenu")}
-        title={t("titlebar.systemMenu")}
-        className="flex w-rail shrink-0 cursor-default items-center justify-center"
-        onClick={sysMenu}
-        onDoubleClick={() => isWindowsShell() && windowClose()}
-      >
-        <img src="/logo.png" alt="" aria-hidden draggable={false} className="h-4 w-4 rounded-sm" />
-      </button>
+      {/* 整条单色、无底边线、**除三键外什么都不放**(LAYOUT §1 三条铁律)。
+          品牌标记曾摆在这条左端(为的是别让窗口左上角空着一块深色方格),
+          2026-08-09 挪去 rail 角落格——那格在 Windows/Linux 上本来就是空的
+          (它存在的唯一理由是 mac 要在那儿放红绿灯),标记落进去两处空档一次
+          填平,这条也回归"只做 chrome"。
+          系统菜单改由**本条右键**唤起:它是标题栏的东西,挂到侧栏图标上会变成
+          「双击侧栏图标把应用关了」的陷阱 */}
       <div data-tauri-drag-region="" className="flex-1" />
       <button
         type="button"

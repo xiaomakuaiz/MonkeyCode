@@ -75,35 +75,21 @@ describe("自绘窗框条(Windows / Linux)", () => {
     const bar = container.querySelector("[data-window-titlebar]") as HTMLElement;
     expect(bar.className).toContain("bg-base-300");
     expect(bar.className).not.toContain("border-b");
-    // 禁的是**列色分段**(那才是冒充 header 的成因),不是列宽令牌本身——
-    // w-rail 现在正当用于把应用图标对到 rail 图标列上,见下一条
+    // 列宽令牌一个都不许出现:品牌标记 2026-08-09 挪去 rail 角落格后,
+    // 本条不再需要与任何列对齐,回归纯 chrome
     expect(container.innerHTML).not.toMatch(/bg-base-200|bg-base-100/);
-    expect(container.innerHTML).not.toContain("w-side");
+    expect(container.innerHTML).not.toMatch(/w-rail|w-side/);
     done();
   });
 
-  // 图标与正下方 rail 的三个空间图标必须落在同一条竖轴上:rail 宽 62px、
-  // 图标居中即 x=31;这里若用自定宽度(曾是 w-8)中心就在 x=16,比下面那列
-  // 偏左 15px(2026-08-09 用户报障「小猴子太偏左」)。两处共用同一个令牌,
-  // 改列宽也不会错位——所以钉的是"用了 w-rail",不是某个像素值。
-  it("左端图标宽度取 w-rail:与 rail 图标列同轴,不写自定宽度", () => {
+  // 2026-08-09:品牌标记挪去 rail 角落格(那格在 Windows/Linux 上本来就空着,
+  // 存在的唯一理由是 mac 要放红绿灯)。本条从此只剩拖拽区 + caption 三键。
+  it("条内不放品牌标记:除三键外只有拖拽区(标记归 rail 角落格)", () => {
     const { done } = stubShell("Windows NT 10.0");
-    render(<TitleBar />);
-    const icon = screen.getByRole("button", { name: "系统菜单" });
-    expect(icon.className).toContain("w-rail");
-    expect(icon.className).toContain("justify-center");
-    done();
-  });
-
-  it("左端应用图标:Windows 上点击开系统菜单、双击关窗", async () => {
-    const { calls, done } = stubShell("Windows NT 10.0");
-    render(<TitleBar />);
-    const icon = screen.getByRole("button", { name: "系统菜单" });
-    expect(icon.hasAttribute("data-tauri-drag-region")).toBe(false);
-    await userEvent.click(icon);
-    expect(calls.map((c) => c.cmd)).toContain("window_system_menu");
-    await userEvent.dblClick(icon);
-    expect(calls.map((c) => c.cmd)).toContain("plugin:window|close");
+    const { container } = render(<TitleBar />);
+    expect(container.querySelector("img")).toBeNull();
+    // 三个 caption 键,没有第四个按钮
+    expect(container.querySelectorAll("button")).toHaveLength(3);
     done();
   });
 
@@ -115,14 +101,13 @@ describe("自绘窗框条(Windows / Linux)", () => {
     done();
   });
 
-  it("Linux 同样自绘本条(壳一并走 CSD),但系统菜单是 Windows 专有", async () => {
+  it("Linux 同样自绘本条(壳一并走 CSD),但系统菜单是 Windows 专有", () => {
     const { calls, done } = stubShell("X11; Linux x86_64");
     const { container } = render(<TitleBar />);
     expect(container.querySelector("[data-window-titlebar]")).not.toBeNull();
     expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
-    // GTK 侧无对等 API:图标纯展示,右键与点击都不发命令
+    // GTK 侧无对等 API:右键不发命令
     fireEvent.contextMenu(container.querySelector("[data-window-titlebar]")!);
-    await userEvent.click(screen.getByRole("button", { name: "系统菜单" }));
     expect(calls.map((c) => c.cmd)).not.toContain("window_system_menu");
     done();
   });

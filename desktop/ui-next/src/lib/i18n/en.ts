@@ -9,7 +9,6 @@ export const en: Record<MessageKey, string> = {
   "titlebar.restore": "Restore",
   "titlebar.close": "Close",
   "titlebar.zoom": "Zoom",
-  "titlebar.systemMenu": "System menu",
   "titlebar.resize": "Resize window",
 
   "rail.label": "Spaces",

@@ -46,17 +46,27 @@ describe("壳骨架(P1)", () => {
   // 曾对 Windows 开特例不留这一格,让第一个空间图标顶上去占位——尺寸恰好
   // 凑得上(size-11 + py-1 = 52px)所以没露馅,但三个图标整体比其余平台高
   // 一格,LAYOUT §2 也从没写过这条(2026-08-08 删除)
-  it("Windows 壳:rail 顶仍留同高空位,空间图标不顶到窗框条下", () => {
+  // 角落格恒存在(与三列头部同高,基线才对得齐),里面按平台放不同东西:
+  // mac 是红绿灯的家,其余平台放品牌标记——空着一整块深色方格在窗口左上角
+  // 既浪费又难看(2026-08-09 用户报障)。标记**不可交互**:系统菜单是标题栏
+  // 的东西,挂到侧栏图标上会变成「双击侧栏图标把应用关了」的陷阱。
+  it.each([
+    ["Windows NT 10.0", "Windows"],
+    ["X11; Linux x86_64", "Linux"],
+  ])("%s 壳:rail 角落格同高,里面是不可交互的品牌标记", (ua) => {
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: { invoke: () => Promise.resolve(false) },
       event: { listen: () => Promise.resolve(() => {}) },
     };
-    vi.stubGlobal("navigator", { ...window.navigator, userAgent: "Windows NT 10.0" });
+    vi.stubGlobal("navigator", { ...window.navigator, userAgent: ua });
     render(<App />);
-    const rail = screen.getByRole("navigation", { name: "空间导航" });
-    expect(rail.firstElementChild?.className).toContain("h-13");
-    // 那一格是空位,不是塞了图标的按钮容器
-    expect(rail.firstElementChild?.querySelector("button")).toBeNull();
+    const corner = screen.getByRole("navigation", { name: "空间导航" }).firstElementChild;
+    expect(corner?.className).toContain("h-13");
+    const brand = corner?.querySelector("[data-rail-brand]");
+    expect(brand).not.toBeNull();
+    expect(corner?.querySelector("button")).toBeNull();
+    // 整格可拖窗(与 mac 的红绿灯格同待遇)
+    expect(corner?.hasAttribute("data-tauri-drag-region")).toBe(true);
   });
 
   it("mac 壳:红绿灯在 rail 左上角(chrome 角落),无 Windows 三键", () => {
