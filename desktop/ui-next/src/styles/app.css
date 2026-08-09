@@ -126,7 +126,7 @@
   }
   [data-platform="windows"],
   [data-platform="linux"] {
-    --chrome-h: 32px;
+    --chrome-h: 28px;
   }
   html,
   body,

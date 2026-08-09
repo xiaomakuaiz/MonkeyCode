@@ -3,7 +3,7 @@
 > 布局先行:功能只能放进本规范的格子里。改格子=改本文件+对应实现,不许就地发明。
 
 ## 1. 层级(自底向上)
-1. **窗体 chrome**:Windows/Linux = 32px 全宽窗框条(左端应用图标 + 右端 caption
+1. **窗体 chrome**:Windows/Linux = **28px** 全宽窗框条(左端应用图标 + 右端 caption
    三键);mac = rail 左上角红绿灯(chrome 角落,**不画条**);浏览器 = 无。
    平台判据只有一个:`isCustomChromeShell()`(host.ts),别在组件里散写。
    > **不追求三端结构相同**(2026-08-08 定案):右边缘只有一条,让窗控与视图动作
@@ -21,6 +21,11 @@
      窗框本来就该跟内容断开,为了不断色而让它假装成内容的延伸,恰恰是它冒充
      header 的原因。整条单色(`bg-base-300`),列宽令牌不许出现在条里。
    - **不带底边线**。有线就成了 header 基线。
+
+   条高 28px:低于 Win11 caption 的标准 32(用户两次反馈顶部太厚,2026-08-09)。
+   **caption 宽度仍守 46px 系统度量**——横向才是决定「点不点得中」的那一维
+   (三键并排,错一格点成邻居),纵向瘦只是少占地方。改条高必须同步 app.css
+   的 `--chrome-h`,chromeHeight.test.ts 会对表。
 
    Linux 一并走 CSD(壳侧 `decorations(false)`):保留原生装饰栏的话,三端里
    唯一不受控的那端最显眼。代价是 WM 的 resize 边/右键标题菜单/部分平铺手势
@@ -42,7 +47,7 @@
   > 也从没写过这条。2026-08-08 删除。
 - 拖拽区分布在各头部空白处(data-tauri-drag-region;按钮与可双击标题除外)。
 - **固定定位覆盖层的顶偏移一律读 `--chrome-h`**(app.css,按根节点
-  `data-platform` 取 0 / 32px),不许各自手算平台偏移。FilesDrawer 抽屉、
+  `data-platform` 取 0 / 28px),不许各自手算平台偏移。FilesDrawer 抽屉、
   daisyUI `.modal`、角落 toast 都走这条。
   > 2026-08-08 根治:此前 FilesDrawer 写 `isWindowsShell() ? "top-9" : "top-0"`、
   > toast 另写死 `mt-13`——后者那个 52 是照 mac 算的,Windows 上基线在 84px、

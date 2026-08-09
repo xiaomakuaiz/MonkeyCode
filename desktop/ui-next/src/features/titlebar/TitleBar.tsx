@@ -1,7 +1,10 @@
 // 自绘窗口 chrome:
-// - Windows / Linux 壳去掉原生装饰栏,这里补 32px **扁平窗框条**(高度对齐
-//   caption 的 46×32 系统度量;右侧最小化/最大化(还原)/关闭三键,关闭键
-//   hover 官方红;左端应用图标,Windows 上点击开系统菜单、双击关窗)。
+// - Windows / Linux 壳去掉原生装饰栏,这里补 28px **扁平窗框条**(右侧
+//   最小化/最大化(还原)/关闭三键,关闭键 hover 官方红;左端应用图标,
+//   Windows 上点击开系统菜单、双击关窗)。
+//   高度取 28 而非 Win11 caption 的标准 32:用户两次反馈 Windows 顶部太厚
+//   (2026-08-09)。**宽度仍守 46px 系统度量**——横向才是真正决定"点不点得中"
+//   的那一维(三键并排,错一格就点成邻居),纵向瘦一点只是少占地方。
 //   本条**只做 chrome**,三条铁律(LAYOUT §1):
 //   ① 不放品牌/视图信息——品牌的法定位置是侧栏头(§2),两处都摆就成了上下
 //      紧挨的两行同样字样(2026-08-07 用户报障「两个 header」);
@@ -86,7 +89,7 @@ export function Brand() {
   );
 }
 
-/** caption 三键共用皮相:46×全条高(=32px)的**直角通高**块,触到窗口上下边。
+/** caption 三键共用皮相:46×全条高(=28px)的**直角通高**块,触到窗口上下边。
  *  与视图头部那排 `btn-ghost btn-square btn-sm` 的圆角内缩胶囊形成形状对比
  *  ——眼睛靠"贴不贴边"分组,不靠间距硬撑(2026-08-08 定案)。 */
 const CAPTION_BTN =
@@ -106,7 +109,7 @@ export function TitleBar() {
       data-tauri-drag-region=""
       data-window-titlebar=""
       onContextMenu={sysMenu}
-      className="flex h-8 shrink-0 items-stretch bg-base-300 select-none"
+      className="flex h-7 shrink-0 items-stretch bg-base-300 select-none"
     >
       {/* 整条单色、无底边线、除图标与三键外不放任何东西(LAYOUT §1 三条铁律)。
           左端应用图标:Windows 上单击开系统菜单、双击关窗——Win95 起的老规矩,

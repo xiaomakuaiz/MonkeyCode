@@ -26,9 +26,20 @@ describe("--chrome-h 静态契约", () => {
     expect(chromeHeightIn(":root")).toBe("0px");
   });
 
-  it("Windows 与 Linux 覆写为 32px,且两者写在同一条规则里(同一条窗框)", () => {
-    expect(chromeHeightIn('[data-platform="windows"]')).toBe("32px");
+  it("Windows 与 Linux 覆写为 28px,且两者写在同一条规则里(同一条窗框)", () => {
+    expect(chromeHeightIn('[data-platform="windows"]')).toBe("28px");
     expect(css).toMatch(/\[data-platform="windows"\],\s*\[data-platform="linux"\]/);
+  });
+
+  // 变量的意义就是"覆盖层让开的高度 = 窗框条的真实高度"。两处各写各的数,
+  // 谁改一边就整体错几像素,而且**只在 Windows/Linux 上现形**——mac 那边
+  // --chrome-h 恒为 0,条也不渲染,本机怎么看都正常。所以这条必须机器来对。
+  it("条高(TitleBar 的 h-*)与 --chrome-h 必须同值", () => {
+    const bar = readFileSync(fileURLToPath(new URL("../features/titlebar/TitleBar.tsx", import.meta.url)), "utf-8");
+    const header = bar.match(/className="flex h-(\d+) shrink-0 items-stretch/);
+    expect(header, "没在 TitleBar 里找到窗框条的 h-* 类,改了结构就同步这条测试").not.toBeNull();
+    const barPx = Number(header![1]) * 4; // Tailwind 间距刻度:1 = 0.25rem = 4px
+    expect(`${barPx}px`).toBe(chromeHeightIn('[data-platform="windows"]'));
   });
 
   it("mac 不许有自己的覆写(有就说明谁给 mac 也画了条)", () => {
