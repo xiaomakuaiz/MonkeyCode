@@ -931,6 +931,28 @@ describe("CloudTaskView", () => {
     }
   });
 
+  // offline 的另一半:服务端确实给了 Failed 条件——这时才配说"启动失败、
+  // 不会自动恢复",而且原因要直接摆出来(原文案让用户"去浏览器控制台查看详情")
+  it("机器 offline 且带 Failed 条件:才下失败定论,并把服务端给的原因摆出来", async () => {
+    stubShellWs((cmd) =>
+      cmd === "mc_task_info"
+        ? Promise.resolve({
+            id: "t22b",
+            status: "processing",
+            virtualmachine: {
+              id: "vm1",
+              status: "offline",
+              conditions: [{ type: "Failed", status: 3, message: "镜像拉取超时" }],
+            },
+          })
+        : Promise.resolve({}),
+    );
+    render(<CloudTaskView task={{ id: "t22b", status: "processing" }} />);
+    await waitFor(() => expect(screen.getAllByText(/启动失败/).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/镜像拉取超时/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/尚未上线/)).toBeNull();
+  });
+
   it("机器 offline(非休眠):不谎称唤醒中,发送照常出门不押后", async () => {
     const streamModes: string[] = [];
     stubShellWs((cmd, args) => {
@@ -946,9 +968,14 @@ describe("CloudTaskView", () => {
     });
     render(<CloudTaskView task={{ id: "t22", status: "processing" }} />);
     await waitFor(() => expect(streamModes).toContain("attach"));
-    // 连接条讲实话:离线且不会自己回来,不是"正在唤醒"
-    await waitFor(() => expect(screen.getAllByText(/已离线/).length).toBeGreaterThan(0));
+    // 连接条讲实话:不是"正在唤醒";但也**不许断言已回收/启动失败**——
+    // 服务端的 offline 把"真回收""真失败""建成超 3 分钟还没上线"三件事挤在
+    // 一个枚举里(backend/pkg/vmstatus/status.go::Resolve),这个桩没给 Failed
+    // 条件,所以只能说"尚未上线"(2026-08-09 用户报障「明显是错的」)
+    await waitFor(() => expect(screen.getAllByText(/尚未上线/).length).toBeGreaterThan(0));
     expect(screen.queryByText(/正在唤醒云端机器/)).toBeNull();
+    expect(screen.queryByText(/不会自动恢复/)).toBeNull();
+    expect(screen.queryByText(/启动失败/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText("消息输入"), { target: { value: "还是发出去试试" } });
     await userEvent.click(screen.getByRole("button", { name: "发送" }));

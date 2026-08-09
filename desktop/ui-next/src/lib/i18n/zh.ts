@@ -558,8 +558,10 @@ export const zh = {
   "cloud.empty.connecting.detail": "对话记录马上回放到这里;任务在云端继续执行,不受本地影响。",
   "cloud.empty.ended.title": "没有可回放的对话记录",
   "cloud.empty.ended.detail": "这个任务已结束且没有留下对话。需要继续这项工作,可以新建云端任务。",
-  "cloud.empty.vmOffline.title": "云端机器已离线",
-  "cloud.empty.vmOffline.detail": "机器已回收或启动失败,不会自动恢复。可以在浏览器控制台查看详情,或新建一个云端任务。",
+  "cloud.empty.vmFailed.title": "云端机器启动失败",
+  "cloud.empty.vmFailed.detail": "{reason} 这台机器不会自动恢复,新建一个云端任务即可。",
+  "cloud.empty.vmNotReady.title": "云端机器尚未上线",
+  "cloud.empty.vmNotReady.detail": "可能还在启动(排队与拉取镜像有时要几分钟),也可能已被回收。刷新一下重新查询。",
 
   "cloud.conn.connecting": "连接云端…",
   "cloud.conn.reconnecting": "云端连接断开,{seconds} 秒后自动重连…",
@@ -568,7 +570,9 @@ export const zh = {
   "cloud.conn.dropGaveUp": "云端流反复断开,发送消息时会重试",
 
   "cloud.conn.waking": "正在唤醒云端机器…机器休眠后首次连接约需 1~2 分钟,消息会在连上后自动发出",
-  "cloud.conn.vmOffline": "云端机器已离线(已回收或启动失败),不会自动恢复",
+  "cloud.conn.vmFailed": "云端机器启动失败:{reason}",
+  "cloud.conn.vmFailedNoReason": "服务端未给出原因",
+  "cloud.conn.vmNotReady": "云端机器尚未上线,可能仍在启动",
   "cloud.conn.ctlOffline": "云端控制通道已断开,机器可能因此进入休眠;操作时会自动重连",
   "cloud.send.pending": "发送中,等待云端回应…",
   "cloud.send.waking": "云端机器唤醒中,连上后自动发出…",

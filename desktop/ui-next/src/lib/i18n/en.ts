@@ -562,8 +562,10 @@ export const en: Record<MessageKey, string> = {
   "cloud.empty.connecting.detail": "The conversation will replay here shortly; the task keeps running in the cloud regardless of this client.",
   "cloud.empty.ended.title": "No conversation to replay",
   "cloud.empty.ended.detail": "This task has ended without leaving a conversation. To continue the work, create a new cloud task.",
-  "cloud.empty.vmOffline.title": "The cloud machine is offline",
-  "cloud.empty.vmOffline.detail": "It was recycled or failed to start and will not come back on its own. Check the browser console for details, or create a new cloud task.",
+  "cloud.empty.vmFailed.title": "Cloud machine failed to start",
+  "cloud.empty.vmFailed.detail": "{reason} This machine will not recover — create a new cloud task.",
+  "cloud.empty.vmNotReady.title": "Cloud machine is not online yet",
+  "cloud.empty.vmNotReady.detail": "It may still be starting (queueing and image pulls can take a few minutes), or it may have been recycled. Refresh to check again.",
 
   "cloud.conn.connecting": "Connecting to the cloud…",
   "cloud.conn.reconnecting": "Cloud connection lost; reconnecting in {seconds}s…",
@@ -572,7 +574,9 @@ export const en: Record<MessageKey, string> = {
   "cloud.conn.dropGaveUp": "Cloud stream keeps dropping; will retry when you send a message",
 
   "cloud.conn.waking": "Waking the cloud machine… the first connection after hibernation takes 1–2 minutes; your message is sent as soon as it is up",
-  "cloud.conn.vmOffline": "The cloud machine is offline (recycled or failed to start) and will not recover on its own",
+  "cloud.conn.vmFailed": "Cloud machine failed to start: {reason}",
+  "cloud.conn.vmFailedNoReason": "no reason given by the server",
+  "cloud.conn.vmNotReady": "Cloud machine is not online yet — it may still be starting",
   "cloud.conn.ctlOffline": "Cloud control channel is down; the machine may hibernate. It reconnects on your next action",
   "cloud.send.pending": "Sending — waiting for the cloud…",
   "cloud.send.waking": "Waking the cloud machine; your message goes out once it is up…",

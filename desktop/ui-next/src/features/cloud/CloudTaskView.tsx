@@ -76,14 +76,17 @@ function PendingBubble({ content, waking }: { content: string; waking: boolean }
 function statusText(
   t: ReturnType<typeof useI18n>["t"],
   status: StreamStatus | null,
-  vm: { waking: boolean; offline: boolean; ctrlOffline: boolean },
+  vm: { waking: boolean; failed: boolean; notReady: boolean; failReason: string; ctrlOffline: boolean },
 ): string | null {
   // 机器态压过连接态:同样是 connecting,休眠机器的等待以分钟计,拿
   // 「连接中…」糊过去会让用户以为卡死了(2026-08-06 用户报障)
   if (vm.waking) return t("cloud.conn.waking");
   // 离线不是唤醒:后端只对 hibernated 做 Resume(task_control.go),
-  // offline 的机器没人会去救,说成「正在唤醒」就是骗人干等
-  if (vm.offline) return t("cloud.conn.vmOffline");
+  // offline 的机器没人会去救,说成「正在唤醒」就是骗人干等。
+  // 但 offline 也**不都是终态**——见 useCloudTask 里 vmFailed/vmNotReady 的
+  // 注释,只有拿到 Failed 条件才敢说"失败",否则只报"尚未上线"
+  if (vm.failed) return t("cloud.conn.vmFailed", { reason: vm.failReason || t("cloud.conn.vmFailedNoReason") });
+  if (vm.notReady) return t("cloud.conn.vmNotReady");
   switch (status?.kind) {
     case "connecting":
       return t("cloud.conn.connecting");
@@ -102,11 +105,15 @@ function statusText(
   }
 }
 
-/** 空态四选一(结束 / 机器离线 / 唤醒中 / 连接中)的文案键。 */
-function emptyKey(ended: boolean, waking: boolean, offline: boolean, part: "title" | "detail") {
-  if (ended) return `cloud.empty.ended.${part}` as const;
-  if (waking) return `cloud.empty.waking.${part}` as const;
-  if (offline) return `cloud.empty.vmOffline.${part}` as const;
+/** 空态五选一(结束 / 启动失败 / 尚未上线 / 唤醒中 / 连接中)的文案键。 */
+function emptyKey(
+  s: { ended: boolean; waking: boolean; failed: boolean; notReady: boolean },
+  part: "title" | "detail",
+) {
+  if (s.ended) return `cloud.empty.ended.${part}` as const;
+  if (s.waking) return `cloud.empty.waking.${part}` as const;
+  if (s.failed) return `cloud.empty.vmFailed.${part}` as const;
+  if (s.notReady) return `cloud.empty.vmNotReady.${part}` as const;
   return `cloud.empty.connecting.${part}` as const;
 }
 
@@ -391,7 +398,14 @@ export function CloudTaskView({
   };
 
   const pending = h.taskStatus === "pending";
-  const connText = statusText(t, h.status, { waking: h.waking, offline: h.vmOffline, ctrlOffline: h.ctrlOffline });
+  const connText = statusText(t, h.status, {
+    waking: h.waking,
+    failed: h.vmFailed,
+    notReady: h.vmNotReady,
+    failReason: h.vmFailReason,
+    ctrlOffline: h.ctrlOffline,
+  });
+  const emptyState = { ended: h.ended, waking: h.waking, failed: h.vmFailed, notReady: h.vmNotReady };
   // 空态带 !cursor 守卫:结束态首轮可能没有帧但仍有更早可翻,
   // 此时要保住「加载更早」入口,不能整屏换成空态
   // 发送在途时不走空态:那条占位气泡就是当前唯一的内容,空态会把它盖掉
@@ -619,10 +633,10 @@ export function CloudTaskView({
               它不会自己回来,不能拿唤醒动画吊着 */}
           {!h.ended && h.waking && <span className="loading loading-spinner loading-sm text-base-content/40" aria-hidden />}
           <p className="max-w-md text-center text-base font-bold">
-            {t(emptyKey(h.ended, h.waking, h.vmOffline, "title"))}
+            {t(emptyKey(emptyState, "title"))}
           </p>
           <p className="max-w-md text-center text-xs leading-relaxed text-base-content/60">
-            {t(emptyKey(h.ended, h.waking, h.vmOffline, "detail"))}
+            {t(emptyKey(emptyState, "detail"), { reason: h.vmFailReason })}
           </p>
         </div>
       ) : (

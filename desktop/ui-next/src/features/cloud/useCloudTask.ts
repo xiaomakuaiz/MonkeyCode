@@ -137,6 +137,12 @@ export interface CloudTaskHandle {
    * 与 waking 是两回事:后端只对 hibernated 做 Resume,offline 没人会去救
    * (vmstatus.Resolve + task_control.go),所以不能拿「正在唤醒」糊过去 */
   vmOffline: boolean;
+  /** offline 且服务端给了 Failed 条件:确凿的启动失败,终态 */
+  vmFailed: boolean;
+  /** offline 但没有 Failed 条件:只知道没上线,可能还在起、也可能已回收 */
+  vmNotReady: boolean;
+  /** Failed 条件带的原因(有就直接给用户看,别让他去翻控制台) */
+  vmFailReason: string;
   /** VM 状态原值(空/pending/online/offline/hibernated) */
   vmStatus: string;
 }
@@ -247,7 +253,23 @@ export function useCloudTask(
   // 就是对着一台没人会去救的机器显唤醒动画、押住消息死等 5 分钟。
   // vmStatus 空(详情没到/任务没带 VM)什么都不算:不妄断,发送照旧直发。
   const waking = taskStatus === "processing" && vmStatus === "hibernated";
+  // **offline 不等于"完了"**(2026-08-09 用户报障「明显是错的」):服务端把三件
+  // 事挤进同一个枚举值(backend/pkg/vmstatus/status.go::Resolve)——
+  //   ① IsRecycled(真回收)
+  //   ② 最后一条 condition 是 Failed(真启动失败)
+  //   ③ **建成超 3 分钟仍没探到在线**,既没 Failed 也没 Hibernated
+  // ③ 只是"还在起,只是慢"——本产品自己的文案都写着 VM 排队要数分钟
+  // (LAYOUT §6.1),3 分钟这条线一跨就被判成 offline。此前 UI 见 offline 就
+  // 断言「已回收或启动失败,不会自动恢复」,对 ③ 就是纯造谣,还劝用户重建任务。
+  // 载荷里只有 ② 认得出来(conditions 详情接口是给的),① 与 ③ 无从区分,
+  // 那就**不下定论**:只有 ② 敢说失败,其余一律说"尚未上线"。
+  const lastCond = meta?.virtualmachine?.conditions?.at(-1);
+  const failedCond = lastCond?.type === "Failed" ? lastCond : undefined;
   const vmOffline = taskStatus === "processing" && vmStatus === "offline";
+  /** 确凿的启动失败(服务端给了 Failed 条件):终态,不会自愈 */
+  const vmFailed = vmOffline && !!failedCond;
+  /** 只知道"没上线":可能仍在启动,也可能已被回收——不许说成终态 */
+  const vmNotReady = vmOffline && !failedCond;
   // 环境还在建(task pending):VM 尚未存在,消息同样发不出去,一并押后
   const starting = taskStatus === "pending";
   // 押后条件:机器此刻收不到。解除的那一刻把出件箱里那条送出去(见下方 effect)
@@ -764,6 +786,9 @@ export function useCloudTask(
     sending,
     waking,
     vmOffline,
+    vmFailed,
+    vmNotReady,
+    vmFailReason: failedCond?.message ?? "",
     vmStatus,
   };
 }
