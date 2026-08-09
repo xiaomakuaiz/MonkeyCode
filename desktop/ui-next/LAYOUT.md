@@ -111,6 +111,11 @@
    primary/等待确认·排队中 warning 着色且仅 >0 时出现;云端 feed 由
    Sidebar 注入(useCloudTasks/useCloudProjects,enabled=仅云端空间),
    与列表同一份数据,首屏加载中不出统计行)
+  **标题行恒留一个 btn-xs 的高度**:云端多一颗刷新钮(24px)而 text-xs 行盒只
+  16px,不预留就是「有钮的空间比没钮的高 8px」,切空间时概览块往下跳
+  (2026-08-09 用户报障)。高度写成与 btn-xs 同一个表达式(--size-field × 6),
+  不写死——自定义主题里「控件尺寸」可调。同 §6.2 hover 显隐铁律:**行高不许由
+  「这行恰好有没有那个元素」决定**。
 列表(flex-1,唯一滚动区,纵滚横截):menu menu-sm + details 折叠
 footer(固定钉底):更新提示等常驻条,永不随列表滚动
 ```

@@ -78,6 +78,21 @@ describe("侧栏(local 空间)", () => {
     expect(within(alphaGroup).queryByText("修复了闪退,补了用例")).toBeNull();
   });
 
+  // 云端多一颗刷新钮(btn-xs = 24px),而 text-xs 的行盒只有 16px——标题行
+  // 不预留高度的话,「有钮的云端」比「没钮的本地/对话」整整高 8px,切空间时
+  // 概览块往下一跳(2026-08-09 用户报障)。同 LAYOUT §6.2 的 hover 显隐铁律:
+  // 行高不许由"这行恰好有没有那个元素"决定。
+  it.each(["local", "chat", "cloud"] as const)(
+    "%s 概览:标题行恒留一个 btn-xs 的高度,不随刷新钮有无变化",
+    (space) => {
+      const { container } = render(
+        <Sidebar space={space} sessions={SESSIONS} currentId={null} actions={actions()} />,
+      );
+      const titleRow = container.querySelector(".flex.min-h-\\[calc\\(var\\(--size-field\\,0\\.25rem\\)\\*6\\)\\]");
+      expect(titleRow, `${space} 概览标题行缺少预留高度`).not.toBeNull();
+    },
+  );
+
   it("概览块:空间标题 + 描述 + 统计(归档不计;等待确认仅 >0 时着色出现)", () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(screen.getByText("本地任务")).toBeTruthy();

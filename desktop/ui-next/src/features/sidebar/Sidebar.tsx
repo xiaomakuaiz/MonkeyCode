@@ -373,7 +373,15 @@ function Overview({
   const feedErr = space === "cloud" ? cloud?.feed.error : "";
   return (
     <div className="shrink-0 px-5 pt-3 pb-1">
-      <div className="flex items-center gap-1">
+      {/* 标题行**恒留一个 btn-xs 的高度**,不管这个空间有没有刷新钮:
+          btn-xs 是 24px(--size-field × 6),text-xs 的行盒只有 16px,
+          于是「有钮的云端」比「没钮的本地/对话」整整高 8px,切空间时概览块
+          往下一跳(2026-08-09 用户报障)。高度写成与 btn-xs 同一个表达式,
+          而不是写死 h-6——自定义主题里「控件尺寸」可调 --size-field,
+          写死了换个尺寸又会错开。
+          同 LAYOUT §6.2 的 hover 显隐铁律一个道理:**行高不许由"这行恰好有
+          没有那个元素"决定**。 */}
+      <div className="flex min-h-[calc(var(--size-field,0.25rem)*6)] items-center gap-1">
         <div className="min-w-0 flex-1 truncate text-xs font-semibold">{title}</div>
         {/* 刷新是**列表级**操作,归概览块;品牌头只放品牌与新建
             (用户报障 2026-08-06:刷新钮不该在 header) */}
