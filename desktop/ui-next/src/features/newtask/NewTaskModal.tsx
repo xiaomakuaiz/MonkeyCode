@@ -33,7 +33,7 @@ import { resolveShortcut } from "@/app/shortcuts";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useI18n } from "@/lib/i18n";
 import { getConfig } from "@/lib/ipc/config";
-import { isWindowsShell, pickDirectory, workdirPickBase, wslWorkdirBase } from "@/lib/ipc/host";
+import { isWindowsShell, pickDirectory, workdirPickBase } from "@/lib/ipc/host";
 import { modelsList, sessionCreate, sessionSend, type ModelInfo, type SessionKind, type SessionMeta } from "@/lib/ipc/sessions";
 import {
   isImagePath,
@@ -49,7 +49,7 @@ import { b64encode } from "@/lib/protocol/codec";
 import { THINK_LABELS } from "@/lib/protocol/reduce";
 import { createImeGuard } from "@/lib/util/slash";
 import { readLastTaskModel, rememberLastTaskModel } from "@/lib/util/prefs";
-import { DEFAULT_DIR, defaultWorkdir, workdirMatchesEnv } from "@/lib/util/workdir";
+import { DEFAULT_DIR, workdirMatchesEnv } from "@/lib/util/workdir";
 import { ModelMenu, ThinkMenu } from "@/features/chat/composer/pickers";
 import { NewCloudTask } from "@/features/cloud/NewCloudTask";
 import type { CloudProject, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
@@ -104,7 +104,6 @@ export function NewTaskModal({
   const [model, setModel] = useState("");
   const [think, setThink] = useState("");
   const [kernelEnv, setKernelEnv] = useState("");
-  const [defaultDir, setDefaultDir] = useState(DEFAULT_DIR);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [offerCreate, setOfferCreate] = useState(false);
@@ -162,17 +161,15 @@ export function NewTaskModal({
         if (pick) setModel(pick.name);
       })
       .catch(() => {});
-    // 运行环境 → 默认目录/最近目录过滤:WSL 模式默认目录落在 guest 家目录基座
+    // 运行环境 → 最近目录过滤(默认目录恒为 DEFAULT_DIR:`~` 由壳按环境展开,
+    // WSL 下就是 guest 家目录下的 MonkeyCode,见 lib/util/workdir 头注)
     void (async () => {
       const env = (await getConfig().catch(() => null))?.kernel_env ?? "";
-      const base = env.startsWith("wsl:") ? await wslWorkdirBase() : null;
       if (!alive) return;
-      const fallback = defaultWorkdir(base);
       setKernelEnv(env);
-      setDefaultDir(fallback);
       if (dirTouched.current) return;
       const recents = (recentRef.current ?? []).filter((p) => workdirMatchesEnv(p, env, isWindowsShell()));
-      setDir(recents[0] ?? fallback);
+      setDir(recents[0] ?? DEFAULT_DIR);
     })();
     return () => {
       alive = false;
@@ -312,7 +309,8 @@ export function NewTaskModal({
       const meta = await sessionCreate({
         workdir,
         model,
-        createDir: !chat && (forceCreateDir || workdir === defaultDir),
+        // 默认目录恒为 DEFAULT_DIR,没被改过就静默创建(壳按环境展开 ~)
+        createDir: !chat && (forceCreateDir || workdir === DEFAULT_DIR),
         kind: chat ? "chat" : "local",
         think,
       });

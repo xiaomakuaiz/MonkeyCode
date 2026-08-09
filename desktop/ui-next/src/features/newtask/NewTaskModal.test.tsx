@@ -206,7 +206,11 @@ describe("新建任务", () => {
     expect(calls.some((c) => c.cmd === "plugin:dialog|open")).toBe(true);
   });
 
-  it("WSL 运行环境:默认目录用家目录基座,基座默认目录也享受静默创建", async () => {
+  // 2026-08-09 撤回「按 wsl_workdir_base 拼默认目录」:默认目录恒为
+  // ~/MonkeyCode,`~` 交给壳按内核环境展开(WSL → guest 家目录)。前端拼 UNC
+  // 落点完全一样,却要等引擎起来才拿得到基座、拿不到时又退回 ~/MonkeyCode,
+  // 同一个"默认目录"两种形态;旧 UI 从头到尾就是 ~/MonkeyCode。
+  it("WSL 运行环境:默认目录仍是 ~/MonkeyCode(不拼 UNC),且享受静默创建", async () => {
     const calls = stubShell({
       get_config: () => Promise.resolve({ models: [], mcp_servers: {}, kernel_env: "wsl:Ubuntu" }),
       wsl_workdir_base: () => Promise.resolve("\\\\wsl$\\Ubuntu\\home\\u"),
@@ -214,13 +218,15 @@ describe("新建任务", () => {
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
     const input = await openDirMenu();
-    await waitFor(() => expect(input.value).toBe("\\\\wsl$\\Ubuntu\\home\\u\\MonkeyCode"));
+    await waitFor(() => expect(input.value).toBe("~/MonkeyCode"));
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(calls.find((c) => c.cmd === "session_create")?.args).toMatchObject({
-      workdir: "\\\\wsl$\\Ubuntu\\home\\u\\MonkeyCode",
+      workdir: "~/MonkeyCode",
       createDir: true,
     });
+    // 基座只用于**目录对话框**的起始位置,不参与默认目录推导
+    expect(calls.some((c) => c.cmd === "wsl_workdir_base")).toBe(false);
   });
 
   it("WSL 运行环境:最近目录按环境过滤(posix/盘符留、无关形态不进列表)", async () => {
