@@ -75,8 +75,23 @@ describe("自绘窗框条(Windows / Linux)", () => {
     const bar = container.querySelector("[data-window-titlebar]") as HTMLElement;
     expect(bar.className).toContain("bg-base-300");
     expect(bar.className).not.toContain("border-b");
-    // 列宽令牌一个都不许再出现在窗框条里
-    expect(container.innerHTML).not.toMatch(/w-rail|w-side|bg-base-200/);
+    // 禁的是**列色分段**(那才是冒充 header 的成因),不是列宽令牌本身——
+    // w-rail 现在正当用于把应用图标对到 rail 图标列上,见下一条
+    expect(container.innerHTML).not.toMatch(/bg-base-200|bg-base-100/);
+    expect(container.innerHTML).not.toContain("w-side");
+    done();
+  });
+
+  // 图标与正下方 rail 的三个空间图标必须落在同一条竖轴上:rail 宽 62px、
+  // 图标居中即 x=31;这里若用自定宽度(曾是 w-8)中心就在 x=16,比下面那列
+  // 偏左 15px(2026-08-09 用户报障「小猴子太偏左」)。两处共用同一个令牌,
+  // 改列宽也不会错位——所以钉的是"用了 w-rail",不是某个像素值。
+  it("左端图标宽度取 w-rail:与 rail 图标列同轴,不写自定宽度", () => {
+    const { done } = stubShell("Windows NT 10.0");
+    render(<TitleBar />);
+    const icon = screen.getByRole("button", { name: "系统菜单" });
+    expect(icon.className).toContain("w-rail");
+    expect(icon.className).toContain("justify-center");
     done();
   });
 
