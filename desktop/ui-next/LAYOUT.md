@@ -3,11 +3,29 @@
 > 布局先行:功能只能放进本规范的格子里。改格子=改本文件+对应实现,不许就地发明。
 
 ## 1. 层级(自底向上)
-1. **窗体 chrome**:Windows = 36px 全宽标题栏(caption 三键);mac = rail 左上角红绿灯
-   (chrome 角落);Linux/浏览器 = 无(Linux 壳保留原生装饰栏,UI 不自绘)。
-   > chrome 条**只做 chrome**:不放品牌、不放视图信息。Windows 标题栏曾摆了一份
-   > 品牌,与紧挨其下的侧栏头凑成上下两行同样字样,看着就是「两个 header」
-   > (2026-08-07 用户报障)。品牌的法定位置只有侧栏头,见 §2/§3。
+1. **窗体 chrome**:Windows/Linux = 32px 全宽窗框条(左端应用图标 + 右端 caption
+   三键);mac = rail 左上角红绿灯(chrome 角落,**不画条**);浏览器 = 无。
+   平台判据只有一个:`isCustomChromeShell()`(host.ts),别在组件里散写。
+   > **不追求三端结构相同**(2026-08-08 定案):右边缘只有一条,让窗控与视图动作
+   > 去抢,谁赢另一个都会被挤到中间当孤儿;mac 没这问题只因它的窗控在左边。
+   > 该统一的是设计语言,结构随平台——mac 没有标题栏条是因为 macOS 窗口就没有。
+   > 「把 caption 并进 52px 头带」的方案**已废弃,别再提**;视图动作三端一律
+   > 留在主区头部最右缘。
+
+   窗框条的三条铁律:
+   - **不放品牌/视图信息**。曾摆过一份品牌,与紧挨其下的侧栏头凑成上下两行
+     同样字样(2026-08-07 用户报障「两个 header」)。品牌法定位置只有侧栏头。
+   - **不承列色**(2026-08-08 定案)。删掉品牌文字还不够:条按 rail/side/main
+     复刻三列配色时,`base-200` 色块 y=0..36 紧贴着又一个 `base-200` 侧栏头,
+     **那才是「两个 header」的真正成因**。当年保留分段是为了"不断色"——但
+     窗框本来就该跟内容断开,为了不断色而让它假装成内容的延伸,恰恰是它冒充
+     header 的原因。整条单色(`bg-base-300`),列宽令牌不许出现在条里。
+   - **不带底边线**。有线就成了 header 基线。
+
+   Linux 一并走 CSD(壳侧 `decorations(false)`):保留原生装饰栏的话,三端里
+   唯一不受控的那端最显眼。代价是 WM 的 resize 边/右键标题菜单/部分平铺手势
+   没了——resize 由 UI 侧边缘热区补(§8.1),右键菜单由 `window_system_menu`
+   命令补(Windows;GTK 侧无对等 API)。
 2. **全局横幅**:EngineBanner(引擎生命周期专用),chrome 之下、三列之上,全宽。
 3. **三列内容**:rail(w-rail,bg-base-300)/ 侧栏(w-side,bg-base-200,border-e)/
    主区(flex-1,bg-base-100)。
@@ -17,9 +35,19 @@
 ## 2. 头部基线
 - 三列各自长出 **h-13(52px)** 头部,同高对齐成一条贯通线(border-b border-base-300);
   两行文字(标题+副标题)在 44px 里太挤,52px 是定稿高度(2026-08-04)。
-- rail 顶 = 窗控角落(mac)或同高空位;侧栏头 = 品牌名 + ＋新建(云端空间
-  另有刷新钮);主区头 = 当前视图提供(欢迎页为空头带)。
+- rail 顶 = 窗控角落(mac)或同高空位(**其余平台一律留,无例外**);侧栏头 =
+  品牌名 + ＋新建(云端空间另有刷新钮);主区头 = 当前视图提供(欢迎页为空头带)。
+  > 曾对 Windows 开特例不留这一格,让第一个空间图标顶上去占位:尺寸恰好凑得上
+  > (size-11 + py-1 = 52px)所以没露馅,但三个图标整体比其余平台高一格,契约里
+  > 也从没写过这条。2026-08-08 删除。
 - 拖拽区分布在各头部空白处(data-tauri-drag-region;按钮与可双击标题除外)。
+- **固定定位覆盖层的顶偏移一律读 `--chrome-h`**(app.css,按根节点
+  `data-platform` 取 0 / 32px),不许各自手算平台偏移。FilesDrawer 抽屉、
+  daisyUI `.modal`、角落 toast 都走这条。
+  > 2026-08-08 根治:此前 FilesDrawer 写 `isWindowsShell() ? "top-9" : "top-0"`、
+  > toast 另写死 `mt-13`——后者那个 52 是照 mac 算的,Windows 上基线在 84px、
+  > 提醒却从 68px 起,z-50 压住主区头右侧的文件/⋯ 动作钮。同一笔账算两遍、
+  > 错一遍,变量收口治的是这一**类**,不是那一个。
 
 ## 3. 信息安放规则(每类信息只有一个法定位置)
 | 信息 | 法定位置 | 禁止出现在 |
@@ -206,8 +234,21 @@ footer(固定钉底):更新提示等常驻条,永不随列表滚动
   > `IconFolderCode`。
 
 ### 8.1 豁免清单(daisyUI 无对应形态,自绘保留;新增豁免须在此登记)
-- TitleBar Windows caption 三键 / mac 红绿灯:系统 chrome 规范(热区/配色跟
-  平台),btn 表达不了;§1 已归窗体 chrome 层。
+- TitleBar 的 Windows/Linux caption 三键 / mac 红绿灯:系统 chrome 规范(热区/
+  配色/度量跟平台),btn 表达不了;§1 已归窗体 chrome 层。caption 键取
+  **46×32 系统度量、直角通高触边**,与视图头部那排圆角内缩胶囊(btn-ghost
+  btn-square btn-sm)形成形状对比——眼睛靠"贴不贴边"分组,不靠间距硬撑。
+- ResizeEdges(Linux):窗口内侧 8 个透明拉伸热区(边 4px / 角 12px),
+  `decorations(false)` 后 WM 的 resize 边没了,由它经 `start_resize_dragging`
+  把拖拽交回壳。仅 Linux 渲染——Windows 的无边框 resize 由 tao 在 WM_NCHITTEST
+  里做,mac 走 Overlay 保留原生窗体边;最大化时撤掉,免得误触屏幕边。
+- `window_system_menu` 命令(Windows):无边框窗口丢掉的原生右键标题菜单,由
+  窗框条右键与左端应用图标点击唤起。不走 WM_NCHITTEST/HTSYSMENU——WebView2
+  子窗口铺满客户区,非客户区命中测试到不了 UI 这层。
+  > **已知缺口**:同样因为客户区被 WebView2 占满,Windows 11 的 Snap Layouts
+  > (悬停最大化键弹平铺菜单)拿不到,需要 `HTMAXBUTTON` 才会触发。这是自绘
+  > caption 以来一直如此,不是本次回退。要补得在壳侧挂 WndProc 做
+  > `WM_NCCALCSIZE` + `WM_NCHITTEST`(Chrome / Windows Terminal 的做法)。
 - lib/contextMenu:命令式右键菜单按指针位定位,dropdown(锚定触发器)表达
   不了;皮相仍取 menu 文档形态(`menu bg-base-100 rounded-box shadow-sm`)。
 - FilesDrawer 与 CloudTaskView 详情抽屉:daisyUI drawer 是 checkbox 驱动的

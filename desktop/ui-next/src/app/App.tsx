@@ -17,12 +17,13 @@ import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { Sidebar } from "@/features/sidebar/Sidebar";
+import { ResizeEdges } from "@/features/titlebar/ResizeEdges";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import {
   hostInfo,
+  isCustomChromeShell,
   isMacShell,
-  isWindowsShell,
   sessionIdFromUiIntent,
   setWindowTitle,
   takeUiIntent,
@@ -127,13 +128,16 @@ function SpaceRail({
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
       {/* 头部基线:mac 红绿灯待在 chrome 角落(h-13 = 52px,与各列头部同高);
-          其余环境同高空位,保证三列头部线对齐 */}
+          其余平台一律同高空位,保证三列头部线对齐(LAYOUT §2)。
+          曾对 Windows 开特例不留空位,让第一个空间图标顶上去占那格——尺寸
+          恰好凑得上(size-11 + py-1 = 52px)所以没露馅,但三个图标整体比其余
+          平台高一格,且契约里从没写过这条。2026-08-08 删除 */}
       {isMacShell() ? (
         <div data-tauri-drag-region="" className="flex h-13 w-full shrink-0 items-center">
           <MacWindowControls compact />
         </div>
       ) : (
-        !isWindowsShell() && <div className="h-13 w-full shrink-0" />
+        <div className="h-13 w-full shrink-0" />
       )}
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
         {(["local", "cloud", "chat"] as const).map((s) => (
@@ -550,7 +554,8 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col text-base-content">
-      {isWindowsShell() && <TitleBar />}
+      {isCustomChromeShell() && <TitleBar />}
+      <ResizeEdges />
       <EngineBanner />
       <div className="flex min-h-0 flex-1">
         <SpaceRail space={space} waiting={waiting} onChange={setSpace} settingsOpen={settingsOpen} onToggleSettings={() => { setCreating(null); setSettingsOpen((v) => !v); }} />
@@ -661,13 +666,17 @@ export function App() {
       </div>
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭。
           壳级提示(浏览器工具装载等)与会话提醒共用同一角落栈,只是不可跳转。
-          纵向起点是算出来的:daisyUI .toast-top 自带 top:1rem(16px),要让提醒
-          落到头部基线(h-13 = 52px,三列同高)之下,mt 得补 52-16=36px——原来的
-          mt-9 恰好就是这个数,于是严丝合缝贴着头部下边线,一点缝都不留。
-          mt-13(52px)把顶起点推到 68px,即基线下留 16px,与 .toast 自带的
-          inset-inline-end:1rem 同值:右上角上下左右同一圈留白 */}
+          纵向起点是算出来的:daisyUI .toast-top 自带 top:1rem(16px),头部基线
+          下缘在 chrome + 52px 处,mt 补满这一段即落在基线下 16px,与 .toast 自带
+          的 inset-inline-end:1rem 同值——右上角上下左右同一圈留白。
+          **必须带 --chrome-h**:原先写死 mt-13(52px)是照 mac 算的,Windows/Linux
+          有 32px 窗框条、基线在 84px,提醒从 68px 起就压住了主区头右侧的
+          文件/⋯ 动作钮(z-50 还盖在上面)。凡 fixed 贴顶的一律读该变量(§1) */}
       {(notices.length > 0 || shellNotices.length > 0) && (
-        <div className="toast toast-top toast-end z-50 mt-13" aria-label={t("notice.label")}>
+        <div
+          className="toast toast-top toast-end z-50 mt-[calc(var(--chrome-h)+52px)]"
+          aria-label={t("notice.label")}
+        >
           {shellNotices.map((n) => (
             <div
               key={n.id}

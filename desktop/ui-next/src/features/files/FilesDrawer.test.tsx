@@ -214,24 +214,28 @@ describe("文件抽屉", () => {
     window.removeEventListener("keydown", leaked);
   });
 
-  it("Windows 壳(H3):scrim/面板从自绘标题栏下缘起(top-9),不遮三键与拖拽区", async () => {
-    vi.stubGlobal("navigator", { ...window.navigator, userAgent: "Windows NT 10.0" });
+  // H3:scrim/面板从自绘窗框条下缘起,结构性避让(三键与拖拽区恒可点)。
+  // 偏移**必须读 --chrome-h**,不许按平台手算:此前这里是 isWindowsShell()
+  // 三元,同一笔账 App 的 toast 又手算了一遍、算的还是 mac 的数,于是
+  // Windows 上提醒压住主区头的动作钮(2026-08-08 定案:凡 fixed 贴顶的统一读
+  // 变量)。所以这条钉的是「读了变量」而非某个具体像素——平台差异归 CSS。
+  it.each([
+    ["Windows NT 10.0", "Windows"],
+    ["X11; Linux x86_64", "Linux"],
+    ["Macintosh; Intel Mac OS X 10_15_7", "mac"],
+  ])("%s:scrim/面板的顶偏移读 --chrome-h,不写死平台值", async (ua) => {
+    vi.stubGlobal("navigator", { ...window.navigator, userAgent: ua });
     stubShell({ list: { "": [] } });
     const { container } = render(<FilesDrawer sessionId="s1" onClose={() => {}} />);
     await flush();
     const scrim = container.querySelector(".z-30");
     const panel = screen.getByRole("region", { name: "会话文件" });
-    expect(scrim?.className).toContain("top-9");
+    for (const cls of [scrim?.className ?? "", panel.className]) {
+      expect(cls).toContain("top-[var(--chrome-h)]");
+      expect(cls).not.toContain("top-9");
+      expect(cls).not.toContain("top-0");
+    }
     expect(scrim?.className).not.toContain("inset-0");
-    expect(panel.className).toContain("top-9");
-  });
-
-  it("非 Windows 壳:抽屉照旧贴视口顶(top-0)", async () => {
-    stubShell({ list: { "": [] } });
-    const { container } = render(<FilesDrawer sessionId="s1" onClose={() => {}} />);
-    await flush();
-    expect(container.querySelector(".z-30")?.className).toContain("top-0");
-    expect(screen.getByRole("region", { name: "会话文件" }).className).toContain("top-0");
   });
 
   it("非 git 工作区:改动 tab 不渲染,只留文件浏览", async () => {

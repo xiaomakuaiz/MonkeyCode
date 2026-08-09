@@ -102,19 +102,32 @@
    * 不依赖本机安装;显式列出各平台回退,泛型解析各 WebView 不一 */
   --font-sans: "HarmonyOS Sans SC", "HarmonyOS Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", "HarmonyOS Sans SC", ui-monospace, Menlo, Consolas, "Courier New", "Microsoft YaHei", monospace;
-  /* 布局列宽令牌(w-rail / w-side):Windows 自绘标题栏的分段与内容区的列
-   * 必须逐列对齐,两层只认这组令牌,不写字面值(写两份,窄窗下竖分隔线会错开) */
+  /* 布局列宽令牌(w-rail / w-side):三列宽度的唯一出处,不写字面值 */
   --spacing-rail: 62px;
   --spacing-side: 232px;
   /* 平台约定色:不跟主题走。mac 红绿灯三色 = 系统本色;caption-close =
-   * Windows 官方关闭键 hover 红 */
+   * Windows 11 官方关闭键 hover 红(Win10 是 #e81123,Win11 起改这个值) */
   --color-mac-close: #ff5f57;
   --color-mac-min: #febc2e;
   --color-mac-zoom: #28c840;
-  --color-caption-close: #e81123;
+  --color-caption-close: #c42b1c;
 }
 
 @layer base {
+  /* 自绘窗框条的高度,**固定定位覆盖层的唯一避让依据**(LAYOUT §1)。
+   * 平台判据走根节点的 data-platform(main.tsx 启动时 applyPlatformAttr 落)。
+   *
+   * 为什么要一个变量:此前每个覆盖层各自手算一次偏移(FilesDrawer 的 top-9、
+   * toast 的 mt-13),换个平台就错——toast 在 Windows 上从 68px 起、压住主区
+   * 头右侧的动作钮,根因就是那 52 是照 mac 算的。凡 fixed 且贴顶的,一律读
+   * 本变量,不许再手算。 */
+  :root {
+    --chrome-h: 0px;
+  }
+  [data-platform="windows"],
+  [data-platform="linux"] {
+    --chrome-h: 32px;
+  }
   html,
   body,
   #root {
@@ -144,4 +157,17 @@
 .menu {
   --menu-active-bg: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
   --menu-active-fg: var(--color-base-content);
+}
+
+/* 模态从窗框条下缘起(LAYOUT §1/§2):daisyUI 的 .modal 是 fixed + inset:0,
+ * scrim 会盖住 Windows/Linux 的自绘窗框——三键点不动、窗框还被压暗。与
+ * FilesDrawer 同口径做结构性避让,不入 z 层竞赛。
+ *
+ * **必须写在这里(无层区),不能放进 @layer base**:daisyUI 的 .modal 落在
+ * `daisyui.l1.l2.l3` 层,该层在产物里出现得比 base 晚 → 优先级更高,写在
+ * base 里的 top 会被它的 inset:0 悄悄吃掉(改完样式照旧、没有任何报错)。
+ * 无层规则胜过一切层规则,所以本文件的全局组件微调一律待在这一段。
+ * chromeHeight.test.ts 钉着这条位置约束。 */
+.modal {
+  top: var(--chrome-h);
 }

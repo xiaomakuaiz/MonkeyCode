@@ -1,29 +1,36 @@
 // 自绘窗口 chrome:
-// - Windows 壳去掉原生装饰栏,这里补 36px 标题栏(左侧按 rail/side 列宽分段
-//   与内容区对齐,右侧最小化/最大化(还原)/关闭三键,关闭键 hover 官方红)。
-//   本条**只做 chrome,不放品牌**:品牌的法定位置是侧栏头(LAYOUT §2),两处
-//   都摆就成了上下紧挨的两行同样字样(2026-08-07 用户报障「两个 header」)。
-//   Linux 不走这条(壳保留原生装饰栏,UI 侧不渲染 TitleBar),不受影响。
+// - Windows / Linux 壳去掉原生装饰栏,这里补 32px **扁平窗框条**(高度对齐
+//   caption 的 46×32 系统度量;右侧最小化/最大化(还原)/关闭三键,关闭键
+//   hover 官方红;左端应用图标,Windows 上点击开系统菜单、双击关窗)。
+//   本条**只做 chrome**,三条铁律(LAYOUT §1):
+//   ① 不放品牌/视图信息——品牌的法定位置是侧栏头(§2),两处都摆就成了上下
+//      紧挨的两行同样字样(2026-08-07 用户报障「两个 header」);
+//   ② **不承列色**——曾按 rail/side/main 分三段复刻列色以求"不断色",结果
+//      base-200 色块紧贴着下面又一个 base-200 侧栏头,那才是「两个 header」
+//      的真正成因(2026-08-08 定案)。窗框本来就该跟内容断开,整条单色;
+//   ③ 不带底边线——有线就成了 header 基线。
 // - mac 壳隐藏原生红绿灯(TitleBarStyle::Overlay),MacWindowControls 自绘
 //   10px 圆点(悬停整组浮现字形、窗口失焦整组退灰;绿点 ⌥ 点击最大化、
-//   否则全屏)。渲染位置在 NavRail 顶部(App 拼装)。
+//   否则全屏)。渲染位置在 NavRail 顶部(App 拼装),mac 不渲染本条。
 // - 拖拽热区铁律:Tauri 按事件目标**自身**的 data-tauri-drag-region 判定,
 //   不继承——条内每个可见的非交互子节点都要单独带;交互按钮不许带。
 //   带该属性的区域双击 = 切换最大化(Tauri 原生行为,无需自绑)。
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "@/lib/i18n";
 
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
 import {
+  isWindowsShell,
   windowClose,
   windowIsMaximized,
   windowMinimize,
+  windowSystemMenu,
   windowToggleFullscreen,
   windowToggleMaximize,
 } from "@/lib/ipc/host";
 
-function useMaximized(): boolean {
+export function useMaximized(): boolean {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     if (!inDesktopShell()) return;
@@ -79,62 +86,81 @@ export function Brand() {
   );
 }
 
+/** caption 三键共用皮相:46×全条高(=32px)的**直角通高**块,触到窗口上下边。
+ *  与视图头部那排 `btn-ghost btn-square btn-sm` 的圆角内缩胶囊形成形状对比
+ *  ——眼睛靠"贴不贴边"分组,不靠间距硬撑(2026-08-08 定案)。 */
+const CAPTION_BTN =
+  "flex h-full w-[46px] cursor-default items-center justify-center text-base-content/70 transition-colors duration-150";
+
 export function TitleBar() {
   const { t } = useI18n();
   const maximized = useMaximized();
+  // 系统菜单只在 Windows 有(mac 不渲染本条;GTK 侧无对等 API,图标纯展示)
+  const sysMenu = (e: ReactMouseEvent) => {
+    if (!isWindowsShell()) return;
+    e.preventDefault();
+    windowSystemMenu();
+  };
   return (
     <header
       data-tauri-drag-region=""
       data-window-titlebar=""
-      className="flex h-9 shrink-0 items-stretch select-none"
+      onContextMenu={sysMenu}
+      className="flex h-8 shrink-0 items-stretch bg-base-300 select-none"
     >
-      {/* 左侧分段与内容区各列同宽同色(w-rail/w-side 令牌),竖分隔线贯通。
-          **不放品牌**:品牌的法定位置只有侧栏头(LAYOUT §2/§3),这里再摆一份
-          就是紧挨着的两行同样的「MonkeyCode work」——Windows 上看着像两个
-          header(2026-08-07 用户报障)。本条只做窗体 chrome:拖拽 + caption 三键 */}
-      <div data-tauri-drag-region="" className="flex w-rail items-center justify-center bg-base-300" />
-      <div data-tauri-drag-region="" className="w-side bg-base-200" />
-      <div data-tauri-drag-region="" className="flex-1 bg-base-100" />
-      <div className="flex bg-base-100">
-        <button
-          type="button"
-          aria-label={t("titlebar.minimize")}
-          className="flex w-12 cursor-default items-center justify-center text-base-content/70 transition-colors duration-150 hover:bg-base-content/10"
-          onClick={windowMinimize}
-        >
+      {/* 整条单色、无底边线、除图标与三键外不放任何东西(LAYOUT §1 三条铁律)。
+          左端应用图标:Windows 上单击开系统菜单、双击关窗——Win95 起的老规矩,
+          VS Code / Windows Terminal 至今保留;空着一块深色方格在窗口左上角
+          看着像什么东西没加载出来 */}
+      <button
+        type="button"
+        aria-label={t("titlebar.systemMenu")}
+        title={t("titlebar.systemMenu")}
+        className="flex w-8 shrink-0 cursor-default items-center justify-center"
+        onClick={sysMenu}
+        onDoubleClick={() => isWindowsShell() && windowClose()}
+      >
+        <img src="/logo.png" alt="" aria-hidden draggable={false} className="h-4 w-4 rounded-sm" />
+      </button>
+      <div data-tauri-drag-region="" className="flex-1" />
+      <button
+        type="button"
+        aria-label={t("titlebar.minimize")}
+        className={`${CAPTION_BTN} hover:bg-base-content/10`}
+        onClick={windowMinimize}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
+          <path d="M0 5h10" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        aria-label={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
+        className={`${CAPTION_BTN} hover:bg-base-content/10`}
+        onClick={windowToggleMaximize}
+      >
+        {maximized ? (
+          // 还原:双框字形
           <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
-            <path d="M0 5h10" />
+            <path d="M2.5 2.5V.5h7v7h-2" />
+            <rect x="0.5" y="2.5" width="7" height="7" />
           </svg>
-        </button>
-        <button
-          type="button"
-          aria-label={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
-          className="flex w-12 cursor-default items-center justify-center text-base-content/70 transition-colors duration-150 hover:bg-base-content/10"
-          onClick={windowToggleMaximize}
-        >
-          {maximized ? (
-            // 还原:双框字形
-            <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
-              <path d="M2.5 2.5V.5h7v7h-2" />
-              <rect x="0.5" y="2.5" width="7" height="7" />
-            </svg>
-          ) : (
-            <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
-              <rect x="0.5" y="0.5" width="9" height="9" />
-            </svg>
-          )}
-        </button>
-        <button
-          type="button"
-          aria-label={t("titlebar.close")}
-          className="flex w-12 cursor-default items-center justify-center text-base-content/70 transition-colors duration-150 hover:bg-caption-close hover:text-white"
-          onClick={windowClose}
-        >
+        ) : (
           <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
-            <path d="M0 0l10 10M10 0L0 10" />
+            <rect x="0.5" y="0.5" width="9" height="9" />
           </svg>
-        </button>
-      </div>
+        )}
+      </button>
+      <button
+        type="button"
+        aria-label={t("titlebar.close")}
+        className={`${CAPTION_BTN} hover:bg-caption-close hover:text-white`}
+        onClick={windowClose}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" {...CAPTION_GLYPH} aria-hidden>
+          <path d="M0 0l10 10M10 0L0 10" />
+        </svg>
+      </button>
     </header>
   );
 }

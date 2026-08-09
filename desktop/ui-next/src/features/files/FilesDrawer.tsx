@@ -14,7 +14,7 @@ import { IconFolderOpen, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { isMacShell, isWindowsShell } from "@/lib/ipc/host";
+import { isMacShell } from "@/lib/ipc/host";
 import { repoChanges, repoFileDiff, repoListDir, repoReadFile, repoReveal, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
 import { copyText } from "@/lib/util/clipboard";
 import { useEscLayer } from "@/lib/util/escLayer";
@@ -293,18 +293,18 @@ export function FilesDrawer({
     ? `min-h-0 shrink-0 overflow-x-hidden overflow-y-auto py-1 max-h-[calc(100%-190px)] ${split > 0 ? "" : "h-[38%]"}`
     : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1";
 
-  // Windows 壳自绘标题栏(h-9)不入 z 层竞赛:抽屉整组(scrim + 面板)从
-  // 标题栏下缘起,结构性避让——三键与拖拽区恒可点,scrim 也不压暗标题栏;
-  // 其余平台无自绘标题栏,照旧贴视口顶
-  const topClass = isWindowsShell() ? "top-9" : "top-0";
+  // 自绘窗框条(Windows/Linux)不入 z 层竞赛:抽屉整组(scrim + 面板)从窗框
+  // 下缘起,结构性避让——三键与拖拽区恒可点,scrim 也不压暗窗框。高度读
+  // --chrome-h(app.css,按 data-platform 落值),不在这儿手算平台偏移
+  const TOP = "top-[var(--chrome-h)]";
 
   return (
     <>
-      <div aria-hidden className={`fixed ${topClass} inset-x-0 bottom-0 z-30 bg-base-content/20`} onClick={onClose} />
+      <div aria-hidden className={`fixed ${TOP} inset-x-0 bottom-0 z-30 bg-base-content/20`} onClick={onClose} />
       <section
         aria-label={t("files.label")}
         style={{ width }}
-        className={`fixed ${topClass} right-0 bottom-0 z-40 flex max-w-[90vw] flex-col border-l border-base-300 bg-base-100 shadow-xl`}
+        className={`fixed ${TOP} right-0 bottom-0 z-40 flex max-w-[90vw] flex-col border-l border-base-300 bg-base-100 shadow-xl`}
       >
         <div
           role="separator"

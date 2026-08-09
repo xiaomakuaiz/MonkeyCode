@@ -38,6 +38,7 @@ fn main() {
                 "open_app_dir",
                 "export_engine_log",
                 "open_devtools",
+                "window_system_menu",
                 "list_wsl_distros",
                 "wsl_workdir_base",
                 "engine_restart",

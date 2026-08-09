@@ -8,6 +8,8 @@ export const zh = {
   "titlebar.restore": "还原",
   "titlebar.close": "关闭",
   "titlebar.zoom": "缩放",
+  "titlebar.systemMenu": "系统菜单",
+  "titlebar.resize": "调整窗口大小",
 
   "rail.label": "空间导航",
   "rail.local": "本地任务",

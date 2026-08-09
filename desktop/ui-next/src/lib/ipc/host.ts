@@ -21,6 +21,17 @@ export function hostPlatform(): HostPlatform {
   return "linux";
 }
 
+export function isLinuxShell(): boolean {
+  return hostPlatform() === "linux";
+}
+
+/** 「本端由 UI 自绘窗框条」的唯一判据(LAYOUT §1)。壳在 Windows/Linux 走
+ *  decorations(false),UI 补 32px 扁平窗框;mac 走 TitleBarStyle::Overlay
+ *  由 rail 角落承窗控,浏览器无窗体。组件里不要散写两个平台判断。 */
+export function isCustomChromeShell(): boolean {
+  return isWindowsShell() || isLinuxShell();
+}
+
 /** 启动即调用:CSS/组件按 data-platform 做平台分支(mac 红绿灯让位等)。 */
 export function applyPlatformAttr(): void {
   document.documentElement.dataset.platform = hostPlatform();
@@ -60,6 +71,33 @@ export function windowClose(): void {
 
 export function windowIsMaximized(): Promise<boolean> {
   return invoke<boolean>("plugin:window|is_maximized").catch(() => false);
+}
+
+/** 无边框窗口的边缘拉伸方向(壳侧 tauri_runtime::ResizeDirection,PascalCase
+ *  直传,无 serde 重命名)。 */
+export type ResizeDirection =
+  | "North"
+  | "NorthEast"
+  | "East"
+  | "SouthEast"
+  | "South"
+  | "SouthWest"
+  | "West"
+  | "NorthWest";
+
+/** Linux 走 decorations(false) 后 WM 的 resize 边就没了,由 UI 侧边缘热区
+ *  接管(App 的 ResizeEdges)。按下即交给壳做 OS 级拖拽,不自己算几何。 */
+export function windowStartResize(direction: ResizeDirection): void {
+  quiet(invoke("plugin:window|start_resize_dragging", { value: direction }));
+}
+
+/** Windows 窗体系统菜单(移动/大小/最小化/最大化/关闭)。走壳命令而非
+ *  WM_NCHITTEST:WebView2 子窗口占满客户区,非客户区命中测试到不了这儿。
+ *  入口是窗框条右键与左端应用图标点击(Win95 起的老规矩)。非 Windows 静默。
+ *  不传坐标:壳侧自取指针的物理屏幕位,免去 CSS 像素→物理像素的换算。 */
+export function windowSystemMenu(): void {
+  if (!isWindowsShell()) return;
+  quiet(invoke("window_system_menu"));
 }
 
 /** mac 绿灯默认行为:切换全屏(⌥ 点击才是最大化,由调用方分流)。 */

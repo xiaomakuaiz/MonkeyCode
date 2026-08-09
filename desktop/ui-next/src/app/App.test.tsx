@@ -26,16 +26,37 @@ describe("壳骨架(P1)", () => {
     expect(screen.queryByRole("button", { name: "缩放" })).toBeNull();
   });
 
-  it("Windows 壳:渲染 36px 标题栏三键", () => {
+  // Windows 与 Linux 壳都走 decorations(false),UI 侧自绘同一条窗框
+  it.each([
+    ["Windows NT 10.0", "Windows"],
+    ["X11; Linux x86_64", "Linux"],
+  ])("%s 壳:渲染自绘窗框条三键", (ua) => {
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: () => Promise.resolve(false) },
+      event: { listen: () => Promise.resolve(() => {}) },
+    };
+    vi.stubGlobal("navigator", { ...window.navigator, userAgent: ua });
+    const { container } = render(<App />);
+    expect(container.querySelector("[data-window-titlebar]")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "最小化" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "最大化" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
+  });
+
+  // 曾对 Windows 开特例不留这一格,让第一个空间图标顶上去占位——尺寸恰好
+  // 凑得上(size-11 + py-1 = 52px)所以没露馅,但三个图标整体比其余平台高
+  // 一格,LAYOUT §2 也从没写过这条(2026-08-08 删除)
+  it("Windows 壳:rail 顶仍留同高空位,空间图标不顶到窗框条下", () => {
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: { invoke: () => Promise.resolve(false) },
       event: { listen: () => Promise.resolve(() => {}) },
     };
     vi.stubGlobal("navigator", { ...window.navigator, userAgent: "Windows NT 10.0" });
     render(<App />);
-    expect(screen.getByRole("button", { name: "最小化" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "最大化" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
+    const rail = screen.getByRole("navigation", { name: "空间导航" });
+    expect(rail.firstElementChild?.className).toContain("h-13");
+    // 那一格是空位,不是塞了图标的按钮容器
+    expect(rail.firstElementChild?.querySelector("button")).toBeNull();
   });
 
   it("mac 壳:红绿灯在 rail 左上角(chrome 角落),无 Windows 三键", () => {

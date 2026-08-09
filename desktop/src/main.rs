@@ -543,6 +543,60 @@ fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
 }
 
+/// Windows 窗体系统菜单(移动/大小/最小化/最大化/关闭)。壳在 Windows 走
+/// decorations(false),原生标题栏连同它的右键菜单一起没了;UI 侧窗框条的
+/// 右键与左端应用图标点击都落到这儿,把菜单补回来(Win95 起的老规矩,
+/// VS Code / Windows Terminal 至今保留)。
+///
+/// 为什么不走 WM_NCHITTEST/HTSYSMENU 让系统自己弹:WebView2 子窗口铺满整个
+/// 客户区,非客户区命中测试根本到不了咱们这层。改由 UI 报指针位、壳主动
+/// TrackPopupMenu,绕开这件事。
+///
+/// 弹出位置取**指针的物理屏幕坐标**(Tauri 的 cursor_position),不收 UI 传的
+/// clientX/clientY:那是 CSS 像素,在 150% 缩放的屏上要乘 scale 再做客户区→
+/// 屏幕换算,两步都能错;而系统菜单本就该弹在指针处,直接问壳最稳。
+///
+/// TPM_RETURNCMD 让 TrackPopupMenu 同步返回选中项,再 PostMessage 交回窗口
+/// 自己执行——不用 SendMessage:那会在菜单的模态消息循环里重入窗口过程。
+/// 非 Windows 是空操作(mac 有原生菜单栏;GTK 侧无对等 API,图标纯展示)。
+#[tauri::command]
+fn window_system_menu(window: tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMenu, PostMessageW, SetForegroundWindow, TrackPopupMenu, TPM_RETURNCMD,
+            TPM_RIGHTBUTTON, WM_SYSCOMMAND,
+        };
+        let (Ok(hwnd), Ok(pos)) = (window.hwnd(), window.cursor_position()) else {
+            return;
+        };
+        unsafe {
+            let menu = GetSystemMenu(hwnd, false);
+            if menu.is_invalid() {
+                return;
+            }
+            // 菜单要求窗口在前台,否则点别处不会自动收起(MSDN TrackPopupMenu 注)
+            let _ = SetForegroundWindow(hwnd);
+            let cmd = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                pos.x as i32,
+                pos.y as i32,
+                Some(0),
+                hwnd,
+                None,
+            );
+            // TPM_RETURNCMD 下返回值是命令 id,0 = 用户没选(点空处/Esc)
+            if cmd.0 != 0 {
+                let _ = PostMessageW(Some(hwnd), WM_SYSCOMMAND, WPARAM(cmd.0 as usize), LPARAM(0));
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = window;
+}
+
 /// Windows 隐藏状态页→原生 layered window 的视觉快照。
 /// 非 Windows 继续由 pet.html 自己渲染,命令保留为跨平台空操作,
 /// 使同一份内置页不需分叉打包。
@@ -838,8 +892,17 @@ fn create_main_window(app: &AppHandle, page: &str) {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
-    // Windows:去原生装饰栏,UI 侧自绘 36px 标题栏(拖拽区 + 窗口按钮)
-    #[cfg(target_os = "windows")]
+    // Windows / Linux:去原生装饰栏,UI 侧自绘 32px 扁平窗框条(拖拽区 +
+    // caption 三键 + 左端应用图标),见 ui-next 的 TitleBar。
+    //
+    // Linux 一并走 CSD(2026-08-08):保留原生装饰栏的话,mac/Windows 精心画的
+    // 那条窗框在 Linux 上会被换成 Adwaita/Breeze 的条——三端里唯一不受我们
+    // 控制的那端恰恰最显眼。VS Code(titleBarStyle 在 Linux 默认 custom)、
+    // Slack、Discord、Spotify 一律如此;GNOME 自己的 libadwaita 更是 CSD 优先。
+    // 代价:WM 的 resize 边/右键标题菜单/部分平铺手势没了,resize 由 UI 侧
+    // 边缘热区经 start_resize_dragging 补回(ResizeEdges.tsx);GNOME 用户若把
+    // button-layout 设成靠左,我们仍在右边。
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         builder = builder.decorations(false);
     }
@@ -1203,6 +1266,7 @@ fn main() {
             host_info,
             show_main,
             open_devtools,
+            window_system_menu,
             pet_native_render,
             sound_enabled,
             set_sound_enabled,

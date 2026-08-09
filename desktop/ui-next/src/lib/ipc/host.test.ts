@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { hostInfo, hostPlatform, isMacShell, isWindowsShell, setWindowTitle } from "./host";
+import {
+  applyPlatformAttr,
+  hostInfo,
+  hostPlatform,
+  isCustomChromeShell,
+  isLinuxShell,
+  isMacShell,
+  isWindowsShell,
+  setWindowTitle,
+} from "./host";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -27,6 +36,35 @@ describe("平台探测", () => {
     expect(hostPlatform()).toBe("windows");
     stubShell("X11; Linux x86_64");
     expect(hostPlatform()).toBe("linux");
+  });
+
+  // 自绘窗框条的唯一判据(LAYOUT §1)。mac 走 Overlay 由 rail 角落承窗控、
+  // 浏览器无窗体,两者都不画;Windows/Linux 壳都走 decorations(false)。
+  it("isCustomChromeShell = Windows | Linux,mac 与浏览器为假", () => {
+    vi.stubGlobal("window", {});
+    expect(isCustomChromeShell()).toBe(false);
+    stubShell("Macintosh; Intel Mac OS X 10_15_7");
+    expect(isCustomChromeShell()).toBe(false);
+    stubShell("Windows NT 10.0; Win64");
+    expect(isCustomChromeShell()).toBe(true);
+    stubShell("X11; Linux x86_64");
+    expect(isCustomChromeShell()).toBe(true);
+    expect(isLinuxShell()).toBe(true);
+  });
+
+  // --chrome-h 按这个属性取值(app.css),落错就是所有固定覆盖层一起错位
+  it("applyPlatformAttr 把平台落到根节点 data-platform", () => {
+    const root = { dataset: {} as Record<string, string> };
+    vi.stubGlobal("document", { documentElement: root });
+    stubShell("Windows NT 10.0; Win64");
+    applyPlatformAttr();
+    expect(root.dataset.platform).toBe("windows");
+    stubShell("X11; Linux x86_64");
+    applyPlatformAttr();
+    expect(root.dataset.platform).toBe("linux");
+    stubShell("Macintosh; Intel Mac OS X 10_15_7");
+    applyPlatformAttr();
+    expect(root.dataset.platform).toBe("mac");
   });
 });
 
