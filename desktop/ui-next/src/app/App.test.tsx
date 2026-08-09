@@ -81,6 +81,17 @@ describe("壳骨架(P1)", () => {
     expect(screen.getByRole("navigation", { name: "空间导航" }).contains(zoom)).toBe(true);
     expect(screen.queryByRole("button", { name: "最大化" })).toBeNull();
   });
+  // 启动落点恒为本地任务(用户定案 2026-08-09)。此前读 mc.sidebarSpace 恢复
+  // 上次所在空间,于是只要建过一次云端任务(onCloudCreated 会 setSpace("cloud")),
+  // 启动空间就被永久改成云端,直到用户手动点回来——云端可能未登录/断网,
+  // 拿它当开机首屏每次都是一个坏屏幕。
+  it("启动恒落本地任务:localStorage 里存着 cloud 也不恢复", () => {
+    localStorage.setItem("mc.sidebarSpace", "cloud");
+    render(<App />);
+    expect(screen.getByRole("button", { name: "本地任务" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "云端任务" }).getAttribute("aria-pressed")).toBe("false");
+    localStorage.removeItem("mc.sidebarSpace");
+  });
 });
 
 describe("设置入口(外观/语言/配置在 SettingsView,各有专测)", () => {
@@ -397,9 +408,11 @@ describe("覆盖视图开着时点侧栏(设置/新建永远让位)", () => {
   // 云端 onSelect 曾只 setCloudTask、不收覆盖视图,于是设置页开着时点云端任务
   // 毫无反应(主区分支 settingsOpen/creating 优先级在前)——用户报障 2026-08-07
   it("云端空间:设置页/新建页开着时点云端任务,都切到该任务", async () => {
-    localStorage.setItem("mc.sidebarSpace", "cloud");
     stubShell({ cloudTasks: [{ id: "c1", title: "云端任务一", status: "processing" }] });
     render(<App />);
+    // 启动恒落本地(见「壳骨架」那条),要测云端就点 rail 切过去——这也更贴近
+    // 用户实际路径,比塞 localStorage 让 App"记得"上次在云端可靠
+    await userEvent.click(screen.getByRole("button", { name: "云端任务" }));
     await openSettings();
     await userEvent.click(await screen.findByText("云端任务一"));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "设置" })).toBeNull());
@@ -618,32 +631,30 @@ describe("侧栏 ＋ 的默认页签跟随当前空间", () => {
     (screen.getByRole("tab", { name }) as HTMLElement).getAttribute("aria-selected") === "true";
 
   it("停在「本地会话」空间时点 ＋:开出来就是会话页签", async () => {
-    localStorage.setItem("mc.sidebarSpace", "chat");
     stubShell();
     render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "本地会话" }));
     await openCreate();
     expect(tabOn("本地会话")).toBe(true);
     expect(tabOn("本地任务")).toBe(false);
   });
 
   it("停在「云端任务」空间时点 ＋:开出来是云端页签", async () => {
-    localStorage.setItem("mc.sidebarSpace", "cloud");
     stubShell();
     render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "云端任务" }));
     await openCreate();
     expect(tabOn("云端任务")).toBe(true);
   });
 
   it("本地空间照旧落本地任务页签", async () => {
-    localStorage.setItem("mc.sidebarSpace", "local");
     stubShell();
-    render(<App />);
+    render(<App />); // 启动恒落本地,不用再摆布 localStorage
     await openCreate();
     expect(tabOn("本地任务")).toBe(true);
   });
 
   it("项目组头「+」带目录:比空间更强,即便停在会话空间也落本地任务页签", async () => {
-    localStorage.setItem("mc.sidebarSpace", "chat");
     stubShell({ sessions: [sess({ id: "s1", workdir: "/proj/alpha" })] });
     render(<App />);
     // 组头的 ＋ 只在本地空间可见,先切过去

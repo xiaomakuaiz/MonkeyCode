@@ -3,15 +3,11 @@
 
 export type Space = "local" | "cloud" | "chat";
 
-export function readSpace(): Space {
-  try {
-    const v = localStorage.getItem("mc.sidebarSpace");
-    return v === "cloud" || v === "chat" || v === "local" ? v : "local";
-  } catch {
-    return "local";
-  }
-}
-
+/** 启动落点恒为本地任务(用户定案 2026-08-09:「应用打开后默认选本地项目,
+ *  不要选云端项目」)。所以**没有 readSpace** ——上次停在哪儿不再决定这次开在
+ *  哪儿:云端是可能未登录/断网的空间,拿它当开机首屏,每次启动都是一个坏屏幕。
+ *  writeSpace 仍然写:mc.sidebarSpace 是与旧 UI 共用的契约键(ui/src/sidebar.tsx
+ *  仍会读它),并行期不能单方面停写。 */
 export function writeSpace(space: Space): void {
   try {
     localStorage.setItem("mc.sidebarSpace", space);

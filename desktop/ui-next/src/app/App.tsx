@@ -42,7 +42,7 @@ import {
 } from "@/lib/ipc/sessions";
 import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
-import { readLastSession, readSpace, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
+import { readLastSession, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
 // 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
@@ -269,7 +269,12 @@ function MainArea({
 
 export function App() {
   const { t } = useI18n();
-  const [space, setSpaceState] = useState<Space>(readSpace);
+  // 启动恒落本地任务(用户定案 2026-08-09),不恢复上次所在空间:云端可能
+  // 未登录/断网,拿它当开机首屏每次都是一个坏屏幕;而且此前只要建过一次
+  // 云端任务(onCloudCreated 里 setSpace("cloud")),启动空间就被永久改成
+  // 云端,直到用户手动点回来——这个副作用没人预料得到。prefs 仍写
+  // mc.sidebarSpace(与旧 UI 共用的契约键),只是不再读回。
+  const [space, setSpaceState] = useState<Space>("local");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(readLastSession);
   // 新建任务视图:null=关;dir 携带「在此项目新建」的预填目录(本地),
