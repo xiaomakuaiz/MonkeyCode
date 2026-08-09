@@ -27,8 +27,15 @@ const posInt = (v: string): number | undefined => {
 };
 
 /** 折叠行的高级项摘要:只列**显式配置过**的项(缺省值不占位置——
- *  「跟默认一样」不值得占一行的横向预算)。 */
+ *  「跟默认一样」不值得占一行的横向预算)。
+ *
+ *  **会员条目(source=monkeycode)整句不出**(用户定案 2026-08-09):窗口/
+ *  输出/图片/思考档都是随同步整组下来的,用户一项也改不了(会员行不可展开,
+ *  表单里本来就没有它们)。advSummary 的存在理由是「配置过的值收起来就看不见,
+ *  改完一合上认不出这行跟别行有何不同」——在会员行上这个前提根本不成立:
+ *  没人在这儿配过任何东西,于是它退化成一串把每行都撑长的噪音。 */
 function advSummary(m: HostModel, t: ReturnType<typeof useI18n>["t"]): string {
+  if (m.source === SOURCE_MONKEYCODE) return "";
   const parts = [
     m.context_window ? t("settings.models.sum.ctx", { n: m.context_window.toLocaleString() }) : "",
     m.max_output ? t("settings.models.sum.out", { n: m.max_output.toLocaleString() }) : "",

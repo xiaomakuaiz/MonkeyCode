@@ -291,6 +291,59 @@ describe("脏状态机与保存条", () => {
 });
 
 describe("模型增删改与设默认", () => {
+  it("会员模型行不出高级项摘要(窗口/输出/图片/思考档一概不列)", async () => {
+    // 用户定案 2026-08-09:这几项都是随同步整组下来的,会员行不可展开、
+    // 表单里也没有它们,用户一项都改不了。advSummary 的前提(「我配过的值
+    // 收起来看不见」)在会员行上不成立,剩下只是把每行撑长的噪音
+    stubShell({
+      config: {
+        ...baseConfig,
+        models: [
+          ...baseConfig.models,
+          {
+            name: "会员-高级",
+            provider: "anthropic",
+            base_url: "https://mc",
+            api_key: "mk",
+            model: "claude-x",
+            default: false,
+            source: "monkeycode",
+            context_window: 200000,
+            max_output: 64000,
+            vision: true,
+            think: "high",
+          },
+          {
+            name: "自定义-同参数",
+            provider: "anthropic",
+            base_url: "https://c",
+            api_key: "ck",
+            model: "claude-y",
+            default: false,
+            context_window: 200000,
+            max_output: 64000,
+            vision: true,
+            think: "high",
+          },
+        ],
+      },
+    });
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+
+    // 会员行是只读 span(不可展开),自定义行是 button——都带 title=原始名
+    const member = await screen.findByTitle("会员-高级");
+    expect(member.textContent).not.toMatch(/窗口|输出|支持图片|思考/);
+
+    // 反向锚:同样几项配在自定义条目上照旧展示(证明是按 source 分流,
+    // 不是把整个摘要删了)
+    const custom = await screen.findByTitle("自定义-同参数");
+    expect(custom.textContent).toMatch(/窗口/);
+    expect(custom.textContent).toMatch(/输出/);
+    expect(custom.textContent).toMatch(/支持图片/);
+    expect(custom.textContent).toMatch(/思考/);
+  });
+
   it("添加模型:新行展开编辑,保存载荷含新条目", async () => {
     const { calls } = stubShell();
     render(<SettingsView onClose={() => {}} />);
