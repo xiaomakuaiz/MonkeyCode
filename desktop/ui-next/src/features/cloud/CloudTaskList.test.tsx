@@ -1,7 +1,7 @@
 // 云端任务列表(与本地/对话列表同一套 listKit,不做两套):进行中裸行
 // 置顶、「历史任务」小节置底(契约键持久化、收起即卸载)、项目分组懒拉、
 // 行右键(终止/删除二段确认)、选择回调(假壳 invoke)。
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -197,6 +197,62 @@ describe("CloudTaskList", () => {
     await userEvent.click(screen.getByText("加载更多"));
     await screen.findByText("更早的");
     await waitFor(() => expect(screen.queryByText("加载更多")).toBeNull()); // 4/4 载完
+  });
+
+  // 自动刷新(旧 UI App.tsx:329-340;ui-next 此前只有创建/终止/删除/手动刷新
+  // /切空间会拉数)。没有它,网页/手机端派发的任务永远不出现,状态翻转也一路静止
+  it("窗口重获焦点即刷新:网页/手机端刚派发的任务切回来就看得见", async () => {
+    let batch: CloudTask[] = [{ id: "a", title: "修复登录", status: "processing" }];
+    let calls = 0;
+    stubShell((cmd) => {
+      if (cmd !== "mc_tasks") return Promise.resolve({});
+      calls += 1;
+      return Promise.resolve({ tasks: batch, page_info: { total: batch.length } });
+    });
+    render(<Harness currentId={null} onSelect={() => {}} />);
+    await screen.findByText("修复登录");
+    expect(calls).toBe(1);
+    batch = [{ id: "z", title: "手机上派的活", status: "pending" }, ...batch];
+    fireEvent.focus(window);
+    await screen.findByText("手机上派的活");
+  });
+
+  it("30s 轮询:状态翻转(pending→processing→finished)不用手动刷新", async () => {
+    vi.useFakeTimers();
+    try {
+      let batch: CloudTask[] = [{ id: "a", title: "修复登录", status: "pending" }];
+      stubShell((cmd) =>
+        cmd === "mc_tasks" ? Promise.resolve({ tasks: batch, page_info: { total: 1 } }) : Promise.resolve({}),
+      );
+      render(<Harness currentId={null} onSelect={() => {}} />);
+      await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
+      expect(rowOf("修复登录").title).toContain("排队中");
+      // 仍留在「进行中」段(finished 会掉进默认收起的历史小节,断言就跟
+      // 折叠态纠缠了):只看状态词跟着云端翻
+      batch = [{ id: "a", title: "修复登录", status: "processing" }];
+      await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)));
+      expect(rowOf("修复登录").title).toContain("运行中");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("后台刷新用合并而非整表替换:已翻出来的深层页不会被 30s 一次的轮询收回去", async () => {
+    localStorage.setItem("mc.cloudHistoryOpen", "1");
+    const page2: CloudTask[] = [{ id: "d", title: "更早的", status: "finished" }];
+    stubShell((cmd, args) => {
+      if (cmd !== "mc_tasks") return Promise.resolve({});
+      return Promise.resolve(
+        (args?.page as number) === 1 ? { tasks, page_info: { total: 4 } } : { tasks: page2, page_info: { total: 4 } },
+      );
+    });
+    render(<Harness currentId={null} onSelect={() => {}} />);
+    await screen.findByText("修复登录");
+    await userEvent.click(screen.getByText("加载更多"));
+    await screen.findByText("更早的");
+    fireEvent.focus(window); // 后台刷新只拉首页
+    await waitFor(() => expect(screen.getByText("更早的")).toBeTruthy());
+    expect(screen.queryByText("加载更多")).toBeNull(); // 分页水位没被后台刷新推回去
   });
 
   it("query:过滤行并强制展开历史", async () => {

@@ -127,6 +127,56 @@ describe("connectCloudControl", () => {
     await expect(p).rejects.toMatchObject({ code: "remote", message: "模型不存在" });
   });
 
+  // 成败判据不能只看 success:后端每个 kind 的响应结构体不一样。
+  // repo_file_list 的 RepoListFiles.Success 是 `json:"success,omitempty"`
+  // (backend types.go:441)——失败时 success=false 被 omitempty 抹掉,只剩
+  // error;而 ListPortforwadResp(types.go:728)压根没有 success 字段。
+  // 两头一夹,`success === false` 和 `success !== true` 都是错的。
+  it("repo_file_list 失败(success 被 omitempty 抹掉、只剩 error)→ reject,不能读成空目录", async () => {
+    const h = harness();
+    const pipe = h.opens[0]!.accept();
+    await flush();
+    const p = h.ctl.call("repo_file_list", { path: "nope" });
+    p.catch(() => {});
+    await flush();
+    // 后端实际下发的失败形状:没有 success 这一项
+    h.respond(0, { request_id: h.sentCall(pipe, 0).payload.request_id, path: "nope", error: "目录不存在" });
+    await expect(p).rejects.toMatchObject({ code: "remote", message: "目录不存在" });
+  });
+
+  it("port_forward_list 应答没有 success 字段:照常 resolve(不能把缺席当失败)", async () => {
+    const h = harness();
+    const pipe = h.opens[0]!.accept();
+    await flush();
+    const p = h.ctl.call<{ ports: unknown[] }>("port_forward_list");
+    await flush();
+    h.respond(0, { request_id: h.sentCall(pipe, 0).payload.request_id, ports: [{ port: 3000 }] });
+    await expect(p).resolves.toMatchObject({ ports: [{ port: 3000 }] });
+  });
+
+  it("revive():放弃自动重连后不发 call 也能重新拨(唤醒休眠 VM 靠的就是建连本身)", async () => {
+    const h = harness();
+    const delays = [2000, 4000, 8000, 16000];
+    for (let i = 0; i < 4; i++) {
+      h.opens[i]!.fail();
+      await flush();
+      h.clock.advance(delays[i]!);
+    }
+    h.opens[4]!.fail();
+    await flush();
+    expect(h.statuses.at(-1)?.st.kind).toBe("offline");
+    expect(h.clock.pendingDelays()).toEqual([]); // 放弃后没有任何重连计时器
+
+    h.ctl.revive();
+    expect(h.opens).toHaveLength(6); // 没有 call,单靠 revive 也重新拨了
+    h.opens[5]!.accept();
+    await flush();
+    expect(h.statuses.at(-1)?.st.kind).toBe("connected");
+    // 已连上时 revive 是空操作,不会拨出多余连接
+    h.ctl.revive();
+    expect(h.opens).toHaveLength(6);
+  });
+
   it("超时档位:默认 15s;唤醒场景 180s + 定制文案", async () => {
     const h = harness();
     h.opens[0]!.accept();

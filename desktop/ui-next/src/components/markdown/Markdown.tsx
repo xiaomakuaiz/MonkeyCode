@@ -130,6 +130,10 @@ export function Markdown({
   onLocalLink?: (path: string) => void;
 }) {
   const { locale } = useI18n(); // 复制按钮文案随 locale 重渲
+  // locale 看着"没用到",实则 renderMarkdown 内部经 code renderer 调了
+  // t("md.copy") 把文案烤进 HTML——静态分析看不穿这层,去掉它换语言后
+  // 已渲染的消息里复制按钮会一直是旧语言
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const html = useMemo(() => renderMarkdown(source), [source, locale]);
   const root = useRef<HTMLDivElement>(null);
   const cache = useRef(new Map<string, string>());

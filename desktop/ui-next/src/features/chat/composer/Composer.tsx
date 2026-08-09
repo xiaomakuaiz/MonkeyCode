@@ -6,6 +6,7 @@
 // permission_mode_update 帧,ChatState 是唯一真值。
 import { IconClock, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -15,6 +16,7 @@ import {
 } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionSetMode, sessionSetModel, sessionSetThink } from "@/lib/ipc/controls";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -51,12 +53,18 @@ export function Composer({
   const imeRef = useRef(createImeGuard());
   const [models, setModels] = useState<ModelInfo[]>([]);
 
-  // 模型清单一次拉取(锁定项禁选;浏览器模式为空,触发器仍显当前名)
+  // 模型清单一次拉取(锁定项禁选;浏览器模式为空,触发器仍显当前名)。
+  // 失败保留上一份而不是清空:modelsList 自 2026-08-09 起会**抛**(此前吞成
+  // [],把 afterEngineReady 的重试变成了死代码),而引擎重启期这一拉必然
+  // 撞上壳的「配置应用中」闸门——清空就是"重启一次模型菜单就空了";
+  // 且未处理拒绝会被 index.html 的兜底画成满屏红框。
   useEffect(() => {
     let alive = true;
-    void modelsList().then((list) => {
-      if (alive && Array.isArray(list)) setModels(list);
-    });
+    void modelsList()
+      .then((list) => {
+        if (alive && Array.isArray(list)) setModels(list);
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -85,20 +93,18 @@ export function Composer({
     taRef.current?.focus();
   };
 
-  // Esc 关闭斜杠面板必须在 window capture 阶段拦截并阻断全局链:审批快捷键
-  // 挂在冒泡阶段且 esc 是不可逆的拒绝,面板开着时这一下只能归面板。
-  // (模型/思考档 dropdown 的 Esc 在容器 onKeyDown 就地拦截,见 onPickerKeyDown。)
-  useEffect(() => {
-    if (!slashOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
-      e.preventDefault();
+  // Esc 关闭斜杠面板走统一层栈(lib/util/escLayer):面板打开时才入栈,层序
+  // (后入先得)保证它压过视图级 Esc;返回 true = 消费即截断,不许漏给冒泡
+  // 阶段的全局审批热键(esc = deny 不可逆)。此前是自己挂 window capture,
+  // 而同阶段同 target 按**注册先后**触发,谁先挂载谁先吃——见 escLayer 头注。
+  // (模型/思考档 dropdown 的 Esc 走 useDismiss,同一条层栈。)
+  useEscLayer(
+    slashOpen,
+    useCallback(() => {
       setSlashSuppressed(true);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [slashOpen]);
+      return true;
+    }, []),
+  );
 
   // ==== 模型 / 思考档 / 权限模式 ====
   const currentModel = state.model || meta.model;
@@ -322,17 +328,19 @@ export function Composer({
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
               (形态收口在 composerKit/UsageRing) */}
-          {usagePct !== null && state.usage && (
-            <UsageRing
-              pct={usagePct}
-              label={t("chat.contextUsage")}
-              tip={t("chat.usageTip", {
-                pct: usagePct,
-                used: fmtK(state.usage.used),
-                size: fmtK(state.usage.size),
-              })}
-            />
-          )}
+          <UsageRing
+            pct={usagePct}
+            label={t("chat.contextUsage")}
+            tip={
+              usagePct !== null && state.usage
+                ? t("chat.usageTip", {
+                    pct: usagePct,
+                    used: fmtK(state.usage.used),
+                    size: fmtK(state.usage.size),
+                  })
+                : t("chat.usageEmpty")
+            }
+          />
           <button
             type="button"
             aria-label={t("chat.send")}

@@ -60,6 +60,32 @@ function rowTrailing(meta: SessionMeta, t: T, attention: boolean): { tone: strin
   return null;
 }
 
+/** 行状态词(与旧 UI sidebar.rowStatus 同一张表):**每种状态都有词**,
+ * 要紧态另由 rowTrailing 给一个彩点,静默态就只剩这个词——它进行 tooltip,
+ * 不上行(LAYOUT §6.1「文字状态词不上行」、「终态词收进行 tooltip」)。
+ *
+ * 为什么补这个函数:§6.1 承诺的是「安静的状态词搬进 tooltip」,而实现里只有
+ * status.turns 搬过去了,status.interrupted / idle / notStarted 三条在 zh.ts 里
+ * 成了没人读的孤儿键——tooltip 只插值 trailing?.label,而这三种状态压根不给
+ * trailing。结果是「已停止 / 可继续 / 尚未开始」在界面上无处可查:被引擎崩溃
+ * 打断的后台任务,行上没点、tooltip 里也没词,彻底隐身。 */
+function rowStatusLabel(meta: SessionMeta, t: T): string {
+  if (meta.waiting_ask) return t("status.waitingAsk");
+  switch (meta.status) {
+    case "running":
+      return t("status.running");
+    case "error":
+      return t("status.error");
+    case "interrupted":
+      return t("status.interrupted");
+    case "idle":
+    case "finished": // 旧版壳顶层会话的「一轮结束」;新壳一律回 idle
+      return t("status.idle");
+    default:
+      return meta.turns > 0 ? t("status.idle") : t("status.notStarted");
+  }
+}
+
 interface RowPlumbing {
   currentId: string | null;
   actions: SidebarActions;
@@ -110,16 +136,39 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
   const primary = meta.title_custom ? meta.title : meta.summary || meta.title;
   const trailing = rowTrailing(meta, t, attention);
   const turns = meta.turns > 0 ? t("status.turns", { n: String(Math.trunc(meta.turns)) }) : "";
+  // 行 tooltip = 这一行的全部安静信息(§6.1):标题 / 摘要 / 目录 / 状态词 /
+  // 未读 / 轮次 / 右键提示。状态词取 rowStatusLabel 而不是 trailing.label——
+  // 后者只有要紧态才有,静默态原先整条不出词
+  const tooltip = [
+    meta.title,
+    meta.summary,
+    isChat ? t("sidebar.row.chatDetail") : meta.workdir,
+    rowStatusLabel(meta, t),
+    attention ? t("status.attention") : "",
+    turns,
+    t("sidebar.row.hint"),
+  ]
+    .filter(Boolean)
+    .join("\n");
   const menuItems: MenuItem[] = [
     { label: t("sidebar.row.rename"), run: () => p.onRenameStart(meta.id) },
     { label: meta.archived ? t("sidebar.row.unarchive") : t("sidebar.row.archive"), run: () => p.actions.onToggleArchive(meta) },
-    { label: t("sidebar.row.delete"), confirm: t("sidebar.row.deleteConfirm"), danger: true, run: () => p.actions.onDelete(meta) },
+    {
+      label: t("sidebar.row.delete"),
+      confirm: t("sidebar.row.deleteConfirm"),
+      danger: true,
+      // 运行中的会话壳/内核会拒删。旧 UI 直接把这一项置灰并写明
+      // title="运行中,请先停止"(viewChrome.DeleteMenuItem);ui-next 此前
+      // 压根没看 meta.status,点下去只会得到一条失败提示,而且不说为什么
+      disabledReason: meta.status === "running" ? t("sidebar.row.deleteRunning") : undefined,
+      run: () => p.actions.onDelete(meta),
+    },
   ];
   return (
     <ListRow
       primary={primary}
       trailing={trailing}
-      tooltip={`${meta.title}\n${meta.summary ? `${meta.summary}\n` : ""}${isChat ? t("sidebar.row.chatDetail") : meta.workdir}\n${trailing ? `${trailing.label}\n` : ""}${turns ? `${turns}\n` : ""}${t("sidebar.row.hint")}`}
+      tooltip={tooltip}
       indent={indent}
       active={meta.id === p.currentId}
       archived={meta.archived}

@@ -8,6 +8,8 @@ afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
   localStorage.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  document.body.removeAttribute("style");
 });
 
 interface CallRecord {
@@ -132,7 +134,51 @@ describe("文件抽屉", () => {
     expect(localStorage.getItem("mc.drawerWidth")).toBe(String(expected));
   });
 
-  it("Esc(window capture):预览开着先关预览,再一次才关抽屉", async () => {
+  // trackPointer 的收尾此前只挂在 mouseup 上,而 mouseup 不保证会来:抽屉在
+  // 按住把手期间被卸载(它自己的 Esc 就能关掉自己、会话被删、切走视图),
+  // 或者鼠标拖出 webview 才松开。泄漏的不只是 window 上那两条监听——body 的
+  // cursor/user-select 是**全局副作用**,留下就是整个应用从此选不中任何文字、
+  // 光标恒为调宽箭头,只能重启
+  it("拖拽中途卸载:window 监听与 body 全局样式都收得回来", async () => {
+    stubShell({ list: { "": [] } });
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    const { unmount } = render(<FilesDrawer sessionId="s1" onClose={() => {}} />);
+    await flush();
+
+    fireEvent.mouseDown(screen.getByTitle("拖动调整宽度"));
+    fireEvent.mouseMove(window, { clientX: 300 });
+    expect(document.body.style.cursor).toBe("col-resize");
+    expect(document.body.style.userSelect).toBe("none");
+
+    unmount(); // 按住不放就卸载(mouseup 永远不会来)
+
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.getPropertyValue("-webkit-user-select")).toBe("");
+    // 拖拽期间挂上的 window 监听逐个摘干净(留一条就是"后台还在跟指针")
+    const dragHandlers = (spy: typeof addSpy) =>
+      new Set(spy.mock.calls.filter(([type]) => type === "mousemove" || type === "mouseup").map(([, fn]) => fn));
+    expect(dragHandlers(addSpy)).toEqual(dragHandlers(removeSpy));
+  });
+
+  it("正常松手仍然只收一次(mouseup 收尾与卸载兜底幂等)", async () => {
+    stubShell({ list: { "": [] } });
+    const { unmount } = render(<FilesDrawer sessionId="s1" onClose={() => {}} />);
+    await flush();
+
+    fireEvent.mouseDown(screen.getByTitle("拖动调整宽度"));
+    fireEvent.mouseMove(window, { clientX: 400 });
+    fireEvent.mouseUp(window);
+    const persisted = localStorage.getItem("mc.drawerWidth");
+    expect(persisted).toBe(String(window.innerWidth - 400));
+
+    unmount(); // 兜底不该再跑一遍收尾(否则 onDone 会二次落盘/二次 setState)
+    expect(localStorage.getItem("mc.drawerWidth")).toBe(persisted);
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("Esc(escLayer 层栈):预览开着先关预览,再一次才关抽屉", async () => {
     const onClose = vi.fn();
     stubShell({ list: { "": [entry("a.txt", "a.txt")] }, content: "hello" });
     render(<FilesDrawer sessionId="s1" onClose={onClose} />);

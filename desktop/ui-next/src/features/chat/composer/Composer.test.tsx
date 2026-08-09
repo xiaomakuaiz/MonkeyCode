@@ -3,10 +3,11 @@
 // uploads.rs 为准)。
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelInfo, SessionMeta } from "@/lib/ipc/sessions";
 import { b64decode, b64encode } from "@/lib/protocol/codec";
+import { pushEscLayer } from "@/lib/util/escLayer";
 import { ChatView } from "../ChatView";
 
 afterEach(() => {
@@ -140,6 +141,34 @@ describe("斜杠指令面板", () => {
     await userEvent.clear(box);
     await userEvent.type(box, "/");
     expect(await screen.findByRole("listbox", { name: "斜杠指令" })).toBeTruthy();
+  });
+
+  it("Esc 分层:先注册的视图级层抢不走面板的这一下(escLayer 按层序,不按注册时序)", async () => {
+    // 视图级 Esc(设置页/新建任务)是**挂载即注册**的,而浮层只在打开时注册
+    // ——同 target 同阶段按注册先后触发,自挂 window capture 的写法里视图永远
+    // 先吃掉这一下(开着面板按 Esc 关掉的是整个视图)。收口到 escLayer 后由
+    // 层序决定:后 push 的先拿到
+    const viewLayer = vi.fn(() => true);
+    const popView = pushEscLayer(viewLayer);
+    try {
+      const { ops, emit } = stubShell();
+      render(<ChatView meta={META} />);
+      const box = await ready();
+      emit("frames:s1", [COMMANDS_FRAME]);
+      await userEvent.type(box, "/re");
+      await screen.findByRole("listbox", { name: "斜杠指令" });
+
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("listbox", { name: "斜杠指令" })).toBeNull();
+      expect(viewLayer).not.toHaveBeenCalled(); // 面板消费即截断,不再往下问
+      expect(sends(ops, "permission-resp")).toHaveLength(0);
+
+      // 面板收起后这一下才归视图层
+      await userEvent.keyboard("{Escape}");
+      expect(viewLayer).toHaveBeenCalledTimes(1);
+    } finally {
+      popView();
+    }
   });
 });
 
@@ -482,6 +511,19 @@ describe("运行条 detail 与上下文用量", () => {
       },
     ]);
     await waitFor(() => expect(screen.getByText("第 1 轮 · 45.7k tokens")).toBeTruthy());
+  });
+
+  it("还没有 usage 帧时圆环照旧占位,并说明「暂无数据」", async () => {
+    // 旧 UI 的 ContextRing 是恒显的(chat.tsx:1203,空态文案「暂无数据,
+    // 本轮请求后更新」);ui-next 首版把整个圆环 gate 掉了——元素时有时无
+    // 本身是干扰,用户也无从知道"这里本该有个东西、只是还没数据"
+    stubShell();
+    render(<ChatView meta={META} />);
+    await ready();
+    const ring = await screen.findByRole("img", { name: "上下文用量" });
+    expect(ring.closest("[data-tip]")?.getAttribute("data-tip")).toBe("暂无数据,本轮请求后更新");
+    // 空态只有轨道,没有用量弧
+    expect(screen.queryByRole("progressbar", { name: "上下文用量" })).toBeNull();
   });
 
   it("上下文用量:radial-progress 语义 + tooltip 紧凑摘要(pct+fmtK);>85% 示警", async () => {

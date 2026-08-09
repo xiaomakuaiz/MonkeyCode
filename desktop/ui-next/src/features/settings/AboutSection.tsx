@@ -2,14 +2,21 @@
 // 壳自行重启,installing 态不回收;安装失败复位忙态并外显失败文案(与侧栏
 // useUpdate 同一语义)。
 //
-// 两个排障入口(打开程序目录 / 打开存储目录)常态不展示,连点版本号 5 次
-// 解锁,解锁只在本次挂载内有效(用户定案 2026-08-07):它们是电话指引支持
-// 同学用的,不是给普通用户的常驻按钮。原「导出日志」「打开扩展目录」按此
-// 定案撤下——日志就在存储目录里(ohmyagent/logs/),扩展目录的入口在
-// 设置·浏览器分区还在。
+// 排障入口(打开程序目录 / 打开存储目录 / 导出日志)常态不展示,连点版本号
+// 5 次解锁,解锁只在本次挂载内有效(用户定案 2026-08-07):它们是电话指引
+// 支持同学用的,不是给普通用户的常驻按钮。「打开扩展目录」按同一定案撤下
+// ——它的常驻入口在设置·浏览器分区。
+//
+// 「导出日志」当时连同扩展目录一起撤了,理由是"日志就在存储目录里"。但那
+// 两件事并不等价:export_engine_log 走的是**另存对话框**,一步就能拿到一份
+// 可直接拖进工单的副本(旧 UI 的 title 原话「另存一份引擎日志,报障时附上」);
+// 而"打开存储目录"要用户自己进 ohmyagent/logs/ 认出是哪个文件再复制出来——
+// 电话指引里这是最容易卡住的一步。撤掉后 exportEngineLog 在整个 ui-next 里
+// 零调用者,壳命令空挂着。故按同一把解锁钥匙恢复(常态仍不占位)。
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import { exportEngineLog } from "@/lib/ipc/config";
 import { engineRestart } from "@/lib/ipc/engine";
 import { hostInfo, openAppDir, openLogDir, type HostInfo } from "@/lib/ipc/host";
 import { recordUpdateCheck, updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
@@ -89,10 +96,17 @@ export function AboutSection() {
     }
   };
 
-  const openDir = async (fn: () => Promise<void>) => {
+  /** 排障动作的统一收尾:失败就地外显(壳的 Err 是中文,吞掉就成了「点了
+   *  没反应」);ok 可按结果补一句成功反馈,返回 null 表示这次不必说话
+   *  (如另存对话框被用户取消)。 */
+  const runDiag = async <T,>(fn: () => Promise<T>, ok?: (v: T) => string | null) => {
     setMsg(null);
     try {
-      await fn();
+      // 动作先单独求值:写成 ok?.(await fn()) 的话,ok 缺席时可选调用会连
+      // **实参**一起短路掉——按钮点了什么都不会发生
+      const done = await fn();
+      const text = ok?.(done);
+      if (text) setMsg({ text });
     } catch (e) {
       setMsg({ text: errMsg(e), error: true });
     }
@@ -156,11 +170,20 @@ export function AboutSection() {
             是中文,吞掉就成了「点了没反应」 */}
         {unlocked && (
           <>
-            <button type="button" className="btn btn-sm" onClick={() => void openDir(openAppDir)}>
+            <button type="button" className="btn btn-sm" onClick={() => void runDiag(openAppDir)}>
               {t("settings.about.openAppDir")}
             </button>
-            <button type="button" className="btn btn-sm" onClick={() => void openDir(openLogDir)}>
+            <button type="button" className="btn btn-sm" onClick={() => void runDiag(openLogDir)}>
               {t("settings.about.openDataDir")}
+            </button>
+            {/* 另存一份引擎日志当报障附件:取消(返回 null)不出提示 */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              title={t("settings.about.exportLogHint")}
+              onClick={() => void runDiag(exportEngineLog, (dest) => (dest ? t("settings.about.exportDone") : null))}
+            >
+              {t("settings.about.exportLog")}
             </button>
           </>
         )}

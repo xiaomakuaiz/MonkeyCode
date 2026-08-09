@@ -110,11 +110,28 @@ export interface NativeDropHandlers {
   onDragging(dragging: boolean): void;
   onFiles(files: File[]): void;
   onError?(message: string): void;
+  /** 需要文件**内容本体**(云端任务附件要把字节上行对象存储)。
+   * 缺省只 stat 元数据造 path-backed 占位 File(0 字节,壳按路径直拷,
+   * 大小不设限);置真则经壳 read_dropped_file 读回字节还原成真 File,
+   * 保留壳侧整包 20MB 上限。旧 UI nativeDrop.ts:58-66 的同一个分岔——
+   * 漏掉它,云端侧拖进来的每个文件都会以「是空文件」告吹(uploadCloudFile
+   * 的 size===0 拦截),Linux 壳上拖放对云端任务整个不可用。 */
+  wantContent?: boolean;
+}
+
+/** base64 → File(壳 read_dropped_file 的回包;data 是整包 base64)。 */
+function fileOfDropped(r: { name?: string; mediaType?: string; data?: string }, path: string): File {
+  const bin = atob(r.data ?? "");
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const name = r.name || path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "file";
+  return new File([bytes], name, { type: r.mediaType ?? "" });
 }
 
 /** 订阅壳的原生文件拖放事件(Linux 壳:WebKitGTK 的 HTML5 拖拽拿不到
  * File,壳保留 Tauri 原生处理器,以 tauri://drag-* 事件送达路径)。
- * 只 stat 元数据造 path-backed 占位 File,内容由壳按路径直拷,大小不设限。
+ * 默认只 stat 元数据造 path-backed 占位 File,内容由壳按路径直拷,大小不
+ * 设限;wantContent 的调用方(云端)经壳读回字节还原 File。
  * mac/Windows 壳禁用了原生处理器走 DOM 事件,这里的监听永不触发,无副作用。
  * 返回退订函数。 */
 export function onNativeFileDrop(h: NativeDropHandlers): () => void {
@@ -129,9 +146,14 @@ export function onNativeFileDrop(h: NativeDropHandlers): () => void {
         const files: File[] = [];
         for (const p of paths) {
           try {
-            const st = await invoke<{ name?: string; mediaType?: string }>("stat_dropped_file", { path: p });
-            const name = st.name || p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "file";
-            files.push(pathBackedFile(p, name, st.mediaType ?? ""));
+            if (h.wantContent) {
+              const r = await invoke<{ name?: string; mediaType?: string; data?: string }>("read_dropped_file", { path: p });
+              files.push(fileOfDropped(r, p));
+            } else {
+              const st = await invoke<{ name?: string; mediaType?: string }>("stat_dropped_file", { path: p });
+              const name = st.name || p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "file";
+              files.push(pathBackedFile(p, name, st.mediaType ?? ""));
+            }
           } catch (e) {
             h.onError?.(e instanceof Error ? e.message : String(e));
           }

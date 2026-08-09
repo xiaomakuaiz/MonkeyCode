@@ -20,6 +20,10 @@ import { mcProjects, mcTaskDelete, mcTasks, mcTaskStop, type CloudProject, type 
 
 const PAGE_SIZE = 20;
 
+/** 后台轮询节拍(旧 UI App.tsx:336-340 同值):任务状态在云端自己走,
+ * 不轮询的话 pending→processing→finished 一路都要靠用户手动刷新才可见。 */
+const POLL_MS = 30_000;
+
 const ACTIVE = new Set(["pending", "processing"]);
 
 export interface CloudTasksFeed {
@@ -39,10 +43,19 @@ export interface CloudTasksFeed {
   refresh(): void;
 }
 
+/** 一次取数怎么并进现有列表。
+ * - replace:整表重来(手动刷新 / reloadKey / 进入云端空间);
+ * - append:续页(loadMore),按 id 去重;
+ * - merge:后台刷新首页——首页数据覆盖同 id 的旧条目并置前,**保留已经翻
+ *   出来的深层页**。后台刷新若用 replace,用户翻了三页历史会被 30s 一次的
+ *   轮询悄悄收回去。 */
+type PageMode = "replace" | "append" | "merge";
+
 /** 云端任务列表数据源:分页合并,active/history 由状态派生。
  * reloadKey 变化触发整表重拉(App 在任务创建/终止后 bump)。
  * enabled=false 时不拉取(Sidebar 只在云端空间供数;数据跨空间切换留存,
- * 重新进入云端经 enabled 翻转刷新)。 */
+ * 重新进入云端经 enabled 翻转刷新)。
+ * 自动刷新:窗口重获焦点 + 30s 轮询(仅 enabled 时挂,离开即拆)。 */
 export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
   const [tasks, setTasks] = useState<CloudTask[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,29 +63,44 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
   const [unauthorized, setUnauthorized] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const pageRef = useRef(0); // 已加载的最后一页(0 = 尚未加载)
+  // 取数互斥分两条:前台(首屏/翻页/手动刷新)与后台刷新各占各的。
+  // 合成一条会让后台刷新**吃掉**用户刚点的「加载更多」——焦点/轮询的时机
+  // 与点击撞车是常态,静默丢一次用户操作比多发一个请求坏得多。
+  // 反向则让路:前台在跑时后台这一拍直接跳过(下一拍还会来)。
   const inFlight = useRef(false);
+  const bgFlight = useRef(false);
 
-  const fetchPage = useCallback(async (page: number, replace: boolean) => {
+  const fetchPage = useCallback(async (page: number, mode: PageMode) => {
     if (!inDesktopShell()) {
       // 浏览器模式:与 sessionsList 同约定,查询类降级为空列表而非报错
       setTasks((prev) => prev ?? []);
       return;
     }
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setLoading(true);
+    const bg = mode === "merge";
+    const busy = bg ? bgFlight : inFlight;
+    if (busy.current || (bg && inFlight.current)) return;
+    busy.current = true;
+    // 后台刷新不点亮 loading:30s 一次的 spinner 闪烁是纯噪音,
+    // 「加载更多」按钮也会因此莫名其妙地禁用一下
+    if (!bg) setLoading(true);
     setError("");
     try {
       const r = await mcTasks(page, PAGE_SIZE);
       setUnauthorized(false); // 连上了(设置里刚连接完再回来)
       const batch = r.tasks ?? [];
       setTotal(r.page_info?.total ?? r.page_info?.total_count ?? null);
-      pageRef.current = page;
+      // merge 不动分页水位:它刷的是首页,已翻出来的深层页仍在列表里
+      if (!bg) pageRef.current = page;
       setTasks((prev) => {
-        if (replace || !prev) return batch;
-        // 续页去重:置顶任务状态翻转会跨页重复出现
-        const seen = new Set(prev.map((task) => task.id));
-        return [...prev, ...batch.filter((task) => !seen.has(task.id))];
+        if (!prev || mode === "replace") return batch;
+        if (mode === "append") {
+          // 续页去重(以**已有**为准):置顶任务状态翻转会跨页重复出现
+          const seen = new Set(prev.map((task) => task.id));
+          return [...prev, ...batch.filter((task) => !seen.has(task.id))];
+        }
+        // merge 去重以**首页新数据**为准:同 id 用新的那份并置前,其余(深层页)原序保留
+        const fresh = new Set(batch.map((task) => task.id));
+        return [...batch, ...prev.filter((task) => !fresh.has(task.id))];
       });
     } catch (e) {
       // 会话失效/未登录不是"加载失败":回查一次登录态确证(壳的 401 文案
@@ -88,15 +116,32 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      inFlight.current = false;
-      setLoading(false);
+      busy.current = false;
+      if (!bg) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (!enabled) return;
-    void fetchPage(1, true);
+    void fetchPage(1, "replace");
   }, [fetchPage, reloadKey, enabled]);
+
+  // 自动刷新(旧 UI App.tsx:329-340 的两条,ui-next 此前整个漏掉):
+  // ① 窗口重获焦点即刷——网页/手机端刚派发的任务,切回桌面就该看得见;
+  // ② 30s 轮询——任务状态在云端自己走,不轮询的话 pending→processing→
+  //    finished 全程静止,侧栏概览的运行中/排队中计数跟着一起冻住。
+  // 两条都只在云端空间(enabled)挂,离开即拆;fetchPage 自带在途互斥,
+  // 与手动刷新/翻页撞车是安全的。
+  useEffect(() => {
+    if (!enabled) return;
+    const refresh = () => void fetchPage(1, "merge");
+    window.addEventListener("focus", refresh);
+    const timer = setInterval(refresh, POLL_MS);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      clearInterval(timer);
+    };
+  }, [enabled, fetchPage]);
 
   const loaded = tasks?.length ?? 0;
   const hasMore = total !== null ? loaded < total : loaded >= pageRef.current * PAGE_SIZE && loaded > 0;
@@ -110,8 +155,8 @@ export function useCloudTasks(reloadKey = 0, enabled = true): CloudTasksFeed {
     unauthorized,
     total,
     hasMore,
-    loadMore: () => void fetchPage(pageRef.current + 1, false),
-    refresh: () => void fetchPage(1, true),
+    loadMore: () => void fetchPage(pageRef.current + 1, "append"),
+    refresh: () => void fetchPage(1, "replace"),
   };
 }
 

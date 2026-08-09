@@ -2,6 +2,8 @@
 // 大图 lightbox。设计移植旧 uploadMedia/logView,实现走 daisyUI modal。
 import { useEffect, useState } from "react";
 
+import { pushEscLayer } from "@/lib/util/escLayer";
+
 /** 上传/落盘图片:src 经壳异步回读(data URL),就绪前不渲染——
  * 失败(越界路径/超限/日志清理)也不渲染,永不出裂图。 */
 export function UploadImg({
@@ -49,18 +51,15 @@ export function downloadUpload(load: () => Promise<string>, name: string): void 
     .catch(() => {});
 }
 
-/** 大图预览:daisyUI modal 官方形态;Esc window capture 截断(浮层优先,
- * 不许漏给全局审批热键——esc = deny 不可逆,与抽屉/子会话浮层同法)。 */
+/** 大图预览:daisyUI modal 官方形态;Esc 经 escLayer 层栈消费(浮层最后打开
+ * 即在栈顶,先拿到这一下,也不会漏给全局审批热键——esc = deny 不可逆)。 */
 export function Lightbox({ alt, onClose, children }: { alt: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
+    return pushEscLayer(() => {
       onClose();
-    };
-    window.addEventListener("keydown", h, true);
-    return () => window.removeEventListener("keydown", h, true);
-    // onClose 由调用方保证稳定(setState);挂载期一次注册即可
+      return true;
+    });
+    // onClose 由调用方保证稳定(setState);挂载期一次入栈即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (

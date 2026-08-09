@@ -7,7 +7,7 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { IconAlertCircle, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
@@ -56,6 +56,7 @@ const NOTICE_TONE: Record<NoticeKind, string> = {
   ask: "alert-warning",
   done: "alert-success",
   error: "alert-error",
+  interrupted: "alert-warning",
   queued: "alert-success",
 };
 
@@ -64,6 +65,7 @@ const NOTICE_ICON: Record<NoticeKind, typeof IconHelpCircle> = {
   ask: IconHelpCircle,
   done: IconCircleCheck,
   error: IconAlertCircle,
+  interrupted: IconPlayerStop,
   queued: IconSend,
 };
 
@@ -71,20 +73,41 @@ const NOTICE_TEXT: Record<NoticeKind, MessageKey> = {
   ask: "notice.ask",
   done: "notice.done",
   error: "notice.error",
+  interrupted: "notice.interrupted",
   queued: "notice.queued",
 };
 
+/** 后台会话提醒的存活时长(旧 UI useSession 的 notice 同款 8s)。
+ *  LAYOUT §1 把它归在「角落瞬态」——不设期限的话,三个后台任务就是三条
+ *  永久钉在主区右上角的横幅,而且只能一条条手点关掉。
+ *  注意只有 toast 到点消失:侧栏那一行的 attention 高亮**不跟着走**,
+ *  「未读」是持久状态,打开会话才算读过(dismissSession)。 */
+const SESSION_NOTICE_MS = 8000;
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** 壳侧 updated_at 的格式(config.rs::ms_to_rfc3339):秒精度 UTC。
+ *  增量补丁要跟它同格式,列表排序才是同一坐标系上的字符串比较。 */
+const nowStamp = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
+
 /** 壳级提示(不属于任何会话,故不进 SessionNotice 通道):浏览器工具装载
- *  结果等。info 自动消失,warn 留到用户关掉——「工具没装上」不能一晃而过。 */
+ *  结果、会话操作失败等。三档语气:
+ *  - info:成功类,6s 自灭;
+ *  - error:操作失败(改名/归档/删除被壳拒、提醒指向的会话已不存在),
+ *    8s 自灭(旧 UI notify 同款窗口),原因经 params 带出来;
+ *  - warn:留到用户关掉——「工具没装上」不能一晃而过。 */
 interface ShellNotice {
   id: number;
   key: MessageKey;
-  kind: "info" | "warn";
+  kind: "info" | "warn" | "error";
+  /** 文案插值(失败提示要把壳给的原因原样带出) */
+  params?: Record<string, string>;
   /** 提示自带的出口动作:谁的提示指了哪条路,谁就把按钮给出来。
    *  "restart" = 重启引擎(mcpTimeout 那条文案里写的就是它) */
   action?: "restart";
 }
 const SHELL_NOTICE_MS = 6000;
+const SHELL_ERROR_MS = 8000;
 
 function SpaceRail({
   space,
@@ -160,12 +183,15 @@ function MainArea({
   epoch,
   onDelete,
   onPatched,
+  onActionError,
 }: {
   current: SessionMeta | null;
   epoch: number;
   onDelete: (meta: SessionMeta) => void;
   /** 视图内改名/归档落盘后重拉列表(壳 session_patch 不广播事件) */
   onPatched: () => void;
+  /** 视图内改名/归档**失败**时外显:与侧栏右键菜单共用角落提示栈 */
+  onActionError: (key: "notice.renameFailed" | "notice.archiveFailed", reason: string) => void;
 }) {
   const { t } = useI18n();
   const [info, setInfo] = useState<HostInfo | null>(null);
@@ -179,7 +205,27 @@ function MainArea({
     };
   }, []);
 
-  if (current) return <ChatView meta={current} epoch={epoch} onDeleted={() => onDelete(current)} onPatched={onPatched} />;
+  // key={epoch}:引擎自愈信号一变就整棵重建。epoch 本身已经喂给 useSessionFeed
+  // 做幂等重连,但**模型清单挂在 Composer 自己的挂载期 effect 上**(deps 是
+  // []),不重建就永远是旧引擎那份——保存设置触发的重启碰巧自愈(SettingsView
+  // 把 ChatView 整个卸掉了),崩溃自愈与浏览器扩展配对却不会,模型菜单一直
+  // 停在旧内容,直到用户手动切一次会话。旧 UI 是在重连路径里直接重拉 models
+  // (App.tsx reconnectRef),ui-next 的模型清单没有集中缓存,只能从挂载期
+  // 重来。代价可控:epoch 只在引擎真的掉过之后自增(不是每帧),而那时
+  // ChatView 的数据面本就要整份重放;草稿/排队/附件按会话存在 composer stash
+  // 里,卸载即留档、重挂即恢复,不会丢。
+  // 注意 key **只取 epoch**:切会话仍走同一实例(与此前行为一致),不牵连
+  if (current)
+    return (
+      <ChatView
+        key={epoch}
+        meta={current}
+        epoch={epoch}
+        onDeleted={() => onDelete(current)}
+        onPatched={onPatched}
+        onActionError={onActionError}
+      />
+    );
 
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-base-100">
@@ -227,10 +273,50 @@ export function App() {
   // 壳级提示的自增号与在途定时器(卸载时统一清)
   const shellSeq = useRef(0);
   const shellTimers = useRef<Set<number>>(new Set());
+  // 会话提醒的到期定时器(按 sessionId 记账:同一会话来了新提醒就顶掉旧计时,
+  // 免得旧计时把刚换上的那条提前撤走)
+  const noticeTimers = useRef<Map<string, number>>(new Map());
 
-  // 同样过退避重试:引擎重启后这一拉也在壳的 apply 闸门窗口里(见
-  // afterEngineReady 头注)。原先连 catch 都没有,撞闸门时既不重试、
-  // 又抛未处理拒绝,列表停在重启前的旧快照
+  /** 壳级提示入栈:同一条 key 只留最新一份(连着配对两次不叠成两条)。
+   *  info/error 自我了断,warn 留到用户关掉(定时器记账供卸载时清空)。 */
+  const pushShell = (
+    key: MessageKey,
+    kind: ShellNotice["kind"],
+    opts: { params?: Record<string, string>; action?: ShellNotice["action"] } = {},
+  ) => {
+    const id = ++shellSeq.current;
+    setShellNotices((list) => [...list.filter((n) => n.key !== key), { id, key, kind, ...opts }]);
+    if (kind === "warn") return;
+    const timer = window.setTimeout(() => {
+      shellTimers.current.delete(timer);
+      setShellNotices((list) => list.filter((n) => n.id !== id));
+    }, kind === "error" ? SHELL_ERROR_MS : SHELL_NOTICE_MS);
+    shellTimers.current.add(timer);
+  };
+
+  const clearNoticeTimer = (id: string) => {
+    const timer = noticeTimers.current.get(id);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    noticeTimers.current.delete(id);
+  };
+
+  /** 后台会话提醒入栈(每会话只留最新一条)+ 侧栏 attention + 到点自灭。 */
+  const pushNotice = (n: SessionNotice) => {
+    setNotices((list) => [...list.filter((x) => x.sessionId !== n.sessionId), n]);
+    setAttentionIds((prev) => (prev.has(n.sessionId) ? prev : new Set(prev).add(n.sessionId)));
+    clearNoticeTimer(n.sessionId);
+    const timer = window.setTimeout(() => {
+      noticeTimers.current.delete(n.sessionId);
+      setNotices((list) => list.filter((x) => x.sessionId !== n.sessionId));
+    }, SESSION_NOTICE_MS);
+    noticeTimers.current.set(n.sessionId, timer);
+  };
+
+  // 过退避重试:引擎重启后这一拉也在壳的 apply 闸门窗口里(见 afterEngineReady
+  // 头注)。**失败一定要保留现有列表**——sessionsList 现在如实抛错(此前它把
+  // 拒绝吞成空数组,退避重试因此成了死代码),而空结果会被下游读成「会话都
+  // 没了」:侧栏清空、current 变 null、开着的对话卸载回欢迎页
   const refresh = () => void afterEngineReady(sessionsList).then(setSessions).catch(() => {});
 
   const setSpace = (next: Space) => {
@@ -243,6 +329,7 @@ export function App() {
 
   /** 摘掉某会话的提醒与侧栏 attention(打开它即视为已读)。 */
   const dismissSession = (id: string) => {
+    clearNoticeTimer(id);
     setNotices((list) => list.filter((n) => n.sessionId !== id));
     setAttentionIds((prev) => {
       if (!prev.has(id)) return prev;
@@ -257,14 +344,27 @@ export function App() {
   const openSessionById = async (id: string) => {
     let meta = sessionsRef.current.find((m) => m.id === id);
     if (!meta) {
-      const list = await sessionsList();
-      setSessions(list);
-      meta = list.find((m) => m.id === id);
+      // 这一拉可能撞上壳的 apply 闸门。**失败不能用空结果覆盖列表**
+      // (旧 UI 原话:清空会话列表会被误判为"会话已删"),保留原样即可
+      const list = await sessionsList().catch(() => null);
+      if (list) {
+        setSessions(list);
+        meta = list.find((m) => m.id === id);
+      }
+    }
+    if (!meta) {
+      // 提醒/托盘意图指向的会话已经不在了(期间被删、或这一拉失败)。
+      // 此前无条件 setCurrentId(id):选中一个列表里没有的 id,主区空白一片,
+      // 既没内容也没解释。旧 UI 是「无法打开:对应的任务或会话可能已被删除」
+      // 然后原地不动
+      pushShell("notice.openMissing", "error");
+      dismissSession(id); // 过期提醒点完就该消失,别赖在角落里
+      return;
     }
     setCurrentId(id);
     writeLastSession(id);
     setSettingsOpen(false);
-    if (meta) setSpace(meta.kind === "chat" ? "chat" : "local");
+    setSpace(meta.kind === "chat" ? "chat" : "local");
     dismissSession(id);
   };
   const openSessionByIdRef = useRef(openSessionById);
@@ -295,32 +395,26 @@ export function App() {
     // 浏览器扩展配对后壳会重启引擎换上带 browser_* 工具的配置。两条事件都
     // 必须外显:成功不说,用户不知道现在能用了;超时(壳等任务空闲放弃,见
     // main.rs BROWSER_MCP_REFRESH_DEADLINE)更不能静默——配好了却没工具会被
-    // 当成配对失败。同一条只留最新一份,连着配对两次不叠成两条
-    const pushShell = (key: MessageKey, kind: ShellNotice["kind"], action?: ShellNotice["action"]) => {
-      const id = ++shellSeq.current;
-      setShellNotices((list) => [...list.filter((n) => n.key !== key), { id, key, kind, action }]);
-      // info 档自我了断;warn 留到用户关掉(定时器记账供卸载时清空)
-      if (kind !== "info") return;
-      const timer = window.setTimeout(() => {
-        shellTimers.current.delete(timer);
-        setShellNotices((list) => list.filter((n) => n.id !== id));
-      }, SHELL_NOTICE_MS);
-      shellTimers.current.add(timer);
-    };
+    // 当成配对失败。同一条只留最新一份,连着配对两次不叠成两条(见 pushShell)
     const offMcpReloaded = listen<void>("browser-mcp-reloaded", () => pushShell("browser.mcpReloaded", "info"));
     // 超时那条的文案里写着「保存设置或重启引擎即可生效」,就把重启按钮
     // 直接挂在提示上——引擎横幅只在崩溃/启动失败时出,正常跑着时用户在
     // 界面上找不到重启入口(2026-08-07 用户报障)
     const offMcpTimeout = listen<void>("browser-mcp-refresh-timeout", () =>
-      pushShell("browser.mcpTimeout", "warn", "restart"),
+      pushShell("browser.mcpTimeout", "warn", { action: "restart" }),
     );
     refresh();
     // D5 首启向导:桌面壳里模型清单为空 → 自动打开设置页。只在挂载时判一次:
     // 用户关掉设置页不再纠缠,配好模型后自然不会再触发。
+    // catch 必须有:models_list 会撞壳的 apply 闸门(引擎正在重启),而
+    // modelsList 现在如实抛错。没有 catch 的话,一次瞬时失败 = 未处理拒绝;
+    // 而按老写法把失败吞成 [],等于把设置页糊到一个模型配得好好的用户脸上
     if (inDesktopShell()) {
-      void modelsList().then((models) => {
-        if (alive && models.length === 0) setSettingsOpen(true);
-      });
+      void modelsList()
+        .then((models) => {
+          if (alive && models.length === 0) setSettingsOpen(true);
+        })
+        .catch(() => {});
     }
     // 后台会话状态/摘要/审批等待:全局事件驱动,不轮询
     const off = onSessionEvent((e) => {
@@ -334,6 +428,15 @@ export function App() {
                   status: e.status ?? m.status,
                   summary: e.summary ?? m.summary,
                   waiting_ask: e.type === "session-ask" ? e.open : m.waiting_ask,
+                  // 侧栏项目组按「组内最近 updated_at」排序(util/projects
+                  // groupSessions)。增量补丁此前只改状态不动时间戳,于是后台
+                  // 任务跑起来,它所在的项目组不会浮上去——顺序永远停在事件
+                  // 发生之前。旧 UI 是每来一条事件就重拉全表,顺序自然跟着走;
+                  // 这里不能那么干(一帧一拉),所以按壳侧契约就地跟进:
+                  // session-status 恒紧跟一次**刷新 updated_at** 的 write_sidecar
+                  // (driver/normalize.rs、session.rs),而 session-ask /
+                  // session-summary 走的是 write_sidecar_keep_updated,不动时间戳
+                  updated_at: e.type === "session-status" ? nowStamp() : m.updated_at,
                 }
               : m,
           ),
@@ -345,17 +448,11 @@ export function App() {
       // 后台会话轮结束 → 补投其暂存的排队消息(stash 模块状态机;成功走
       // queued toast + 侧栏 attention,§3 后台会话提醒的法定位置)
       if (e.type === "session-status" && e.status) {
-        deliverQueued(e.id, e.status, (sid, text) => {
-          const n = noticeForQueuedDelivery(sid, text);
-          setNotices((list) => [...list.filter((x) => x.sessionId !== n.sessionId), n]);
-          setAttentionIds((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
-        });
+        deliverQueued(e.id, e.status, (sid, text) => pushNotice(noticeForQueuedDelivery(sid, text)));
       }
       // D3:非当前会话的等待审批/终态提醒(文案取自事件本身,不依赖列表快照)
       const notice = noticeForSessionEvent(e, currentIdRef.current);
-      if (!notice) return;
-      setNotices((list) => [...list.filter((n) => n.sessionId !== notice.sessionId), notice]);
-      setAttentionIds((prev) => (prev.has(notice.sessionId) ? prev : new Set(prev).add(notice.sessionId)));
+      if (notice) pushNotice(notice);
     });
     return () => {
       alive = false;
@@ -366,6 +463,8 @@ export function App() {
       offMcpTimeout();
       shellTimers.current.forEach(window.clearTimeout);
       shellTimers.current.clear();
+      noticeTimers.current.forEach(window.clearTimeout);
+      noticeTimers.current.clear();
     };
   }, []);
 
@@ -415,16 +514,20 @@ export function App() {
     setCreating(null);
   };
 
-  /** 删除会话(侧栏右键与 ChatView ⋯ 菜单共用一套):composer 留档随会话
-   *  清除,删的是当前会话则撤选中,最后重拉列表。 */
+  /** 删除会话(侧栏右键与 ChatView ⋯ 菜单共用一套):成功才清 composer 留档、
+   *  撤选中、重拉列表;失败外显原因并**就此打住**。
+   *
+   *  此前是 `.catch(() => {}).then(...)`:壳拒了(运行中的会话内核不许删)
+   *  界面照样撤选中 + 重拉,于是"删成功了"的假象只维持到列表刷回来——会话
+   *  又冒出来了,而全程没有一个字解释。旧 UI 是 notify 后直接 return。 */
   const removeSession = (meta: SessionMeta) => {
-    dropStash(meta.id); // 会话没了,composer 留档随之清除
     void sessionDelete(meta.id)
-      .catch(() => {})
       .then(() => {
+        dropStash(meta.id); // 会话没了,composer 留档随之清除
         if (currentIdRef.current === meta.id) setCurrentId(null);
         refresh();
-      });
+      })
+      .catch((e: unknown) => pushShell("notice.deleteFailed", "error", { params: { reason: errText(e) } }));
   };
 
   const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
@@ -491,16 +594,19 @@ export function App() {
               setSettingsOpen(false);
               setCreating({ dir: workdir });
             },
+            // 改名/归档同理:成功才重拉,失败给原因(旧 UI「⚠ 重命名失败:
+            // {原因}」)。原先 .catch(() => {}).then(refresh) 是"失败了也当
+            // 没事发生":列表刷回旧标题,用户以为自己没点中
             onRename: (meta, title) => {
               void sessionPatch(meta.id, { title })
-                .catch(() => {})
-                .then(refresh);
+                .then(refresh)
+                .catch((e: unknown) => pushShell("notice.renameFailed", "error", { params: { reason: errText(e) } }));
             },
             onDelete: removeSession,
             onToggleArchive: (meta) => {
               void sessionPatch(meta.id, { archived: !meta.archived })
-                .catch(() => {})
-                .then(refresh);
+                .then(refresh)
+                .catch((e: unknown) => pushShell("notice.archiveFailed", "error", { params: { reason: errText(e) } }));
             },
           }}
         />
@@ -514,6 +620,12 @@ export function App() {
             // 侧栏 ＋ 属于当前空间:rail 停在哪个空间,新建就默认开哪个页签
             initialKind={space}
             recentDirs={recentDirs}
+            // 云端页签未连接时的出口:与侧栏云端空态同一个动作(关掉新建、
+            // 开设置页——设置页初始分区就是「账号」,直达连接入口)
+            onOpenSettings={() => {
+              setCreating(null);
+              setSettingsOpen(true);
+            }}
             onClose={() => setCreating(null)}
             onCreated={(meta) => {
               refresh();
@@ -538,7 +650,13 @@ export function App() {
             }}
           />
         ) : (
-          <MainArea current={space === "cloud" ? null : current} epoch={epoch} onDelete={removeSession} onPatched={refresh} />
+          <MainArea
+            current={space === "cloud" ? null : current}
+            epoch={epoch}
+            onDelete={removeSession}
+            onPatched={refresh}
+            onActionError={(key, reason) => pushShell(key, "error", { params: { reason } })}
+          />
         )}
       </div>
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭。
@@ -553,15 +671,16 @@ export function App() {
           {shellNotices.map((n) => (
             <div
               key={n.id}
-              role={n.kind === "warn" ? "alert" : "status"}
-              className={`alert ${n.kind === "warn" ? "alert-warning" : "alert-success"} alert-soft py-2 text-xs shadow-sm`}
+              role={n.kind === "info" ? "status" : "alert"}
+              className={`alert ${n.kind === "info" ? "alert-success" : n.kind === "warn" ? "alert-warning" : "alert-error"} alert-soft py-2 text-xs shadow-sm`}
             >
-              {n.kind === "warn" ? (
-                <IconAlertCircle size={14} stroke={1.75} aria-hidden className="shrink-0" />
-              ) : (
+              {n.kind === "info" ? (
                 <IconWorld size={14} stroke={1.75} aria-hidden className="shrink-0" />
+              ) : (
+                <IconAlertCircle size={14} stroke={1.75} aria-hidden className="shrink-0" />
               )}
-              <span className="max-w-64 min-w-0">{t(n.key)}</span>
+              {/* 失败原因是壳给的任意串,break-all 免得长路径把提示撑爆 */}
+              <span className="max-w-64 min-w-0 break-all">{t(n.key, n.params)}</span>
               {n.action === "restart" && (
                 // 成功即撤这条提示(问题已解决);失败不撤,由引擎横幅接手外显
                 <button
@@ -617,6 +736,7 @@ export function App() {
                 className="btn btn-ghost btn-square btn-xs"
                 onClick={(e) => {
                   e.stopPropagation();
+                  clearNoticeTimer(n.sessionId);
                   setNotices((list) => list.filter((x) => x.sessionId !== n.sessionId));
                 }}
               >

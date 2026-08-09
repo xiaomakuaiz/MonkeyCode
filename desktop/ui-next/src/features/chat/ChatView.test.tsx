@@ -653,6 +653,43 @@ describe("聊天视图", () => {
     expect(screen.queryByRole("menuitem", { name: "确认删除?" })).toBeNull();
   });
 
+  it("运行中不许删:⋯ 菜单里的删除置灰并说明原因(旧 UI DeleteMenuItem 随迁)", async () => {
+    const { emit } = stubShell();
+    const onDeleted = vi.fn();
+    render(<ChatView meta={META} onDeleted={onDeleted} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [{ type: "task-started", timestamp: 9, seq: 9 }]);
+
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    const del = await screen.findByRole("menuitem", { name: "删除" });
+    await waitFor(() => expect((del as HTMLButtonElement).disabled).toBe(true));
+    // 理由挂 li:多数 webview 不给 disabled 按钮弹 tooltip,挂按钮上等于没写
+    expect(del.closest("li")?.getAttribute("title")).toBe("运行中,请先停止");
+    fireEvent.click(del);
+    expect(screen.queryByRole("menuitem", { name: "确认删除?" })).toBeNull();
+    expect(onDeleted).not.toHaveBeenCalled();
+
+    // 轮结束即恢复可删
+    emit("frames:s1", [{ type: "task-ended", timestamp: 10, seq: 10 }]);
+    await waitFor(() => expect((screen.getByRole("menuitem", { name: "删除" }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("打开会话失败:原因进 header 之下的内嵌条(§3),不进 header", async () => {
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: {
+        invoke: (cmd: string) =>
+          cmd === "session_open" ? Promise.reject(new Error("引擎没起来")) : Promise.resolve(null),
+      },
+      event: { listen: () => Promise.resolve(() => {}) },
+    };
+    render(<ChatView meta={META} />);
+    // 壳只在成功路径 emit conn-status:这条不显,用户拿到的是不解释的空会话
+    const strip = await screen.findByText("打开会话失败:引擎没起来", undefined, { timeout: 3000 });
+    const header = document.querySelector("[data-view-header]") as HTMLElement;
+    expect(header.contains(strip)).toBe(false);
+    expect(strip.closest("[role=status]")).toBeTruthy();
+  });
+
   it("改动徽标:轮末拉 repo_file_changes 计数;点文件钮直达「改动」页;§7 徽标带拖拽属性", async () => {
     const { ops, emit } = stubShell({ changes: { result: [{ path: "src/a.ts", status: "M" }], is_git_repo: true } });
     render(<ChatView meta={META} />);

@@ -20,6 +20,7 @@
 //   不发明新键
 import { IconCheck, IconChevronDown, IconCloud, IconFile as FileIcon, IconFolder, IconFolderCode, IconFolderOpen, IconMessages, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -28,6 +29,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
+import { resolveShortcut } from "@/app/shortcuts";
+import { useEscLayer } from "@/lib/util/escLayer";
 import { useI18n } from "@/lib/i18n";
 import { getConfig } from "@/lib/ipc/config";
 import { isWindowsShell, pickDirectory, workdirPickBase, wslWorkdirBase } from "@/lib/ipc/host";
@@ -71,11 +74,15 @@ export function NewTaskModal({
   initialDir,
   initialCloudProject,
   initialKind,
+  onOpenSettings,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (meta: SessionMeta) => void;
   onCloudCreated?: (task: CloudTaskDetail) => void;
+  /** 云端页签未连接 MonkeyCode 时的出口(空态里的「去设置连接」)。不传的话
+   *  那颗按钮根本不渲染——空态只剩一句"请先连接",却不给路。 */
+  onOpenSettings?: () => void;
   /** 最近项目目录(App 从 sessions 的 workdir 去重、按 updated_at 降序派生);
    *  环境过滤与截断在本组件内做 */
   recentDirs?: string[];
@@ -140,16 +147,21 @@ export function NewTaskModal({
     } else {
       setKind(initialKind ?? "local");
     }
-    void modelsList().then((list) => {
-      if (!alive) return;
-      setModels(list);
-      const remembered = readLastTaskModel();
-      const pick =
-        (remembered && list.find((m) => m.name === remembered && !m.locked)) ||
-        list.find((m) => m.default && !m.locked) ||
-        list.find((m) => !m.locked);
-      if (pick) setModel(pick.name);
-    });
+    // 失败保留上一份、不清空(modelsList 现在会抛,见其头注):引擎重启期
+    // 这一拉会撞上壳的「配置应用中」闸门,清空等于"重启一次就选不了模型";
+    // 未处理拒绝还会被 index.html 的兜底画成满屏红框
+    void modelsList()
+      .then((list) => {
+        if (!alive) return;
+        setModels(list);
+        const remembered = readLastTaskModel();
+        const pick =
+          (remembered && list.find((m) => m.name === remembered && !m.locked)) ||
+          list.find((m) => m.default && !m.locked) ||
+          list.find((m) => !m.locked);
+        if (pick) setModel(pick.name);
+      })
+      .catch(() => {});
     // 运行环境 → 默认目录/最近目录过滤:WSL 模式默认目录落在 guest 家目录基座
     void (async () => {
       const env = (await getConfig().catch(() => null))?.kernel_env ?? "";
@@ -328,16 +340,24 @@ export function NewTaskModal({
     }
   };
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  // 视图级 Esc:走 escLayer 层栈而非自挂 window capture。同 target 同阶段的
+  // 监听按**注册先后**触发,本视图打开即注册、浮层(useDismiss:模型菜单/
+  // 思考档/最近目录)开时才注册,于是永远是本视图先吃掉这一下——开着模型
+  // 菜单按 Esc 关掉的是整个新建页,连同已写的首条消息与暂存附件一起没
+  // (2026-08-09 报障)。层栈按后进先出派发,后开的浮层天然压在上面。
+  // handler 引用必须稳定(身份一变就重挂 effect、把本层顶到栈顶),故 ref
+  // 读最新闭包;输入态只收敛焦点,不拿一下 Esc 换掉整篇草稿。
+  const escRef = useRef<() => boolean>(() => false);
+  escRef.current = () => {
+    const el = document.activeElement;
+    if (el instanceof HTMLElement && resolveShortcut({ key: "Escape", targetTag: el.tagName, openPermId: null }).kind === "blur") {
+      el.blur();
+      return true;
+    }
+    onClose();
+    return true;
+  };
+  useEscLayer(open, useCallback(() => escRef.current(), []));
 
   if (!open) return null;
   const recents = (recentDirs ?? []).filter((p) => workdirMatchesEnv(p, kernelEnv, isWindowsShell())).slice(0, 6);
@@ -409,6 +429,7 @@ export function NewTaskModal({
             {kind === "cloud" ? (
               <NewCloudTask
                 initialProject={initialCloudProject}
+                onOpenSettings={onOpenSettings}
                 onCreated={(task) => {
                   onCloudCreated?.(task);
                   onClose();

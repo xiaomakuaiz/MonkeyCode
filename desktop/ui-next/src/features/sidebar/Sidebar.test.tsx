@@ -99,6 +99,35 @@ describe("侧栏(local 空间)", () => {
     expect(quiet.title).toContain("3 轮");
   });
 
+  // LAYOUT §6.1 承诺「静默态(可继续/未开始/已停止)的词收进行 tooltip」,
+  // 实现里却只有 status.turns 搬过去了:tooltip 只插值 trailing?.label,而
+  // 静默态根本不给 trailing —— zh.ts 里的 status.interrupted/idle/notStarted
+  // 成了没人读的孤儿键。配合"interrupted 不出提醒"那个 bug,被引擎崩溃打断的
+  // 后台任务在界面上处处隐身
+  it("静默状态词进 tooltip 且不上行:已停止 / 可继续 / 尚未开始", () => {
+    const sessions = [
+      meta({ id: "被打断的", workdir: "/p/alpha", status: "interrupted", turns: 2 }),
+      meta({ id: "可以接着来", workdir: "/p/alpha", status: "idle", turns: 1 }),
+      meta({ id: "还没开始", workdir: "/p/alpha", status: "created", turns: 0 }),
+    ];
+    render(<Sidebar space="local" sessions={sessions} currentId={null} actions={actions()} />);
+    for (const [id, word] of [
+      ["被打断的", "已停止"],
+      ["可以接着来", "可继续"],
+      ["还没开始", "尚未开始"],
+    ] as const) {
+      const row = rowOf(id);
+      expect(row.title).toContain(word);
+      expect(within(row).queryByText(word)).toBeNull(); // 词不上行
+      expect(within(row).queryByRole("img")).toBeNull(); // 静默态不给点
+    }
+  });
+
+  it("要紧态的词同样在 tooltip 里(点的 aria 之外多一份可读文本)", () => {
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
+    expect(rowOf("重构侧栏").title).toContain("等待确认");
+  });
+
   it("归档任务收进项目内「已归档任务 · N」小节(默认收起,点开并落契约键);chat 会话不出现", async () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(screen.queryByText("问了个问题")).toBeNull();
@@ -147,7 +176,7 @@ describe("侧栏(local 空间)", () => {
     expect(label.className).not.toContain("font-semibold");
   });
 
-  it("行右键菜单:归档直接触发;删除二段确认", async () => {
+  it("行右键菜单:归档直接触发;删除二段确认(第二段带后果句)", async () => {
     const acts = actions();
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
     let menu = contextMenuOf(rowOf("修复了闪退,补了用例"));
@@ -157,8 +186,39 @@ describe("侧栏(local 空间)", () => {
     menu = contextMenuOf(rowOf("修复了闪退,补了用例"));
     await userEvent.click(within(menu).getByText("删除"));
     expect(acts.onDelete).not.toHaveBeenCalled(); // 第一次点只换文案
-    await userEvent.click(within(menu).getByText("确认删除"));
+    // 后果句不能丢:旧 UI 的 ConfirmPane 是「删除后不可恢复。」+「确认删除」
+    // 两行,命令式菜单只有一行按钮,后果合并进标签(云端「终止」侧一直有
+    // 这句,只有会话删除掉了)
+    const confirm = within(menu).getByText(/确认删除/);
+    expect(confirm.textContent).toContain("不可恢复");
+    await userEvent.click(confirm);
     expect(acts.onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "修复登录" }));
+  });
+
+  // 旧 UI 的 DeleteMenuItem 对运行中的会话直接置灰 + title「运行中,请先停止」;
+  // ui-next 此前压根没看 meta.status,于是运行中的会话点得下去,壳/内核拒了
+  // 也没人说为什么(用户只看到"点了没反应")
+  it("运行中的会话不给删:菜单项置灰并写明理由,点不动", async () => {
+    const acts = actions();
+    const sessions = [meta({ id: "跑着的", workdir: "/p/alpha", status: "running" })];
+    render(<Sidebar space="local" sessions={sessions} currentId={null} actions={acts} />);
+    const menu = contextMenuOf(rowOf("跑着的"));
+    const del = within(menu).getByText("删除") as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.title).toBe("运行中,请先停止");
+    expect(del.closest("li")?.className).toContain("menu-disabled");
+    await userEvent.click(del);
+    expect(acts.onDelete).not.toHaveBeenCalled();
+    // 二段确认也不该被"武装":文案原地不动
+    expect(within(menu).queryByText(/确认删除/)).toBeNull();
+  });
+
+  it("非运行中的会话照常可删(置灰只针对 running)", async () => {
+    const acts = actions();
+    const sessions = [meta({ id: "停下的", workdir: "/p/alpha", status: "interrupted" })];
+    render(<Sidebar space="local" sessions={sessions} currentId={null} actions={acts} />);
+    const menu = contextMenuOf(rowOf("停下的"));
+    expect((within(menu).getByText("删除") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("重命名:右键菜单进入行内输入,Enter 提交新标题", async () => {

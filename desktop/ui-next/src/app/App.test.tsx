@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -80,26 +80,43 @@ interface Call {
 }
 
 /** 桌面壳桩:支持同名事件多监听(App 与 EngineBanner 都听 engine-status)。 */
-function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?: string | null; cloudTasks?: unknown[] } = {}) {
+function stubShell(
+  opts: {
+    sessions?: SessionMeta[];
+    models?: unknown[];
+    intent?: string | null;
+    cloudTasks?: unknown[];
+    /** 让指定命令直接回 Err(壳拒了写操作:运行中不许删、磁盘只读…) */
+    fail?: Record<string, string>;
+  } = {},
+) {
   const calls: Call[] = [];
-  let gate = 0;
+  // 壳的「配置应用中」闸门(driver/mod.rs::DriverHost::get):**每条**经引擎的
+  // 命令都会被同一道锁拒掉,不只是 session_open。此前这里只给 session_open
+  // 设闸,于是「Ready 后的重拉会不会被拒」这条路从来没被测到——而实现里
+  // sessionsList 把拒绝吞成空数组,退避重试成了死代码,测试却一路全绿。
+  // 各命令各计各的次数,互不消耗
+  const gates = new Map<string, number>();
+  const gateOf = (cmd: string): Promise<never> | null => {
+    const left = gates.get(cmd) ?? 0;
+    if (left <= 0) return null;
+    gates.set(cmd, left - 1);
+    return Promise.reject(new Error("引擎配置正在应用,请稍后重试"));
+  };
   const listeners = new Map<string, Set<(e: { payload: unknown }) => void>>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
       invoke: (cmd: string, args?: Record<string, unknown>) => {
         calls.push({ cmd, args });
+        const gated = gateOf(cmd);
+        if (gated) return gated;
+        const failure = opts.fail?.[cmd];
+        if (failure) return Promise.reject(new Error(failure));
         if (cmd === "sessions_list") return Promise.resolve(opts.sessions ?? []);
         if (cmd === "models_list") return Promise.resolve(opts.models ?? [{ name: "m", default: true }]);
         if (cmd === "take_ui_intent") return Promise.resolve(opts.intent ?? null);
         if (cmd === "engine_status") return Promise.resolve({ phase: "ready", version: "1" });
-        if (cmd === "session_open") {
-          // 模拟壳的「配置应用中」闸门:重启后头几发被拒(见 afterEngineReady)
-          if (gate > 0) {
-            gate -= 1;
-            return Promise.reject(new Error("配置应用中,请稍后重试"));
-          }
-          return Promise.resolve({ frames: [], cursor: 0, has_more: false });
-        }
+        if (cmd === "session_open") return Promise.resolve({ frames: [], cursor: 0, has_more: false });
         if (cmd === "host_info") return Promise.resolve({ version: "1", engine_version: "1" });
         if (cmd === "sound_enabled") return Promise.resolve(true);
         if (cmd === "get_config") return Promise.resolve({ models: [], mcp_servers: {} });
@@ -121,14 +138,24 @@ function stubShell(opts: { sessions?: SessionMeta[]; models?: unknown[]; intent?
   };
   return {
     calls,
-    /** 让随后 n 次 session_open 撞闸门被拒 */
-    armGate: (n: number) => {
-      gate = n;
+    /** 让随后 n 次指定命令撞闸门被拒(缺省:重启后必发的那两条) */
+    armGate: (n: number, cmds: string[] = ["session_open", "sessions_list"]) => {
+      for (const cmd of cmds) gates.set(cmd, n);
     },
     count: (cmd: string) => calls.filter((c) => c.cmd === cmd).length,
     emit: (name: string, payload: unknown) => listeners.get(name)?.forEach((cb) => cb({ payload })),
   };
 }
+
+/** 侧栏行(菜单/属性都挂在 <a> 上;同名文字在主区头部也有一份,取侧栏那份)。 */
+const rowOf = (text: string) =>
+  screen.getAllByText(text).map((el) => el.closest("a")).find(Boolean) as HTMLElement;
+
+/** 行右键后取命令式菜单(backdrop + menu 追加在 body 末尾)。 */
+const contextMenuOf = (el: HTMLElement): HTMLElement => {
+  fireEvent.contextMenu(el);
+  return document.body.lastElementChild as HTMLElement;
+};
 
 describe("D1 引擎重启自愈", () => {
   it("引擎曾不可用后转 ready:重拉会话列表并幂等重开当前会话", async () => {
@@ -143,6 +170,23 @@ describe("D1 引擎重启自愈", () => {
     act(() => shell.emit("engine-status", { phase: "ready", version: "1" }));
     await waitFor(() => expect(shell.count("session_open")).toBe(2)); // epoch 信号驱动重开
     expect(shell.count("sessions_list")).toBeGreaterThan(listBefore);
+  });
+
+  // 模型清单挂在 composer 自己的挂载期 effect 上(deps 是 []),epoch 只驱动
+  // 数据面重连、碰不到它。保存设置那条路碰巧自愈(SettingsView 把 ChatView
+  // 整个卸掉了),崩溃自愈与浏览器扩展配对却不会——模型菜单一直停在旧引擎
+  // 那份,直到用户手动切一次会话。旧 UI 是在重连路径里直接重拉 models
+  it("引擎自愈后模型清单重新拉取(不必等用户切会话)", async () => {
+    localStorage.setItem("mc.lastSession", "s1");
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({ sessions: [sess({ id: "s1", title: "任务一" })] });
+    render(<App />);
+    await waitFor(() => expect(shell.count("session_open")).toBe(1));
+    const before = shell.count("models_list");
+
+    act(() => shell.emit("engine-status", { phase: "crashed", detail: "x", log_tail: "", attempt: 1, retry_in_ms: 1000 }));
+    act(() => shell.emit("engine-status", { phase: "ready", version: "2" }));
+    await waitFor(() => expect(shell.count("models_list")).toBeGreaterThan(before));
   });
 
   it("一直 ready(没掉过)不空转:不重拉不重开", async () => {
@@ -352,6 +396,188 @@ describe("引擎重启后的重开要撞得过壳的 apply 闸门", () => {
     act(() => shell.emit("engine-status", { phase: "ready", version: "2" }));
     // 1(首挂)+ 3(重开:拒/拒/成)
     await waitFor(() => expect(shell.count("session_open")).toBe(4), { timeout: 3000 });
+  });
+});
+
+describe("会话列表拉取失败不能清空侧栏", () => {
+  // 壳在 apply 闸门期间对 sessions_list 回的是 Err「引擎配置正在应用,请稍后
+  // 重试」,而 adopt_engine 在闸门内就 emit 了 Ready ——这一拉必然撞上。此前
+  // sessionsList 把拒绝吞成 [],于是:退避重试永远等不到拒绝(死代码),而
+  // 空列表被下游读成「会话都没了」——侧栏清空、current 变 null、开着的对话
+  // 卸载回欢迎页,还得等下一条 session-event 才可能恢复
+  it("Ready 后的重拉撞闸门:退避重试补上,列表全程不空、对话不掉线", async () => {
+    localStorage.setItem("mc.lastSession", "s1");
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({ sessions: [sess({ id: "s1", title: "任务一" })] });
+    render(<App />);
+    await waitFor(() => expect(shell.count("session_open")).toBe(1));
+    const before = shell.count("sessions_list");
+
+    shell.armGate(1, ["sessions_list"]); // 下一发 sessions_list 被闸门拒
+    act(() => shell.emit("engine-status", { phase: "crashed", detail: "x", log_tail: "", attempt: 1, retry_in_ms: 1000 }));
+    act(() => shell.emit("engine-status", { phase: "ready", version: "2" }));
+
+    // 拒 1 次 + 重试成功 1 次 = 两发(吞错的实现只会有一发)
+    await waitFor(() => expect(shell.count("sessions_list")).toBe(before + 2), { timeout: 3000 });
+    expect(rowOf("任务一")).toBeTruthy(); // 侧栏没被空结果洗掉
+    expect(screen.queryByText("开始一个任务")).toBeNull(); // 主区没退回欢迎页
+  });
+
+  it("models_list 失败 ≠ 没配模型:不弹首启向导", async () => {
+    stubShell({ fail: { models_list: "引擎配置正在应用,请稍后重试" } });
+    render(<App />);
+    await act(() => Promise.resolve());
+    await act(() => Promise.resolve());
+    expect(screen.queryByRole("heading", { name: "设置" })).toBeNull();
+  });
+});
+
+describe("会话操作失败必须外显(壳拒了就别装作成功)", () => {
+  it("删除被拒:给出原因,且不撤选中、不重拉(旧 UI 同款:notify 后 return)", async () => {
+    localStorage.setItem("mc.lastSession", "s1");
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({
+      sessions: [sess({ id: "s1", title: "任务一" })],
+      fail: { session_delete: "会话正在运行,请先停止" },
+    });
+    render(<App />);
+    await waitFor(() => expect(shell.count("session_open")).toBe(1));
+    const listBefore = shell.count("sessions_list");
+
+    const menu = contextMenuOf(rowOf("任务一"));
+    await userEvent.click(within(menu).getByText("删除"));
+    await userEvent.click(within(menu).getByText(/确认删除/));
+
+    expect(await screen.findByText("删除失败:会话正在运行,请先停止")).toBeTruthy();
+    // 没有装作成功:会话还在、当前会话没被撤掉,也没有多余的一次重拉
+    expect(rowOf("任务一")).toBeTruthy();
+    expect(screen.queryByText("开始一个任务")).toBeNull();
+    expect(shell.count("sessions_list")).toBe(listBefore);
+  });
+
+  it("归档 / 重命名被拒:各自给出原因", async () => {
+    const shell = stubShell({
+      sessions: [sess({ id: "s1", title: "任务一" })],
+      fail: { session_patch: "磁盘只读" },
+    });
+    render(<App />);
+    await waitFor(() => expect(shell.count("sessions_list")).toBeGreaterThanOrEqual(1));
+
+    let menu = contextMenuOf(rowOf("任务一"));
+    await userEvent.click(within(menu).getByText("归档"));
+    expect(await screen.findByText("归档失败:磁盘只读")).toBeTruthy();
+
+    menu = contextMenuOf(rowOf("任务一"));
+    await userEvent.click(within(menu).getByText("重命名"));
+    const input = await screen.findByRole("textbox", { name: "重命名" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "新名字{Enter}");
+    expect(await screen.findByText("重命名失败:磁盘只读")).toBeTruthy();
+  });
+});
+
+describe("提醒的生命周期与失效跳转", () => {
+  // LAYOUT §1 把后台提醒归在「角落瞬态」。此前 SessionNotice 只增不减(唯一
+  // 一个定时器被 `if (kind !== "info") return` 挡在壳级提示那条路上),三个
+  // 后台任务 = 三条永久钉在主区右上角的横幅
+  it("后台提醒到点自动消退;侧栏 attention 不跟着走(未读是持久状态)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      localStorage.setItem("mc.lastSession", "s1");
+      localStorage.setItem("mc.sidebarSpace", "local");
+      const shell = stubShell({
+        sessions: [sess({ id: "s1", title: "任务一" }), sess({ id: "s2", title: "后台任务" })],
+      });
+      render(<App />);
+      await waitFor(() => expect(shell.count("session_open")).toBe(1));
+
+      act(() => shell.emit("session-event", { type: "session-status", id: "s2", title: "后台任务", status: "idle" }));
+      expect(await screen.findByText("「后台任务」已回复")).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(8100);
+      });
+      expect(screen.queryByText("「后台任务」已回复")).toBeNull();
+      expect(rowOf("后台任务").dataset.attention).toBeDefined(); // 未读留着,打开才算读过
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 引擎崩溃时壳对每个顶层会话发 interrupted(driver/session.rs 的
+  // reconcile-all)。此前 notices.ts 漏了这一档,于是"跑着的后台任务全被打断"
+  // 在界面上一声不吭:行是静默态(无点),提醒也没有
+  it("interrupted 出警示提醒(引擎崩溃时后台任务的唯一信号)", async () => {
+    localStorage.setItem("mc.lastSession", "s1");
+    const shell = stubShell({
+      sessions: [sess({ id: "s1", title: "任务一" }), sess({ id: "s2", title: "后台任务" })],
+    });
+    render(<App />);
+    await waitFor(() => expect(shell.count("session_open")).toBe(1));
+
+    act(() =>
+      shell.emit("session-event", { type: "session-status", id: "s2", title: "后台任务", status: "interrupted" }),
+    );
+    const alert = await screen.findByText("「后台任务」已中断");
+    expect(alert.closest(".alert")?.className).toContain("alert-warning");
+  });
+
+  it("点击指向已删会话的提醒:给出解释,而不是把用户扔进空白主区", async () => {
+    localStorage.setItem("mc.lastSession", "s1");
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({ sessions: [sess({ id: "s1", title: "任务一" })] });
+    render(<App />);
+    await waitFor(() => expect(shell.count("session_open")).toBe(1));
+
+    // 事件带来一个壳里也已经不存在的 id(提醒发出后会话被删)
+    act(() => shell.emit("session-event", { type: "session-ask", id: "ghost", title: "幽灵任务", open: true }));
+    await userEvent.click(await screen.findByText("「幽灵任务」等待审批"));
+
+    expect(await screen.findByText("无法打开:对应的任务或会话可能已被删除")).toBeTruthy();
+    expect(screen.queryByText("「幽灵任务」等待审批")).toBeNull(); // 过期提醒点完即消
+    expect(screen.queryByText("开始一个任务")).toBeNull(); // 当前会话没被顶掉
+    expect(shell.calls.some((c) => c.cmd === "session_open" && c.args?.id === "ghost")).toBe(false);
+  });
+});
+
+describe("侧栏排序跟得上后台活动", () => {
+  // 侧栏项目组按「组内最近 updated_at」排(util/projects.groupSessions),而
+  // 增量补丁此前只改状态不动时间戳,于是后台任务跑起来、它所在的项目组不会
+  // 浮上去。旧 UI 是每来一条事件重拉全表,顺序自然跟着走
+  it("后台任务有进展:所在项目组浮到列表顶,且不为此重拉全表", async () => {
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({
+      sessions: [
+        sess({ id: "新的", workdir: "/p/alpha", updated_at: "2026-08-08T00:00:00Z" }),
+        sess({ id: "旧的", workdir: "/p/beta", updated_at: "2026-08-01T00:00:00Z" }),
+      ],
+    });
+    render(<App />);
+    const groups = () =>
+      [...document.querySelectorAll("aside details > summary")].map((el) => el.textContent ?? "");
+    await waitFor(() => expect(groups()[0]).toContain("alpha"));
+    const listBefore = shell.count("sessions_list");
+
+    act(() => shell.emit("session-event", { type: "session-status", id: "旧的", title: "旧的", status: "running" }));
+    await waitFor(() => expect(groups()[0]).toContain("beta"));
+    expect(shell.count("sessions_list")).toBe(listBefore); // 就地补丁,没有重拉风暴
+  });
+
+  it("session-ask / session-summary 不动时间戳(壳侧走的是 keep_updated 那条)", async () => {
+    localStorage.setItem("mc.sidebarSpace", "local");
+    const shell = stubShell({
+      sessions: [
+        sess({ id: "新的", workdir: "/p/alpha", updated_at: "2026-08-08T00:00:00Z" }),
+        sess({ id: "旧的", workdir: "/p/beta", updated_at: "2026-08-01T00:00:00Z" }),
+      ],
+    });
+    render(<App />);
+    const groups = () =>
+      [...document.querySelectorAll("aside details > summary")].map((el) => el.textContent ?? "");
+    await waitFor(() => expect(groups()[0]).toContain("alpha"));
+
+    act(() => shell.emit("session-event", { type: "session-ask", id: "旧的", title: "旧的", open: true }));
+    await waitFor(() => expect(shell.count("sessions_list")).toBeGreaterThanOrEqual(1));
+    expect(groups()[0]).toContain("alpha");
   });
 });
 

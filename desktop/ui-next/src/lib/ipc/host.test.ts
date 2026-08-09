@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { hostInfo, hostPlatform, isMacShell, isWindowsShell } from "./host";
+import { hostInfo, hostPlatform, isMacShell, isWindowsShell, setWindowTitle } from "./host";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function stubShell(ua: string, invoke: (cmd: string) => Promise<unknown> = () => Promise.resolve(null)) {
+function stubShell(
+  ua: string,
+  invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> = () => Promise.resolve(null),
+) {
   vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
   vi.stubGlobal("navigator", { userAgent: ua });
 }
@@ -24,6 +27,33 @@ describe("平台探测", () => {
     expect(hostPlatform()).toBe("windows");
     stubShell("X11; Linux x86_64");
     expect(hostPlatform()).toBe("linux");
+  });
+});
+
+describe("setWindowTitle", () => {
+  // 线上契约:壳侧这条命令由 Tauri 的 `setter!(set_title, &str)` 宏生成,
+  // 形参名恒为 value。传 { title } 会被反序列化成「command argument
+  // missing: value」拒掉,而调用点 quiet() 吞错——症状是 Alt-Tab/任务栏
+  // 里永远是 index.html 的静态标题,界面上看不出任何异常。所以这里钉的是
+  // **载荷字面键名**,不是"调用过就行"
+  it("壳内:命令名与载荷键名按 Tauri 契约(value,不是 title)", async () => {
+    const calls: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
+    stubShell("Windows NT 10.0", (cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, args });
+      return Promise.resolve(null);
+    });
+    setWindowTitle("任务一 — MonkeyCode");
+    await Promise.resolve();
+    expect(calls).toEqual([{ cmd: "plugin:window|set_title", args: { value: "任务一 — MonkeyCode" } }]);
+    expect(Object.keys(calls[0]?.args ?? {})).not.toContain("title");
+  });
+
+  it("浏览器模式:退回 document.title,不发命令", () => {
+    const doc = { title: "" };
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("document", doc); // 本文件跑在 node 环境,document 得自己给
+    setWindowTitle("浏览器标题");
+    expect(doc.title).toBe("浏览器标题");
   });
 });
 

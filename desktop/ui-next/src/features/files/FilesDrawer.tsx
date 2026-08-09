@@ -8,8 +8,8 @@
 //   body 选区与光标。
 // - 数据面全部走 lib/ipc/repo(壳内 repo.rs 原生处理);改动列表挂载即拉,
 //   refreshToken 自增(调用方在 ChatState.turnEnded 时递增)则重拉。
-// - Esc(window capture):抽屉开着只管自己——预览开着先关预览,再一次
-//   才关抽屉;层级协调交调用方。
+// - Esc:走全局层栈 lib/util/escLayer(抽屉开着即占一层),层内再分两级
+//   ——预览开着先关预览,再一次才关抽屉;跨浮层的层级协调交给层栈本身。
 import { IconFolderOpen, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
@@ -17,6 +17,7 @@ import { useI18n } from "@/lib/i18n";
 import { isMacShell, isWindowsShell } from "@/lib/ipc/host";
 import { repoChanges, repoFileDiff, repoListDir, repoReadFile, repoReveal, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
 import { copyText } from "@/lib/util/clipboard";
+import { useEscLayer } from "@/lib/util/escLayer";
 import { Changes } from "./Changes";
 import { Preview, type PreviewModel } from "./Preview";
 import { Tree } from "./Tree";
@@ -132,29 +133,31 @@ export function FilesDrawer({
     }
   }, [isGitRepo, tab]);
 
-  // Esc(window capture):预览开着先关预览,否则关抽屉。经 ref 读最新值,
-  // 监听只挂一次
+  // Esc:抽屉挂载期间在全局层栈里占一层(escLayer 只有一条 window capture
+  // 监听,后 push 的先拿到)。层内自己再分两级:预览开着先关预览,再一次
+  // 才关抽屉——这是抽屉内部的语义,层栈管不到,所以留在这里。
+  //
+  // 为什么不再自己 addEventListener(2026-08-09 收口):同 target 同阶段按
+  // 注册先后触发,而视图级 Esc 挂载即注册、浮层只在打开时注册,谁先吃掉这
+  // 一下取决于挂载时序而非语义(见 escLayer 头注)。返回 true 即消费,
+  // escLayer 会 preventDefault + stopImmediatePropagation —— 审批热键
+  // (app/shortcuts.ts)挂 bubble 阶段,这一下就到不了它;esc = deny 不可逆,
+  // 同一下按键绝不允许"关抽屉 + 拒绝审批"双消费。
   const previewOpenRef = useRef(false);
   previewOpenRef.current = preview !== null;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // 浮层优先:这一下 Esc 已被抽屉消费,立即截断——window 上还挂着
-      // 审批热键(app/shortcuts.ts,esc = deny 不可逆),同一下按键绝不能
-      // "关抽屉 + 拒绝审批"双消费;抽屉关完再按,才轮到审批
-      e.stopImmediatePropagation();
-      if (previewOpenRef.current) {
-        reqRef.current++;
-        setPreview(null);
-      } else {
-        onCloseRef.current();
-      }
-    };
-    window.addEventListener("keydown", h, true);
-    return () => window.removeEventListener("keydown", h, true);
+  // 稳定引用(useEscLayer 以 handler 身份为依赖):最新闭包经上面两个 ref 读
+  const onEsc = useCallback(() => {
+    if (previewOpenRef.current) {
+      reqRef.current++;
+      setPreview(null);
+      return true;
+    }
+    onCloseRef.current();
+    return true;
   }, []);
+  useEscLayer(true, onEsc);
 
   const closePreview = () => {
     reqRef.current++;
@@ -195,21 +198,35 @@ export function FilesDrawer({
 
   // 拖拽跟踪:mousedown 后接管 window 的 move/up,期间锁光标与选区。
   // WebKitGTK 与旧 WKWebView 只认带前缀的 user-select 写法,两个都写。
+  //
+  // ⚠️ 收尾必须**两条路都有**(2026-08-09):此前只挂在 mouseup 上,而
+  // mouseup 并不保证会来——抽屉在按住把手期间被卸载(它自己的 Esc 就能关掉
+  // 自己)、或鼠标拖出 webview 才松开,收尾便永远不执行。泄漏的不只是
+  // window 上那两条监听:`document.body` 上的 `cursor: col-resize` 与
+  // `user-select: none` 是**全局副作用**,留下就是整个应用从此选不中任何
+  // 文字、光标恒为调宽箭头。现在收尾函数记进 ref,卸载 effect 兜底再调一次。
+  const stopDragRef = useRef<(() => void) | null>(null);
   const trackPointer = (cursor: string, onMove: (ev: MouseEvent) => void, onDone: () => void) => {
+    stopDragRef.current?.(); // 上一场没收干净就先收(正常路径下恒为 null)
     document.body.style.cursor = cursor;
     document.body.style.userSelect = "none";
     document.body.style.setProperty("-webkit-user-select", "none");
-    const onUp = () => {
+    const finish = () => {
+      if (stopDragRef.current !== finish) return; // 幂等:mouseup 与卸载兜底只生效一次
+      stopDragRef.current = null;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       document.body.style.removeProperty("-webkit-user-select");
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mouseup", finish);
       onDone();
     };
+    stopDragRef.current = finish;
     window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mouseup", finish);
   };
+  // 卸载兜底:拖拽中途被卸载时把 window 监听与 body 全局样式收回来
+  useEffect(() => () => stopDragRef.current?.(), []);
 
   // 左缘拖拽调宽,松手落盘记忆
   const startWidthDrag = (e: ReactMouseEvent) => {

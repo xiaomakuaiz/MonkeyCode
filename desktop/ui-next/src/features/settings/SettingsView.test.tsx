@@ -3,9 +3,17 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopConfig } from "@/lib/ipc/config";
+import { resetEscLayersForTest } from "@/lib/util/escLayer";
 import { SettingsView } from "./SettingsView";
 
+/** Esc = 走 escLayer 的 window capture 单一监听(层栈按后进先出派发)。 */
+const pressEsc = () =>
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+
 afterEach(() => {
+  resetEscLayersForTest(); // 模块级层栈跨用例会串
   localStorage.clear();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
   // UA 覆写(WSL 条件渲染用)按实例属性打的,删掉即回落 jsdom 原型 getter
@@ -114,7 +122,106 @@ describe("设置视图:导航与载入", () => {
   });
 });
 
+describe("Esc 分层与离开守卫", () => {
+  it("开着主题下拉按 Esc:只关下拉,设置页不退(层栈后进先出,不再是注册时序说了算)", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<SettingsView onClose={onClose} />);
+    await userEvent.click(screen.getByRole("button", { name: "通用" }));
+    await userEvent.click(screen.getByRole("button", { name: "外观主题" }));
+    expect(screen.getByRole("listbox", { name: "外观主题" })).toBeDefined();
+
+    pressEsc();
+    expect(screen.queryByRole("listbox", { name: "外观主题" })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled(); // 此前视图层先注册,一按就把整页关了
+
+    pressEsc(); // 下拉已收,这下才轮到视图层(表单干净 → 直接退出)
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("在输入框里按 Esc:只收敛焦点,不退出、不丢弃未保存的编辑", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<SettingsView onClose={onClose} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    const name = screen.getByRole("textbox", { name: "名称" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "主力2");
+    expect(document.activeElement).toBe(name);
+
+    pressEsc();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(name); // 焦点收敛
+    expect((screen.getByRole("textbox", { name: "名称" }) as HTMLInputElement).value).toBe("主力2");
+  });
+
+  it("脏表单上 Esc/返回:先问一句;「留在设置」不退,「放弃并离开」才退", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<SettingsView onClose={onClose} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    await userEvent.type(screen.getByRole("textbox", { name: "名称" }), "x");
+
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(await screen.findByRole("dialog", { name: "有未保存的更改" })).toBeDefined();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // 弹层里的 Esc = 取消离开:它自占一层,不会穿回视图层再把设置页关掉
+    pressEsc();
+    expect(screen.queryByRole("dialog", { name: "有未保存的更改" })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    pressEsc(); // 焦点已不在输入框(上一步点了「返回」),这下走视图层
+    await userEvent.click(await screen.findByRole("button", { name: "留在设置" }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    await userEvent.click(await screen.findByRole("button", { name: "放弃并离开" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("表单干净时 Esc/返回直接退出,不拿弹层烦人", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<SettingsView onClose={onClose} />);
+    await openModels();
+    pressEsc();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("脏状态机与保存条", () => {
+  it("载入即收敛同名模型:重名不再把整份配置的保存永久拦死", async () => {
+    // 历史版本/手工编辑落盘的同名存量(这里两条都叫「主力」)。载入不收敛的话
+    // validateDraft 恒报 modelDup,save() 见错即 return —— 改 kernel_env、加
+    // MCP、加模型……什么都存不下去,而重名的那条在引擎侧本来就是静默失效的
+    const { calls } = stubShell({
+      config: {
+        ...baseConfig,
+        models: [
+          { name: "主力", provider: "anthropic", base_url: "https://a", api_key: "k1", model: "old", default: true },
+          { name: "主力", provider: "anthropic", base_url: "https://a", api_key: "k1", model: "new" },
+        ],
+      },
+    });
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "添加 MCP" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "名称" }), "files");
+    await userEvent.type(screen.getByRole("textbox", { name: "URL" }), "https://x");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
+    expect(screen.queryByText(/模型名称重复/)).toBeNull();
+    const saved = calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig;
+    // 收敛为一条:后者内容胜出(与引擎按名字建 Map 的物化行为一致)
+    expect(saved.models.map((m) => [m.name, m.model])).toEqual([["主力", "new"]]);
+    expect(saved.mcp_servers).toMatchObject({ files: { url: "https://x" } });
+  });
+
   it("改动 → 保存条现身;放弃 → 草稿还原、保存条收起", async () => {
     stubShell();
     render(<SettingsView onClose={() => {}} />);
@@ -273,6 +380,64 @@ describe("MCP 编辑(与模型同一份脏状态)", () => {
       files: { command: "npx", args: ["-y", "srv"], env: { HOME: "/h" } },
     });
   });
+
+  // 停用真值 = extra.disabled,壳按它过滤派生 mcp.json(config.rs 物化处):
+  // 没有开关也没有徽标时,被早先版本停用过的 server 看着和正常条目一模一样,
+  // 工具却永远不装载,只能手改 config.json
+  it("停用:行上出「已停用」徽标,extra.disabled 进载荷", async () => {
+    const { calls } = stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /fetch/ })).toBeDefined());
+    expect(screen.queryByText("已停用")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "停用" }));
+    expect(screen.getByText("已停用")).toBeDefined();
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
+    expect((calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig).mcp_servers).toEqual({
+      fetch: { disabled: true, url: "https://mcp", headers: undefined },
+    });
+  });
+
+  it("既有停用条目:载入即外显,可就地启用(disabled 键随之消失)", async () => {
+    const { calls } = stubShell({
+      config: { ...baseConfig, mcp_servers: { fetch: { url: "https://mcp", disabled: true } } },
+    });
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    expect(await screen.findByText("已停用")).toBeDefined();
+
+    await userEvent.click(screen.getByRole("button", { name: "启用" }));
+    expect(screen.queryByText("已停用")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
+    expect((calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig).mcp_servers).toEqual({
+      fetch: { url: "https://mcp", headers: undefined },
+    });
+  });
+});
+
+describe("模型分区的空组引导(旧 UI 随迁)", () => {
+  it("一个模型都没有:百智云组与自定义组仍在,各自给出「模型从哪来」", async () => {
+    stubShell({ config: { ...baseConfig, models: [] } });
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "模型" }));
+    // 未登录变体(baizhi_status 桩回 null)
+    expect(await screen.findByText(/登录百智云并同步后/)).toBeDefined();
+    expect(screen.getByText(/手工接入其他服务商的模型/)).toBeDefined();
+    expect(screen.getByRole("button", { name: "添加模型" })).toBeDefined();
+  });
+
+  it("已登录百智云但该组为空:引导改成「去账号页点同步」", async () => {
+    stubShell({
+      config: { ...baseConfig, models: [] },
+      extra: { baizhi_status: () => ({ logged_in: true, host: "baizhi.cloud" }) },
+    });
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "模型" }));
+    expect(await screen.findByText(/点「同步模型与 MCP」/)).toBeDefined();
+  });
 });
 
 describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
@@ -409,5 +574,31 @@ describe("运行环境(仅 Windows 壳)", () => {
     await waitFor(() => expect((select as HTMLSelectElement).value).toBe("wsl:Gone"));
     expect(screen.getByRole("option", { name: /Gone.*未检测到/ })).toBeDefined();
     expect(screen.queryByRole("button", { name: "保存" })).toBeNull(); // 载入不置脏
+  });
+
+  it("记忆的发行版已卸载:页面上出告警(引擎起不来,不能只在收起的下拉里缀一句)", async () => {
+    windowsUA();
+    stubShell({ config: { ...baseConfig, kernel_env: "wsl:Gone" }, distros: ["Ubuntu"] });
+    render(<SettingsView onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "运行环境" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("未检测到发行版 Gone");
+    expect(alert.textContent).toContain("引擎将无法启动");
+
+    // 切回本机后告警消失
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "内核运行环境" }), "");
+    expect(screen.queryByText(/未检测到发行版/)).toBeNull();
+  });
+});
+
+describe("布局契约", () => {
+  it("左侧导航 menu 解除 daisyUI 的 column wrap(LAYOUT §6.2 截断铁律)", () => {
+    stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    // .menu 与 .menu li 都默认 flex-flow: column wrap,不解除的话行宽跟内容
+    // 走,行内 truncate 链永不触发
+    const menu = screen.getByRole("navigation", { name: "设置" }).querySelector("ul.menu")!;
+    expect(menu.className).toContain("flex-nowrap");
+    expect(menu.className).toContain("[&_li]:flex-nowrap");
   });
 });

@@ -122,8 +122,38 @@ export const emptyModel = (): HostModel => ({
 
 export const emptyMcp = (): McpEntry => ({ name: "", type: "http", url: "", command: "", args: "", kv: "" });
 
+/** 载入自愈:同名(trim)条目收敛为一条——内容后者覆盖前者、落在首现位置,
+ * 与引擎物化(settings.models 以名字为键的 Map)实际生效行为完全一致。
+ * 历史版本/手工编辑落盘的同名存量若不在载入时收敛,保存会被重名校验
+ * (validateDraft → modelDup)**永久拦死**:save() 在校验处直接 return,于是
+ * kernel_env、MCP、新加的模型……什么都存不下去;而被拦的那条在引擎侧本来
+ * 就是静默失效的。同名条目若是 source=monkeycode 的会员行,UI 里连删除入口
+ * 都没有(ModelsSection 只给手工条目 删除),用户无路可走。空名草稿不参与。
+ * (移植旧工程 settingsConfig.dedupeModelsByName,ui-next 首版漏迁) */
+export function dedupeModelsByName<T extends { name: string }>(list: T[]): T[] {
+  const winner = new Map<string, T>();
+  for (const m of list) {
+    const n = m.name.trim();
+    if (n) winner.set(n, m);
+  }
+  const emitted = new Set<string>();
+  const out: T[] = [];
+  for (const m of list) {
+    const n = m.name.trim();
+    if (!n) {
+      out.push(m);
+      continue;
+    }
+    if (emitted.has(n)) continue;
+    emitted.add(n);
+    out.push(winner.get(n)!);
+  }
+  return out;
+}
+
 export function draftFromConfig(cfg: DesktopConfig): SettingsDraft {
-  const models = (cfg.models ?? []).map((m) => ({ ...m }));
+  // 先收敛同名再定位默认位:去重后下标会变,顺序必须是"归一 → findIndex"
+  const models = dedupeModelsByName((cfg.models ?? []).map((m) => ({ ...m })));
   const di = models.findIndex((m) => m.default);
   return {
     models,

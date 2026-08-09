@@ -40,6 +40,16 @@ const bzIn = () => ({ logged_in: true, host: "baizhi.cloud", profile: { name: "�
 const mcOut = () => ({ logged_in: false, host: "monkeycode-ai.com" });
 const mcIn = () => ({ logged_in: true, host: "monkeycode-ai.com", user: { id: "u1", name: "云端用户" } });
 
+const emptyDraft = (): SettingsDraft => ({
+  models: [],
+  defaultIdx: 0,
+  mcps: [],
+  kernelEnv: "",
+  mcBaseUrl: "",
+  mcBasicAuth: "",
+  mcLlmBaseUrl: "",
+});
+
 const usageFixture = (): McUsage => ({
   base_url: "https://mc.example",
   wallet: { balance: 12345, daily_token_balance: 1_500_000, daily_token_limit: 3_000_000 },
@@ -108,6 +118,48 @@ describe("账号分区:门与登录面板", () => {
     // 登录态不触发,由「已登录:同步按钮」用例的无自动同步前提反向钉住)
     await waitFor(() => expect(calls.some((c) => c.cmd === "baizhi_sync")).toBe(true));
     await waitFor(() => expect(calls.some((c) => c.cmd === "mc_models_sync")).toBe(true));
+  });
+});
+
+describe("登录即自动同步的信号边沿", () => {
+  // McCard 的自动同步守卫读 connected 却只依赖 autoSyncToken:两者不在同一次
+  // 提交里落地时(这里让 mc_status 在桥接那一轮失败,connected 晚到),effect
+  // 早就跑完了,这一路同步永远不会发生 —— 用户连上了却没有会员模型,还查无
+  // 对证。依赖补上 connected 后,连接态一到就补发(同一个 token 只发一次)
+  it("连接态晚于同步信号落地(桥接后状态刷新失败,重试才连上):会员同步照样补发", async () => {
+    let bzIn_ = false;
+    let mcConnected = false;
+    const gate = { mcStatusOk: false };
+    const { calls } = stubShell({
+      baizhi_status: () => (bzIn_ ? bzIn() : bzOut()),
+      mc_status: () => {
+        if (!gate.mcStatusOk) throw new Error("网络抖动");
+        return mcConnected ? mcIn() : mcOut();
+      },
+      baizhi_wechat_start: () => ({ qr: "data:qr" }),
+      baizhi_wechat_poll: () => {
+        bzIn_ = true;
+        return { status: "ok" };
+      },
+      mc_login: () => {
+        mcConnected = true;
+        return { ok: true };
+      },
+      mc_usage: () => null,
+      baizhi_sync: () => ({ models: [{ name: "g", base_url: "https://g", api_key: "k", model: "g" }], mcp_servers: {}, key_created: false }),
+      mc_models_sync: () => ({ models: [{ name: "m", base_url: "https://m", api_key: "k", model: "m", source: "monkeycode" }] }),
+    });
+    render(<AccountSection />);
+    // 登录 → 桥接成功,但这一轮 mc_status 挂了:token 已 bump,connected 还是 false
+    await waitFor(() => expect(calls.some((c) => c.cmd === "mc_login")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "baizhi_sync")).toBe(true));
+    expect(calls.some((c) => c.cmd === "mc_models_sync")).toBe(false);
+
+    // 状态恢复后重试 → 连接态这才落地
+    gate.mcStatusOk = true;
+    await userEvent.click(await screen.findByRole("button", { name: "重试" }));
+    expect(await screen.findByText("云端用户")).toBeDefined();
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "mc_models_sync")).toHaveLength(1));
   });
 });
 
@@ -329,6 +381,54 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     expect((await screen.findByText(/已获取 2 个会员模型/)).textContent).toContain("不支持的协议");
   });
 
+  // 契约见 desktop/src/baizhi/sync.rs ensure_api_key:壳先拿 knownKeys 去网关
+  // 匹配复用,匹配不上才新建一把。恒传空数组 = 每同步一次就在用户网关账号里
+  // 凭空多一把密钥,而表单里明明就握着可用的那把
+  it("baizhi_sync 携带草稿里握着的网关密钥(只挑 sk- 且去重),不再恒传空数组", async () => {
+    const usage = { current: usageFixture() };
+    const { calls } = stubShell({
+      ...connectedHandlers(usage),
+      baizhi_sync: () => ({ models: [{}], mcp_servers: {}, key_created: false }),
+    });
+    const draft: SettingsDraft = {
+      ...emptyDraft(),
+      models: [
+        { name: "a", provider: "anthropic", base_url: "https://a", api_key: " sk-live ", model: "m" },
+        { name: "b", provider: "anthropic", base_url: "https://b", api_key: "sk-live", model: "m" }, // 同一把,去重
+        { name: "c", provider: "anthropic", base_url: "https://c", api_key: "hf_xxx", model: "m" }, // 非网关密钥
+        { name: "d", provider: "anthropic", base_url: "https://d", api_key: "", model: "m" },
+      ],
+    };
+    render(<AccountSection draft={draft} onDraft={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "同步模型与 MCP" }));
+    expect(calls.find((c) => c.cmd === "baizhi_sync")?.args).toEqual({ knownKeys: ["sk-live"] });
+  });
+
+  // 「已获取 0 个…保存后生效」读起来像成功,用户就等着模型出现;而且空集合
+  // 并入本是 no-op,却会捎带触发一次自动保存(写盘 + 重启引擎)
+  it("一条都没拉到:按失败外显(不是「已获取 0 个」),也不把空结果并入草稿", async () => {
+    const usage = { current: usageFixture() };
+    const onSyncResult = vi.fn();
+    stubShell({
+      ...connectedHandlers(usage),
+      baizhi_sync: () => ({ models: [], mcp_servers: {}, key_created: false, notes: ["未开通 Agent 工具包"] }),
+      mc_models_sync: () => ({ models: [], notes: ["账号无会员权益"] }),
+    });
+    render(<AccountSection onSyncResult={onSyncResult} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "同步模型与 MCP" }));
+    const bzMsg = await screen.findByText(/没有拉取到可用的模型/);
+    expect(bzMsg.getAttribute("role")).toBe("alert"); // 失败语义,不是 status
+    expect(bzMsg.textContent).toContain("未开通 Agent 工具包"); // 内核诊断照样外显
+    expect(screen.queryByText(/已获取 0 个/)).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "同步会员模型" }));
+    const mcMsg = await screen.findByText(/没有可同步的会员模型/);
+    expect(mcMsg.getAttribute("role")).toBe("alert");
+    expect(mcMsg.textContent).toContain("账号无会员权益");
+    expect(onSyncResult).not.toHaveBeenCalled();
+  });
+
   it("断开连接:mc_models_revoke 先于 mc_logout(顺序钉死),断开后回连接入口", async () => {
     let mcConnected = true;
     const usage = { current: usageFixture() };
@@ -376,16 +476,6 @@ describe("已登录:用量面板/签到/同步/断开", () => {
 });
 
 describe("自建部署配置(彩蛋解锁)", () => {
-  const emptyDraft = (): SettingsDraft => ({
-    models: [],
-    defaultIdx: 0,
-    mcps: [],
-    kernelEnv: "",
-    mcBaseUrl: "",
-    mcBasicAuth: "",
-    mcLlmBaseUrl: "",
-  });
-
   it("默认隐藏;连点 MonkeyCode 卡图标 6 次解锁并记住", async () => {
     stubShell({ baizhi_status: bzOut, mc_status: mcOut });
     const { unmount } = render(<AccountSection draft={emptyDraft()} onDraft={() => {}} />);

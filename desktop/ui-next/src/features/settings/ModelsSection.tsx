@@ -7,8 +7,10 @@
 // 两者的比例不做校验(用户定案 2026-08-06,理由见 settingsForm.validateDraft)。
 // 展示口径:行标题经 modelDisplay 剥来源后缀/会员档位前缀(落盘名是引擎
 // 寻址键,任何展示面都必须剥;编辑表单里的「名称」字段仍是原始键);
-// 列表按来源分组(会员→百智云→自定义,modelSourceRank 单一出处),全部
-// 为手工条目时不出组头。
+// 列表按来源分组(会员→百智云→自定义,modelSourceRank 单一出处)。百智云组
+// 与自定义组恒在(空了也出组头 + 引导卡):组是"模型从哪来"的说明位,按现有
+// 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
+// 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
 import { IconChevronDown, IconPlus } from "@tabler/icons-react";
 import { useState } from "react";
 
@@ -47,9 +49,12 @@ const THINK_LABEL_KEY: Record<string, "settings.models.think.off" | "settings.mo
 export function ModelsSection({
   draft,
   onDraft,
+  baizhiLoggedIn = false,
 }: {
   draft: SettingsDraft;
   onDraft: (up: (d: SettingsDraft) => SettingsDraft) => void;
+  /** 百智云登录态:只影响空组引导的措辞(去同步 / 先登录),旧 UI 同款 */
+  baizhiLoggedIn?: boolean;
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -82,8 +87,7 @@ export function ModelsSection({
 
   // 来源分组(保留原始下标:展开/删改/设默认全部按扁平数组下标寻址)
   const groupMap = new Map<string, { key: string; label: string; rank: number; items: Array<{ m: HostModel; i: number }> }>();
-  draft.models.forEach((m, i) => {
-    const key = m.source || "";
+  const groupOf = (key: string, source?: string) => {
     let g = groupMap.get(key);
     if (!g) {
       const label =
@@ -92,13 +96,25 @@ export function ModelsSection({
           : key === SOURCE_BAIZHI
             ? t("model.source.baizhi")
             : key || t("model.source.custom");
-      g = { key, label, rank: modelSourceRank(m.source), items: [] };
+      g = { key, label, rank: modelSourceRank(source), items: [] };
       groupMap.set(key, g);
     }
-    g.items.push({ m, i });
-  });
+    return g;
+  };
+  // 百智云组与自定义组**恒在**(旧 UI 同款,ui-next 首版按现有条目派生分组
+  // 时丢了这条):组空时不是"少一块",而是唯一能告诉用户「模型从哪来」的
+  // 那句话没了——新装用户只看到一句通用空态,查不到该去账号页点同步。
+  // 代价是全手工条目时也会出组头(此前的「全手工不出组头」随之作废)
+  groupOf(SOURCE_BAIZHI, SOURCE_BAIZHI);
+  groupOf("", undefined);
+  draft.models.forEach((m, i) => groupOf(m.source || "", m.source).items.push({ m, i }));
   const groups = [...groupMap.values()].sort((a, b) => a.rank - b.rank);
-  const showGroups = groups.length > 1 || groups.some((g) => g.key !== "");
+  /** 空组引导:百智云分「已登录去同步」「未登录先登录」两句,自定义组说明
+   *  手工接入要填什么(旧 UI settings.tsx 三句原样随迁)。 */
+  const emptyHint = (key: string): string =>
+    key === SOURCE_BAIZHI
+      ? t(baizhiLoggedIn ? "settings.models.baizhiEmpty" : "settings.models.baizhiEmptyLoggedOut")
+      : t("settings.models.customEmpty");
 
   // 行 = daisyUI list-row。契约(用户定案 2026-08-06):
   // - 会员条目(source=monkeycode)只读不可展开——配置随同步整组更新,表单
@@ -310,15 +326,6 @@ export function ModelsSection({
 
   return (
     <section aria-label={t("settings.nav.models")} className="flex flex-col gap-2">
-      {draft.models.length === 0 && (
-        <div className="flex flex-col items-center gap-3 rounded-box border border-dashed border-base-300 px-6 py-10">
-          <p className="text-center text-xs text-base-content/50">{t("settings.models.empty")}</p>
-          <button type="button" className="btn btn-sm" onClick={add}>
-            <IconPlus size={14} stroke={2} aria-hidden />
-            {t("settings.models.add")}
-          </button>
-        </div>
-      )}
       {groups.map((g) => {
         // 会员组按档位/来源分节(基础/专业/旗舰/付费/我的/团队,与模型菜单
         // 同一 groupMemberSections 口径):节头表达档位,行内免重复贴徽标。
@@ -330,10 +337,14 @@ export function ModelsSection({
             : null;
         const indexOf = new Map(g.items.map(({ m, i }) => [m as unknown as ModelInfo, i]));
         const groupOpen = !collapsedGroups.has(g.key);
+        const empty = g.items.length === 0;
         return (
           <div key={g.key || "custom"} className="flex flex-col gap-1.5">
-            {/* 组头即折叠开关(旧工程 Section 同款交互):箭头 + 组名 + 计数 */}
-            {showGroups && (
+            {/* 组头即折叠开关(旧工程 Section 同款交互):箭头 + 组名 + 计数。
+                空组没有可折叠的东西,退成纯标签(不给一个点了什么都不发生的钮) */}
+            {empty ? (
+              <span className="mt-1 w-fit px-1 text-xs font-bold text-base-content/60">{g.label}</span>
+            ) : (
               <button
                 type="button"
                 aria-expanded={groupOpen}
@@ -350,10 +361,16 @@ export function ModelsSection({
                 <span className="font-normal text-base-content/40">{g.items.length}</span>
               </button>
             )}
+            {/* 空组 = 引导卡(模型从哪来的唯一说明,见上方分组构造处) */}
+            {empty && (
+              <div className="rounded-box border border-dashed border-base-300 px-4 py-6">
+                <p className="text-center text-xs leading-relaxed text-base-content/50">{emptyHint(g.key)}</p>
+              </div>
+            )}
             {/* 组 = 一个 list 容器,行间分隔线;不再每行一个独立小盒子。
                 overflow-hidden 同 McpSection:行 rounded-none 方角,daisyUI .list
                 不裁剪,首/末行 hover 底色否则盖出圆角轮廓 */}
-            {groupOpen && (
+            {!empty && groupOpen && (
               <ul className="list divide-y divide-base-300 overflow-hidden rounded-box border border-base-300 bg-base-100">
                 {memberSections
                   ? memberSections.map((s) => [
@@ -372,12 +389,11 @@ export function ModelsSection({
           </div>
         );
       })}
-      {draft.models.length > 0 && (
-        <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
-          <IconPlus size={14} stroke={2} aria-hidden />
-          {t("settings.models.add")}
-        </button>
-      )}
+      {/* 「添加模型」恒在(自定义组恒在,空态也要有落点),不再随条目数显隐 */}
+      <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
+        <IconPlus size={14} stroke={2} aria-hidden />
+        {t("settings.models.add")}
+      </button>
     </section>
   );
 }

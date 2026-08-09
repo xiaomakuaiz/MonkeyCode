@@ -342,6 +342,7 @@ export function OptionMenu({
   title?: string;
   align?: "start" | "end";
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, boxRef, () => setOpen(false));
@@ -389,6 +390,14 @@ export function OptionMenu({
           style={{ maxHeight: menuMax }}
           className="dropdown-content menu w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
         >
+          {/* 空清单也要说话(与 ModelMenu 同形态):调用方在拉取失败/尚未拉到
+              时给的就是空数组(云端 models===null → sections=[]),没有这一档
+              菜单展开是一个**没有任何内容的空盒子**——看着像点坏了 */}
+          {flat.length === 0 && (
+            <li className="menu-disabled">
+              <span className="text-xs">{t("chat.option.empty")}</span>
+            </li>
+          )}
           {/* 节头 text-xs:与 ModelMenu 同理(menu-title 默认比条目大,倒挂) */}
           {sections
             ? sections.map((s) => [

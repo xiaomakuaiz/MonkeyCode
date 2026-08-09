@@ -68,7 +68,7 @@ export function Tree({
   // 挂载即拉根目录(抽屉关闭整体卸载,重开自然是全新状态)
   useEffect(() => {
     void load("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // 展开/收起目录(展开时懒加载子项,已缓存的即时展开)

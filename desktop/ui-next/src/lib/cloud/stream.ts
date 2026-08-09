@@ -273,6 +273,14 @@ export function connectCloudStream(
     send: doSend,
     close() {
       closed = true;
+      // 主动关闭要连**同一拍里已排队、还没 flush 的帧**一起作废:批调度是
+      // rAF/宏任务,close() 之后那一拍照样会跑 flush,把帧喂给调用方已经
+      // 弃用的 handler。发消息正是这条路径——dispatch 先 close 掉观察连接
+      // 再建 mode=new,残留帧一到就 clearSentPlaceholder(),把「发送中」的
+      // 占位气泡在任何回显之前撤掉,气泡存在的意义正好被它抵消(2026-08-09)。
+      // 只清队列不加 closed 守卫:服务端正常收束(onIdle/onSendFailed)那条
+      // 路径同样置 closed,加守卫会把云端最后一批回放帧一起丢掉。
+      queue = [];
       if (reconnectTimer !== null) d.clearTimeout(reconnectTimer);
       pipe?.close();
       pipe = null;

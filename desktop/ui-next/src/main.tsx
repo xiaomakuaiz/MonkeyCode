@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";
@@ -18,4 +19,11 @@ installShellChrome();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html 缺 #root 挂载点");
-createRoot(root).render(<App />);
+// StrictMode(仅开发期生效,生产构建被剥掉):双挂载能当场暴露 effect 不幂等、
+// 清理漏做、"旧 id 短路"这类问题——ChatView/CloudTaskView 里多处注释记的正是
+// 靠它抓到的坑。旧工程一直开着,ui-next 首版漏迁(2026-08-09 补回)。
+createRoot(root).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

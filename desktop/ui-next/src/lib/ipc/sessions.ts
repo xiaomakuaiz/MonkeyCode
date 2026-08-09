@@ -1,6 +1,12 @@
 // 会话域 API:sessions_* / session_* / models_list 命令与 session-event 订阅。
 // 类型字段名 = 壳侧 serde 序列化的线上形状(契约,别改名)。
-// 浏览器模式:列表类返回空、变更类抛错(调用方 toast)。
+//
+// 错误约定(读/写一视同仁,2026-08-09 收敛):
+// - **浏览器模式**是静态事实,不是故障:列表类返回空、变更类抛错;
+// - **壳内失败一律抛**,读类也不例外。降级值只能表达"这个环境没有此能力",
+//   不能用来表达"这一次没拉到"——两者混成同一个空数组,调用方就再也分不清
+//   「用户真没有会话/模型」与「引擎正在重启」,只能按前者处理(清空列表、
+//   弹首启向导)。见 sessionsList/modelsList 各自的头注。
 import type { Frame } from "@/gen/Frame";
 import { inDesktopShell, invoke, listen, listenAsync } from "./ipc";
 
@@ -51,14 +57,31 @@ export interface SessionEvent {
   summary?: string;
 }
 
+/** ⚠️ 壳内失败要**抛**给调用方。
+ *
+ *  壳持着 EngineApply 闸门时这条命令直接回 Err「引擎配置正在应用,请稍后
+ *  重试」(driver/mod.rs::DriverHost::get),而 `restart_engine_locked` 在
+ *  `adopt_engine` 里就 emit 了 engine-status: ready、调用方(save_config /
+ *  浏览器配对刷新)却仍持着锁——UI 一收到 Ready 就发的这一拉必然落在窗口里
+ *  被拒。lib/ipc/engine.ts::afterEngineReady 正是为这段窗口写的退避重试。
+ *
+ *  此前这里 `.catch(() => [])` 把拒绝吞成空数组,后果有两层:退避重试永远
+ *  看不到拒绝,成了死代码;而一次瞬时故障被翻译成「这个用户一条会话都没有」
+ *  ——侧栏清空、current 变 null、开着的对话卸载回欢迎页,而且要等下一条
+ *  session-event 才可能恢复。旧 UI 的注释写得很直白:「任一项拉取失败都保留
+ *  现有状态,不能用空结果覆盖……清空会话列表会被误判为'会话已删'」。 */
 export function sessionsList(): Promise<SessionMeta[]> {
   if (!inDesktopShell()) return Promise.resolve([]);
-  return invoke<SessionMeta[]>("sessions_list").catch(() => []);
+  return invoke<SessionMeta[]>("sessions_list");
 }
 
+/** ⚠️ 同 sessionsList:壳内失败要抛。
+ *  models_list 撞的是同一道 apply 闸门,而它的空结果在 App 里是**首启向导**
+ *  的触发条件(models.length === 0 → 自动打开设置页)。吞成 [] 的话,一次
+ *  拉取失败就把设置页糊到一个模型配得好好的用户脸上。 */
 export function modelsList(): Promise<ModelInfo[]> {
   if (!inDesktopShell()) return Promise.resolve([]);
-  return invoke<ModelInfo[]>("models_list").catch(() => []);
+  return invoke<ModelInfo[]>("models_list");
 }
 
 export function sessionCreate(args: {

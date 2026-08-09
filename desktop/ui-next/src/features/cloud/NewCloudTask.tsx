@@ -11,6 +11,8 @@
 import { IconCheck, IconChevronDown, IconCloud, IconFolder, IconSend } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
+import { mcStatus } from "@/lib/ipc/account";
+
 import { OptionMenu } from "@/features/chat/composer/pickers";
 
 import {
@@ -34,15 +36,23 @@ export function NewCloudTask({
   onCreated,
   onCancel,
   initialProject,
+  onOpenSettings,
 }: {
   onCreated: (task: CloudTaskDetail) => void;
   onCancel?: () => void;
   /** 「在此项目新建任务」预选的云端项目(侧栏项目组头入口) */
   initialProject?: CloudProject | null;
+  /** 未连接空态的「去设置连接」入口(与侧栏未连接空态同一动作) */
+  onOpenSettings?: () => void;
 }) {
   const { t } = useI18n();
   const [options, setOptions] = useState<McTaskOptions | null>(null);
   const [loadErr, setLoadErr] = useState("");
+  // 云端连接三态:null = 还在查(此时什么都不拉、也不报错),true/false 已定。
+  // 未连接不是"选项加载失败":恢复动作是去设置里连账号,不是重试——把壳的
+  // 401 原文摊在面板上,用户只能看到一句自己看不懂的报错(与侧栏未连接
+  // 空态同一口径)
+  const [connected, setConnected] = useState<boolean | null>(null);
   const [content, setContent] = useState("");
   const [modelId, setModelId] = useState("");
   const [hostId, setHostId] = useState("");
@@ -58,19 +68,31 @@ export function NewCloudTask({
   const [repoOpen, setRepoOpen] = useState(false);
   const repoIme = useRef(createImeGuard());
 
+  // 先确认登录态再拉选项(旧 UI newtask.tsx:289 的 cloudReady 守卫):没连上
+  // 时 mc_task_options 必然 401,拉它只是把一句原始错误摊到面板上。
+  // 浏览器模式 mcStatus 返回 null:当作未连接,面板给未连接空态而非报错
   useEffect(() => {
     let alive = true;
-    mcTaskOptions()
-      .then((o) => {
+    void mcStatus()
+      .then((st) => {
         if (!alive) return;
-        setOptions(o);
-        const model = pickDefaultCloudModel(o.models, o.plan);
-        setModelId(model);
-        setHostId(pickDefaultCloudHost(o.hosts, o.task_defaults?.host_id ?? "", isPublicModel(o.models, model)));
-        setImageId(pickDefaultCloudImage(o.images));
+        setConnected(!!st?.logged_in);
+        if (!st?.logged_in) return;
+        return mcTaskOptions().then((o) => {
+          if (!alive) return;
+          setOptions(o);
+          const model = pickDefaultCloudModel(o.models, o.plan);
+          setModelId(model);
+          setHostId(pickDefaultCloudHost(o.hosts, o.task_defaults?.host_id ?? "", isPublicModel(o.models, model)));
+          setImageId(pickDefaultCloudImage(o.images));
+        });
       })
       .catch((e: unknown) => {
-        if (alive) setLoadErr(e instanceof Error ? e.message : String(e));
+        // mc_status 自己抛(网络故障)时不敢断言未连接:按连接态走,让选项
+        // 加载失败的原文照常外显,不把一切故障都粉饰成「未连接」
+        if (!alive) return;
+        setConnected((cur) => cur ?? true);
+        setLoadErr(e instanceof Error ? e.message : String(e));
       });
     return () => {
       alive = false;
@@ -143,6 +165,12 @@ export function NewCloudTask({
   };
 
   const submit = async () => {
+    // 未连接兜底:选项加载后会话才失效时表单仍在屏上,这一句免得把壳的
+    // 401 原文当成任务创建失败摊给用户
+    if (connected === false) {
+      setError(t("cloud.new.offline.submitTip"));
+      return;
+    }
     if (!content.trim()) {
       setError(t("cloud.new.error.content"));
       return;
@@ -293,12 +321,27 @@ export function NewCloudTask({
         )}
       </div>
 
-      {loadErr && (
+      {/* 未连接:空态形态(图标 + 标题 + 辅助 + 动作),与侧栏未连接空态同构;
+          红底 alert 只留给真故障 */}
+      {connected === false && (
+        <div className="flex min-h-36 flex-col items-center justify-center gap-1.5 px-3 py-8 text-center">
+          <IconCloud size={20} stroke={1.75} className="text-base-content/30" aria-hidden />
+          <div className="text-sm font-semibold">{t("cloud.new.offline.title")}</div>
+          <div className="text-xs text-base-content/60">{t("cloud.new.offline.detail")}</div>
+          {onOpenSettings && (
+            <button type="button" className="btn btn-primary btn-xs mt-1.5" onClick={onOpenSettings}>
+              {t("cloud.new.offline.action")}
+            </button>
+          )}
+        </div>
+      )}
+
+      {loadErr && connected !== false && (
         <div role="alert" className="mx-3 my-3 alert alert-error alert-soft py-1.5 text-xs">
           {t("cloud.new.optionsFailed", { reason: loadErr })}
         </div>
       )}
-      {!options && !loadErr && (
+      {!options && !loadErr && connected !== false && (
         // min-h ≈ 描述区+工具行的高度:选项到达/页签切换时卡片不塌陷回弹
         <div className="flex min-h-36 items-center justify-center gap-2 px-4 text-xs text-base-content/50">
           <span className="loading loading-spinner loading-xs" aria-hidden />
@@ -340,6 +383,9 @@ export function NewCloudTask({
               value={effectiveHostId}
               onPick={setHostId}
               disabled={publicModel}
+              // 禁用必须给理由:光是点不动,用户只会以为界面坏了(旧 UI
+              // newtask.tsx:857「公共模型仅支持公共宿主机」)
+              title={publicModel ? t("cloud.new.hostPublicOnly") : undefined}
               options={hosts.map((hostItem) => ({ value: hostItem.id ?? "", label: cloudHostLabel(hostItem) }))}
             />
             <OptionMenu

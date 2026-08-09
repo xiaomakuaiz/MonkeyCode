@@ -7,6 +7,7 @@ import type { BaizhiSyncedModel } from "@/lib/ipc/account";
 import type { DesktopConfig } from "@/lib/ipc/config";
 import {
   buildPayload,
+  dedupeModelsByName,
   draftFromConfig,
   mcpsToServers,
   mergeSyncedMcps,
@@ -94,6 +95,45 @@ describe("草稿 ⇄ 载荷(全量写回)", () => {
     expect(draftFromConfig(cfg()).defaultIdx).toBe(0);
     expect(draftFromConfig(cfg({ models: [model(), model({ name: "m2", default: true })] })).defaultIdx).toBe(1);
     expect(draftFromConfig(cfg({ models: [model()] })).defaultIdx).toBe(0);
+  });
+
+  // 载入自愈:同名存量不在载入时收敛,validateDraft 会以 modelDup 把**整份
+  // 配置**的保存永久拦死(save() 见错即 return,kernel_env/MCP/新模型一起存
+  // 不下去);同名的会员条目在 UI 里连删除入口都没有,用户无路可走
+  it("dedupeModelsByName:同名收敛为一条(后者内容胜出、留在首现位置),空名不动", () => {
+    expect(
+      dedupeModelsByName([
+        { name: "Claude", tag: "老" },
+        { name: "别的", tag: "x" },
+        { name: " Claude ", tag: "新" },
+        { name: "", tag: "空1" },
+        { name: "", tag: "空2" },
+      ]),
+    ).toEqual([
+      { name: " Claude ", tag: "新" }, // 首现位置 + 后者内容
+      { name: "别的", tag: "x" },
+      { name: "", tag: "空1" },
+      { name: "", tag: "空2" },
+    ]);
+  });
+
+  it("draftFromConfig 载入即收敛同名:校验放行(否则保存被 modelDup 永久拦死)", () => {
+    const base = cfg({
+      models: [
+        model({ name: "Claude", model: "old", default: true }),
+        model({ name: "Claude", model: "new", source: "monkeycode", locked: true }),
+      ],
+    });
+    const draft = draftFromConfig(base);
+    expect(draft.models).toHaveLength(1);
+    expect(draft.models[0]).toMatchObject({ name: "Claude", model: "new", source: "monkeycode" });
+    expect(validateDraft(draft)).toBeNull();
+    // 默认位在归一后的数组上定位:被折叠掉的那条带着 default,不能指到界外
+    expect(draft.defaultIdx).toBe(0);
+    // 保存载荷落的是收敛后的一条(与引擎按名字建 Map 的物化行为一致)
+    expect(buildPayload(base, draft).models.map((m) => m.name)).toEqual(["Claude"]);
+    // 基线同样出自 draftFromConfig:载入自愈不把表单弄脏(不逼用户先点保存)
+    expect(payloadEquals(buildPayload(base, draft), buildPayload(base, draftFromConfig(base)))).toBe(true);
   });
 
   it("buildPayload:白名单收敛(未知字段不透传)、default 重算、表单外顶层字段透传", () => {

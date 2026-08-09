@@ -8,7 +8,7 @@ afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
 
-function stubShell({ failInstall }: { failInstall?: string } = {}) {
+function stubShell({ failInstall, exportLog }: { failInstall?: string; exportLog?: () => unknown } = {}) {
   const calls: string[] = [];
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
@@ -18,12 +18,25 @@ function stubShell({ failInstall }: { failInstall?: string } = {}) {
         if (cmd === "update_check") return Promise.resolve({ available: true, current: "1.0", latest: "1.1" });
         if (cmd === "update_install" && failInstall) return Promise.reject(new Error(failInstall));
         if (cmd === "update_install") return new Promise(() => {}); // 成功:壳自行重启,不返回
+        if (cmd === "export_engine_log" && exportLog) {
+          try {
+            return Promise.resolve(exportLog());
+          } catch (e) {
+            return Promise.reject(e);
+          }
+        }
         return Promise.resolve(null);
       },
     },
     event: { listen: () => Promise.resolve(() => {}) },
   };
   return { calls };
+}
+
+/** 隐藏排障入口的解锁手势:连点版本号 5 次。 */
+async function unlock() {
+  const version = await screen.findByRole("button", { name: /应用 1\.0/ });
+  for (let i = 0; i < 5; i++) await userEvent.click(version);
 }
 
 describe("关于页更新(H5)", () => {
@@ -50,7 +63,40 @@ describe("关于页更新(H5)", () => {
 });
 
 describe("隐藏排障入口(连点版本号解锁)", () => {
-  it("常态只有「检查更新」:导出日志/打开扩展目录已撤,两个目录入口不出现", async () => {
+  // 「导出日志」= 一步拿到可直接附进工单的引擎日志副本(走另存对话框),
+  // 与「打开存储目录 → 自己进 ohmyagent/logs/ 找文件」不是一回事;撤掉后
+  // exportEngineLog 在整个 ui-next 里零调用者。按同一把解锁钥匙恢复
+  it("解锁后可导出引擎日志:走 export_engine_log,成功给回执", async () => {
+    const { calls } = stubShell({ exportLog: () => "/tmp/ohmyagent.log" });
+    render(<AboutSection />);
+    await unlock();
+    await userEvent.click(screen.getByRole("button", { name: "导出日志" }));
+    await waitFor(() => expect(calls).toContain("export_engine_log"));
+    expect((await screen.findByRole("status")).textContent).toContain("日志已导出");
+  });
+
+  it("另存对话框被取消(壳回 null):不谎报成功;失败则外显壳的中文 Err", async () => {
+    const failing = { on: false };
+    stubShell({
+      exportLog: () => {
+        if (failing.on) throw new Error("引擎日志不存在");
+        return null;
+      },
+    });
+    render(<AboutSection />);
+    await unlock();
+    await userEvent.click(screen.getByRole("button", { name: "导出日志" }));
+    expect(screen.queryByText("日志已导出")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    failing.on = true;
+    await userEvent.click(screen.getByRole("button", { name: "导出日志" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("引擎日志不存在");
+  });
+
+  // 不解锁时一个排障入口都不占位;「打开扩展目录」是真撤了(常驻入口在
+  // 设置·浏览器分区),解锁也不会出现
+  it("常态只有「检查更新」:三个排障入口都不出现,打开扩展目录更是已撤", async () => {
     stubShell();
     render(<AboutSection />);
     await screen.findByText(/应用 1\.0/);

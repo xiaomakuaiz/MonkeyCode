@@ -5,13 +5,14 @@
 // (h.chat.usage,云端 usage_update 帧与本地同构)+ 发送。
 // 发送/上传/切换/错误通道全在 useCloudTask 的 handle 上,本组件纯视图。
 import { IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 
 import { ComposerCard, ErrorBar, RunBar, SlashPanel, UsageRing, useAutosizeTextarea } from "@/features/chat/composer/composerKit";
 import { OptionMenu } from "@/features/chat/composer/pickers";
 import { useI18n } from "@/lib/i18n";
 import { groupedCloudModelLabel } from "@/lib/cloud/options";
 import { fmtK } from "@/lib/util/fmt";
+import { useEscLayer } from "@/lib/util/escLayer";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import type { SlashCommand } from "@/lib/protocol/types";
 import type { CloudTaskHandle } from "./useCloudTask";
@@ -22,7 +23,10 @@ export function CloudComposer({
   onSend,
 }: {
   h: CloudTaskHandle;
-  /** VM 启动中:输入框禁用(占位文案提示就绪后可发) */
+  /** VM 启动中(task pending)。**输入框不禁用**:桌面侧不退化成只读等待页
+   * ——启动期照常输入,内容押进出件箱,环境就绪即自动送达(旧 UI
+   * cloudStartup.tsx:6-8「这是桌面侧独有的能力」)。VM 建成要以分钟计,
+   * 干等一屏时间线是白等。只有真需要 VM 在场的动作(切模型)才禁。 */
   pending: boolean;
   /** 发送动作由视图包一层(发送前重新贴底),内容仍取 h.input */
   onSend: () => void;
@@ -56,19 +60,14 @@ export function CloudComposer({
     taRef.current?.focus();
   };
 
-  // Esc 关面板走 window capture 并阻断全局链:审批热键挂在冒泡阶段且
-  // esc = 不可逆的拒绝,面板开着时这一下只能归面板(与本地 Composer 同法)
-  useEffect(() => {
-    if (!slashOpen) return;
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
-      e.preventDefault();
-      setSlashSuppressed(true);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [slashOpen]);
+  // Esc 关面板走 escLayer 层栈(全应用唯一一条 window capture,后开的浮层先
+  // 拿到):面板开着时这一下只能归面板——审批热键挂在冒泡阶段且 esc = 不可逆
+  // 的拒绝,消费即截断。返回 true = 已消费
+  const escSlash = useCallback(() => {
+    setSlashSuppressed(true);
+    return true;
+  }, []);
+  useEscLayer(slashOpen, escSlash);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 面板优先:↑↓/↩/⇥ 归面板,不落到发送
@@ -183,6 +182,19 @@ export function CloudComposer({
           </div>
         )}
 
+        {/* 启动期押后的那条:整屏让给了启动时间线,占位气泡没有落脚处,
+            改在输入卡内给一条待发 chip(旧 UI QueuedChip「环境就绪后自动
+            发送」同位同义)——不外显的话输入框一清、屏幕毫无变化 */}
+        {pending && h.sending && (
+          <div className="flex flex-wrap items-center gap-2 px-3 pt-2">
+            <span title={h.sending.content} className="badge badge-ghost gap-1.5 text-xs">
+              <span className="loading loading-spinner loading-xs" aria-hidden />
+              <span className="max-w-60 truncate">{h.sending.content}</span>
+            </span>
+            <span className="text-xs text-base-content/60">{t("cloud.send.startupQueued")}</span>
+          </div>
+        )}
+
         {slashOpen && <SlashPanel list={list} active={act} onHover={setActive} onPick={pickCommand} />}
 
         <textarea
@@ -191,11 +203,12 @@ export function CloudComposer({
           className="textarea min-h-10 w-full resize-none border-0 bg-transparent text-sm shadow-none focus:outline-none"
           rows={2}
           placeholder={
+            // 启动期/唤醒期都不禁输入:消息押后、条件解除即自动送达,
+            // 占位文案把这件事说清楚免得白等
             pending
               ? t("cloud.view.composerPending")
               : h.waking
-                ? // 唤醒期不禁输入:消息会随连接建立自动送达,先说清楚免得白等
-                  t("cloud.view.composerWaking")
+                ? t("cloud.view.composerWaking")
                 : t("cloud.view.composerPlaceholder")
           }
           value={h.input}
@@ -203,7 +216,6 @@ export function CloudComposer({
           onCompositionEnd={(e) => imeRef.current.markEnd(e.timeStamp)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          disabled={pending}
         />
 
         {/* 底部集群(同 Composer 口径:ps-1 光学对齐/pe-2 发送钮留白):
@@ -223,7 +235,6 @@ export function CloudComposer({
             aria-label={t("chat.attach")}
             title={t("chat.attachTip")}
             className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60"
-            disabled={pending}
             onClick={() => fileRef.current?.click()}
           >
             <IconPaperclip size={15} stroke={1.75} aria-hidden />
@@ -244,13 +255,17 @@ export function CloudComposer({
             />
           </span>
 
-          {usagePct !== null && usage && (
-            <UsageRing
-              pct={usagePct}
-              label={t("chat.contextUsage")}
-              tip={t("chat.usageTip", { pct: usagePct, used: fmtK(usage.used), size: fmtK(usage.size) })}
-            />
-          )}
+          {/* 恒显(与本地 composer 同口径):没有 usage 帧时只画空轨道 +
+              「暂无数据」,不整块消失——元素时有时无本身是干扰 */}
+          <UsageRing
+            pct={usagePct}
+            label={t("chat.contextUsage")}
+            tip={
+              usagePct !== null && usage
+                ? t("chat.usageTip", { pct: usagePct, used: fmtK(usage.used), size: fmtK(usage.size) })
+                : t("chat.usageEmpty")
+            }
+          />
           {/* 发送在途(mode=new 连接在拨号/唤醒机器):按钮转圈并禁用——
               再点一次会掐掉在途连接,首条被弹回输入框挤掉刚打的字 */}
           <button
@@ -258,7 +273,7 @@ export function CloudComposer({
             aria-label={t("chat.send")}
             title={inFlight ? t("cloud.send.pending") : t("chat.sendTip")}
             className="btn btn-primary btn-square btn-sm shrink-0"
-            disabled={pending || inFlight || !h.input.trim()}
+            disabled={inFlight || !h.input.trim()}
             onClick={onSend}
           >
             {inFlight ? (

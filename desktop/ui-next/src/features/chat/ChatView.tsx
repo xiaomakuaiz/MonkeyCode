@@ -32,6 +32,7 @@ import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
 import { anchorScrollTop, findAnchor, outlineActiveSeq } from "@/lib/util/scrollAnchor";
 import { createImeGuard } from "@/lib/util/slash";
+import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
@@ -58,6 +59,7 @@ export function ChatView({
   epoch = 0,
   onDeleted,
   onPatched,
+  onActionError,
 }: {
   meta: SessionMeta;
   epoch?: number;
@@ -68,11 +70,18 @@ export function ChatView({
    * 「改了不生效」的根因;侧栏右键改名一直是 patch().then(refresh),
    * 头部这条链路对齐同一条路) */
   onPatched?: () => void;
+  /** 头部改名/归档落盘失败时外显(走 App 的角落提示栈,与侧栏右键菜单
+   *  同一条通道)。此前两处都是 `.catch(() => {})`:壳拒了也一声不吭,
+   *  用户看到的是"改了个名字,过一会儿又变回去了"。 */
+  onActionError?: (key: "notice.renameFailed" | "notice.archiveFailed", reason: string) => void;
 }) {
   const { t } = useI18n();
-  const { state, conn, hasMore, loadingEarlier, earlierError, loadEarlier, ensureLoaded } = useSessionFeed(meta.id, epoch);
+  const { state, conn, historyLoaded, openError, hasMore, loadingEarlier, earlierError, loadEarlier, ensureLoaded } =
+    useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
-  const composer = useComposer(meta.id, state.running);
+  // lastSeq 也喂给 composer:帧到达才是"上行已被壳接收"的可信信号
+  // (useComposer 的 ComposerFeed 头注写了三个信号各自兜住的故障)
+  const composer = useComposer(meta.id, { running: state.running, historyLoaded, lastSeq: state.lastSeq });
   // 稳定引用:传给 memo 化 LogList 的回调、拖拽/原生落盘回调都经它取最新
   // ctl,不随 composer 对象每渲染换新
   const composerRef = useRef(composer);
@@ -238,9 +247,15 @@ export function ChatView({
   const prependAnchor = useRef<{ node: Element; offset: number } | null>(null);
   const onLoadEarlier = async () => {
     pinnedRef.current = false;
-    const el = scrollRef.current;
-    const col = itemColOf();
-    if (el && col) {
+    // 锚点必须由 loadEarlier 在前插**写入前**同步回调,不能"先记再 await":
+    // 消费锚点的 layoutEffect 依赖 state.items,而流式期间每 ~30ms 就有一批
+    // 新帧——先记的话锚点会被前插之前的某次提交吃掉,startRestore 按错的
+    // 元素把视口拽住整整 3 秒(RESTORE_POLLS 轮询期)。旧 UI chat.tsx:640-665
+    // 的 beforeApply 正是为此存在
+    await loadEarlier(() => {
+      const el = scrollRef.current;
+      const col = itemColOf();
+      if (!el || !col) return;
       const elTop = el.getBoundingClientRect().top;
       for (const kid of Array.from(col.children)) {
         const r = kid.getBoundingClientRect();
@@ -249,8 +264,7 @@ export function ChatView({
           break;
         }
       }
-    }
-    await loadEarlier();
+    });
   };
   // 用 layout effect:DOM 已更新但尚未绘制,这一帧就把位置纠回去,不闪
   useLayoutEffect(() => {
@@ -316,7 +330,10 @@ export function ChatView({
     // 落盘后必须主动重拉:壳侧 session_patch 不广播 session-event,
     // 不拉就没有任何信号回流(标题看着「改了没反应」)
     const noop = next === meta.title || (!next && !meta.title_custom);
-    if (!noop) void sessionPatch(meta.id, { title: next }).catch(() => {}).then(() => onPatched?.());
+    if (!noop)
+      void sessionPatch(meta.id, { title: next })
+        .catch((e: unknown) => onActionError?.("notice.renameFailed", e instanceof Error ? e.message : String(e)))
+        .then(() => onPatched?.());
   };
   const cancelRename = () => {
     renameDoneRef.current = true;
@@ -399,7 +416,7 @@ export function ChatView({
       updateActive();
     });
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   useEffect(scheduleActive, [state.items]);
   // 取消后必须把 id 清零:scheduleActive 以「非零 = 已排队」做节流,残留
   // 旧 id 会让它永远短路(StrictMode 双挂载即触发,当前项从此不再更新)
@@ -521,6 +538,14 @@ export function ChatView({
   // 留 {dir} 占位,渲染时拆开插 span。 ====
   const emptyChat = !meta.workdir;
   const [emptyTitlePre, emptyTitlePost] = t("chat.empty.taskTitle").split("{dir}");
+
+  // header 之下那条内嵌条的文案(§3:会话连接状态唯一的法定位置)。打开失败
+  // 压过连接态:它是终局,而"正在恢复"只是过程
+  const stripText = openError
+    ? t("chat.openFailed", { reason: openError })
+    : conn && !conn.connected
+      ? conn.text
+      : null;
 
   return (
     <main
@@ -647,16 +672,30 @@ export function ChatView({
                   role="menuitem"
                   onClick={() => {
                     closeMenu();
-                    void sessionPatch(meta.id, { archived: !meta.archived }).catch(() => {}).then(() => onPatched?.());
+                    void sessionPatch(meta.id, { archived: !meta.archived })
+                      .catch((e: unknown) =>
+                        onActionError?.("notice.archiveFailed", e instanceof Error ? e.message : String(e)),
+                      )
+                      .then(() => onPatched?.());
                   }}
                 >
                   {meta.archived ? t("chat.menu.unarchive") : t("chat.menu.archive")}
                 </button>
               </li>
-              <li role="none">
+              {/* 运行中不许删(壳/内核也会拒),置灰并说明原因——光是点不动
+                  等于没有解释(旧 UI viewChrome.tsx DeleteMenuItem 的
+                  title「运行中,请先停止」随迁)。title 挂 li 而非 disabled
+                  按钮:多数 webview 不给 disabled 按钮弹 tooltip
+                  (2026-08-06 用户报障「提示没了」的根因,同 pickers.tsx) */}
+              <li
+                role="none"
+                className={state.running ? "menu-disabled" : ""}
+                title={state.running ? t("chat.menu.deleteRunning") : undefined}
+              >
                 <button
                   type="button"
                   role="menuitem"
+                  disabled={state.running}
                   className={confirmDelete ? "text-error" : ""}
                   onClick={() => {
                     // 危险动作二段确认:首点只变文案,再点才执行(同 CloudTaskView 停止钮)
@@ -680,11 +719,15 @@ export function ChatView({
           以内嵌条挂在 header 之下,恢复即消。形态 = 「header 的延长线」:
           同 px-4 内距(文字与标题同一竖线)、同 border-b 分隔线、微量
           warning 底,不用 alert 横幅(环境态是低声耳语,不是警报);
-          文案由壳带来(恢复中/恢复失败),warning 点保持状态中立 */}
-      {conn && !conn.connected && (
-        <div role="status" className="flex shrink-0 items-center gap-2 border-b border-base-300 bg-warning/5 px-4 py-1.5 text-xs text-base-content/70">
-          <span aria-hidden className="status status-warning status-sm animate-pulse shrink-0" />
-          <span className="min-w-0 flex-1 truncate" title={conn.text}>{conn.text}</span>
+          文案由壳带来(恢复中/恢复失败),warning 点保持状态中立。
+          session_open 失败共用这条内嵌条(§3:会话连接状态只有这一个法定
+          位置):壳只在**成功**路径 emit conn-status,失败时 conn 恒为 null
+          ——此前这一条整个不渲染,用户拿到的是没有任何解释的空会话。
+          它不是"恢复中"而是已经落定的失败,故用 error 点且不呼吸 */}
+      {stripText !== null && (
+        <div role="status" className={`flex shrink-0 items-center gap-2 border-b border-base-300 px-4 py-1.5 text-xs text-base-content/70 ${openError ? "bg-error/5" : "bg-warning/5"}`}>
+          <span aria-hidden className={`status status-sm shrink-0 ${openError ? "status-error" : "status-warning animate-pulse"}`} />
+          <span className="min-w-0 flex-1 truncate" title={stripText}>{stripText}</span>
         </div>
       )}
 
@@ -776,17 +819,23 @@ function ChildSessionModal({ id, workdir, onClose }: { id: string; workdir?: str
   const { state } = useSessionFeed(id);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  useEffect(() => {
-    // Esc(window capture):浮层优先——消费即截断,不许漏给全局审批热键
-    // (esc = deny 不可逆;语义与 FilesDrawer 一致)
-    const h = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
+  // Esc 走统一层栈(lib/util/escLayer):浮层挂载时才入栈,层序保证它压过
+  // 视图级 Esc;返回 true = 消费即截断,不许漏给冒泡阶段的全局审批热键
+  // (esc = deny 不可逆)。自己挂 window capture 的老写法被层栈取代,理由
+  // 见 escLayer 头注:同阶段同 target 按**注册先后**触发,浮层永远输给
+  // 挂载即注册的视图级监听
+  useEscLayer(
+    true,
+    useCallback(() => {
       onCloseRef.current();
-    };
-    window.addEventListener("keydown", h, true);
-    return () => window.removeEventListener("keydown", h, true);
-  }, []);
+      return true;
+    }, []),
+  );
+  // useCallback 稳定引用:LogList 已 memo,浮层每收一批帧就重渲染,内联箭头
+  // 会把整列消息(每张工具卡的 effect)一起拖着重跑——主路径为此早就用了
+  // useCallback(见上方 uploadUrl/loadFullTool),这里此前漏了
+  const uploadUrl = useCallback((p: string) => uploadFileURL(id, p), [id]);
+  const loadFullTool = useCallback((seq: number) => sessionFrame(id, seq), [id]);
   return (
     <div className="modal modal-open" role="dialog" aria-label={t("chat.child.title")}>
       <div className="modal-box flex max-h-[84vh] w-[min(860px,92vw)] max-w-[min(860px,92vw)] flex-col gap-3 p-5">
@@ -806,14 +855,7 @@ function ChildSessionModal({ id, workdir, onClose }: { id: string; workdir?: str
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-          <LogList
-            state={state}
-            sessionId={id}
-            readonly
-            uploadUrl={(p) => uploadFileURL(id, p)}
-            workdir={workdir}
-            loadFullTool={(seq) => sessionFrame(id, seq)}
-          />
+          <LogList state={state} sessionId={id} readonly uploadUrl={uploadUrl} workdir={workdir} loadFullTool={loadFullTool} />
         </div>
       </div>
       <div className="modal-backdrop cursor-pointer" onClick={onClose} aria-hidden />

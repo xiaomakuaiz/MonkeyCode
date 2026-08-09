@@ -6,6 +6,7 @@
 // 密码框与系统菜单一致不给剪切/复制;贴视口边缘回收定位。
 import { t } from "@/lib/i18n";
 import { copyText } from "@/lib/util/clipboard";
+import { pushEscLayer } from "@/lib/util/escLayer";
 
 type Editable = HTMLInputElement | HTMLTextAreaElement;
 
@@ -47,6 +48,9 @@ export interface MenuItem {
   danger?: boolean;
   /** 二段确认:第一次点换成此文案,再点才执行 */
   confirm?: string;
+  /** 不可用的**原因**(非布尔):置灰 + 进 title。禁用态不给理由,用户只会
+   *  以为界面坏了——「运行中,请先停止」这类话必须能表达出来(旧 UI 同款)。 */
+  disabledReason?: string;
 }
 
 function buildItems(e: MouseEvent): MenuItem[] {
@@ -107,6 +111,15 @@ export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void
     if (it.danger) btn.classList.add("text-error");
     // mousedown 默认会把焦点从输入框抢走,选区一丢 execCommand 就没得操作了
     btn.addEventListener("mousedown", (ev) => ev.preventDefault());
+    if (it.disabledReason) {
+      // daisyUI menu 的官方禁用形态挂在 li 上;理由进 title(见 MenuItem 注释)
+      li.classList.add("menu-disabled");
+      btn.disabled = true;
+      btn.title = it.disabledReason;
+      li.appendChild(btn);
+      menu.appendChild(li);
+      continue;
+    }
     let armed = !it.confirm;
     btn.addEventListener("click", () => {
       // 危险动作二段确认:第一次点只换文案,菜单不关
@@ -122,20 +135,21 @@ export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void
     menu.appendChild(li);
   }
 
-  const onKey = (ev: KeyboardEvent) => {
-    if (ev.key === "Escape") closeMenu();
-  };
   backdrop.addEventListener("mousedown", closeMenu);
   backdrop.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();
     closeMenu();
   });
-  window.addEventListener("keydown", onKey, true);
+  // Esc 走统一层栈(escLayer):命令式菜单是最后打开的,自然在栈顶先拿到
+  const popEsc = pushEscLayer(() => {
+    closeMenu();
+    return true;
+  });
   window.addEventListener("resize", closeMenu);
   window.addEventListener("blur", closeMenu);
   cleanup = () => {
     cleanup = null;
-    window.removeEventListener("keydown", onKey, true);
+    popEsc();
     window.removeEventListener("resize", closeMenu);
     window.removeEventListener("blur", closeMenu);
     backdrop.remove();

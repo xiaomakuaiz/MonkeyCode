@@ -1,11 +1,19 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { b64encode } from "@/lib/protocol/codec";
+import { resetEscLayersForTest } from "@/lib/util/escLayer";
 import { NewTaskModal } from "./NewTaskModal";
 
+/** Esc = 走 escLayer 的 window capture 单一监听(层栈按后进先出派发)。 */
+const pressEsc = () =>
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+
 afterEach(() => {
+  resetEscLayersForTest(); // 模块级层栈跨用例会串
   localStorage.clear();
   vi.restoreAllMocks();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
@@ -229,6 +237,51 @@ describe("新建任务", () => {
     expect(menu.textContent).toContain("/home/u/proj");
     expect(menu.textContent).toContain("C:\\dev\\proj");
     expect(menu.textContent).not.toContain("relative");
+  });
+});
+
+describe("Esc 分层(草稿不能被一下 Esc 顺手清掉)", () => {
+  it("开着模型菜单按 Esc:只关菜单,新建页不退、首条消息还在", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<NewTaskModal open onClose={onClose} onCreated={() => {}} />);
+    await userEvent.type(screen.getByRole("textbox", { name: "首条消息" }), "修个 bug");
+    await userEvent.click(screen.getByRole("button", { name: "模型" }));
+    expect(screen.getByRole("list", { name: "切换模型" })).toBeDefined();
+
+    pressEsc();
+    // 此前视图级 Esc 挂载即注册、浮层开时才注册,同阶段按注册先后触发 ——
+    // 视图必先吃掉这一下,整页连同草稿一起没
+    expect(screen.queryByRole("list", { name: "切换模型" })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "首条消息" }) as HTMLTextAreaElement).value).toBe("修个 bug");
+  });
+
+  it("焦点在正文里按 Esc:只收敛焦点;再按一下才关页", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<NewTaskModal open onClose={onClose} onCreated={() => {}} />);
+    const box = screen.getByRole("textbox", { name: "首条消息" });
+    await userEvent.type(box, "草稿");
+    expect(document.activeElement).toBe(box);
+
+    pressEsc();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(box);
+    expect((screen.getByRole("textbox", { name: "首条消息" }) as HTMLTextAreaElement).value).toBe("草稿");
+
+    pressEsc();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("关闭后不再占层(open=false 即出栈)", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    const { rerender } = render(<NewTaskModal open onClose={onClose} onCreated={() => {}} />);
+    await screen.findByRole("textbox", { name: "首条消息" });
+    rerender(<NewTaskModal open={false} onClose={onClose} onCreated={() => {}} />);
+    pressEsc();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

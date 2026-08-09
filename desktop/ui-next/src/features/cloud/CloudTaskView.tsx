@@ -14,6 +14,7 @@
 // loadEarlier 大步长补页——effect 驱动(每页提交后重查),上限防死循环。
 import { IconDots, IconFolderOpen, IconTerminal2, IconWorld, IconX } from "@tabler/icons-react";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -38,6 +39,7 @@ import { cloudAnchorIndex, cloudOutlineAnchor, fetchCloudOutline, withCloudAncho
 import type { StreamStatus } from "@/lib/cloud/stream";
 import { onNativeFileDrop } from "@/lib/ipc/uploads";
 import { outlineActiveSeq } from "@/lib/util/scrollAnchor";
+import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { CloudComposer } from "./CloudComposer";
 import { CloudFiles } from "./CloudFiles";
@@ -74,11 +76,14 @@ function PendingBubble({ content, waking }: { content: string; waking: boolean }
 function statusText(
   t: ReturnType<typeof useI18n>["t"],
   status: StreamStatus | null,
-  waking: boolean,
+  vm: { waking: boolean; offline: boolean; ctrlOffline: boolean },
 ): string | null {
-  // 唤醒中压过普通「连接中」:同样是 connecting,休眠机器的等待以分钟计,
-  // 拿「连接中…」糊过去会让用户以为卡死了(2026-08-06 用户报障)
-  if (waking) return t("cloud.conn.waking");
+  // 机器态压过连接态:同样是 connecting,休眠机器的等待以分钟计,拿
+  // 「连接中…」糊过去会让用户以为卡死了(2026-08-06 用户报障)
+  if (vm.waking) return t("cloud.conn.waking");
+  // 离线不是唤醒:后端只对 hibernated 做 Resume(task_control.go),
+  // offline 的机器没人会去救,说成「正在唤醒」就是骗人干等
+  if (vm.offline) return t("cloud.conn.vmOffline");
   switch (status?.kind) {
     case "connecting":
       return t("cloud.conn.connecting");
@@ -91,8 +96,18 @@ function statusText(
     case "dropGaveUp":
       return t("cloud.conn.dropGaveUp");
     default:
-      return null;
+      // 任务流健康时才轮到控制流:它一断保活与唤醒就都没了(机器会照常
+      // 休眠、且没人去叫醒),属于用户该知道的后台故障
+      return vm.ctrlOffline ? t("cloud.conn.ctlOffline") : null;
   }
+}
+
+/** 空态四选一(结束 / 机器离线 / 唤醒中 / 连接中)的文案键。 */
+function emptyKey(ended: boolean, waking: boolean, offline: boolean, part: "title" | "detail") {
+  if (ended) return `cloud.empty.ended.${part}` as const;
+  if (waking) return `cloud.empty.waking.${part}` as const;
+  if (offline) return `cloud.empty.vmOffline.${part}` as const;
+  return `cloud.empty.connecting.${part}` as const;
 }
 
 export function CloudTaskView({
@@ -117,9 +132,13 @@ export function CloudTaskView({
   const [mcHost, setMcHost] = useState("");
   useEffect(() => {
     let alive = true;
-    void mcStatus().then((st) => {
-      if (alive && st?.host) setMcHost(st.host);
-    });
+    // catch 不能省:mc_status 会把网络故障抛成 Err(壳 baizhi/mod.rs),
+    // 未捕获的 rejection 被 index.html 画成盖住整个应用的红色遮罩
+    void mcStatus()
+      .then((st) => {
+        if (alive && st?.host) setMcHost(st.host);
+      })
+      .catch(() => undefined); // 拿不到 host 就不出「在浏览器打开」,不给死链
     return () => {
       alive = false;
     };
@@ -183,6 +202,10 @@ export function CloudTaskView({
   useEffect(
     () =>
       onNativeFileDrop({
+        // 云端附件要把字节上行对象存储(mc_upload),必须真读内容:默认的
+        // path-backed 占位 File 是 0 字节,到 uploadCloudFile 会一律以
+        // 「是空文件」告吹(旧 UI cloudtask.tsx:94 同一处 wantContent)
+        wantContent: true,
         onDragging: (v) => setDragging(v && !hRef.current.ended),
         onFiles: (files) => {
           if (!hRef.current.ended) hRef.current.addFiles(files);
@@ -194,19 +217,15 @@ export function CloudTaskView({
     [h.id],
   );
 
-  // Esc 关文件抽屉(window capture,与 FilesDrawer 同法):浮层优先,这一下
-  // Esc 已被抽屉消费必须立即截断——window 上还挂着审批热键(app/shortcuts.ts,
-  // esc = deny 不可逆),同一下按键绝不能"关抽屉 + 拒绝审批"双消费
-  useEffect(() => {
-    if (!filesOpen) return;
-    const onEsc = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
-      setFilesOpen(false);
-    };
-    window.addEventListener("keydown", onEsc, true);
-    return () => window.removeEventListener("keydown", onEsc, true);
-  }, [filesOpen]);
+  // Esc 关文件抽屉走 escLayer 层栈(全应用唯一一条 window capture,后开的
+  // 浮层先拿到):抽屉里的预览是更晚入栈的一层,Esc 先关预览再关抽屉。
+  // 消费即截断——window 上还挂着审批热键(app/shortcuts.ts,esc = deny
+  // 不可逆),同一下按键绝不能"关抽屉 + 拒绝审批"双消费
+  const escFiles = useCallback(() => {
+    setFilesOpen(false);
+    return true;
+  }, []);
+  useEscLayer(filesOpen, escFiles);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -258,7 +277,7 @@ export function CloudTaskView({
       setActiveAnchor(outlineActiveSeq(seqTops, el.getBoundingClientRect().top));
     });
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   useEffect(scheduleActive, [h.chat.items]);
   // 取消后必须把 id 清零:scheduleActive 以「非零 = 已排队」做节流,残留
   // 旧 id 会让它永远短路(StrictMode 双挂载即触发,与 ChatView 同教训)
@@ -372,7 +391,7 @@ export function CloudTaskView({
   };
 
   const pending = h.taskStatus === "pending";
-  const connText = statusText(t, h.status, h.waking);
+  const connText = statusText(t, h.status, { waking: h.waking, offline: h.vmOffline, ctrlOffline: h.ctrlOffline });
   // 空态带 !cursor 守卫:结束态首轮可能没有帧但仍有更早可翻,
   // 此时要保住「加载更早」入口,不能整屏换成空态
   // 发送在途时不走空态:那条占位气泡就是当前唯一的内容,空态会把它盖掉
@@ -582,21 +601,28 @@ export function CloudTaskView({
       )}
 
       {pending ? (
-        // 启动页:VM 准备是以分钟计的过程,整屏让给时间线(此时必无对话)
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
-          <StartupTimeline meta={h.meta} />
+        // 启动页:VM 准备是以分钟计的过程,整屏让给时间线(此时必无对话)。
+        // 居中用 m-auto 而**不是** items-center/justify-center(LAYOUT §5):
+        // 后者在内容高过容器时会向两端等量溢出,顶端那截滚不回去——步骤多、
+        // 窗口矮时正好看不到最前面几步。auto margin 在没有余量时归零,退化成
+        // 顶端对齐,滚动照旧可达。overflow-x-hidden 是 §5 的硬性搭配
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto p-6">
+          <div className="m-auto">
+            <StartupTimeline meta={h.meta} />
+          </div>
         </div>
       ) : showEmpty ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
           <img src="/logo.png" alt="" aria-hidden className="h-13 w-13 rounded-2xl shadow-sm" />
           {/* 唤醒期的空态单独说:等待量级(分钟)与「连接中」不是一回事,
-              且要讲清「现在就能输入,连上自动发」 */}
+              且要讲清「现在就能输入,连上自动发」。机器离线是第三种:
+              它不会自己回来,不能拿唤醒动画吊着 */}
           {!h.ended && h.waking && <span className="loading loading-spinner loading-sm text-base-content/40" aria-hidden />}
           <p className="max-w-md text-center text-base font-bold">
-            {t(h.ended ? "cloud.empty.ended.title" : h.waking ? "cloud.empty.waking.title" : "cloud.empty.connecting.title")}
+            {t(emptyKey(h.ended, h.waking, h.vmOffline, "title"))}
           </p>
           <p className="max-w-md text-center text-xs leading-relaxed text-base-content/60">
-            {t(h.ended ? "cloud.empty.ended.detail" : h.waking ? "cloud.empty.waking.detail" : "cloud.empty.connecting.detail")}
+            {t(emptyKey(h.ended, h.waking, h.vmOffline, "detail"))}
           </p>
         </div>
       ) : (
@@ -645,7 +671,15 @@ export function CloudTaskView({
         <>
           <div aria-hidden className="absolute inset-0 z-10 bg-base-content/20" onClick={() => setFilesOpen(false)} />
           <aside className="absolute inset-y-0 right-0 z-20 flex w-[26rem] max-w-[85%] flex-col border-l border-base-300 bg-base-100 shadow-xl">
-            <CloudFiles taskId={h.id} vmId={h.ended ? undefined : h.vmId || undefined} onClose={() => setFilesOpen(false)} />
+            {/* 控制流复用常驻那条(h.borrowControl):每条控制连接在后端都会
+                另起一份 TaskLive 上游订阅(task_control.go),各开各的既费
+                上游、又多一条与保活语义纠缠的连接 */}
+            <CloudFiles
+              taskId={h.id}
+              vmId={h.ended ? undefined : h.vmId || undefined}
+              borrowControl={h.borrowControl}
+              onClose={() => setFilesOpen(false)}
+            />
           </aside>
         </>
       )}

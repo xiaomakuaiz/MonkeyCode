@@ -61,7 +61,10 @@ export function Preview({
           <IconX size={14} stroke={1.75} aria-hidden />
         </button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* 只写 overflow-y 时 overflow-x 被算成 auto(LAYOUT §5):预览体今天
+          都靠 whitespace-pre-wrap+wrap-anywhere 折行、撑不宽,但这条不能赌
+          ——将来任何一个不折行的预览体都会在这里长出横滚条 */}
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <PreviewBody model={model} />
       </div>
     </div>

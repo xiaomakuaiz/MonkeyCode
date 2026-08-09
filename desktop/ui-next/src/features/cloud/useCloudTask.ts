@@ -9,10 +9,10 @@
 // 它既不唤醒机器也不知道机器醒没醒。所以本 hook 进任务即建一条控制连接,
 // 「机器就绪与否」一律取详情接口的 virtualmachine.status,不拿连接状态当代理。
 //
-// 发送:机器就绪(vm online)时直发——关掉观察连接,建 mode=new 连接(连上即
-// 上行首条输入,经 stream 内部 send);机器未就绪(休眠/唤醒中)则**押后**:
-// 内容挂成占位气泡,等轮询看到 vm online 再上行(现在直发只会掉进黑洞——后端
-// 收到 user-input 先原样回显、再 Continue 到睡着的机器上失败,只写一行日志)。
+// 发送:机器收得到的时候直发——关掉观察连接,建 mode=new 连接(连上即上行
+// 首条输入,经 stream 内部 send);收不到(环境还在建 / 机器休眠)则**押后**:
+// 内容挂成占位气泡,等押后条件解除再上行(此刻直发只会掉进黑洞——后端收到
+// user-input 先原样回显、再 Continue 到没起来的机器上失败,只写一行日志)。
 // 失败经 onSendFailed 交还草稿,绝不静默丢。
 // 执行中不排队(与旧 UI 投递队列的差异,刻意的简化):提示后保留草稿。
 //
@@ -72,8 +72,10 @@ export interface CloudTaskHandle {
   /** 连接状态(结构化;视图映射文案,健康态不外显) */
   status: StreamStatus | null;
   connected: boolean;
-  /** attach 收束后的就绪态(发消息时另建 mode=new 连接) */
-  idle: boolean;
+  /** 常驻控制流已放弃自动重连(后台机件的健康度)。它一断,保活与唤醒
+   * 就都没了——机器会照常休眠且没人去叫醒,所以要外显;唤醒期拨号必然
+   * 连败,那段由 waking 压掉不外显(与旧 UI 同口径)。 */
+  ctrlOffline: boolean;
   /** 操作失败/提示(视图横幅) */
   err: string;
   clearErr(): void;
@@ -120,15 +122,22 @@ export interface CloudTaskHandle {
   ports: PortInfo[] | null;
   /** 拉一次开放端口(⋯ 菜单打开时触发;结束态/无 VM 不拉) */
   fetchPorts(): void;
+  /** 借常驻控制流办事(文件面板等):优先复用,借不到才临时建一条;
+   * release 只关自己建的那条。每条控制连接在后端都会另起一份 TaskLive
+   * 上游订阅(task_control.go),各开各的既费上游也白白多一条保活链。 */
+  borrowControl(): { ctrl: CloudControl; release: () => void };
   /** 还没被云端回显的那条输入(押在本地等机器醒 / mode=new 连接在途)。
    * 视图据此渲染「发送中」占位气泡——不占位的话输入框一清、日志无变化,
    * 用户会以为消息丢了 */
   sending: { content: string; attachments: { url: string; filename: string }[] } | null;
-  /** 云端机器没就绪:任务在跑但服务端说 VM 不在线(休眠/离线/正在起)。
-   * 此间发送押后,等唤醒完成自动送出;「连接中」与「唤醒中」的等待量级差
-   * 一个数量级(秒 vs 分钟),文案要分开 */
+  /** 云端机器休眠中、正在被唤醒。此间发送押后,等唤醒完成自动送出;
+   * 「连接中」与「唤醒中」的等待量级差一个数量级(秒 vs 分钟),文案要分开 */
   waking: boolean;
-  /** VM 状态原值(unknown/pending/online/offline/hibernated) */
+  /** 云端机器离线(已回收 / Failed 条件 / 建成超 3 分钟仍探不到在线)。
+   * 与 waking 是两回事:后端只对 hibernated 做 Resume,offline 没人会去救
+   * (vmstatus.Resolve + task_control.go),所以不能拿「正在唤醒」糊过去 */
+  vmOffline: boolean;
+  /** VM 状态原值(空/pending/online/offline/hibernated) */
   vmStatus: string;
 }
 
@@ -136,6 +145,10 @@ export interface CloudTaskHandle {
  * 还没 online 就不是"在唤醒"而是起不来了(唤醒失败/虚拟机已回收)——交还草稿
  * 并外显,不把消息永远压在本地转圈。 */
 const WAKE_WAIT_MAX_MS = 300_000;
+
+/** 已出门的那条等回执的上限(旧 UI useCloudTask.ts:229 同值):15s 内云端
+ * 一帧不回就解除发送态,否则连接静静挂着时发送按钮永远转圈。 */
+const SEND_RECEIPT_MAX_MS = 15_000;
 
 export function useCloudTask(
   task: CloudTask,
@@ -146,7 +159,7 @@ export function useCloudTask(
   const [chat, setChat] = useState<ChatState>(createChatState);
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [connected, setConnected] = useState(false);
-  const [idle, setIdle] = useState(false);
+  const [ctrlOffline, setCtrlOffline] = useState(false);
   const [err, setErr] = useState("");
   const [input, setInput] = useState("");
   const [atts, setAtts] = useState<CloudUploadedAtt[]>([]);
@@ -162,14 +175,20 @@ export function useCloudTask(
   // 永远压在本地转圈。到点交还草稿并外显——不是"到点照发":此刻上行只会被
   // 后端回显一下就丢,看起来像发成功了,比转圈更坏
   const wakeTimerRef = useRef(0);
-  const clearWakeTimer = () => {
-    if (!wakeTimerRef.current) return;
-    window.clearTimeout(wakeTimerRef.current);
-    wakeTimerRef.current = 0;
+  // 回执兜底闸:已经出门(mode=new 已建)但云端一帧不回。socket 连上后
+  // 静静挂着时,onFrames/onIdle/onSendFailed 一个都不会来,发送态就永远
+  // 悬着——按钮转圈到天荒地老,用户的字已经离开输入框,再按发送还被
+  // 「上一条还在拨号」挡回来。旧 UI 同位置有一道 15s 闸(useCloudTask.ts:229)
+  const receiptTimerRef = useRef(0);
+  const clearTimer = (ref: { current: number }) => {
+    if (!ref.current) return;
+    window.clearTimeout(ref.current);
+    ref.current = 0;
   };
   const clearSending = () => {
     outboxRef.current = null;
-    clearWakeTimer();
+    clearTimer(wakeTimerRef);
+    clearTimer(receiptTimerRef);
     if (!sendingRef.current) return;
     sendingRef.current = false;
     setSending(null);
@@ -219,16 +238,20 @@ export function useCloudTask(
   const ended = taskStatus === "finished" || taskStatus === "error";
   const vmId = meta?.virtualmachine?.id ?? "";
   const vmStatus = meta?.virtualmachine?.status ?? "";
-  // 机器就绪 = 服务端说 online(后端 vmstatus.Resolve 只给
-  // pending/online/offline/hibernated 四值);空值 = 详情还没到,不妄断。
-  const vmReady = vmStatus === "online";
-  // 唤醒中 = 任务在跑而且**明确知道**机器不在线。判据只取详情接口的 VM 状态,
+  // 唤醒中 = 任务在跑而且服务端说机器**休眠**。判据只取详情接口的 VM 状态,
   // **不挂连接状态**:任务流 WS 连的是后端,机器睡着它照样 connected——旧判据
   // 挂了 connected/status,现实里恒假,唤醒文案永远不亮(2026-08-08 用户报障)。
-  // 也不枚举 hibernated/offline:唤醒过程中后端会短暂把 VM 报成 offline,
-  // 按"非 online"判定天然免疫这种中间态抖动。vmStatus 空(详情没到/任务没带
-  // VM)既不算就绪也不算唤醒中——不妄断,发送照旧直发,不会把消息押死在本地
-  const waking = taskStatus === "processing" && vmStatus !== "" && !vmReady;
+  // 也**不能写成"非 online"**(2026-08-09 修):后端 vmstatus.Resolve 对已回收、
+  // 带 Failed 条件、以及建成超 3 分钟仍探不到在线的 VM 一律给 offline,而
+  // task_control.go 只对 hibernated 调 Resume——把 offline 也算成"正在唤醒"
+  // 就是对着一台没人会去救的机器显唤醒动画、押住消息死等 5 分钟。
+  // vmStatus 空(详情没到/任务没带 VM)什么都不算:不妄断,发送照旧直发。
+  const waking = taskStatus === "processing" && vmStatus === "hibernated";
+  const vmOffline = taskStatus === "processing" && vmStatus === "offline";
+  // 环境还在建(task pending):VM 尚未存在,消息同样发不出去,一并押后
+  const starting = taskStatus === "pending";
+  // 押后条件:机器此刻收不到。解除的那一刻把出件箱里那条送出去(见下方 effect)
+  const parked = starting || waking;
   const label = task.title || task.summary || task.content || meta?.title || meta?.summary || t("cloud.list.untitled");
 
   const refreshInfo = useCallback(async (): Promise<CloudTaskDetail | null> => {
@@ -284,7 +307,6 @@ export function useCloudTask(
     onStatus: (st, ok) => {
       setStatus(st);
       setConnected(ok);
-      if (ok) setIdle(false);
     },
     // 一轮结束:刷新详情并让侧栏列表同步
     onEnded: () => void refreshInfo().then(() => onTasksChangedRef.current?.()),
@@ -298,7 +320,6 @@ export function useCloudTask(
       attachIdleRef.current = true;
       connRef.current = null;
       setConnected(false);
-      setIdle(true);
       // 连接以「空闲」收束却一帧未回:发送态不能悬着(否则占位气泡永远转圈)。
       // 内容已经出门,不退回输入框——退回会造成重复发送。押后未上行的那条
       // 不受影响:它等的是机器醒,不是这条连接
@@ -322,7 +343,16 @@ export function useCloudTask(
     liveRef.current = [];
     connRef.current?.close();
     attachIdleRef.current = true; // 由新连接接管;失败时 onSendFailed 重新武装
-    setIdle(false);
+    // 回执兜底:连上后一帧不回(socket 静静挂着)时没有任何回调会来,
+    // 到点解除发送态并把内容外显——不放回输入框,内容已经出门,退回去
+    // 就是重复发送(与 onIdle 同一口径)
+    clearTimer(receiptTimerRef);
+    receiptTimerRef.current = window.setTimeout(() => {
+      receiptTimerRef.current = 0;
+      if (!sendingRef.current || outboxRef.current) return;
+      clearSending();
+      setErr(t("cloud.err.sendNoReceipt", { text: outgoing.content }));
+    }, SEND_RECEIPT_MAX_MS);
     // content 交明文:内层 base64 由 stream 状态机统一包(双重编码会乱码)
     connRef.current = connectCloudStream(id, "new", makeHandlers(), outgoing);
   };
@@ -339,7 +369,6 @@ export function useCloudTask(
     setInput("");
     setAtts([]);
     attCountRef.current = 0;
-    setIdle(false);
     sendingRef.current = false;
     outboxRef.current = null;
     setSending(null);
@@ -364,14 +393,13 @@ export function useCloudTask(
     };
   }, [id, refreshInfo]);
 
-  // 状态轮询:pending / 唤醒中 3s(盯状态翻转——押后的消息就等这一下),
-  // 其余 processing 10s(刷新元数据);结束停。
+  // 状态轮询:押后中(环境在建 / 机器休眠)3s 盯状态翻转——押后的消息就等
+  // 这一下;其余 processing 10s(刷新元数据);结束停。
   useEffect(() => {
     if (ended) return;
-    const fast = taskStatus === "pending" || waking;
-    const timer = setInterval(() => void refreshInfo(), fast ? 3000 : 10000);
+    const timer = setInterval(() => void refreshInfo(), parked ? 3000 : 10000);
     return () => clearInterval(timer);
-  }, [taskStatus, ended, waking, refreshInfo]);
+  }, [ended, parked, refreshInfo]);
 
   // 常驻控制流:进任务即连。**这是唯一会唤醒休眠 VM 的通道**——后端在控制流
   // 建连时 Resume 休眠机器,并在连接存续期间持续刷新空闲计时器保活
@@ -379,12 +407,19 @@ export function useCloudTask(
   // 旧桌面 UI 同法;ui-next 此前只在切模型/端口/文件面板临时连一下,于是
   // 打开一个休眠任务根本没人去唤醒它(2026-08-08 用户报障根因)。
   // 代价与 web/移动端一致:任务视图开着期间机器不会休眠。
-  // 控制流自身的 offline 状态不进 err 横幅:它是后台机件,唤醒进度由 vmStatus
-  // 外显;唤醒期拨号必然连败,外显只会与「唤醒中」同屏矛盾
+  // 控制流自身的 offline 状态**不进 err 横幅**(它是后台机件),但也不能吞:
+  // 通道一断,保活与唤醒就都没了,机器照常休眠且没人叫醒——外显走连接条
+  // (结构化布尔,文案在视图),唤醒期那段由 waking 压掉(拨号必然连败,
+  // 与「唤醒中」同屏矛盾)。与旧 UI useCloudTask.ts:630-636 同口径
   useEffect(() => {
     if (ended || !vmId) return;
-    const ctrl = connectCloudControl(id);
+    const ctrl = connectCloudControl(id, {
+      onStatus: (_st, ok) => setCtrlOffline(!ok),
+    });
     ctrlRef.current = ctrl;
+    // 不在这里复位 ctrlOffline:它由 onStatus 单向驱动(建连成功/放弃重连),
+    // 而本 effect 只在 id/vmId/ended 变化时重跑——切任务视图整棵重挂,状态
+    // 本就是新的;结束态连接条整条不渲染
     // 建连触发唤醒后尽快让轮询看到状态翻转(否则要等下一个 3s/10s 拍子)
     const t = setTimeout(() => void refreshInfo(), 1500);
     return () => {
@@ -394,27 +429,66 @@ export function useCloudTask(
     };
   }, [id, ended, vmId, refreshInfo]);
 
-  /** 借一条控制连接办事(切模型/端口列表):优先复用常驻那条——省掉每次开
-   * ⋯ 菜单都拨一条新 WS,也避免临时连接关闭时打断保活;常驻不在(结束态/
-   * 详情还没带 VM)才临时建一条,用完即关。release 只关自己建的那条。 */
-  const borrowControl = (): { ctrl: CloudControl; release: () => void } => {
+  // 休眠边沿上复活控制通道。控制流连败到上限会**永久**放弃自动重连(懒重连
+  // 只挂在 call() 入口,而 call 只有开 ⋯ 菜单/切模型时才发),于是「网络抖
+  // 30 秒 → 通道悄悄退场 → 15 分钟后机器休眠 → 界面显示正在唤醒、实际没人
+  // 去唤醒」成了死结(2026-08-09)。两个边沿各修一头:
+  //  - 进入休眠:此刻正需要有人建连去 Resume,把通道叫回来;
+  //  - 唤醒完成:唤醒期间的拨号必然连败,醒了要复活通道恢复保活(旧 UI
+  //    useCloudTask.ts:646-656 用一发空 port_forward_list 撞懒重连,这里直接
+  //    revive(),不发假 RPC)。
+  // 只在**边沿**动手,不在 waking 为真时反复戳:那等于绕开放弃闸做无限重连。
+  // 也刻意不把 waking 挂进上面那个 effect 的依赖——拆建连接会 reject 唤醒期
+  // 在途的长等待 call(switch_model 等)。
+  const prevWakingRef = useRef(false);
+  useEffect(() => {
+    if (prevWakingRef.current !== waking) ctrlRef.current?.revive();
+    prevWakingRef.current = waking;
+  }, [waking]);
+
+  /** 借一条控制连接办事(切模型/端口列表/文件面板):优先复用常驻那条——省掉
+   * 每次都拨一条新 WS(后端每条控制连接都会另起一份 TaskLive 上游订阅,
+   * task_control.go::controlSubscribeTaskEvents),也避免临时连接关闭时打断
+   * 保活;常驻不在(结束态/详情还没带 VM)才临时建一条,用完即关。
+   * release 只关自己建的那条。 */
+  const borrowControl = useCallback((): { ctrl: CloudControl; release: () => void } => {
     const shared = ctrlRef.current;
     if (shared) return { ctrl: shared, release: () => undefined };
     const own = connectCloudControl(id);
     return { ctrl: own, release: () => own.close() };
-  };
+  }, [id]);
 
-  // 机器醒了:把押在出件箱里的那条送出去(轮询看到 vm online 即触发)。
+  // 押后条件解除(环境建好 / 机器醒了):把出件箱里那条送出去。
+  // 判据取「押后条件」本身而不是「vm 变 online」:启动期的任务详情可能压根
+  // 不带 virtualmachine,盯 vm 状态转变会让启动期排的那条永远发不出去。
   // 押后期间任务被终止/结束的兜底在下方 ended effect
   useEffect(() => {
-    if (!vmReady) return;
+    // ended 也会让 parked 翻假(任务跑完/被终止时既非 pending 也非唤醒中),
+    // 但那不是"可以发了"而是"发不出去了":交给下方 ended effect 外显
+    if (parked || ended) return;
     const queued = outboxRef.current;
     if (!queued) return;
     outboxRef.current = null;
     dispatch(queued);
     // dispatch 只读稳定 ref/setter,刻意不进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vmReady]);
+  }, [parked, ended]);
+
+  // 唤醒完成(观测到「非 online → online」的转变):除了投递押后的消息,还要
+  // 把观察通道重新武装起来——唤醒期间 attach 大概率已经连败收束(attachIdle),
+  // 不重新武装的话 attach effect 的守卫会永远挡着,实时输出就此死掉
+  // (旧 UI useCloudTask.ts:337-348 的四件事,ui-next 此前只做了投递那一件)。
+  // 按**转变**判定而非「当前 online」:首次观测就 online 的健康任务不能触发,
+  // 否则 attach 被无谓拆建一次,服务端把当前轮整轮重放(内容重复)。
+  const lastVmRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!vmStatus) return; // 详情还没到:既不记录也不判定
+    const prev = lastVmRef.current;
+    lastVmRef.current = vmStatus;
+    if (vmStatus !== "online" || prev === null || prev === "online") return;
+    attachIdleRef.current = false;
+    setAttachEpoch((e) => e + 1);
+  }, [vmStatus]);
 
   // 押后期间任务结束(自己终止/云端跑完):占位气泡撤下,内容外显——
   // 结束态 composer 不渲染,放回输入框没有意义,但绝不能静默丢
@@ -452,10 +526,11 @@ export function useCloudTask(
     () => () => {
       connRef.current?.close();
       connRef.current = null;
-      clearWakeTimer();
+      clearTimer(wakeTimerRef);
+      clearTimer(receiptTimerRef);
     },
-    // clearWakeTimer 只读稳定 ref,刻意不进依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // clearTimer 只读稳定 ref,刻意不进依赖
+     
     [],
   );
 
@@ -490,11 +565,13 @@ export function useCloudTask(
     // 用户只能猜消息是不是丢了(2026-08-06 用户报障)
     sendingRef.current = true;
     setSending(outgoing);
-    if (waking) {
-      // 机器没就绪(休眠/唤醒中):押后,等轮询看到 vm online 再上行。
+    if (parked) {
+      // 机器此刻收不到(环境还在建 / 机器休眠):押后,等条件解除再上行。
       // 此刻直发只会掉进黑洞——后端收到 user-input 会先原样回显给我们,
-      // 再把内容 Continue 到睡着的机器上失败、只写一行日志,表现就是
-      // 「消息进了日志然后永远没有下文」(2026-08-08 用户报障)
+      // 再把内容 Continue 到没起来的机器上失败、只写一行日志,表现就是
+      // 「消息进了日志然后永远没有下文」(2026-08-08 用户报障)。
+      // 启动期同样收下不退化成只读等待页——这是桌面侧独有的能力
+      // (旧 UI cloudStartup.tsx:6-8「环境就绪即送达」)
       outboxRef.current = outgoing;
       wakeTimerRef.current = window.setTimeout(() => {
         wakeTimerRef.current = 0;
@@ -538,7 +615,9 @@ export function useCloudTask(
   };
 
   // 模型分组投影懒加载。幂等靠 inFlight ref 而非「已有值」:失败保持 null,
-  // 重开菜单可重试(失败缓存 [] 会让本次挂载永远「没有可用模型」)
+  // 重开菜单可重试(失败缓存 [] 会让本次挂载永远「没有可用模型」)。
+  // 失败原因必须外显:重试可以留给下次开菜单,但静默吞掉的话模型菜单就是
+  // 永远空白且一句交代都没有,用户无从判断是"没有模型"还是"没连上"
   const loadModels = useCallback(() => {
     if (modelsLoadedRef.current || modelsInFlight.current) return;
     modelsInFlight.current = true;
@@ -547,7 +626,7 @@ export function useCloudTask(
         modelsLoadedRef.current = true;
         setModels(groupCloudModels(o.models, o.plan));
       })
-      .catch(() => undefined)
+      .catch((e: unknown) => setErr(t("cloud.model.loadFailed", { reason: e instanceof Error ? e.message : String(e) })))
       .finally(() => {
         modelsInFlight.current = false;
       });
@@ -652,7 +731,7 @@ export function useCloudTask(
     chat,
     status,
     connected,
-    idle,
+    ctrlOffline,
     err,
     clearErr: () => setErr(""),
     notifyErr: setErr,
@@ -681,8 +760,10 @@ export function useCloudTask(
     commands,
     ports,
     fetchPorts,
+    borrowControl,
     sending,
     waking,
+    vmOffline,
     vmStatus,
   };
 }

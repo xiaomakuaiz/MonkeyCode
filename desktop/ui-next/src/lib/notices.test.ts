@@ -31,6 +31,25 @@ describe("后台会话提醒判定(D3)", () => {
     expect(noticeForSessionEvent(ev({ status: "running" }), "s1")).toBeNull();
   });
 
+  // 壳对顶层会话真的会发这个状态:引擎 turn/stopped 的 stop_reason=="interrupted"
+  // (driver/normalize.rs),以及引擎进程死亡后的 reconcile-all 收尾
+  // (driver/session.rs)。漏掉它 = 引擎崩溃时后台任务全被打断却一声不吭
+  it("session-status:interrupted→已中断(引擎崩溃时后台任务的唯一信号)", () => {
+    expect(noticeForSessionEvent(ev({ status: "interrupted" }), "s1")).toEqual({
+      sessionId: "s2",
+      title: "后台任务",
+      kind: "interrupted",
+    });
+    // 当前会话仍不提醒(用户就在现场,消息流里有 task-error/中断帧)
+    expect(noticeForSessionEvent(ev({ status: "interrupted" }), "s2")).toBeNull();
+  });
+
+  // finished 只留给子任务(新壳顶层会话正常收尾回 idle):子任务没有列表行,
+  // 提醒点开也无处可去 —— 这条不进是对的,别"顺手补齐"
+  it("finished 不提醒(子任务专用状态,没有可跳转的列表行)", () => {
+    expect(noticeForSessionEvent(ev({ status: "finished" }), "s1")).toBeNull();
+  });
+
   it("session-summary 与用户等待无关,不提醒", () => {
     expect(noticeForSessionEvent(ev({ type: "session-summary", summary: "x" }), "s1")).toBeNull();
   });

@@ -9,8 +9,9 @@
 //   顺序由 lib 与本组件测试双重钉住);
 // - 同步(baizhi_sync / mc_models_sync)结果经 onSyncResult 交
 //   SettingsView.applySync 并入草稿;干净表单+无任务在跑时那边自动保存,
-//   否则回退保存条——结果行按 autoSaved/blocked 说明白落到哪一步了
-//   (密钥复用 knownKeys 联动留后续版本)。
+//   否则回退保存条——结果行按 autoSaved/blocked 说明白落到哪一步了;
+//   百智云同步把表单此刻持有的网关密钥(knownApiKeys)一并交给壳复用,
+//   不传的话每同步一次就在用户网关账号里多建一把密钥。
 import { IconCheck, IconCopy } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -87,6 +88,17 @@ export function profileName(p?: Record<string, unknown>): string {
     if (typeof v === "string" && v.trim()) return v.trim();
   }
   return "";
+}
+
+/** 交给壳复用的「已持有明文推理密钥」。契约见 desktop/src/baizhi/sync.rs
+ *  ensure_api_key:壳先在网关的密钥列表里找与 knownKeys 完全相同的一把
+ *  (停用的顺带重新启用)复用之,找不到才**新建**一把。传空数组 = 每次同步
+ *  都在用户的网关账号里凭空多出一把新密钥,而表单里明明就有可用的那把。
+ *  只有 sk- 开头的才是网关明文密钥(壳侧同样这么筛);同一把 key 会被多个
+ *  模型行共用,去重后再传。 */
+export function knownApiKeys(draft?: SettingsDraft | null): string[] {
+  const keys = (draft?.models ?? []).map((m) => m.api_key.trim()).filter((k) => k.startsWith("sk-"));
+  return [...new Set(keys)];
 }
 
 type Msg = { text: string; error?: boolean } | null;
@@ -172,11 +184,14 @@ function AccountCard({
 /** 百智云账号卡(已登录形态)。 */
 function BaizhiCard({
   status,
+  knownKeys,
   onChanged,
   onResult,
   autoSyncToken = 0,
 }: {
   status: BaizhiStatus;
+  /** 表单此刻持有的网关明文密钥(见 knownApiKeys):交壳复用,免重复建 key */
+  knownKeys: string[];
   onChanged: () => Promise<void>;
   /** 同步结果交宿主并入设置草稿;回执带跳过名单与自动保存结论(卡内外显) */
   onResult?: (r: BaizhiSyncResult) => SyncApplied | undefined | void;
@@ -188,22 +203,31 @@ function BaizhiCard({
   const { t } = useI18n();
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
+  // 基准取"此刻"的表单:同步是发请求→等数秒,自动同步那一路更是从 effect
+  // 里发出的,拿闭包里的旧值会把刚并入的密钥漏掉
+  const keysRef = useRef(knownKeys);
+  keysRef.current = knownKeys;
 
   const sync = async () => {
     setSyncing(true);
     setMsg(null);
     try {
-      // knownKeys 空:密钥复用联动留给后续版本;壳会复用/新建网关密钥
-      const r = await baizhiSync([]);
-      const applied = onResult?.(r);
+      const r = await baizhiSync(keysRef.current);
+      const mcpCount = Object.keys(r.mcp_servers ?? {}).length;
       const notes = r.notes?.length ? ` ${r.notes.join("；")}` : "";
+      // 一条都没拉到 = 失败语义(旧 UI 同款):账号没开通/没配模型时,
+      // 「已获取 0 个模型…保存后生效」读起来像成功了,用户等着模型出现。
+      // 也不能往下走 onResult:空集合并入本就是 no-op,却会触发一次
+      // 自动保存(写盘 + 重启引擎),白踹一次引擎
+      if (!r.models.length && !mcpCount) {
+        setMsg({ text: t("account.baizhi.syncEmpty") + notes, error: true });
+        return;
+      }
+      const applied = onResult?.(r);
       const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join("、") })}` : "";
       setMsg({
         text:
-          t("account.baizhi.syncDone", {
-            models: r.models.length,
-            mcp: Object.keys(r.mcp_servers ?? {}).length,
-          }) +
+          t("account.baizhi.syncDone", { models: r.models.length, mcp: mcpCount }) +
           syncOutcome(t, applied) +
           notes +
           skipped,
@@ -322,8 +346,15 @@ function McCard({
     setMsg(null);
     try {
       const r: McModelsSyncResult = await mcModelsSync();
-      const applied = onResult?.(r);
       const notes = r.notes?.length ? ` ${r.notes.join("；")}` : "";
+      // 空结果按失败说(旧 UI 同款,理由同 BaizhiCard.sync):没有会员权益时
+      // 「已获取 0 个会员模型…保存后生效」看着像成功;且不往下并入,免得
+      // 一次 no-op 合并白白触发自动保存重启引擎
+      if (!r.models.length) {
+        setMsg({ text: t("account.mc.syncEmpty") + notes, error: true });
+        return;
+      }
+      const applied = onResult?.(r);
       const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join("、") })}` : "";
       setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + syncOutcome(t, applied) + notes + skipped });
     } catch (e) {
@@ -337,12 +368,20 @@ function McCard({
   const user = status?.user;
   const userName = user?.name || user?.username || user?.email || t("account.loggedIn");
 
-  // 登录/桥接即自动同步(语义同 BaizhiCard):connected 现值判断不进依赖
-  // ——桥接流程 refresh 先落(connected 翻真)再 bump,只认 token 边沿
+  // 登录/桥接即自动同步(语义同 BaizhiCard)。依赖必须与守卫一致:守卫读
+  // connected 却只依赖 token,靠的是 onBaizhiLoggedIn 里 refresh 与 bump 被
+  // React 批到同一次提交——一旦 connected 晚一次提交才翻真(状态刷新与
+  // bump 分批、mc_status 慢一步),effect 早跑完了,这一路同步就永远不发生。
+  // 补依赖后要防重复:同一个 token 只认一次边沿,connected 反复翻转不重发
+  const syncedToken = useRef(0);
   useEffect(() => {
-    if (autoSyncToken > 0 && connected) void sync();
+    if (autoSyncToken > 0 && connected && syncedToken.current !== autoSyncToken) {
+      syncedToken.current = autoSyncToken;
+      void sync();
+    }
+    // sync 每渲染新引用但行为稳定,只认 token/连接态边沿
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSyncToken]);
+  }, [autoSyncToken, connected]);
 
   if (!connected) {
     return (
@@ -627,7 +666,13 @@ export function AccountSection({
           <div className="flex flex-col gap-1.5">
             <h3 className="px-1 text-xs font-bold text-base-content/60">{t("account.baizhi.title")}</h3>
             {bz?.logged_in ? (
-              <BaizhiCard status={bz} onChanged={refresh} onResult={onSyncResult} autoSyncToken={bzSyncToken} />
+              <BaizhiCard
+                status={bz}
+                knownKeys={knownApiKeys(draft)}
+                onChanged={refresh}
+                onResult={onSyncResult}
+                autoSyncToken={bzSyncToken}
+              />
             ) : (
               <BaizhiLoginCard>
                 <LoginPanel onBaizhiLoggedIn={() => void onBaizhiLoggedIn()} />

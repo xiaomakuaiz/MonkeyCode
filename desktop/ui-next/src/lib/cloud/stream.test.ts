@@ -63,7 +63,12 @@ interface OpenAttempt {
   fail(msg?: string): void;
 }
 
-function harness(mode: "attach" | "new" = "attach", firstInput?: CloudUserInput) {
+function harness(
+  mode: "attach" | "new" = "attach",
+  firstInput?: CloudUserInput,
+  /** deferFlush:批调度改成手动(还原 rAF 的"下一拍"语义),由 runFlush 触发 */
+  opts: { deferFlush?: boolean } = {},
+) {
   const clock = new FakeClock();
   const opens: OpenAttempt[] = [];
   const openPipe: OpenPipe = (_kind, _id, params, onText, onClose) =>
@@ -86,6 +91,7 @@ function harness(mode: "attach" | "new" = "attach", firstInput?: CloudUserInput)
   const statuses: { st: StreamStatus; ok: boolean }[] = [];
   const sendFailed: CloudUserInput[] = [];
   const counters = { ended: 0, reconnect: 0, idle: 0 };
+  let deferred: (() => void) | null = null;
   const conn = connectCloudStream(
     "task-1",
     mode,
@@ -103,12 +109,22 @@ function harness(mode: "attach" | "new" = "attach", firstInput?: CloudUserInput)
       setTimeout: clock.setTimeout,
       clearTimeout: clock.clearTimeout,
       now: () => clock.now,
-      schedule: (fn) => fn(), // 立即冲刷:一帧一批,断言简单
+      // 默认立即冲刷:一帧一批,断言简单;deferFlush 时攒着等 runFlush
+      schedule: opts.deferFlush
+        ? (fn) => {
+            deferred = fn;
+          }
+        : (fn) => fn(),
     },
   );
   const kinds = () => statuses.map((s) => s.st.kind);
   const deliver = (i: number, frame: Frame | Record<string, unknown>) => opens[i]!.onText(JSON.stringify(frame));
-  return { clock, opens, conn, frames, statuses, sendFailed, counters, kinds, deliver };
+  const runFlush = () => {
+    const fn = deferred;
+    deferred = null;
+    fn?.();
+  };
+  return { clock, opens, conn, frames, statuses, sendFailed, counters, kinds, deliver, runFlush };
 }
 
 describe("退避参数", () => {
@@ -315,5 +331,32 @@ describe("connectCloudStream", () => {
     expect(h.clock.pendingDelays()).toEqual([]);
     h.clock.advance(60_000);
     expect(h.opens).toHaveLength(1);
+  });
+
+  it("close() 连同**同一拍里已排队还没 flush 的帧**一起作废", async () => {
+    // 批调度是 rAF/宏任务:close() 之后那一拍照样会跑 flush,把帧喂给调用方
+    // 已经弃用的 handler。发消息正是这条路径——先 close 观察连接再建
+    // mode=new,残留帧一到就把「发送中」占位气泡在任何回显之前撤掉
+    const h = harness("attach", undefined, { deferFlush: true });
+    h.opens[0]!.accept();
+    await flush();
+    h.deliver(0, { type: "task-running", seq: 1 });
+    expect(h.frames).toEqual([]); // 还没到 flush 那一拍
+    h.conn.close();
+    h.runFlush();
+    expect(h.frames).toEqual([]);
+  });
+
+  it("服务端正常收束时,最后一批回放帧仍要送到(不能被 close 守卫连坐)", async () => {
+    // 与上一条相对:清的是队列,不是"关了就不再回吐"——onIdle/onSendFailed
+    // 路径内部同样置 closed,加 closed 守卫会把云端最后一批帧一起丢掉
+    const h = harness("attach", undefined, { deferFlush: true });
+    h.opens[0]!.accept();
+    await flush();
+    h.deliver(0, { type: "task-running", seq: 1 });
+    h.opens[0]!.onClose({ code: 1000 }); // 云端回放完整轮后正常关连接
+    h.runFlush();
+    expect(h.frames.flat().map((f) => f.type)).toEqual(["task-running"]);
+    expect(h.counters.idle).toBe(1);
   });
 });

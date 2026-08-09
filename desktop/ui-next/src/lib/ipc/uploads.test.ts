@@ -4,6 +4,7 @@ import {
   b64OfBytes,
   isImagePath,
   nativePathOf,
+  onNativeFileDrop,
   pathBackedFile,
   pickAttachmentPaths,
   uploadFilePath,
@@ -137,6 +138,88 @@ describe("路径直拷与对话框选择", () => {
 
     vi.stubGlobal("window", {});
     expect(await pickAttachmentPaths()).toEqual([]);
+  });
+});
+
+/** 假壳事件总线:记录 tauri:// 监听并向下投递 payload。 */
+function stubDropShell(handler: (cmd: string, args?: Record<string, unknown>) => unknown) {
+  const listeners = new Map<string, (e: { payload: unknown }) => void>();
+  const calls: Call[] = [];
+  vi.stubGlobal("window", {
+    __TAURI__: {
+      core: {
+        invoke: (cmd: string, args?: Record<string, unknown>) => {
+          calls.push({ cmd, args });
+          return Promise.resolve(handler(cmd, args));
+        },
+      },
+      event: {
+        listen: (name: string, cb: (e: { payload: unknown }) => void) => {
+          listeners.set(name, cb);
+          return Promise.resolve(() => listeners.delete(name));
+        },
+      },
+    },
+  });
+  return { listeners, calls };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+// Linux 壳原生拖放(WebKitGTK 的 HTML5 拖拽拿不到 File)。两个来源要的东西
+// 不一样:本地会话只要路径(壳直拷,大小不设限),云端附件要**字节本体**
+// (mc_upload 直传对象存储)。少了 wantContent 这一岔,云端侧拖进来的
+// 每个文件都是 0 字节,uploadCloudFile 一律以「是空文件」告吹。
+describe("onNativeFileDrop 内容分岔", () => {
+  it("缺省:stat_dropped_file 造 path-backed 占位 File(0 字节 + 真实路径)", async () => {
+    const { listeners, calls } = stubDropShell(() => ({ name: "笔记.txt", mediaType: "" }));
+    const got: File[][] = [];
+    const off = onNativeFileDrop({ onDragging: () => {}, onFiles: (f) => got.push(f) });
+    await settle();
+    listeners.get("tauri://drag-drop")?.({ payload: { paths: ["/home/u/笔记.txt"] } });
+    await settle();
+    expect(calls.map((c) => c.cmd)).toEqual(["stat_dropped_file"]);
+    expect(got[0]![0]!.size).toBe(0);
+    expect(nativePathOf(got[0]![0]!)).toBe("/home/u/笔记.txt");
+    off();
+  });
+
+  it("wantContent:read_dropped_file 读回字节还原成真 File(云端附件必须拿得到内容)", async () => {
+    const { listeners, calls } = stubDropShell(() => ({
+      name: "图.png",
+      mediaType: "image/png",
+      data: b64OfBytes(new Uint8Array([1, 2, 3, 4, 5]).buffer),
+    }));
+    const got: File[][] = [];
+    const off = onNativeFileDrop({ wantContent: true, onDragging: () => {}, onFiles: (f) => got.push(f) });
+    await settle();
+    listeners.get("tauri://drag-drop")?.({ payload: { paths: ["/home/u/图.png"] } });
+    await settle();
+    expect(calls.map((c) => c.cmd)).toEqual(["read_dropped_file"]);
+    const f = got[0]![0]!;
+    expect(f.name).toBe("图.png");
+    expect(f.type).toBe("image/png");
+    expect(f.size).toBe(5); // 非零:uploadCloudFile 的 size===0 拦截过得去
+    expect([...new Uint8Array(await f.arrayBuffer())]).toEqual([1, 2, 3, 4, 5]);
+    off();
+  });
+
+  it("wantContent:壳读取失败(过大/是目录)逐个上抛原因,不静默丢", async () => {
+    const { listeners } = stubDropShell(() => Promise.reject(new Error("文件过大(上限 20MB)")));
+    const errs: string[] = [];
+    const got: File[][] = [];
+    const off = onNativeFileDrop({
+      wantContent: true,
+      onDragging: () => {},
+      onFiles: (f) => got.push(f),
+      onError: (m) => errs.push(m),
+    });
+    await settle();
+    listeners.get("tauri://drag-drop")?.({ payload: { paths: ["/big.bin"] } });
+    await settle();
+    expect(errs).toEqual(["文件过大(上限 20MB)"]);
+    expect(got).toEqual([]); // 一个都没成:不调 onFiles
+    off();
   });
 });
 

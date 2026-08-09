@@ -72,13 +72,21 @@ export async function windowToggleFullscreen(): Promise<void> {
   }
 }
 
-/** 窗口标题随视图变化;浏览器模式退回 document.title。 */
+/** 窗口标题随视图变化;浏览器模式退回 document.title。
+ *
+ *  ⚠️ 参数名是 **value**,不是 title(线上契约,别"顺手改成同名")。这条
+ *  命令由 Tauri 的 `setter!(set_title, &str)` 宏生成,宏体里的形参恒为
+ *  `value`(tauri-2.11.5/src/window/plugin.rs)。传 `{ title }` 会在壳侧
+ *  反序列化阶段就被拒:「command argument missing: value」——而 quiet()
+ *  把这条拒绝吞掉了,于是**每一次**改标题都静默失败,Alt-Tab / 任务栏 /
+ *  调度中心里永远显示 index.html 里那个静态标题,界面上一点异常都看不出来。
+ *  旧 UI(ui/src/host.ts::setWindowTitle)一直传的就是 value。 */
 export function setWindowTitle(title: string): void {
   if (!inDesktopShell()) {
     document.title = title;
     return;
   }
-  quiet(invoke("plugin:window|set_title", { title }));
+  quiet(invoke("plugin:window|set_title", { value: title }));
 }
 
 /** 外链一律交系统浏览器:壳内 opener 失败时退回 location 导航(壳的

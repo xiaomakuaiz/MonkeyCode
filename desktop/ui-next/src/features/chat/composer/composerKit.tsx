@@ -68,24 +68,31 @@ export function RunBar({
  * >85% 用功能性状态色示警(旧 ContextRing 的设计);tooltip 走紧凑口径:
  * 百分比 + fmtK 缩写(精确 token 数没有决策价值,长串数字把 tooltip 撑成
  * 一整行)。tooltip-left:圆环贴视口右缘,tooltip-top 居中弹会被窗口裁掉半截。 */
-export function UsageRing({ pct, tip, label }: { pct: number; tip: string; label: string }) {
+/** pct = null:本轮还没有 usage 帧。**照旧占位**,只画空轨道 + 「暂无数据,
+ *  本轮请求后更新」——旧 UI 的 ContextRing 就是恒显的(chat.tsx:1203),
+ *  ui-next 首版把整个圆环 gate 掉了:元素时有时无本身就是干扰,而且用户
+ *  无从知道"这里本该有个东西、只是还没数据"。 */
+export function UsageRing({ pct, tip, label }: { pct: number | null; tip: string; label: string }) {
   const geom = { "--size": "1rem", "--thickness": "2px" } as CSSProperties;
   return (
     <div className="tooltip tooltip-left mx-1 shrink-0" data-tip={tip}>
       {/* 同格叠放(col/row-start-1),不用 absolute:两层几何完全一致才不会错圈 */}
       <div className="grid size-4 place-items-center align-middle">
         <div
-          aria-hidden
+          aria-hidden={pct !== null}
+          {...(pct === null ? { role: "img", "aria-label": label } : {})}
           className="radial-progress col-start-1 row-start-1 text-base-content/15"
           style={{ ...geom, "--value": 100 } as CSSProperties}
         />
-        <div
-          role="progressbar"
-          aria-label={label}
-          aria-valuenow={pct}
-          className={`radial-progress col-start-1 row-start-1 ${pct > 85 ? "text-error" : "text-base-content/40"}`}
-          style={{ ...geom, "--value": Math.min(100, pct) } as CSSProperties}
-        />
+        {pct !== null && (
+          <div
+            role="progressbar"
+            aria-label={label}
+            aria-valuenow={pct}
+            className={`radial-progress col-start-1 row-start-1 ${pct > 85 ? "text-error" : "text-base-content/40"}`}
+            style={{ ...geom, "--value": Math.min(100, pct) } as CSSProperties}
+          />
+        )}
       </div>
     </div>
   );

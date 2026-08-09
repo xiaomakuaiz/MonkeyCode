@@ -6,9 +6,10 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { IconAdjustmentsHorizontal, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { IconAdjustmentsHorizontal, IconAlertTriangle, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import { resolveShortcut } from "@/app/shortcuts";
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
 import {
   getConfig,
@@ -24,6 +25,8 @@ import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
 import { customThemeVars, randomTheme, roleHex, COLOR_ROLES, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE, SIZE_RANGE, type ColorRole } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
+import { useEscLayer } from "@/lib/util/escLayer";
+import { baizhiStatus } from "@/lib/ipc/account";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
 import { engineCaps } from "@/lib/ipc/approvals";
 import { AboutSection } from "./AboutSection";
@@ -46,6 +49,19 @@ import {
 type Section = "general" | "account" | "models" | "mcp" | "browser" | "env" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Esc 落在输入态时只收敛焦点、不退出视图(判据复用 app/shortcuts 的同一张
+ * TYPING_TAGS 表,别在这里另发明一份)。此前视图级 Esc 不看事件目标:在
+ * 模型名 / API Key 里按一下 Esc 就退出设置,连同满屏未保存的编辑一起丢掉。
+ * escLayer 的 handler 不带事件,故读 activeElement——键盘事件的 target 与
+ * 焦点元素在这里恒等。返回 true = 这一下已被消费。 */
+function blurIfTyping(): boolean {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  if (resolveShortcut({ key: "Escape", targetTag: el.tagName, openPermId: null }).kind !== "blur") return false;
+  el.blur();
+  return true;
+}
 
 /** 设置行:左侧名称+说明、右侧控件,行间分隔线成组——桌面设置页惯例。 */
 function SettingRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -502,6 +518,15 @@ function EnvSection({
   const missing = draft.kernelEnv.startsWith("wsl:") && !distros.includes(draft.kernelEnv.slice(4));
   return (
     <section aria-label={t("settings.nav.env")} className="flex flex-col gap-2">
+      {/* 缺发行版 = 引擎起不来的硬故障,必须在页面上外显(旧 UI 同款告警):
+          只在收起的 <select> 里缀一句「(未检测到)」,用户看到的是引擎一直
+          启动失败而界面上没有任何解释 */}
+      {missing && (
+        <div role="alert" className="alert alert-warning alert-soft text-xs">
+          <IconAlertTriangle size={16} stroke={1.75} aria-hidden className="shrink-0" />
+          <span>{t("settings.env.missingWarn", { name: draft.kernelEnv.slice(4) })}</span>
+        </div>
+      )}
       <div className="rounded-box border border-base-300">
         <SettingRow label={t("settings.env.kernel")} hint={t("settings.env.hint")}>
           <select
@@ -538,18 +563,10 @@ export function SettingsView({
    * 隐式踹掉运行中的轮次不可接受;回退保存条由用户择机保存(旧 UI 同款口径) */
   hasRunningTask?: boolean;
 }) {
-  // 桌面客户端惯例:Esc 离开设置视图(capture 消费,不落到下层快捷键)
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
   const { t } = useI18n();
+  // 离开确认(旧 UI App.tsx settingsDirty + window.confirm 的 daisyUI 版):
+  // 脏表单直接退出 = 静默丢弃全部未保存编辑,必须先问一句
+  const [leaveAsk, setLeaveAsk] = useState(false);
   // 初始落账号分区(旧 UI 同款,ui-next 首版漏迁 2026-08-06 用户报障):
   // 「登录 → 同步」是主路径,新用户进设置第一眼要看到扫码登录
   const [section, setSection] = useState<Section>("account");
@@ -558,6 +575,8 @@ export function SettingsView({
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [distros, setDistros] = useState<string[]>([]);
   const [browserExt, setBrowserExt] = useState(false);
+  // 模型页百智云空组的引导文案分两种(去同步 / 先登录),口径同旧 UI
+  const [bzLoggedIn, setBzLoggedIn] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
 
@@ -576,6 +595,11 @@ export function SettingsView({
     // 浏览器分区按引擎能力显隐:引擎不带扩展桥时整项不出现(旧 UI 同款门禁)。
     // caps 拿不到(浏览器模式/引擎未起)按不支持算,不给一个点进去必然报错的入口
     void engineCaps().then((caps) => alive && setBrowserExt(caps?.browser_ext === true));
+    // 登录态只为模型页空组的引导措辞,拿不到就按未登录说(读不到状态时那句
+    // 「先登录百智云」总是成立的),失败不外显
+    void baizhiStatus()
+      .then((s) => alive && setBzLoggedIn(!!s?.logged_in))
+      .catch(() => undefined);
     return () => {
       alive = false;
     };
@@ -585,6 +609,37 @@ export function SettingsView({
   const baseline = useMemo(() => (cfg ? buildPayload(cfg, draftFromConfig(cfg)) : null), [cfg]);
   const payload = cfg && draft ? buildPayload(cfg, draft) : null;
   const dirty = !!(payload && baseline && !payloadEquals(payload, baseline));
+
+  // 关闭主路径(Esc 与「返回」共用):脏表单先问一句再走(旧 UI App.tsx
+  // closeSettings 同款守卫)
+  const requestClose = () => {
+    if (dirty) setLeaveAsk(true);
+    else onClose();
+  };
+
+  // 视图级 Esc:走 escLayer 层栈而非自挂 window capture。同 target 同阶段的
+  // 监听按**注册先后**触发,视图挂载即注册、浮层(useDismiss)开时才注册,
+  // 于是永远是视图先吃掉这一下——开着主题下拉按 Esc 关掉的是整个设置页
+  // (2026-08-09 报障)。层栈按后进先出派发,后开的浮层天然压在视图之上。
+  // handler 必须**引用稳定**:身份一变 useEscLayer 就会重挂 effect,
+  // 视图层会被重新 push 到栈顶,浮层优先又白搭了——故用 ref 读最新闭包。
+  const escRef = useRef<() => boolean>(() => false);
+  escRef.current = () => {
+    if (blurIfTyping()) return true; // 输入态只收敛焦点,绝不连带丢弃编辑
+    if (leaveAsk) return true; // 确认弹层在场(它自己那层会先消费,这里兜底)
+    requestClose();
+    return true;
+  };
+  useEscLayer(true, useCallback(() => escRef.current(), []));
+  // 确认弹层自己占一层(后 push 即在视图层之上):弹层里的 Esc = 取消离开,
+  // 不会穿回视图层再问一遍,也不会把设置页关掉
+  useEscLayer(
+    leaveAsk,
+    useCallback(() => {
+      setLeaveAsk(false);
+      return true;
+    }, []),
+  );
 
   const updateDraft = (up: (d: SettingsDraft) => SettingsDraft) => {
     setDraft((d) => (d ? up(d) : d));
@@ -736,7 +791,7 @@ export function SettingsView({
         //(拿不到配置时该块自行隐去,不影响登录主路径)
         return <AccountSection onSyncResult={applySync} draft={draft} onDraft={updateDraft} />;
       case "models":
-        return draft ? <ModelsSection draft={draft} onDraft={updateDraft} /> : configGate;
+        return draft ? <ModelsSection draft={draft} onDraft={updateDraft} baizhiLoggedIn={bzLoggedIn} /> : configGate;
       case "mcp":
         return draft ? <McpSection draft={draft} onDraft={updateDraft} /> : configGate;
       case "browser":
@@ -754,13 +809,16 @@ export function SettingsView({
       <header data-tauri-drag-region="" data-view-header="" className="flex h-13 shrink-0 items-center gap-2 border-b border-base-300 px-4">
         <h1 data-tauri-drag-region="" className="text-sm font-semibold">{t("settings.title")}</h1>
         <span data-tauri-drag-region="" className="flex-1" />
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={requestClose}>
           {t("settings.back")}
         </button>
       </header>
       <div className="flex min-h-0 flex-1">
         <nav aria-label={t("settings.title")} className="w-44 shrink-0 border-r border-base-300 p-2">
-          <ul className="menu w-full gap-0.5 p-0">
+          {/* flex-nowrap + [&_li]:flex-nowrap:daisyUI 给 .menu 与 .menu li
+              双双设了 column wrap,不解除的话行宽跟内容走,行内 truncate 链
+              永远不触发(LAYOUT §6.2 menu 截断铁律) */}
+          <ul className="menu w-full flex-nowrap [&_li]:flex-nowrap gap-0.5 p-0">
             {items.map((it) => (
               <li key={it.id}>
                 <button
@@ -810,6 +868,33 @@ export function SettingsView({
           )}
         </div>
       </div>
+      {/* 离开确认(旧 UI「有未保存的更改,确定离开设置?」的 daisyUI 版):
+          Esc / 返回 在脏表单上不再直接丢弃编辑。弹层自占一层 Esc,
+          里面按 Esc = 取消离开,不会递归回视图层 */}
+      {leaveAsk && (
+        <div className="modal modal-open" role="dialog" aria-label={t("settings.leave.title")}>
+          <div className="modal-box max-w-sm">
+            <h3 className="text-sm font-semibold">{t("settings.leave.title")}</h3>
+            <p className="py-3 text-xs leading-relaxed text-base-content/70">{t("settings.leave.body")}</p>
+            <div className="modal-action">
+              <button type="button" className="btn btn-sm" onClick={() => setLeaveAsk(false)}>
+                {t("settings.leave.stay")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-error btn-sm"
+                onClick={() => {
+                  setLeaveAsk(false);
+                  onClose();
+                }}
+              >
+                {t("settings.leave.discard")}
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop cursor-pointer" onClick={() => setLeaveAsk(false)} aria-hidden />
+        </div>
+      )}
     </main>
   );
 }
