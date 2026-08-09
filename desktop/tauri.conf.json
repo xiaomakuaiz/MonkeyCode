@@ -46,6 +46,7 @@
             "allow-update-install",
             "allow-open-extension-dir",
             "allow-open-log-dir",
+            "allow-open-app-dir",
             "allow-export-engine-log",
             "allow-open-devtools",
             "allow-list-wsl-distros",
