@@ -237,3 +237,12 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 60px;
 }
+
+/* 悬停的行退出剪枝(2026-08-10 用户报障「hover 不再显示时间」):
+ * content-visibility 无条件附带 paint containment,把画在行盒之外的悬浮
+ * 元素——块上方 -top-3.5 的 MessageTime 时间线——按盒边裁掉了。时间只在
+ * hover 显影,恰好只需给 hover 的那一行解除包含:一次一行,合成仍收敛
+ * O(视口);行在视口内早已渲染,auto→visible 不产生布局跳变。 */
+[data-chat-items] > :hover {
+  content-visibility: visible;
+}
