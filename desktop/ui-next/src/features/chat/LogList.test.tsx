@@ -462,3 +462,37 @@ describe("行级 memo(性能契约,2026-08-10 用户报障「长会话非常卡�
     expect(screen.getByRole("button", { name: "工具调用组" }).querySelector("span.truncate")).toBe(label);
   });
 });
+
+describe("远行降档(data-far 分带,性能契约)", () => {
+  // c-v:auto 的视口相关性跟踪按元素计费,几千行会话打字每键 70~180ms
+  // (2026-08-10 定案,机制见 LogList 分带 effect 头注)。这里 mock 行几何
+  // 钉住分带行为:视口 ±2 屏内保留 auto(无属性),更远打 data-far。
+  it("视口带内的行无 data-far,远行有;滚动语义由 rect 决定", async () => {
+    const items: ChatItem[] = Array.from({ length: 8 }, (_, i) => ({
+      kind: "agent" as const,
+      text: `第 ${i} 条`,
+    }));
+    const { container } = render(<LogList state={withItems(items)} sessionId="s1" />);
+    const root = container.firstElementChild!;
+    expect(root.children).toHaveLength(8);
+    // jsdom innerHeight=768;带 = [-1536, 2304]。行高 400,按 top 摆位:
+    // bottom < -1536 的远上方(0~3)与 top > 2304 的远下方(7)打标,
+    // 4/5/6 在带内保留 auto
+    const tops = [-9000, -8600, -5000, -3000, 0, 300, 700, 2500];
+    [...root.children].forEach((el, i) => {
+      (el as HTMLElement).getBoundingClientRect = () =>
+        ({ top: tops[i]!, bottom: tops[i]! + 400, left: 0, right: 100, width: 100, height: 400 }) as DOMRect;
+    });
+    window.dispatchEvent(new Event("scroll"));
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+    const marked = [...root.children].map((el) => el.hasAttribute("data-far"));
+    expect(marked).toEqual([true, true, true, true, false, false, false, true]);
+  });
+
+  it("jsdom 默认零几何 = 全部视作带内,不打标(测试环境 no-op 契约)", async () => {
+    const items: ChatItem[] = [{ kind: "agent", text: "甲" }, { kind: "agent", text: "乙" }];
+    const { container } = render(<LogList state={withItems(items)} sessionId="s1" />);
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+    expect(container.querySelectorAll("[data-far]")).toHaveLength(0);
+  });
+});

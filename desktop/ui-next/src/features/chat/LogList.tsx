@@ -15,7 +15,7 @@
 // 昂贵计算(presentToolCall、splitAttachments、markdown)一律待在行组件内,
 // 靠 memo 只在该行变化时才跑。
 import { IconChevronRight, IconFile as FileIcon, IconSparkles } from "@tabler/icons-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
@@ -431,6 +431,56 @@ export const LogList = memo(function LogList({
   /** 工具卡大字段回读通道(按帧 seq 取原帧);缺省只展示截断头部。 */
   loadFullTool?: (seq: number) => Promise<Frame>;
 }) {
+  // ==== 远行降档(hidden 窗口化) ====
+  // content-visibility:auto 不是免费的:当前版 WebKit(26.x)每次渲染更新要对
+  // **每个** auto 元素重估一遍视口相关性,几千行的会话里打字每键 70~180ms
+  // (2026-08-10 用户 26.2 复测 + WKWebView 全真复现二分实锤:2400 行基线
+  // 每键 72ms,全列改 hidden 后零慢帧,仅留 40 行 auto 同样干净)。
+  // 所以 auto 只留给视口 ±FAR_BAND_SCREENS 屏内的行,更远的打 data-far 降
+  // hidden(静态跳过,零跟踪;app.css 收口样式);滚动/追加时 rAF 节流重分带。
+  // 直接改 DOM 属性不走 React state:分带是渲染层优化不是数据,走 state 会
+  // 让每次滚动重渲整列。行被 React 重建时属性丢失 → 默认回 auto,渲染后的
+  // 调度 effect 会立即补一轮分带。jsdom 无几何(rect 全零)时全部视作带内,
+  // 测试环境天然 no-op。代价:hidden 行退出查找/无障碍树,滚回带内即恢复
+  // (auto 的跳过态本就只有占位,实际损失仅辅助技术读远端历史,可接受)。
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const farPassRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const FAR_BAND_SCREENS = 2;
+    let raf = 0;
+    const pass = () => {
+      raf = 0;
+      const root = rootRef.current;
+      const vh = window.innerHeight;
+      if (!root || !vh) return;
+      const lo = -FAR_BAND_SCREENS * vh;
+      const hi = (FAR_BAND_SCREENS + 1) * vh;
+      for (const el of root.children) {
+        const r = el.getBoundingClientRect();
+        // display:none 占位 rect 全零 → 视作带内不打标,无害
+        if (r.bottom < lo || r.top > hi) el.setAttribute("data-far", "");
+        else el.removeAttribute("data-far");
+      }
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(pass);
+    };
+    farPassRef.current = schedule;
+    schedule();
+    // scroll 不冒泡但可捕获:窗口级捕获覆盖任意滚动容器(主视图/子会话弹窗)
+    window.addEventListener("scroll", schedule, { capture: true, passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", schedule, { capture: true });
+      window.removeEventListener("resize", schedule);
+    };
+  }, []);
+  // 每次渲染后补一轮分带:流式追加/前插历史/组开合都会改行集或行高
+  useEffect(() => {
+    farPassRef.current();
+  });
+
   // 长工具组折叠的展开记录(键 = 组首条目的 itemKey,keyBase 感知,前插
   // 不漂移);仅内存,切会话重挂即复位。open/closed 双集合:用户手动开合
   // 优先于「运行中默认展开、终态默认收起」的推导
@@ -520,7 +570,7 @@ export const LogList = memo(function LogList({
     // 不参与布局/绘制/图层树),长会话的合成成本从 O(全部历史) 收敛到
     // O(视口)——2026-08-10 Safari 时间线实锤:15s 录制里 9.9s 在 composite,
     // 单次 200ms+,JS 反而只占 0.2s(行级 memo 已把它砍掉)。详见 app.css 注释
-    <div data-chat-items="" className="flex flex-col">
+    <div ref={rootRef} data-chat-items="" className="flex flex-col">
       {state.items.map((item, i) => {
         if (isHidden(item) && item.kind === "perm") {
           return <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />;

@@ -238,6 +238,16 @@
   contain-intrinsic-size: auto 60px;
 }
 
+/* 远行降档(LogList 的分带 effect 打 data-far):auto 不是免费的——当前版
+ * WebKit(26.x)每次渲染更新对**每个** auto 元素重估视口相关性,几千行会话
+ * 里打字每键 70~180ms(2026-08-10 用户 26.2 复测 + WKWebView 二分:2400 行
+ * 基线 72ms/键,全列 hidden 零慢帧,仅留视口带 auto 同样干净)。hidden =
+ * 静态跳过零跟踪;占位尺寸沿用上面的 contain-intrinsic-size(渲染过的行有
+ * 记忆尺寸,没渲染过的 60px 估高,与 auto 跳过态同一口径)。 */
+[data-chat-items] > [data-far] {
+  content-visibility: hidden;
+}
+
 /* ⚠️ 此处不得再有 `[data-chat-items] > :hover { content-visibility: visible }`
  * 一类按 hover 解除剪枝的规则(2026-08-10 定案)。它当初是为救被 paint
  * containment 裁掉的 MessageTime(时间悬在行盒上方的块间空隙),但代价是
