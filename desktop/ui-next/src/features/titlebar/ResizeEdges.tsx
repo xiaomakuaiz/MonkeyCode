@@ -39,9 +39,14 @@ export function ResizeEdges() {
         <div
           key={dir}
           title={t("titlebar.resize")}
-          // z-60:压在模态/抽屉/toast(z-30..50)之上。窗口永远该能拉伸,
-          // 且只有贴边这几像素,盖不到任何内容
-          className={`fixed z-60 ${cls}`}
+          // z 必须压过 **daisyUI 模态**:.modal 写死 z-index:999(modal.css),
+          // 原先的 z-60 沉在它之下——Linux 上点开图片灯箱/子会话回放/未保存
+          // 确认期间,左右下三条边与左下右下两角热区被遮罩完全盖住,拖不动
+          // 窗口,按下去反而把刚打开的弹层关了(命中落到 .modal-backdrop)。
+          // 顶边与左上右上角因模态从 --chrome-h 起而幸存,所以只坏一半、更难发现。
+          // 唯一压在它之上的是 caption 三键(z-[1002],见 TitleBar.CAPTION_BTN):
+          // 那处重叠必须让按钮赢,否则右上角点不了关闭。
+          className={`fixed z-[1001] ${cls}`}
           onMouseDown={(e) => {
             if (e.button !== 0) return;
             e.preventDefault();

@@ -349,13 +349,32 @@ describe("模型增删改与设默认", () => {
     render(<SettingsView onClose={() => {}} />);
     await openModels();
     await userEvent.click(screen.getByRole("button", { name: "添加模型" }));
-    const name = screen.getByRole("textbox", { name: "名称" });
-    await userEvent.type(name, "新模型");
+    await userEvent.type(screen.getByRole("textbox", { name: "名称" }), "新模型");
+    // 四项必填(见下一条用例):只填名称的半成品现在拦在保存之前
+    await userEvent.type(screen.getByRole("textbox", { name: "接口地址" }), "https://api.example.com");
+    await userEvent.type(screen.getByLabelText("API Key"), "sk-test"); // type=password 无 textbox role
+    await userEvent.type(screen.getByRole("textbox", { name: "模型标识" }), "gpt-5");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
     const models = (calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig).models;
     expect(models.map((m) => m.name)).toEqual(["主力", "备用", "新模型"]);
     expect(models.map((m) => m.default)).toEqual([true, false, false]);
+  });
+
+  // 旧 UI validateBeforeSave 第一段,ui-next 漏迁:isBlankModel 要求四项全空
+  // 才当"没加",所以半成品会一路落盘 —— 界面说保存成功、引擎白重启一次,
+  // 之后这条模型出现在 composer 选择器里,选中发消息必然失败
+  it("模型缺 API Key / 模型标识:拦在保存之前并说明,不写盘、不重启引擎", async () => {
+    const { calls } = stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "名称" }), "半成品");
+    await userEvent.type(screen.getByRole("textbox", { name: "接口地址" }), "https://api.example.com");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("半成品");
+    expect(calls.some((c) => c.cmd === "save_config")).toBe(false);
   });
 
   it("删除默认行:默认位回落到首行,保存载荷同步", async () => {

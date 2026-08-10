@@ -98,12 +98,28 @@ export function ChatView({
   // 滚动容器 → 条目列:LogList 根节点恒为内容轨(firstElementChild)的
   // 最后一个子元素,其 children 与 state.items 一一对应(LogList 结构契约)
   const itemColOf = () => scrollRef.current?.firstElementChild?.lastElementChild ?? null;
-  // 各条目相对滚动内容的 top 序列(content 坐标,与当前 scrollTop 无关)
+  // 各条目相对滚动内容的 top 序列(content 坐标,与当前 scrollTop 无关)。
+  //
+  // 隐藏占位必须**继承前一条的 top**,不能按自己的矩形算:LogList 为守住
+  // 「DOM 子节点与 state.items 一一对应」的结构契约(锚点是 items 下标),
+  // 给若干条目留了 `display:none` 的占位。它们的 rect 全零,直接减 base 得到
+  // 的是 `scrollTop - elRect.top` —— 一个恒小于视口顶、看起来却完全合法的数。
+  // 锚点一旦落到这种条目上,恢复时反算出 `scrollTop = scrollTop`,15 轮 200ms
+  // 轮询与 ResizeObserver 兜底全成空转,表现为「长会话往上翻过历史,切走再
+  // 切回来有时不回原位,而是停在已加载历史的最顶端」。
+  // 继承前一条的 top 在几何上也正是对的:零高度元素就落在相邻内容的那个位置,
+  // 序列保持单调,findAnchor 的「下一条 top 即本条底边」推导照常成立。
   const itemTops = (el: HTMLElement): number[] => {
     const col = itemColOf();
     if (!col) return [];
     const base = el.getBoundingClientRect().top - el.scrollTop;
-    return Array.from(col.children, (kid) => kid.getBoundingClientRect().top - base);
+    const tops: number[] = [];
+    for (const kid of Array.from(col.children)) {
+      const r = kid.getBoundingClientRect();
+      const noBox = r.width === 0 && r.height === 0; // display:none 占位
+      tops.push(noBox ? (tops[tops.length - 1] ?? 0) : r.top - base);
+    }
+    return tops;
   };
 
   // 自动滚动:优先对齐待恢复锚点,否则贴底跟随。锚点条目还没回放出来时
@@ -481,6 +497,16 @@ export function ChatView({
   const [changesCount, setChangesCount] = useState(0);
   useEffect(() => {
     setChangesCount(0); // 徽标属于会话,切走清零
+    // 抽屉同属会话,切走一并收起(旧 UI App.tsx 五条切换路径一律 setDrawer(null))。
+    // ChatView 的 key 只取 epoch,切会话走的是**同一实例**,不复位就会:文件树
+    // 停在上一个工作区(Tree 挂 loadedRef 守卫、根目录只在挂载时拉一次,且它
+    // 没有 key),而「改动」页已经换成新会话的改动——同一块面板里两个项目的
+    // 数据混在一起,旧树行上还标着新会话的改动徽标。点只在旧工作区存在的文件
+    // 报「文件不存在」;点两边同名的文件(README.md 这类)会**静默显示新会话
+    // 工作区里的另一个文件**,而用户以为点的是刚才看到的那个。
+    // 能在抽屉开着时换会话的路径:后台会话提醒 toast(z-50,压在 scrim 之上
+    // 且可点)、壳意图 open-session(托盘/桌宠)、键盘 Tab 进侧栏行回车。
+    setDrawerOpen(false);
   }, [meta.id]);
   useEffect(() => {
     if (changesToken === 0) return;

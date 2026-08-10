@@ -2,9 +2,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { resetUpdateForTest } from "@/features/update/useUpdate";
 import { AboutSection } from "./AboutSection";
 
 afterEach(() => {
+  // 更新态是模块级 store(侧栏底部条与本页同源),跨用例会串
+  resetUpdateForTest();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
 

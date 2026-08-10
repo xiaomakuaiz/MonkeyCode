@@ -14,6 +14,34 @@ export function isDevtoolsHotkey(e: Pick<KeyboardEvent, "code" | "key" | "ctrlKe
   return (e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "KeyI";
 }
 
+/** 原生窗口标题的上下文文案(旧 UI appView.ts::windowContextLabel 随迁)。
+ *
+ *  写给系统 = Alt-Tab 缩略图 / 任务栏悬停 / GNOME·mac 窗口切换器可见,窗口内
+ *  不再复述。**必须跟主区实际渲染的那个视图走**:此前标题 effect 只认
+ *  `current`(本地会话),与决定主区分支的 settingsOpen/creating/space/cloudTask
+ *  四个状态完全脱钩——开着本地任务「重构登录页」,切到云端空间打开「修 CI」,
+ *  窗口切换器里显示的仍是「重构登录页」。同一处代码自己就承认了这层脱钩:
+ *  MainArea 拿的是 `current={space === "cloud" ? null : current}`,标题却没做
+ *  同样的收敛(切空间也不清 currentId)。
+ *
+ *  优先级 = 主区分支的渲染优先级(App.tsx 的三元链):设置 > 新建 > 云端任务
+ *  > 本地会话 > 欢迎页。 */
+export function windowContextLabel(
+  view: { settingsOpen: boolean; creating: boolean; cloudSpace: boolean },
+  cloudTask: { title?: string; summary?: string; content?: string } | null,
+  current: { title?: string; kind?: string } | null,
+  t: (k: "settings.title" | "create.title" | "rail.cloud" | "rail.chat" | "rail.local" | "main.welcome.title") => string,
+): string {
+  if (view.settingsOpen) return t("settings.title");
+  if (view.creating) return t("create.title");
+  if (view.cloudSpace) {
+    if (!cloudTask) return t("main.welcome.title");
+    return cloudTask.title || cloudTask.summary || cloudTask.content || t("rail.cloud");
+  }
+  if (current) return current.title || t(current.kind === "chat" ? "rail.chat" : "rail.local");
+  return t("main.welcome.title");
+}
+
 export function installShellChrome(): void {
   // 壳判定放进处理器而非注册时(旧工程同款):`window.__TAURI__` 由壳的初始化
   // 脚本注入,与本模块求值的先后不该被当成前提——注册时判一次,万一那次为假

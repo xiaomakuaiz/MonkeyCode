@@ -37,9 +37,17 @@ function DownloadCard({ item }: { item: DownloadItem }) {
             <progress className="progress progress-primary w-full" aria-label={t("downloads.progress")} value={pct} max={100} />
           ))}
         {item.state === "done" && (
-          <button type="button" className="link link-primary self-start" onClick={() => revealDownload(item)}>
-            {t("downloads.reveal")}
-          </button>
+          <>
+            {/* 落点必须写出来:downloads.ts 的注释原本声称「路径本身就在下载卡上,
+                用户仍可自寻」,但这里从来没渲染过 dest —— 下完了不知道存哪儿。
+                旧卡片是「已保存到 {dest}」且 title 挂全路径 */}
+            <span className="truncate text-base-content/50" title={item.dest}>
+              {t("downloads.savedTo", { dest: item.dest })}
+            </span>
+            <button type="button" className="link link-primary self-start" onClick={() => revealDownload(item)}>
+              {t("downloads.reveal")}
+            </button>
+          </>
         )}
         {item.state === "error" && <span className="text-error">{t("downloads.failed", { reason: item.error ?? "" })}</span>}
         {item.state === "canceled" && <span className="text-base-content/50">{t("downloads.canceled")}</span>}
@@ -51,8 +59,14 @@ function DownloadCard({ item }: { item: DownloadItem }) {
 export function DownloadsDock() {
   const downloads = useDownloads();
   if (downloads.length === 0) return null;
+  // z 必须压过 daisyUI 模态(modal.css 写死 z-index:999),不能停在 z-50:
+  // LAYOUT §1 的 z 序是 backdrop<pop<drawer<lightbox<toast,toast 在最上。
+  // 沉在模态之下的后果是——看图片放大/子会话回放/未保存确认期间下载完成,
+  // 卡片被 40% 遮罩压暗、「在文件夹中显示」与关闭钮点不到,点下去反而把
+  // 弹层关了(命中测试落到 .modal-backdrop)。旧 UI downloadsBar 就写着
+  // 「zIndex: 80,压在文件抽屉(36)/缩放浮层(50)之上,下载去向任何页面都可见」
   return (
-    <div className="toast toast-end z-50">
+    <div className="toast toast-end z-[1000]">
       {downloads.map((d) => (
         <DownloadCard key={d.dlId} item={d} />
       ))}

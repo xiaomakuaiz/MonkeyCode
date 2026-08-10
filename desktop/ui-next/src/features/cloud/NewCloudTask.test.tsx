@@ -59,8 +59,22 @@ describe("NewCloudTask", () => {
     expect((within(menu).getByRole("button", { name: /旗舰模型/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole("button", { name: "宿主机" }).textContent).toContain("公共宿主机");
     expect(screen.getByRole("button", { name: "镜像" }).textContent).toContain("devbox");
-    // 公共模型 → 宿主机锁定公共档
-    expect((screen.getByRole("button", { name: "宿主机" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // 此前是 disabled + title:daisyUI 的 disabled 按钮带 pointer-events:none,
+  // 那条 tooltip 任何内核都弹不出来,有私有宿主机的用户只看到一个灰掉、
+  // 点不动、毫无说明的控件
+  it("公共模型限公共宿主:触发器仍可点,理由是菜单里一行可见文字,且只列公共宿主", async () => {
+    stubShell();
+    render(<NewCloudTask onCreated={() => {}} />);
+    const host = (await screen.findByRole("button", { name: "宿主机" })) as HTMLButtonElement;
+    expect(host.disabled).toBe(false);
+
+    await userEvent.click(host);
+    const menu = screen.getByRole("list", { name: "宿主机" });
+    expect(within(menu).getByText("公共模型仅支持公共宿主机")).toBeTruthy();
+    expect(within(menu).getByRole("button", { name: /公共宿主机/ })).toBeTruthy();
+    expect(within(menu).queryByRole("button", { name: /my-host/ })).toBeNull();
   });
 
   it("私有模型解锁宿主机选择;提交带四要素;成功回调", async () => {

@@ -97,6 +97,30 @@ export function modelDisplay(m: Pick<ModelInfo, "name" | "model" | "source">): {
   return { label: stripTierPrefix(short), tier: builtinTierLabel(m.model) };
 }
 
+/** 存量模型名 → 清单里的**实际条目名**。精确优先,没中再按宽松口径找一次
+ * (剥来源后缀),都没中原样返回。
+ *
+ * 为什么必须有这一步:`@monkeycode#<配置 id>` 后缀是后加的,升级后第一次同步
+ * 会重命名所有同步条目。于是三处存量引用记的都是**加后缀之前的裸名**——升级前
+ * 建的会话(meta.model)、mc.lastTaskModel、加后缀前落盘的 default。壳侧
+ * driver/session.rs 有同款宽松兜底所以会话照常打开,只有 UI 对不上:严格
+ * `m.name === current` 的话下拉里一项都选不中、来源 tab 也算成空串默认停在
+ * 「自定义」,用户在会员 tab 里翻半天找不到自己正在用的那条;同一原因下
+ * `modelThink` 查不到,思考档触发器回落「低」——那是个直接给错的读数。 */
+export function resolveModelName(models: readonly ModelInfo[], name: string): string {
+  if (!name) return name;
+  if (models.some((m) => m.name === name)) return name;
+  return models.find((m) => sameModelName(m.name, name))?.name ?? name;
+}
+
+/** 模型菜单清单:当前模型已从配置里下线(改名/删除)时补一条兜底项,
+ * 否则下拉里一项都选不中(旧 UI appView.ts::modelMenuList 原注:
+ * 「否则下拉里选不中当前模型」)。兜底项无 source,归「自定义」组。 */
+export function modelMenuList(models: readonly ModelInfo[], current: string): ModelInfo[] {
+  const known = current && models.some((m) => m.name === current || sameModelName(m.name, current));
+  return known || !current ? [...models] : [...models, { name: current, default: false }];
+}
+
 /** 触发器用:按 name 回查条目做展示投影;查不到(下线模型兜底项)原样。
  * 精确没中再按宽松口径找一次——存量引用记的是加后缀之前的裸名。 */
 export function modelDisplayByName(models: readonly ModelInfo[], name: string): {

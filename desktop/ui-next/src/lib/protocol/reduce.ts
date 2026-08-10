@@ -1,6 +1,7 @@
 // 帧 → 对话流渲染项的归约:流式文本聚合、工具卡生命周期、审批/提问状态机、
 // 会话态回写(usage/model/think/permission_mode)、seq 去重与前插历史。
 // 纯函数、不可变更新,不触 DOM;壳连接层与云端连接层喂帧,视图只读状态。
+import type { MessageKey } from "@/lib/i18n";
 import { decodeUserInput, frameData, toolContentText, toolResultText } from "./codec";
 import type {
   AcpUpdate,
@@ -34,34 +35,41 @@ export function createChatState(): ChatState {
   };
 }
 
-// ==================== 展示文案(状态词 → 中文) ====================
+// ==================== 展示文案(状态词 → i18n 键) ====================
+//
+// **归约层不产成品文案**:归约发生一次、结果长期留在 state 里,在这儿把句子
+// 烘死等于把语言一起烘死。这里只给键,渲染层按当前 locale 求值。
+// (commit 01fd08bd 给系统行加 tag 时就写明「tag 是唯一可测可译口径」,
+//  口径早铺好了,只是没接上。)
 
-/** 思考档位展示名(""=跟随模型默认;composer 的档位选择器同源)。 */
-export const THINK_LABELS: Record<string, string> = {
-  "": "默认",
-  off: "关闭",
-  low: "低",
-  medium: "中",
-  high: "高",
+/** 思考档位 → i18n 键(""=跟随模型默认)。**档位全集(键序)也以此为准**:
+ *  新建任务页的选择器、composer 的 ThinkMenu、think_update 系统行同一份。 */
+export const THINK_KEY: Record<string, MessageKey> = {
+  "": "create.think.default",
+  off: "chat.think.off",
+  low: "chat.think.low",
+  medium: "chat.think.medium",
+  high: "chat.think.high",
 };
 
-const PERM_OUTCOME_LABELS: Record<PermOutcome, string> = {
-  approved: "已允许",
-  denied: "已拒绝",
-  timeout: "已超时(按拒绝处理)",
-  cancelled: "已取消",
+const PERM_OUTCOME_KEY: Record<PermOutcome, MessageKey> = {
+  approved: "chat.perm.allowed",
+  denied: "chat.perm.denied",
+  timeout: "chat.perm.timeout",
+  cancelled: "chat.perm.cancelled",
 };
 
-export function permStateLabel(state: string): string {
+/** 审批状态词的 i18n 键;null = 未知态,调用方原样显示 state 字符串。 */
+export function permStateKey(state: string): MessageKey | null {
   switch (state) {
     case "allowed":
-      return "已允许";
+      return "chat.perm.allowed";
     case "rejected":
-      return "已拒绝";
+      return "chat.perm.denied";
     case "expired":
-      return "(已过期)";
+      return "chat.perm.expired";
     default:
-      return PERM_OUTCOME_LABELS[state as PermOutcome] ?? state;
+      return PERM_OUTCOME_KEY[state as PermOutcome] ?? null;
   }
 }
 
@@ -233,10 +241,12 @@ function closeTool(s: ChatState, u: AcpUpdate, timestamp: number | undefined): C
   const timing = durationMs !== undefined ? { durationMs } : {};
   const items = s.items.slice();
 
+  // 这句中文是**引擎的输出内容**(协议嗅探),不是界面文案——不进词典:
+  // 翻译了就匹配不上上游了
   if (raw.includes("子代理已转入后台继续执行")) {
     // Agent 工具"转后台"的 completed 只是启动回执:卡片视觉上保持运行态,
     // 进度直播照常,真正的终态由后续补发帧回填
-    items[idx] = { ...merged, status: "run", out: "后台运行中", result: undefined, lastLine: undefined, background: true };
+    items[idx] = { ...merged, status: "run", outKey: "chat.tool.bgRunning", out: "", result: undefined, lastLine: undefined, background: true };
     return { ...s, items };
   }
   if (prev.background) {
@@ -245,7 +255,8 @@ function closeTool(s: ChatState, u: AcpUpdate, timestamp: number | undefined): C
     items[idx] = {
       ...merged,
       status: failed ? "fail" : "ok",
-      out: failed ? "后台执行失败" : "后台执行完成",
+      outKey: failed ? "chat.tool.bgFailed" : "chat.tool.bgDone",
+      out: "",
       result: raw,
       ...timing,
       lastLine: undefined,
@@ -377,7 +388,9 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       const next = pushItem(s, {
         kind: "tool",
         tcId: u.toolCallId ?? "",
-        title: u.title || u.kind || "工具调用",
+        // 空标题不在这儿兜底:toolLabels.localizeToolTitle("") 本就产双语的
+        // 「调用工具 / Tool」,写死中文反而把那条兜底顶掉了
+        title: u.title || u.kind || "",
         ...(timestamp !== undefined ? { timestamp } : {}),
         ...(u.kind !== undefined ? { toolKind: u.kind } : {}),
         ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
@@ -422,7 +435,13 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       return { ...s, plan: u.entries ?? [] };
     case "llm_call_retry":
       // 仅云端流出现;渲染系统行让用户知道为什么"卡住了"
-      return pushItem(s, { kind: "sys", tag: "retry", text: `模型调用重试 #${u.attempt ?? "?"}: ${u.message ?? ""}` });
+      return pushItem(s, {
+        kind: "sys",
+        tag: "retry",
+        text: "",
+        key: "chat.sys.retry",
+        params: { attempt: String(u.attempt ?? "?"), message: u.message ?? "" },
+      });
     case "task_notification": {
       // 后台子代理完成通知(📌):独立系统行。不能走流式追加——会把它
       // 并进正在流式的模型正文气泡。已回填后台卡时通知信息重复:消费卡上
@@ -446,25 +465,38 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       return pushItem(s, {
         kind: "sys",
         tag: "compact",
-        text: u.status === "started" ? "⟳ 上下文接近上限,正在压缩…" : "⟳ 上下文压缩完成",
+        text: "",
+        key: u.status === "started" ? "chat.sys.compacting" : "chat.sys.compacted",
       });
     case "model_update": {
       // 系统行外显短名(先剥 @来源#配置id 的寻址后缀,再剥会员档位前缀);
       // 状态 model 保持原始名——它是按 name 回查模型/think 档的键
       const name = u.model ?? "";
       const shown = stripTierPrefix(stripSourceSuffix(name));
-      return { ...pushItem(s, { kind: "sys", tag: "model", text: `模型已切换为 ${shown}` }), model: name };
+      return {
+        ...pushItem(s, { kind: "sys", tag: "model", text: "", key: "chat.sys.model", params: { model: shown } }),
+        model: name,
+      };
     }
     case "think_update": {
       const level = u.think ?? "";
-      const label = THINK_LABELS[level] ?? "默认";
-      return { ...pushItem(s, { kind: "sys", tag: "think", text: `思考深度已调整为「${label}」` }), think: level };
+      // params 存**原始档位**而非成品档位名:渲染时才过 THINK_KEY 取当前语言
+      return {
+        ...pushItem(s, { kind: "sys", tag: "think", text: "", key: "chat.sys.think", params: { level } }),
+        think: level,
+      };
     }
     case "permission_mode_update": {
       const mode = u.mode ?? "default";
-      const text =
-        mode === "yolo" ? "⚡ 已开启 YOLO 模式:所有操作不再询问,直接执行" : "已恢复默认权限模式";
-      return { ...pushItem(s, { kind: "sys", tag: "mode", text }), permMode: mode };
+      return {
+        ...pushItem(s, {
+          kind: "sys",
+          tag: "mode",
+          text: "",
+          key: mode === "yolo" ? "chat.sys.yolo" : "chat.sys.modeDefault",
+        }),
+        permMode: mode,
+      };
     }
     default:
       // 未知词汇原样返回:引擎/云端会长出新 sessionUpdate,归约不许炸
@@ -494,7 +526,7 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         running: false,
         streamKind: "",
         turnEnded: true,
-        items: [...expireOpenAsks(s.items), { kind: "sys", tag: "turn-end", text: "— 本轮结束 —" }],
+        items: [...expireOpenAsks(s.items), { kind: "sys", tag: "turn-end", text: "", key: "chat.sys.turnEnd" }],
       };
     case "task-error": {
       const data = frameData<{ error?: string }>(f);
@@ -502,7 +534,12 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         ...s,
         running: false,
         streamKind: "",
-        items: [...expireOpenAsks(s.items), { kind: "sys", text: "✗ " + (data?.error || "未知错误"), error: true }],
+        items: [
+          ...expireOpenAsks(s.items),
+          data?.error
+            ? { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.error" as const, params: { reason: data.error }, error: true }
+            : { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.errorUnknown" as const, error: true },
+        ],
       };
     }
     case "user-input": {
@@ -513,7 +550,8 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
       const atts: ChatAttachment[] = [];
       for (const a of data?.attachments ?? []) {
         if (!a?.url) continue;
-        atts.push({ url: a.url, filename: a.filename || a.url.split("/").pop() || "附件" });
+        // 两级都取不到就留空,由渲染层出「未命名文件」——归约层不产成品文案
+        atts.push({ url: a.url, filename: a.filename || a.url.split("/").pop() || "" });
       }
       return pushItem(s, {
         kind: "user",

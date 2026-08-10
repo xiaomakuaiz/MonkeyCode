@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, type MouseEvent } from "react";
 
 import { t, useI18n } from "@/lib/i18n";
 import { openExternal } from "@/lib/ipc/host";
+import { copyText } from "@/lib/util/clipboard";
 import { resolveMarkdownResource } from "@/lib/util/markdownPaths";
 
 const escapeHtml = (s: string) =>
@@ -20,7 +21,11 @@ function makeMarked(): Marked {
   m.use({
     renderer: {
       code({ text, lang }) {
-        const language = lang && hljs.getLanguage(lang) ? lang : null;
+        // marked 18 的 `lang` 是**整条 info string**(```ts twoslash、
+        // ```bash {1,3} 里空格后面那些元信息一并给过来),而 hljs.getLanguage
+        // 认的是纯语言名——不切首词的话这类围栏一律降级成无高亮
+        const name = (lang ?? "").trim().split(/\s+/)[0] ?? "";
+        const language = name && hljs.getLanguage(name) ? name : null;
         const body = language ? hljs.highlight(text, { language }).value : escapeHtml(text);
         // data-md-copy 携带原文(escape 过),复制走它而不是回读高亮 DOM
         return (
@@ -33,8 +38,19 @@ function makeMarked(): Marked {
       table(token) {
         // 宽表格在容器内横滚,不撑破消息列
         const header = token.header.map((c) => `<th>${this.parser.parseInline(c.tokens)}</th>`).join("");
+        // 数据行要带 align:GFM 的 `|---:|`(右对齐)/`|:-:|`(居中)全靠它,
+        // 不发就是整表左对齐。表头不受影响——md.css 的 `.md th{text-align:left}`
+        // 本来就把它盖掉了,旧 UI 亦然
         const rows = token.rows
-          .map((row) => `<tr>${row.map((c) => `<td>${this.parser.parseInline(c.tokens)}</td>`).join("")}</tr>`)
+          .map(
+            (row) =>
+              `<tr>${row
+                .map((c, i) => {
+                  const a = token.align[i];
+                  return `<td${a ? ` align="${a}"` : ""}>${this.parser.parseInline(c.tokens)}</td>`;
+                })
+                .join("")}</tr>`,
+          )
           .join("");
         return `<div class="md-scroll" tabindex="0"><table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></div>`;
       },
@@ -90,15 +106,18 @@ function onContainerClick(e: MouseEvent<HTMLElement>, onLocalLink?: (path: strin
   if (copyBtn) {
     e.preventDefault();
     const text = copyBtn.getAttribute("data-md-copy") ?? "";
-    const clipboard = navigator.clipboard;
-    if (!clipboard?.writeText) return;
-    void clipboard.writeText(text).then(() => {
-      const original = copyBtn.textContent;
-      copyBtn.textContent = t("md.copied");
-      window.setTimeout(() => {
-        copyBtn.textContent = original;
-      }, 1500);
-    });
+    // 走 lib/util/clipboard::copyText,不自写裸调用:全应用另外 7 处复制都用它
+    // (异步 API 缺失/被拒时回退 execCommand——WebKitGTK 可能没有 async
+    // clipboard,WKWebView 会拒权限,未聚焦时还会抛 NotAllowedError)。
+    // 此前这里是 `if (!clipboard?.writeText) return;` 静默返回 + `.then()` 无
+    // `.catch()`:前者让消息流里最高频的这颗按钮点了没反应也不报错,后者的
+    // 未处理拒绝会被 index.html 的兜底画成满屏红底诊断面板。
+    copyText(text);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = t("md.copied");
+    window.setTimeout(() => {
+      copyBtn.textContent = original;
+    }, 1500);
     return;
   }
   const link = target.closest<HTMLAnchorElement>("a[href]");

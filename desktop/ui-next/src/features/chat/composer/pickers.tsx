@@ -24,15 +24,12 @@ import {
   stripSourceSuffix,
   SOURCE_MONKEYCODE,
 } from "@/lib/models/modelMenu";
+import { THINK_KEY } from "@/lib/protocol/reduce";
 import { useDismiss } from "@/lib/util/useDismiss";
 
-export const THINK_KEY: Record<string, MessageKey> = {
-  "": "create.think.default",
-  off: "chat.think.off",
-  low: "chat.think.low",
-  medium: "chat.think.medium",
-  high: "chat.think.high",
-};
+// 档位 → 键的映射收口在 lib/protocol/reduce(think_update 系统行同用一份):
+// 两处各写一份的话,加档位时改一处漏一处,系统行与选择器就会各说各话
+export { THINK_KEY };
 /** 档位副文案(一句话讲清速度/深度取舍);""=跟随默认无副文案。 */
 export const THINK_HINT_KEY: Partial<Record<string, MessageKey>> = {
   off: "chat.think.hint.off",
@@ -328,6 +325,7 @@ export function OptionMenu({
   triggerLabel,
   disabled = false,
   title,
+  notice,
   align = "start",
 }: {
   options?: OptionItem[];
@@ -340,6 +338,13 @@ export function OptionMenu({
   triggerLabel?: string;
   disabled?: boolean;
   title?: string;
+  /** 选项受限的**可见**说明,渲染成菜单首行。
+   *  为什么不能用 `disabled` + `title` 表达:daisyUI 的
+   *  `.btn:is(:disabled,[disabled],[aria-disabled=true])` 带
+   *  `pointer-events:none`,命中不到元素,任何内核都不会弹这条 tooltip
+   *  ——用户看到的只是一个灰掉、点不动、也没有任何说明的控件。
+   *  (同目录 ModelMenu 的 locked 条目为同一件事踩过坑并留了注释。) */
+  notice?: string;
   align?: "start" | "end";
 }) {
   const { t } = useI18n();
@@ -396,6 +401,12 @@ export function OptionMenu({
           {flat.length === 0 && (
             <li className="menu-disabled">
               <span className="text-xs">{t("chat.option.empty")}</span>
+            </li>
+          )}
+          {/* 受限说明:菜单里一行可见文字,不走 disabled 按钮的 title */}
+          {notice && (
+            <li className="menu-disabled">
+              <span className="text-xs whitespace-normal">{notice}</span>
             </li>
           )}
           {/* 节头 text-xs:与 ModelMenu 同理(menu-title 默认比条目大,倒挂) */}

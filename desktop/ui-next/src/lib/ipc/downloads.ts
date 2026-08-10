@@ -51,8 +51,22 @@ export function dismissDownload(dlId: string): void {
   notify();
 }
 
+/** 完成/取消的卡片自灭延时(旧 UI downloads.ts::DONE_DISMISS_MS 同值)。
+ *  **只有失败驻留**——失败要用户看见原因并自己决定何时关掉。
+ *  不设期限的话右下角就是一摞永久钉住的 288px 卡片,盖住 composer 右端
+ *  (上下文用量环/发送键那一带)还拦点击,只能一张张手点关掉;这与同一份
+ *  App.tsx 给后台会话 toast 设 8s 时写的理由一字不差(LAYOUT §1 把两者
+ *  一起归进「角落瞬态」层)。 */
+const DONE_DISMISS_MS = 8000;
+
+function autoDismiss(dlId: string): void {
+  setTimeout(() => dismissDownload(dlId), DONE_DISMISS_MS);
+}
+
 export function cancelDownload(dlId: string): void {
+  // 「已取消」态本身要显示(commit 190743be:取消不降级为失败),但同样自灭
   patch(dlId, { state: "canceled" });
+  autoDismiss(dlId);
   void invoke("mc_file_download_cancel", { dlId }).catch(() => {});
 }
 
@@ -72,6 +86,7 @@ export async function startDownload(args: {
   try {
     await invoke<{ ok: boolean; bytes: number }>("mc_file_download", { dlId, ...args });
     patch(dlId, { state: "done" });
+    autoDismiss(dlId);
   } catch (e) {
     // 用户主动取消的不降级为 error(取消已置态)
     const current = items.find((d) => d.dlId === dlId);

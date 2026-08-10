@@ -273,7 +273,10 @@ describe("模型 / 思考深度 / 权限模式", () => {
     const input = await screen.findByRole("textbox", { name: "过滤模型…" });
     expect(screen.queryByRole("tablist", { name: "模型来源" })).toBeNull(); // 全是手工条目 = 单来源
     const menu = screen.getByRole("list", { name: "切换模型" });
-    expect(within(menu).getAllByRole("button")).toHaveLength(7);
+    // 7 条配置 + 1 条兜底:会话在用的 "m" 不在清单里(模型被删/改名),
+    // 不补这一条的话下拉里一项都选不中,用户看不出当前用的是哪个
+    expect(within(menu).getAllByRole("button")).toHaveLength(8);
+    expect(within(menu).getByRole("button", { name: "m" }).getAttribute("aria-current")).toBe("true");
 
     await userEvent.type(input, "model-7");
     expect(within(menu).getByRole("button", { name: "model-7" })).toBeTruthy();

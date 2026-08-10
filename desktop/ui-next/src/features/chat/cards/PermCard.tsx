@@ -13,8 +13,16 @@ import {
   type FrameSender,
   type PermAction,
 } from "@/lib/ipc/approvals";
-import { permStateLabel } from "@/lib/protocol/reduce";
+import { permStateKey } from "@/lib/protocol/reduce";
+import { localizedToolTitleText } from "@/lib/tools/toolLabels";
 import type { PermItem } from "@/lib/protocol/types";
+
+/** 审批状态词:归约层只给键(未知态给 null),这里按当前 locale 求值。
+ *  未知态原样显示服务端字符串——认不出的状态也好过一片空白。 */
+function permText(state: string, t: ReturnType<typeof useI18n>["t"]): string {
+  const key = permStateKey(state);
+  return key ? t(key) : state;
+}
 
 /** 审批按钮行:允许/本会话始终/此项目永久/拒绝 + ⏎/esc 快捷键脚注。
  * engine_caps.perm_remember 为 false 时隐藏两个"始终"档。 */
@@ -42,7 +50,7 @@ export function PermActions({
   }, []);
 
   if (local) {
-    return <span className="badge badge-ghost badge-sm self-start">{permStateLabel(local)}</span>;
+    return <span className="badge badge-ghost badge-sm self-start">{permText(local, t)}</span>;
   }
 
   const answer = (action: PermAction) => {
@@ -93,15 +101,23 @@ export function PermCard({
   sendFrame?: FrameSender;
   readonly?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  // 操作正文过一遍工具词表(旧 promptCards.tsx 同款)。localizedToolTitleText
+  // 连单测一起搬过来了却零调用,于是独立审批卡直接摊出 `Bash cargo test --all`;
+  // 而同一应用里**有工具卡可锚定**的审批行走的是 toolDisplayName,显示「需要
+  // 确认 · 执行命令」——两种审批形态语言不一致。原串退到 title 悬停(旧 UI 同款)。
+  // 英文 locale 下 localizeToolTitle 原样返回,无副作用。
+  const titleText = localizedToolTitleText(item.title, locale);
   if (item.state !== "open" || readonly) {
     return (
       <div role="status" className="alert alert-soft py-1.5 text-xs" data-perm-id={item.id}>
-        <span className="min-w-0 flex-1 truncate">
-          {t("chat.permission")}:{item.title}
+        <span className="min-w-0 flex-1 truncate" title={item.title}>
+          {t("chat.permission")}
+          {t("common.colon")}
+          {titleText}
         </span>
         <span className="badge badge-ghost badge-xs">
-          {item.state === "open" ? t("chat.perm.needConfirm") : permStateLabel(item.state)}
+          {item.state === "open" ? t("chat.perm.needConfirm") : permText(item.state, t)}
         </span>
       </div>
     );
@@ -114,7 +130,9 @@ export function PermCard({
           <span>{t("chat.perm.needConfirm")}</span>
           {item.tool && <span className="badge badge-warning badge-soft badge-xs font-mono">{item.tool}</span>}
         </div>
-        <div className="rounded-box bg-base-200 px-3 py-2 font-mono text-xs break-all select-text">{item.title}</div>
+        <div title={item.title} className="rounded-box bg-base-200 px-3 py-2 font-mono text-xs break-all select-text">
+          {titleText}
+        </div>
         {/* key=perm.id:同一渲染位被复用于另一张审批卡时,乐观态(local)
             必须随卡重置,否则新卡直接顶着旧卡的"已允许"徽标出场 */}
         <PermActions key={item.id} perm={item} sessionId={sessionId} sendFrame={sendFrame} />

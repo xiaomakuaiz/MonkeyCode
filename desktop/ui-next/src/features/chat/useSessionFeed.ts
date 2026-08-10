@@ -64,6 +64,30 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
   const busyRef = useRef(false);
   // 当前活跃会话:翻页请求跨会话切换返回时丢弃,防止旧会话的页混进新状态
   const liveIdRef = useRef<string | null>(null);
+  /** 回放窗口落地**之前**到达的实时帧缓冲(非 null = 还在等窗口)。
+   *
+   *  为什么必须攒着而不是先落地:回放窗口走 session_open 的返回值、实时帧走
+   *  frames:{id} 事件,两条异步通道谁先到没有保证——壳在 session_open 处理中
+   *  就同步推首批实时帧(driver/session.rs 在锁内置 opened=true 后帧才进 batch,
+   *  transport.rs 的 30ms flusher 随时可能抢在整份窗口序列化 + 过 IPC 之前
+   *  emit),**先到才是常态**。而 reduceBatch 按 seq 水位去重、实时 seq 严格
+   *  高于窗口:只要实时帧先落一批把水位抬起来,窗口帧就会被逐帧丢弃。
+   *
+   *  此前的判据是 `s.items.length === 0 ? reduceBatch : prependHistory`——
+   *  **判据用 items、水位用 lastSeq,两个口径**。一批实时帧完全可以抬高水位
+   *  却一个 ChatItem 都不产(task-started / usage_update / plan /
+   *  available_commands_update,以及最常见的 tool_call_update:按 tcId 找卡,
+   *  而 tool_call 帧正躺在还没落地的窗口里,找不到就原样返回;跑子代理时父
+   *  会话正是被 tool_call_progress 连续刷屏)。此时 items 仍为 0 → 走
+   *  reduceBatch → 窗口帧全部 seq ≤ 水位被丢光,表现为"打开一个正在跑的会话
+   *  只剩空态插画",连带 task-started 也没了 → running 停在 false → 空态把
+   *  「加载更早」按钮一起换掉,本次打开里没有任何自救入口。
+   *
+   *  攒帧比"把判据改成 lastSeq === 0"更彻底:后者在竞态分支下走 prependHistory,
+   *  而它只取 items(见 reduce.ts 头注:过去的帧不该回写现状),窗口携带的
+   *  running/usage/model/think/permMode/commands 会被一起丢掉。按到达顺序
+   *  「窗口在前、缓冲在后」一次归约,状态与条目都是对的。 */
+  const pendingRef = useRef<Frame[] | null>(null);
 
   useEffect(() => {
     setState(createChatState());
@@ -75,6 +99,7 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
     cursorRef.current = 0;
     hasMoreRef.current = false;
     liveIdRef.current = id;
+    pendingRef.current = []; // 本轮重新开始攒:窗口未落地前的实时帧一律入缓冲
     if (!id) return;
 
     let alive = true;
@@ -84,7 +109,14 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
     // 壳里(每次快速切会话漏一对,旧会话的帧此后一直往已卸载的组件里灌)。
     // 旧 UI session.ts:140-143 同款:退订等 Promise resolve 之后再执行。
     const framesP = onFrames(id, (batch) => {
-      if (alive) setState((s) => reduceBatch(s, batch as Frame[]));
+      if (!alive) return;
+      // 窗口还没落地就先攒着(见 pendingRef 头注),别把水位抬到窗口之上
+      const pending = pendingRef.current;
+      if (pending) {
+        pending.push(...(batch as Frame[]));
+        return;
+      }
+      setState((s) => reduceBatch(s, batch as Frame[]));
     });
     const connP = onConnStatus(id, (s) => {
       if (alive) setConn(s);
@@ -101,22 +133,25 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         cursorRef.current = win.cursor;
         hasMoreRef.current = !!win.has_more;
         setHasMore(hasMoreRef.current);
-        // 已有内容时按**前插**处理:回放窗口走命令返回值、实时帧走事件,两条
-        // 异步通道谁先到没有保证(壳在 session_open 处理中就同步推首批实时
-        // 帧,先到才是常态)。而 reduceBatch 丢弃 seq ≤ 水位的帧(reduce.ts
-        // 去重口径),实时 seq 严格高于窗口——只要抢先落一批,整份历史就被
-        // 静默丢光,表现为"打开会话只剩最新一两条"。窗口与实时流在壳侧按
-        // opened 切分、互不重叠,前插总是正确的(旧 UI useSession.ts:335-338)
-        setState((s) =>
-          s.items.length === 0 ? reduceBatch(s, win.frames as Frame[]) : prependHistory(s, win.frames as Frame[]),
-        );
+        // 窗口在前、等待期间攒下的实时帧在后,一次归约按真实先后落地。
+        // 窗口与实时流在壳侧按 opened 切分、互不重叠,seq 严格递增,
+        // reduceBatch 的批内去重顺带兜住壳偶发重推
+        const buffered = pendingRef.current ?? [];
+        pendingRef.current = null; // 出缓冲态:此后实时帧直落
+        setState((s) => reduceBatch(s, [...(win.frames as Frame[]), ...buffered]));
         // 窗口落地后 running 才可信:composer 的排队补投闸门等这一下
         setHistoryLoaded(true);
       } catch (e) {
         // 壳只在**成功**路径 emit conn-status(driver/session.rs::open),失败
         // 时 conn 恒为 null、连接条根本不渲染——不外显就是一个不解释的空会话
         // (旧 UI session.ts:138「⚠ 打开会话失败: 」)
-        if (alive) setOpenError(e instanceof Error ? e.message : String(e));
+        if (!alive) return;
+        // 打开失败也必须出缓冲态并把攒下的帧放行,否则实时帧会一直堆在缓冲里
+        // 永不渲染——壳侧会话其实可能还在跑,界面却是个一动不动的空屏
+        const buffered = pendingRef.current;
+        pendingRef.current = null;
+        if (buffered?.length) setState((s) => reduceBatch(s, buffered));
+        setOpenError(e instanceof Error ? e.message : String(e));
       }
     })();
     return () => {

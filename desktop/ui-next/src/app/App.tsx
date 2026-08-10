@@ -19,6 +19,7 @@ import { SettingsView } from "@/features/settings/SettingsView";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ResizeEdges } from "@/features/titlebar/ResizeEdges";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
+import { windowContextLabel } from "@/app/shellChrome";
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import {
   hostInfo,
@@ -436,7 +437,9 @@ export function App() {
     // modelsList 现在如实抛错。没有 catch 的话,一次瞬时失败 = 未处理拒绝;
     // 而按老写法把失败吞成 [],等于把设置页糊到一个模型配得好好的用户脸上
     if (inDesktopShell()) {
-      void modelsList()
+      // 同 refresh():挂载这一刻引擎可能正在起/正在应用配置,裸调会被闸门拒。
+      // 拒掉虽只是"不弹向导"(安全方向),但对真·首启用户就是向导没出来
+      void afterEngineReady(modelsList)
         .then((models) => {
           if (alive && models.length === 0) setSettingsOpen(true);
         })
@@ -528,9 +531,18 @@ export function App() {
 
   const current = sessions.find((m) => m.id === currentId) ?? null;
 
+  // 标题跟随**主区实际渲染的那个视图**,四个状态都要进依赖(见
+  // shellChrome.windowContextLabel 头注:此前只认 current,切设置/新建/云端
+  // 任务时窗口切换器里仍挂着上一个本地会话的标题)
   useEffect(() => {
-    setWindowTitle(current ? `${current.title} — ${t("app.name")}` : t("app.name"));
-  }, [current, t]);
+    const label = windowContextLabel(
+      { settingsOpen, creating: !!creating, cloudSpace: space === "cloud" },
+      cloudTask,
+      space === "cloud" ? null : current,
+      t,
+    );
+    setWindowTitle(`${label} — ${t("app.name")}`);
+  }, [current, settingsOpen, creating, space, cloudTask, t]);
 
   const select = (meta: SessionMeta) => {
     setCurrentId(meta.id);
@@ -696,7 +708,11 @@ export function App() {
           文件/⋯ 动作钮(z-50 还盖在上面)。凡 fixed 贴顶的一律读该变量(§1) */}
       {(notices.length > 0 || shellNotices.length > 0) && (
         <div
-          className="toast toast-top toast-end z-50 mt-[calc(var(--chrome-h)+52px)]"
+          // z 压过 daisyUI 模态(写死 z-index:999):LAYOUT §1 的 z 序里
+          // toast 在最上。停在 z-50 的话,看图放大/子会话回放/未保存确认
+          // 期间到的后台会话提醒与壳提示(含带「重启引擎」按钮的那条)会被
+          // 遮罩压住点不到,点下去反而把弹层关了
+          className="toast toast-top toast-end z-[1000] mt-[calc(var(--chrome-h)+52px)]"
           aria-label={t("notice.label")}
         >
           {shellNotices.map((n) => (

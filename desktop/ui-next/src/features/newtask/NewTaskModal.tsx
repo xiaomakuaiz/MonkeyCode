@@ -31,9 +31,12 @@ import {
 
 import { resolveShortcut } from "@/app/shortcuts";
 import { useEscLayer } from "@/lib/util/escLayer";
+import { useDismiss } from "@/lib/util/useDismiss";
 import { useI18n } from "@/lib/i18n";
 import { getConfig } from "@/lib/ipc/config";
+import { afterEngineReady } from "@/lib/ipc/engine";
 import { isWindowsShell, pickDirectory, workdirPickBase } from "@/lib/ipc/host";
+import { sameModelName } from "@/lib/models/modelMenu";
 import { modelsList, sessionCreate, sessionSend, type ModelInfo, type SessionKind, type SessionMeta } from "@/lib/ipc/sessions";
 import {
   isImagePath,
@@ -46,7 +49,7 @@ import {
 } from "@/lib/ipc/uploads";
 import { attLineOf } from "@/lib/protocol/attLine";
 import { b64encode } from "@/lib/protocol/codec";
-import { THINK_LABELS } from "@/lib/protocol/reduce";
+import { THINK_KEY } from "@/lib/protocol/reduce";
 import { createImeGuard } from "@/lib/util/slash";
 import { readLastTaskModel, rememberLastTaskModel } from "@/lib/util/prefs";
 import { DEFAULT_DIR, workdirMatchesEnv } from "@/lib/util/workdir";
@@ -56,12 +59,18 @@ import type { CloudProject, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
 
 export { DEFAULT_DIR };
 
-/** 档位全集以 THINK_LABELS(protocol/reduce)为准(""=跟随模型默认领跑)。 */
-const THINK_OPTIONS = Object.keys(THINK_LABELS);
+/** 档位全集以 THINK_KEY(protocol/reduce)为准(""=跟随模型默认领跑)。 */
+const THINK_OPTIONS = Object.keys(THINK_KEY);
 
-/** 暂存的附件:File 本体 + 图片预览 URL(非图片无);上传发生在建会话之后。 */
+/** 暂存的附件:File 本体 + 展示名 + 图片预览 URL(非图片/占位 File 无);
+ *  上传发生在建会话之后。
+ *
+ *  `name` 单独存一份而不是各处读 `file.name`:占位 File 与剪贴板截图都可能
+ *  空名(uploads.ts::pathBackedFile 头注、壳 uploads.rs 也为此备了落盘兜底),
+ *  五处渲染各写一遍 `|| 兜底` 迟早漏一处——加进来时算一次,渲染只管用。 */
 interface StagedAtt {
   file: File;
+  name: string;
   preview?: string;
 }
 
@@ -97,8 +106,25 @@ export function NewTaskModal({
 }) {
   const { t } = useI18n();
   const [kind, setKind] = useState<SessionKind | "cloud">("local");
+  // 云端面板一旦挂上就常驻(切页签不丢已填的描述/选项),但没点过就不挂
+  // (省掉 mc_status + mc_task_options 两次请求)。渲染处有完整缘由。
+  const [cloudMounted, setCloudMounted] = useState(false);
+  useEffect(() => {
+    if (kind === "cloud") setCloudMounted(true);
+  }, [kind]);
   const [dir, setDir] = useState(DEFAULT_DIR);
   const [dirMenu, setDirMenu] = useState(false);
+  // 「最近目录」下拉走 useDismiss 而不是容器 onBlur。两条理由:
+  // ①**Esc 必须入 escLayer 层栈**——不入栈的话按 Esc 时栈顶只有本视图自己的
+  //   层,它对非输入焦点一律 onClose(),于是「想收起下拉」变成「整个新建页
+  //   退掉,已写的首条消息与暂存附件一起没,还不带确认」。这正是 2026-08-09
+  //   报障、b6bda87b 收口过的失败模式(注释就在下面 escRef 那儿),当时只覆盖
+  //   了走 useDismiss 的模型/思考档菜单,漏了这两处手写下拉。
+  // ②onBlur+relatedTarget 在壳内核 WebKitGTK 上本就不可靠(点按钮不给焦点,
+  //   relatedTarget 恒 null),见 useDismiss 头注。
+  const dirBoxRef = useRef<HTMLDivElement | null>(null);
+  const closeDirMenu = useCallback(() => setDirMenu(false), []);
+  useDismiss(dirMenu, dirBoxRef, closeDirMenu);
   const [text, setText] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
@@ -149,15 +175,22 @@ export function NewTaskModal({
     // 失败保留上一份、不清空(modelsList 现在会抛,见其头注):引擎重启期
     // 这一拉会撞上壳的「配置应用中」闸门,清空等于"重启一次就选不了模型";
     // 未处理拒绝还会被 index.html 的兜底画成满屏红框
-    void modelsList()
+    void afterEngineReady(modelsList)
       .then((list) => {
         if (!alive) return;
         setModels(list);
         const remembered = readLastTaskModel();
-        const pick =
-          (remembered && list.find((m) => m.name === remembered && !m.locked)) ||
-          list.find((m) => m.default && !m.locked) ||
-          list.find((m) => !m.locked);
+        // 记忆回查必须带 sameModelName 兜底(旧 UI newtask.tsx 同款):
+        // mc.lastTaskModel 记的可能是**加来源后缀之前**的裸名,严格比对就
+        // 匹配不上,无声换成默认模型;更糟的是**不会自愈**——下面创建时
+        // rememberLastTaskModel(model) 会把回落后的默认模型写回记忆,把用户
+        // 的偏好永久覆盖掉。用户不看模型行直接开跑,任务就跑在与预期不同的
+        // 档位/计费模型上。sameModelName 的头注也点名要服务 lastTaskModel。
+        const byMemory = remembered
+          ? (list.find((m) => m.name === remembered && !m.locked) ??
+            list.find((m) => sameModelName(m.name, remembered) && !m.locked))
+          : undefined;
+        const pick = byMemory || list.find((m) => m.default && !m.locked) || list.find((m) => !m.locked);
         if (pick) setModel(pick.name);
       })
       .catch(() => {});
@@ -191,7 +224,14 @@ export function NewTaskModal({
       ...list,
       ...files.map((file) => ({
         file,
-        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+        name: file.name || t("common.unnamedFile"),
+        // `size > 0` 不可省(旧 UI newtask.tsx 同款守卫):回形针选文件与 Linux
+        // 原生拖入走的都是 **0 字节的 path-backed 占位 File**(uploads.ts
+        // ::pathBackedFile,字节由壳按路径直拷,不进 webview),而它的 type 被
+        // 写成 image/*——只看 type 就建 objectURL,渲染出来是个裂图框。
+        // 上限不设:objectURL 不整读文件(旧 UI 那 8MB 是 FileReader→dataURL
+        // 的内存限制,这里没有那笔开销)。
+        preview: file.type.startsWith("image/") && file.size > 0 ? URL.createObjectURL(file) : undefined,
       })),
     ]);
   };
@@ -424,26 +464,32 @@ export function NewTaskModal({
             ))}
           </div>
           <div className="relative flex flex-col rounded-2xl border border-base-300 bg-base-100 shadow-lg transition-colors focus-within:border-base-content/25">
-            {kind === "cloud" ? (
-              <NewCloudTask
-                initialProject={initialCloudProject}
-                onOpenSettings={onOpenSettings}
-                onCreated={(task) => {
-                  onCloudCreated?.(task);
-                  onClose();
-                }}
-              />
-            ) : (
+            {/* 云端面板**懒挂 + 常驻**,不做同位置三元。
+                三元里两个分支类型不同,切页签 React 必然卸载 NewCloudTask ——
+                它的任务描述/模型/宿主机/镜像/关联仓库全是组件内 state,一卸载
+                就全丢,回来还要重跑一次 mc_status + mc_task_options。反方向
+                (本地写的字切到云端)之所以安全,只是因为 text 住在本组件里,
+                这层不对称本身就说明是拆组件时的副作用。
+                懒挂:没点过云端页签就不挂,省掉那两次请求。 */}
+            {cloudMounted && (
+              <div className={kind === "cloud" ? "contents" : "hidden"}>
+                <NewCloudTask
+                  active={kind === "cloud"}
+                  initialProject={initialCloudProject}
+                  onOpenSettings={onOpenSettings}
+                  onCreated={(task) => {
+                    onCloudCreated?.(task);
+                    onClose();
+                  }}
+                />
+              </div>
+            )}
+            {kind !== "cloud" && (
               <>
                 {/* 卡头:本地任务是「在 × 文件夹里工作」句式触发器(富下拉:
                     最近目录/系统选择/手输路径);本地会话是一行说明 */}
                 {kind === "local" ? (
-                  <div
-                    className="relative px-2 pt-2"
-                    onBlur={(e) => {
-                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDirMenu(false);
-                    }}
-                  >
+                  <div ref={dirBoxRef} className="relative px-2 pt-2">
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm max-w-full justify-start gap-1.5 px-2 font-normal"
@@ -565,26 +611,26 @@ export function NewTaskModal({
                 {atts.length > 0 && (
                   <ul aria-label={t("create.attachments")} className="flex flex-wrap gap-2 px-4 pb-1">
                     {atts.map((a, i) => (
-                      <li key={`${a.file.name}-${i}`} className="relative flex">
+                      <li key={`${a.name}-${i}`} className="relative flex">
                         {a.preview ? (
                           <img
                             src={a.preview}
-                            alt={a.file.name}
-                            title={a.file.name}
+                            alt={a.name}
+                            title={a.name}
                             className="size-13 rounded-box border border-base-300 object-cover"
                           />
                         ) : (
                           <span
-                            title={a.file.name}
+                            title={a.name}
                             className="flex h-8 max-w-56 items-center gap-1.5 rounded-box border border-base-300 bg-base-200 px-2.5 text-xs"
                           >
                             <FileIcon size={12} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
-                            <span className="min-w-0 truncate">{a.file.name}</span>
+                            <span className="min-w-0 truncate">{a.name}</span>
                           </span>
                         )}
                         <button
                           type="button"
-                          aria-label={t("create.attachRemove", { name: a.file.name })}
+                          aria-label={t("create.attachRemove", { name: a.name })}
                           className="btn btn-circle btn-xs absolute -end-1.5 -top-1.5 size-4.5 min-h-0 border-base-300 bg-base-100 p-0"
                           onClick={() => removeAtt(i)}
                         >

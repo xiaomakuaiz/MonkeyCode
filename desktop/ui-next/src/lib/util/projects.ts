@@ -78,28 +78,35 @@ export function reorderKeys(keys: readonly string[], dragged: string, before: st
 
 const COLLAPSED_KEY = "mc.collapsedGroups";
 
+/** 读时归一:旧 UI 这一键写的是**裸 workdir**(sidebar.tsx `toggleGroup(group.dir)`),
+ *  而本工程一律写 `projectKey`。Windows 上 `C:\work\demo` 与 `C:/work/demo` 永不
+ *  相等,不归一就是「从旧版升上来,之前收起的项目组全变回展开」。同一文件里
+ *  mc.archivedProjects 走的就是这条(旧 UI 自己也 `.map(projectArchiveKey)`),
+ *  折叠态是漏的那一处。归一同时让残留的裸路径条目在下次写盘时自然收敛。 */
 export function readCollapsedGroups(): Set<string> {
-  return new Set(readStringArray(COLLAPSED_KEY));
+  return new Set(dedupeKeys(readStringArray(COLLAPSED_KEY)));
 }
 
 export function writeCollapsedGroups(keys: ReadonlySet<string>): void {
   try {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...keys]));
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(dedupeKeys([...keys])));
   } catch {
     // 只丢持久化
   }
 }
 
-/** 各项目「已归档任务」小节的展开集(键 = 项目 key;JSON string[] = 旧 UI 契约)。 */
+/** 各项目「已归档任务」小节的展开集(键 = 项目 key;JSON string[] = 旧 UI 契约)。
+ *  与 collapsedGroups 同款归一:旧 UI 这一键走的是 projectArchiveKey(已归一),
+ *  这里保持同口径,顺带兜住手写/迁移进来的裸路径。 */
 const SESSION_ARCHIVES_KEY = "mc.sessionArchivesOpen";
 
 export function readSessionArchivesOpen(): Set<string> {
-  return new Set(readStringArray(SESSION_ARCHIVES_KEY));
+  return new Set(dedupeKeys(readStringArray(SESSION_ARCHIVES_KEY)));
 }
 
 export function writeSessionArchivesOpen(keys: ReadonlySet<string>): void {
   try {
-    localStorage.setItem(SESSION_ARCHIVES_KEY, JSON.stringify([...keys]));
+    localStorage.setItem(SESSION_ARCHIVES_KEY, JSON.stringify(dedupeKeys([...keys])));
   } catch {
     // 只丢持久化
   }
@@ -117,7 +124,7 @@ export interface GroupedSessions {
   archivedProjects: ProjectGroup[];
 }
 
-/** local 空间分组:按项目聚合 → 手动顺序优先(未入序的按组内最近活跃追尾)
+/** local 空间分组:按项目聚合 → 未入手动序的按最近活跃排在最前、其后按手动序
  *  → 项目归档与会话归档各自折叠。传入前先按空间过滤(kind)。 */
 export function groupSessions(
   sessions: readonly SessionMeta[],
@@ -147,9 +154,13 @@ export function groupSessions(
     const ra = rank.get(a.key);
     const rb = rank.get(b.key);
     if (ra !== undefined && rb !== undefined) return ra - rb;
-    if (ra !== undefined) return -1;
-    if (rb !== undefined) return 1;
-    return 0; // 都不在手动序里:保持活跃度序(sort 稳定)
+    if (ra === undefined && rb === undefined) return 0; // 都不在手动序里:保持活跃度序(sort 稳定)
+    // **未入序的排在最前**(旧 UI projectOrder.ts::`[...fresh, ...known]`)。
+    // mc.projectOrder 是全序快照:一次拖拽就把当时全部可见项目写进去,此后
+    // 任何新目录(以及取消归档回来的项目——快照里只有当时可见的非归档 key)
+    // 都 rank=undefined。若让它们追尾,「拖过一次顺序」之后新建的项目一律
+    // 沉到列表最底、项目一多就掉出首屏,而它恰恰是此刻最该在眼前的那个。
+    return ra === undefined ? -1 : 1;
   });
 
   const projects: ProjectGroup[] = [];

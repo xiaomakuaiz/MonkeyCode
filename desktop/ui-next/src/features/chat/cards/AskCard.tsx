@@ -19,7 +19,7 @@ function ReadonlyAsk({ item, local }: { item: AskItem; local: Answers | null }) 
   const { t } = useI18n();
   const answerOf = (q: AskQuestion): string => {
     const a = q.answer ?? local?.[q.question];
-    return Array.isArray(a) ? a.join("、") : (a ?? "");
+    return Array.isArray(a) ? a.join(t("common.listSep")) : (a ?? "");
   };
   const answered = item.questions.some((q) => answerOf(q) !== "");
   if (!answered) {

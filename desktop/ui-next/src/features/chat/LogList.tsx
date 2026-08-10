@@ -13,7 +13,7 @@ import type { FrameSender } from "@/lib/ipc/approvals";
 import { openExternal } from "@/lib/ipc/host";
 import { isImagePath } from "@/lib/ipc/uploads";
 import { splitAttachments } from "@/lib/protocol/attLine";
-import { itemKey, permAnchors } from "@/lib/protocol/reduce";
+import { itemKey, permAnchors, THINK_KEY } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState, Frame, PermItem } from "@/lib/protocol/types";
 import { presentToolCall } from "@/lib/tools/toolLabels";
 import { thoughtMarkdown, thoughtSummary } from "@/lib/util/thoughtMarkdown";
@@ -42,6 +42,8 @@ function UserBubble({
   const { body, images, files } = uploadUrl
     ? splitAttachments(item.text)
     : { body: item.text, images: [] as string[], files: [] as string[] };
+  // 归约层对缺名附件留空串(不产成品文案),展示名在这儿兜底
+  const attName = (a: { filename: string }) => a.filename || t("common.unnamedFile");
   const atts = item.attachments ?? [];
   const cloudImages = atts.filter((a) => isImagePath(a.filename));
   const cloudFiles = atts.filter((a) => !isImagePath(a.filename));
@@ -64,18 +66,18 @@ function UserBubble({
         {hasAtts && (
           <div className={`flex flex-wrap items-center gap-1.5 ${body ? "mt-2" : ""}`}>
             {cloudImages.map((a) => (
-              <img key={a.url} src={a.url} alt={a.filename} title={a.filename} className={thumb} onClick={() => setZoomUrl(a.url)} />
+              <img key={a.url} src={a.url} alt={attName(a)} title={attName(a)} className={thumb} onClick={() => setZoomUrl(a.url)} />
             ))}
             {cloudFiles.map((a) => (
               <button
                 key={a.url}
                 type="button"
                 className="btn btn-ghost btn-xs max-w-56"
-                title={t("chat.att.openTip", { name: a.filename })}
+                title={t("chat.att.openTip", { name: attName(a) })}
                 onClick={() => openExternal(a.url)}
               >
                 <FileIcon size={12} stroke={1.75} aria-hidden className="shrink-0" />
-                <span className="min-w-0 truncate">{a.filename}</span>
+                <span className="min-w-0 truncate">{attName(a)}</span>
               </button>
             ))}
             {images.map((p) => (
@@ -152,8 +154,12 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
   );
 }
 
+type T = ReturnType<typeof useI18n>["t"];
+
 interface RenderOpts {
   sessionId: string;
+  /** 归约层只给 i18n 键,系统行文案在渲染时求值(见 sysText) */
+  t: T;
   anchors: Map<string, PermItem>;
   flashSeq?: number;
   sendFrame?: FrameSender;
@@ -216,15 +222,39 @@ function renderItem(item: ChatItem, o: RenderOpts) {
     case "sys":
       // turn-end 收敛为 2px 呼吸位:消息天然按用户/助手交替,不再用文字
       // 切碎正文;全文留在 title 供悬停查证(旧 UI TurnDivider 同语义)
-      if (item.tag === "turn-end") return <div aria-hidden title={item.text} className="h-0.5" />;
+      if (item.tag === "turn-end") return <div aria-hidden title={sysText(item, o.t)} className="h-0.5" />;
+      // h-auto/py/whitespace-normal 不可省:daisyUI 的 .badge 是
+      // `height: var(--size)` **写死**(badge-sm = 20px),且不带 white-space
+      // 也不裁切。系统行的文案长度不受控——reduce.ts 把引擎/RPC 的原始错误串、
+      // 子代理 task_notification 的整句 description 原样灌进来,760px 列宽下
+      // 62 个汉字就折行,折行后内容高度超出那 20px,再以 align-items:center
+      // 上下对称溢出:药丸底色只盖住中间一条带,文字从上下缘探出去,看着像
+      // 渲染坏了,超长时还压到相邻消息块。
+      // select-text:错误文案要能复制走(body 级 user-select:none 之下,
+      // 这一支祖先链上没有任何放开点;旧 UI 的白名单点名了「系统行」)。
       return (
         <div
-          className={`badge badge-ghost badge-sm self-center ${item.error ? "text-error" : "text-base-content/40"}`}
+          className={`badge badge-ghost badge-sm h-auto max-w-full self-center py-0.5 whitespace-normal select-text ${
+            item.error ? "text-error" : "text-base-content/40"
+          }`}
         >
-          {item.text}
+          {sysText(item, o.t)}
         </div>
       );
   }
+}
+
+/** 系统行文案:归约层只给 key(+原始参数),这里按当前 locale 求值。
+ *  key 缺席 = 上游自由文本(notify 通知正文),原样渲染。
+ *  think 单列一条:params 里存的是**原始档位**(low/high…),要再过一次
+ *  THINK_KEY 才拿得到当前语言的档位名——直接插值会把中文档位名带进英文句子。 */
+function sysText(item: Extract<ChatItem, { kind: "sys" }>, t: T): string {
+  if (!item.key) return item.text;
+  if (item.key === "chat.sys.think") {
+    const level = item.params?.level ?? "";
+    return t("chat.sys.think", { level: t(THINK_KEY[level] ?? THINK_KEY[""]!) });
+  }
+  return t(item.key, item.params);
 }
 
 // memo:打字时 ChatView 每键重渲染(composer 草稿状态在那),消息流不能
@@ -362,7 +392,7 @@ export const LogList = memo(function LogList({
             if (!expanded) return <div key={itemKey(state, i)} className="hidden" aria-hidden />;
             return (
               <div key={itemKey(state, i)} className="flex flex-col">
-                {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
+                {renderItem(item, { t, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
               </div>
             );
           }
@@ -414,7 +444,7 @@ export const LogList = memo(function LogList({
                 />
               </button>
               {expanded &&
-                renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
+                renderItem(item, { t, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
             </div>
           );
         }
@@ -422,7 +452,7 @@ export const LogList = memo(function LogList({
           // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
           // (包裹层是块级时 align-self 无效,居中丢失)
           <div key={itemKey(state, i)} className={`flex flex-col${gapClass}`}>
-            {renderItem(item, { sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev, joinNext })}
+            {renderItem(item, { t, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev, joinNext })}
           </div>
         );
       })}

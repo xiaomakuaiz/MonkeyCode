@@ -19,7 +19,8 @@ import { useI18n } from "@/lib/i18n";
 import { exportEngineLog } from "@/lib/ipc/config";
 import { engineRestart } from "@/lib/ipc/engine";
 import { hostInfo, openAppDir, openLogDir, type HostInfo } from "@/lib/ipc/host";
-import { recordUpdateCheck, updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
+import { updateInstall } from "@/lib/ipc/update";
+import { checkUpdateNow, useUpdateInfo } from "@/features/update/useUpdate";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -29,7 +30,11 @@ const UNLOCK_TAPS = 5;
 export function AboutSection() {
   const { t } = useI18n();
   const [info, setInfo] = useState<HostInfo | null>(null);
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  // 更新态取**共享 store**(features/update/useUpdate):与侧栏底部条同源。
+  // 各持一份 useState 的话,侧栏已在提示「有新版本」时进关于页仍显示普通
+  // 「检查更新」钮;反过来在这儿查到的结果也传不到侧栏,而这次检查还把
+  // 接下来 30 分钟的回焦复查一起闸掉了(两条路共用 update.ts 的模块级闸门)
+  const update = useUpdateInfo();
   const [phase, setPhase] = useState<"idle" | "checking" | "installing">("idle");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   // 连点解锁计数:不落盘、不跨挂载(离开设置页即复位)——隐藏入口就该
@@ -51,16 +56,13 @@ export function AboutSection() {
   const check = async () => {
     setPhase("checking");
     setMsg(null);
-    // 手动检查不过闸门(用户明确要查就得查),但记一笔账:紧接着切个窗口
-    // 回来不该再自动查一遍(旧 UI updateGate.record 同款)
-    recordUpdateCheck();
-    const s = await updateCheck(); // 失败/浏览器模式均为 null(update.ts 收口)
+    // 手动检查不过闸门(用户明确要查就得查)但记一笔账;结果并入共享 store
+    const s = await checkUpdateNow(); // 失败/浏览器模式均为 null(update.ts 收口)
     setPhase("idle");
     if (!s) {
       setMsg({ text: t("settings.about.checkFailed"), error: true });
       return;
     }
-    setUpdate(s);
     setMsg(
       s.available
         ? { text: t("settings.about.available", { latest: s.latest ?? "", current: s.current }) }

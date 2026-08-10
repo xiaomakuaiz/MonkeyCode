@@ -30,16 +30,21 @@ function stubShell({ permRemember = true }: { permRemember?: boolean } = {}): Ca
   return calls;
 }
 
-const PERM: PermItem = { kind: "perm", id: "p1", title: "rm -rf /tmp/x", tool: "Bash", state: "open" };
+// 引擎给的 title 形如「<工具> <参数>」(driver/frame.rs);过一遍工具词表
+// 才是中文界面该看到的东西,原串退到 title 悬停
+const PERM: PermItem = { kind: "perm", id: "p1", title: "Bash rm -rf /tmp/x", tool: "Bash", state: "open" };
 
 describe("审批卡", () => {
-  it("待答复:警示头 + 命令原文 + 四动作 + ⏎/esc 脚注", () => {
+  it("待答复:警示头 + 本地化操作正文(原串进 title)+ 四动作 + ⏎/esc 脚注", () => {
     stubShell();
     render(<PermCard item={PERM} sessionId="s1" />);
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(screen.getByText("需要确认")).toBeTruthy();
     expect(screen.getByText("Bash")).toBeTruthy();
-    expect(screen.getByText("rm -rf /tmp/x")).toBeTruthy();
+    // 修复前这里摊的是 `Bash rm -rf /tmp/x`,而同会话里锚定型审批行显示的
+    // 是「需要确认 · 执行命令」——两种审批形态语言不一致
+    const body = screen.getByText("执行命令 rm -rf /tmp/x");
+    expect(body.getAttribute("title")).toBe("Bash rm -rf /tmp/x");
     for (const name of ["允许", "本会话始终允许", "此项目永久允许", "拒绝"]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }

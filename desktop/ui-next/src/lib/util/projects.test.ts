@@ -72,12 +72,38 @@ describe("分组", () => {
     expect(alpha?.archivedSessions.map((s) => s.id)).toEqual(["a2"]);
   });
 
-  it("手动序优先,未入序项目按活跃度追尾;归档项目单列", () => {
+  // 未入序的排最前(旧 UI projectOrder.ts `[...fresh, ...known]` 同款):
+  // mc.projectOrder 是全序快照,拖过一次之后新建的项目恒 rank=undefined,
+  // 追尾会让它沉到列表最底、项目一多就掉出首屏。
+  it("未入手动序的项目排在最前(按活跃度),其后才按手动序;归档项目单列", () => {
     const { projects } = groupSessions(sessions, ["/p/gamma", "/p/alpha"], new Set());
-    expect(projects.map((p) => p.name)).toEqual(["gamma", "alpha", "beta"]);
+    expect(projects.map((p) => p.name)).toEqual(["beta", "gamma", "alpha"]);
 
     const grouped = groupSessions(sessions, [], new Set(["/p/beta"]));
     expect(grouped.projects.map((p) => p.name)).toEqual(["alpha", "gamma"]);
     expect(grouped.archivedProjects.map((p) => p.name)).toEqual(["beta"]);
+  });
+
+  it("多个未入序项目之间保持活跃度序(sort 稳定)", () => {
+    const { projects } = groupSessions(sessions, ["/p/alpha"], new Set());
+    // beta(08-03)与 gamma(07-01)都未入序 → 按活跃度排最前;alpha 殿后
+    expect(projects.map((p) => p.name)).toEqual(["beta", "gamma", "alpha"]);
+  });
+});
+
+describe("折叠态契约键归一(旧 UI 写的是裸 workdir)", () => {
+  it("mc.collapsedGroups / mc.sessionArchivesOpen 读写都过 projectKey", async () => {
+    const { readCollapsedGroups, writeCollapsedGroups, readSessionArchivesOpen, writeSessionArchivesOpen } =
+      await import("./projects");
+    // 旧 UI 在 Windows 上落的是反斜杠裸路径,不归一就认不出来
+    store.set("mc.collapsedGroups", JSON.stringify(["C:\\work\\demo\\", "/p/a"]));
+    expect([...readCollapsedGroups()]).toEqual(["C:/work/demo", "/p/a"]);
+    writeCollapsedGroups(new Set(["C:\\work\\demo", "C:/work/demo"]));
+    expect(JSON.parse(store.get("mc.collapsedGroups") ?? "")).toEqual(["C:/work/demo"]);
+
+    store.set("mc.sessionArchivesOpen", JSON.stringify(["\\p\\b/"]));
+    expect([...readSessionArchivesOpen()]).toEqual(["/p/b"]);
+    writeSessionArchivesOpen(new Set(["/p/b/"]));
+    expect(JSON.parse(store.get("mc.sessionArchivesOpen") ?? "")).toEqual(["/p/b"]);
   });
 });

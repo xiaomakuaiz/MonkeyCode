@@ -45,9 +45,20 @@ export function setLocale(locale: Locale): void {
   for (const cb of listeners) cb();
 }
 
+/** 复数占位:`{n|单数|复数}`——取 params.n 的**数值**,恰为 1 用前者,其余
+ *  用后者。中文词条不需要它(量词不变形),英文侧必须有:朴素 replaceAll 之下
+ *  「只建了一个项目」的新用户(最常见的首次使用状态)在侧栏概览看到的是
+ *  `1 projects · 1 tasks`,单轮会话的行 tooltip 是 `1 turns`。 */
+const PLURAL_RE = /\{(\w+)\|([^|{}]*)\|([^|{}]*)\}/g;
+
 export function t(key: MessageKey, params?: Record<string, string | number>): string {
   let text: string = DICTS[getLocale()][key];
   if (params) {
+    text = text.replace(PLURAL_RE, (whole, name: string, one: string, other: string) => {
+      const v = params[name];
+      // 参数缺席就原样留着:宁可露出占位也好过悄悄选错一支
+      return v === undefined ? whole : Number(v) === 1 ? one : other;
+    });
     for (const [name, value] of Object.entries(params)) {
       text = text.replaceAll(`{${name}}`, String(value));
     }

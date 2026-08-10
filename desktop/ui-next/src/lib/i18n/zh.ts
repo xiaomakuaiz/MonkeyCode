@@ -3,6 +3,17 @@
 export const zh = {
   "app.name": "MonkeyCode",
 
+  // 空名兜底:占位 File 与剪贴板截图都可能不带文件名(uploads.ts 头注)
+  "common.unnamedFile": "未命名文件",
+  // 列表分隔符进词典:写死全角「、」「;」的话英文界面下会读成
+  // "Option A、Option B",而全角标点在西文字体里还占一个全宽字身
+  "common.listSep": "、",
+  "common.semiSep": ";",
+  // 模型摘要的项间分隔:中文取全角逗号是**刻意消歧**——数字过
+  // toLocaleString() 自带半角千分位逗号,再用半角逗号分项就分不清了
+  "common.metaSep": ",",
+  "common.colon": ":",
+
   "titlebar.minimize": "最小化",
   "titlebar.maximize": "最大化",
   "titlebar.restore": "还原",
@@ -217,6 +228,7 @@ export const zh = {
   "settings.leave.discard": "放弃并离开",
   "settings.error.modelName": "模型名称不能为空",
   "settings.error.modelDup": "模型名称重复:{name}",
+  "settings.error.modelIncomplete": "模型「{name}」还缺接口地址、API Key 或模型标识",
   "settings.error.mcpName": "MCP 名称仅支持英文字母、数字、_ 和 -",
   "settings.error.mcpDup": "MCP 名称重复:{name}",
   "settings.error.mcpIncomplete": "MCP「{name}」缺少 URL 或命令",
@@ -304,6 +316,7 @@ export const zh = {
   "downloads.cancel": "取消下载",
   "downloads.dismiss": "关闭",
   "downloads.progress": "下载进度",
+  "downloads.savedTo": "已保存到 {dest}",
   "downloads.reveal": "在文件管理器中显示",
   "downloads.failed": "下载失败:{reason}",
   "downloads.canceled": "已取消",
@@ -313,6 +326,25 @@ export const zh = {
 
   "chat.thought": "思考",
   "chat.permission": "审批",
+  // ---- 归约层产出的系统行/状态词(reduce.ts 只给键,渲染时才求值)----
+  "chat.sys.turnEnd": "— 本轮结束 —",
+  "chat.sys.model": "模型已切换为 {model}",
+  "chat.sys.think": "思考深度已调整为「{level}」",
+  "chat.sys.retry": "模型调用重试 #{attempt}: {message}",
+  "chat.sys.compacting": "⟳ 上下文接近上限,正在压缩…",
+  "chat.sys.compacted": "⟳ 上下文压缩完成",
+  "chat.sys.yolo": "⚡ 已开启 YOLO 模式:所有操作不再询问,直接执行",
+  "chat.sys.modeDefault": "已恢复默认权限模式",
+  "chat.sys.error": "✗ {reason}",
+  "chat.sys.errorUnknown": "✗ 未知错误",
+  "chat.perm.allowed": "已允许",
+  "chat.perm.denied": "已拒绝",
+  "chat.perm.expired": "(已过期)",
+  "chat.perm.timeout": "已超时(按拒绝处理)",
+  "chat.perm.cancelled": "已取消",
+  "chat.tool.bgRunning": "后台运行中",
+  "chat.tool.bgDone": "后台执行完成",
+  "chat.tool.bgFailed": "后台执行失败",
   "chat.perm.needConfirm": "需要确认",
   "chat.perm.allow": "允许",
   "chat.perm.always": "本会话始终允许",
@@ -382,6 +414,7 @@ export const zh = {
   "chat.attachRemove": "移除附件",
   "chat.uploadCancel": "取消上传",
   "chat.uploadFailed": "附件上传失败:{reason}",
+  "chat.sendFailed": "发送失败:{reason}",
   "chat.dropHint": "松开以添加文件",
   "chat.slash.label": "斜杠指令",
   "chat.slash.empty": "无匹配指令",
@@ -709,6 +742,10 @@ export const zh = {
   "account.baizhi.title": "百智云账号",
   "account.baizhi.sync": "同步模型与 MCP",
   "account.baizhi.syncDone": "已获取 {models} 个模型、{mcp} 个 MCP 配置,已并入模型/MCP 页;",
+  // 首次同步会在用户自己的网关账号里新建一把推理密钥并启用。不说的话,用户
+  // 日后在网关后台看到这把来路不明的 key,当成多余项删掉——本地百智云模型
+  // 就集体鉴权失败,而失败现场与那次同步之间没有任何线索可连(旧 UI 有这句)
+  "account.baizhi.keyCreated": "已在网关新建密钥「{name}」。",
   "account.baizhi.syncEmpty": "没有拉取到可用的模型",
   "account.baizhi.logout": "退出登录",
   "account.mc.title": "MonkeyCode 云端",
@@ -724,6 +761,7 @@ export const zh = {
   "account.mc.userIdTitle": "用户 ID:{id}(点击复制)",
   "account.mc.sync": "同步会员模型",
   "account.mc.syncDone": "已获取 {models} 个会员模型,已并入模型页;",
+  "account.mc.modelsCleared": "已从模型页移除会员模型;",
   "account.mc.syncEmpty": "没有可同步的会员模型",
   "account.sync.autoSaved": "已自动保存生效。",
   "account.sync.manualSave": "保存后生效。",

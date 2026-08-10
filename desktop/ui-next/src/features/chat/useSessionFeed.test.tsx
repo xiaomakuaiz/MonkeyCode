@@ -120,21 +120,21 @@ describe("useSessionFeed:生命周期与翻页游标", () => {
 
 describe("useSessionFeed:窗口与实时帧的先后、监听生命周期、打开失败", () => {
   /** 手动放行 session_open 的桩:回放窗口与实时帧的先后可控。 */
-  function gatedShell() {
+  function gatedShell(
+    winFrames: unknown[] = [userFrame(1, "很久以前的问题"), userFrame(2, "窗口里的第二条")],
+  ) {
     const listeners = new Map<string, (e: { payload: unknown }) => void>();
     let release: () => void = () => {};
-    const gate = new Promise<void>((r) => {
+    let fail: (e: Error) => void = () => {};
+    const gate = new Promise<void>((r, j) => {
       release = r;
+      fail = j;
     });
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: {
         invoke: (cmd: string) => {
           if (cmd === "session_open") {
-            return gate.then(() => ({
-              frames: [userFrame(1, "很久以前的问题"), userFrame(2, "窗口里的第二条")],
-              cursor: 100,
-              has_more: true,
-            }));
+            return gate.then(() => ({ frames: winFrames, cursor: 100, has_more: true }));
           }
           return Promise.resolve(null);
         },
@@ -146,26 +146,85 @@ describe("useSessionFeed:窗口与实时帧的先后、监听生命周期、打�
         },
       },
     };
-    return { listeners, release: () => release() };
+    return { listeners, release: () => release(), fail: (e: Error) => fail(e) };
   }
 
-  it("实时帧抢在回放窗口之前落地:历史仍在(按前插归约,不被 seq 水位吃掉)", async () => {
+  it("实时帧抢在回放窗口之前到达:先攒着,窗口落地后按真实先后一次归约", async () => {
     const { listeners, release } = gatedShell();
     const { result } = renderHook(() => useSessionFeed("s1"));
     // 铁律「监听先于命令」的另一面:壳在 session_open 处理中就同步推首批实时帧,
-    // 它先于返回值到达是常态。实时 seq 严格高于窗口——若窗口仍走 reduceBatch,
-    // 整份历史会被 seq 去重水位静默丢光(打开会话只剩最新一两条)
+    // 它先于返回值到达是常态。实时 seq 严格高于窗口——先落地就会把 seq 水位
+    // 抬到窗口之上,窗口帧随后被 reduceBatch 逐帧丢弃(整份历史静默消失)
     await waitFor(() => expect(listeners.has("frames:s1")).toBe(true));
     act(() => {
       listeners.get("frames:s1")!({ payload: [userFrame(9, "刚发生的问题")] });
     });
-    await waitFor(() => expect(result.current.state.items).toHaveLength(1));
+    // 窗口未落地前不渲染:攒在缓冲里(而不是先落地再想办法把历史插回去)
+    expect(result.current.state.items).toHaveLength(0);
+    expect(result.current.historyLoaded).toBe(false);
 
     act(() => release());
     await waitFor(() => expect(result.current.historyLoaded).toBe(true));
     expect(
       result.current.state.items.filter((it) => it.kind === "user").map((it) => it.text),
     ).toEqual(["很久以前的问题", "窗口里的第二条", "刚发生的问题"]);
+  });
+
+  // 这一条是上一条照不到的真实失败分支:判据若用 items.length 而水位用 lastSeq,
+  // 「抬了水位却一个条目都不产」的首批实时帧会让 items 仍为 0 → 走 reduceBatch
+  // → 窗口帧全部 seq ≤ 水位被丢光。task-started 正是这类帧(只置 running),
+  // tool_call_update/usage_update/plan 同理——跑子代理时父会话被 progress 刷屏
+  it("首批实时帧不产条目、只抬 seq 水位(task-started):历史与 running 都不能丢", async () => {
+    const { listeners, release } = gatedShell();
+    const { result } = renderHook(() => useSessionFeed("s1"));
+    await waitFor(() => expect(listeners.has("frames:s1")).toBe(true));
+    act(() => {
+      listeners.get("frames:s1")!({ payload: [{ type: "task-started", timestamp: 9, seq: 9 }] });
+    });
+    expect(result.current.state.items).toHaveLength(0); // 本来就不产条目
+
+    act(() => release());
+    await waitFor(() => expect(result.current.historyLoaded).toBe(true));
+    // 修复前:窗口两帧 seq 1/2 ≤ 水位 9 被逐帧丢弃 → items 为 0(空态插画)
+    expect(
+      result.current.state.items.filter((it) => it.kind === "user").map((it) => it.text),
+    ).toEqual(["很久以前的问题", "窗口里的第二条"]);
+    // 缓冲帧照常生效:running 不能因为"先攒后放"而丢
+    expect(result.current.state.running).toBe(true);
+  });
+
+  it("窗口携带的会话级状态不被竞态吃掉(前插只取 items,故不能走前插)", async () => {
+    // 窗口里带 task-started:running 归窗口所有。若竞态分支走 prependHistory,
+    // 它只取 items、丢弃 running/usage/model/…,composer 会以为会话空闲
+    const { listeners, release } = gatedShell([
+      userFrame(1, "很久以前的问题"),
+      { type: "task-started", timestamp: 2, seq: 2 },
+    ]);
+    const { result } = renderHook(() => useSessionFeed("s1"));
+    await waitFor(() => expect(listeners.has("frames:s1")).toBe(true));
+    act(() => {
+      listeners.get("frames:s1")!({ payload: [userFrame(9, "刚发生的问题")] });
+    });
+    act(() => release());
+    await waitFor(() => expect(result.current.historyLoaded).toBe(true));
+    expect(result.current.state.running).toBe(true);
+    expect(
+      result.current.state.items.filter((it) => it.kind === "user").map((it) => it.text),
+    ).toEqual(["很久以前的问题", "刚发生的问题"]);
+  });
+
+  it("打开失败:攒下的实时帧要放行,不能一直堆在缓冲里(否则壳还在跑、界面是死的空屏)", async () => {
+    const { listeners, fail } = gatedShell();
+    const { result } = renderHook(() => useSessionFeed("s1"));
+    await waitFor(() => expect(listeners.has("frames:s1")).toBe(true));
+    act(() => {
+      listeners.get("frames:s1")!({ payload: [userFrame(9, "刚发生的问题")] });
+    });
+    act(() => fail(new Error("引擎配置正在应用")));
+    await waitFor(() => expect(result.current.openError).toContain("引擎配置正在应用"));
+    expect(
+      result.current.state.items.filter((it) => it.kind === "user").map((it) => it.text),
+    ).toEqual(["刚发生的问题"]);
   });
 
   it("historyLoaded:窗口落地才置真(composer 的排队补投闸门等它)", async () => {

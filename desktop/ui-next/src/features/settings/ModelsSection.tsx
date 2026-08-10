@@ -42,7 +42,7 @@ function advSummary(m: HostModel, t: ReturnType<typeof useI18n>["t"]): string {
     m.think ? t("settings.models.sum.think", { level: t(THINK_LABEL_KEY[m.think] ?? "settings.models.think.default") }) : "",
     m.vision ? t("settings.models.sum.vision") : "",
   ].filter(Boolean);
-  return parts.length ? `(${parts.join("，")})` : "";
+  return parts.length ? `(${parts.join(t("common.metaSep"))})` : "";
 }
 
 /** 思考档值 → 词条键(与下方选择器同一张表) */

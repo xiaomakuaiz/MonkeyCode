@@ -18,6 +18,8 @@ import {
 import { useI18n } from "@/lib/i18n";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionSetMode, sessionSetModel, sessionSetThink } from "@/lib/ipc/controls";
+import { afterEngineReady } from "@/lib/ipc/engine";
+import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
@@ -58,9 +60,16 @@ export function Composer({
   // [],把 afterEngineReady 的重试变成了死代码),而引擎重启期这一拉必然
   // 撞上壳的「配置应用中」闸门——清空就是"重启一次模型菜单就空了";
   // 且未处理拒绝会被 index.html 的兜底画成满屏红框。
+  // afterEngineReady 不可省:ChatView 挂 `key={epoch}`,引擎 Ready 且此前掉过
+  // 时整棵树重建,于是这一拉与 useSessionFeed 的 session_open 在**同一次
+  // commit 里同刻**打到壳上——后者有 4 次退避、前者一次都没有,只有它会被
+  // 「配置应用中」闸门拒掉。而 Composer 是全新实例、models 从 [] 起,上面
+  // 那句"失败保留上一份"在挂载这一次是空话:结果就是模型下拉只剩「尚未配置
+  // 模型」,且本实例活着期间换不了模型(key 只认 epoch,切会话也不重建),
+  // 顺带 models.find(...)?.think 恒 undefined、思考档触发器回落「低」给错读数。
   useEffect(() => {
     let alive = true;
-    void modelsList()
+    void afterEngineReady(modelsList)
       .then((list) => {
         if (alive && Array.isArray(list)) setModels(list);
       })
@@ -107,7 +116,12 @@ export function Composer({
   );
 
   // ==== 模型 / 思考档 / 权限模式 ====
-  const currentModel = state.model || meta.model;
+  // resolveModelName:会话记的可能是**加来源后缀之前**的裸名(升级前建的会话),
+  // 严格比对的话下拉里一项都选不中、来源 tab 也算成空串停在「自定义」,
+  // modelThink 同样查不到 → 思考档触发器回落「低」给出错读数。
+  // modelMenuList:模型被删/改名后补一条兜底项,否则连"当前用的是哪条"都看不出。
+  const currentModel = resolveModelName(models, state.model || meta.model);
+  const menuModels = modelMenuList(models, currentModel);
   const modelThink = models.find((m) => m.name === currentModel)?.think;
   const effThink = state.think || meta.think || modelThink || "low";
   const mode = state.permMode || meta.mode || "default";
@@ -319,7 +333,7 @@ export function Composer({
             title={state.running ? t("chat.switchWhileRunning") : t("chat.think.tip")}
           />
           <ModelMenu
-            models={models}
+            models={menuModels}
             current={currentModel}
             onPick={pickModel}
             disabled={state.running}

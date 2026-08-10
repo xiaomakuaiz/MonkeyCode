@@ -9,9 +9,10 @@
 // - 仓库:默认不关联(快速开始);选云端项目下发 project_id,手输地址下发
 //   repo_url,两者互斥(选一个即清掉另一个)。
 import { IconCheck, IconChevronDown, IconCloud, IconFolder, IconSend } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { mcStatus } from "@/lib/ipc/account";
+import { useDismiss } from "@/lib/util/useDismiss";
 
 import { OptionMenu } from "@/features/chat/composer/pickers";
 
@@ -37,6 +38,7 @@ export function NewCloudTask({
   onCancel,
   initialProject,
   onOpenSettings,
+  active = true,
 }: {
   onCreated: (task: CloudTaskDetail) => void;
   onCancel?: () => void;
@@ -44,6 +46,10 @@ export function NewCloudTask({
   initialProject?: CloudProject | null;
   /** 未连接空态的「去设置连接」入口(与侧栏未连接空态同一动作) */
   onOpenSettings?: () => void;
+  /** 宿主把本面板 display:none 藏起来时置假(切到本地页签)。面板常驻挂载
+   *  是为了不丢用户填的内容,但**藏起来的浮层不能继续占 Esc 层栈**——否则
+   *  切走后按一下 Esc,被那个看不见的下拉吃掉。 */
+  active?: boolean;
 }) {
   const { t } = useI18n();
   const [options, setOptions] = useState<McTaskOptions | null>(null);
@@ -66,6 +72,15 @@ export function NewCloudTask({
   const [repoDraft, setRepoDraft] = useState("");
   const [repoErr, setRepoErr] = useState("");
   const [repoOpen, setRepoOpen] = useState(false);
+  // 「关联仓库」下拉走 useDismiss(与 NewTaskModal 的「最近目录」同款,理由见
+  // 那儿的注释):Esc 必须入 escLayer 层栈,否则按 Esc 关掉的是整个新建页、
+  // 已写的任务描述一起没;onBlur+relatedTarget 在 WebKitGTK 上也不可靠
+  const repoBoxRef = useRef<HTMLDivElement | null>(null);
+  const closeRepo = useCallback(() => setRepoOpen(false), []);
+  useDismiss(repoOpen && active, repoBoxRef, closeRepo);
+  useEffect(() => {
+    if (!active) setRepoOpen(false); // 藏起来时顺手收起,回来不是半开状态
+  }, [active]);
   const repoIme = useRef(createImeGuard());
 
   // 先确认登录态再拉选项(旧 UI newtask.tsx:289 的 cloudReady 守卫):没连上
@@ -206,12 +221,7 @@ export function NewCloudTask({
     <div className="flex min-w-0 flex-col">
       {/* 卡头 = 「关联仓库」触发器,与本地页文件夹触发器同构同高(mt-2 + h-8):
           切页签卡头不跳动。菜单三段:不关联 / 手输地址 / 云端项目 */}
-      <div
-        className="relative px-2 pt-2"
-        onBlur={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setRepoOpen(false);
-        }}
-      >
+      <div ref={repoBoxRef} className="relative px-2 pt-2">
         <button
           type="button"
           className="btn btn-ghost btn-sm max-w-full justify-start gap-1.5 px-2 font-normal"
@@ -382,10 +392,14 @@ export function NewCloudTask({
               ariaLabel={t("cloud.new.host")}
               value={effectiveHostId}
               onPick={setHostId}
-              disabled={publicModel}
-              // 禁用必须给理由:光是点不动,用户只会以为界面坏了(旧 UI
-              // newtask.tsx:857「公共模型仅支持公共宿主机」)
-              title={publicModel ? t("cloud.new.hostPublicOnly") : undefined}
+              // **不禁用**触发器,理由走菜单内可见文字(旧 UI newtask.tsx:837
+              // 同款:触发器照常可点,菜单里渲染一行说明)。此前写的是
+              // disabled + title——而 daisyUI 的 disabled 按钮带
+              // pointer-events:none,那条 tooltip 永远弹不出来,有私有宿主机的
+              // 用户只看到一个灰掉、点不动、毫无说明的控件。
+              // 选项本身已受限:usableCloudHosts(hosts, true) 只返回公共宿主,
+              // 所以放开触发器不会让人选到不允许的机器。
+              notice={publicModel ? t("cloud.new.hostPublicOnly") : undefined}
               options={hosts.map((hostItem) => ({ value: hostItem.id ?? "", label: cloudHostLabel(hostItem) }))}
             />
             <OptionMenu

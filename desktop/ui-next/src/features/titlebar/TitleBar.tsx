@@ -92,8 +92,16 @@ export function Brand() {
 /** caption 三键共用皮相:46×全条高(=28px)的**直角通高**块,触到窗口上下边。
  *  与视图头部那排 `btn-ghost btn-square btn-sm` 的圆角内缩胶囊形成形状对比
  *  ——眼睛靠"贴不贴边"分组,不靠间距硬撑(2026-08-08 定案)。 */
+// relative z-[1002]:必须压过 ResizeEdges(z-[1001])。Linux 走 CSD 后窗口内侧
+// 补了 8 个透明拉伸热区,其中 NorthEast 的 12×12 **整块落在关闭键内部**、North
+// 又吃掉三键顶部 4px(28px 条高的 1/7,而这条刚因用户两次报障从 32 压到 28)。
+// 不抬 z 的话:把指针甩到右上角点关闭,窗口不关——原地点击的结果是 WM 起了
+// 一次空的 resize 抓取(看起来就是"点了没反应"),按下时指针稍有移动则窗口
+// 被拉变形。抬的是**三键自己**而非整条:条上其余部分(拖拽区)顶边照旧可
+// 拉伸,只让出三键这 138px。代价是窗口右上角那 12px 的对角拉伸没了——
+// 关窗远比从这一个角拉伸常用,右边缘(y>28)与其余三角都还在。
 const CAPTION_BTN =
-  "flex h-full w-[46px] cursor-default items-center justify-center text-base-content/70 transition-colors duration-150";
+  "relative z-[1002] flex h-full w-[46px] cursor-default items-center justify-center text-base-content/70 transition-colors duration-150";
 
 export function TitleBar() {
   const { t } = useI18n();

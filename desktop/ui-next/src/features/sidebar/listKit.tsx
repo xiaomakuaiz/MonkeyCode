@@ -27,7 +27,14 @@ import { readFold, writeFold, type FoldKey } from "@/lib/util/prefs";
 // 项目数一多就把列表撑散(用户报障「项目之间太空了」正是此因)。
 // start 值 = 该层组头图标的中心横坐标,竖线正落在图标列上(VS Code 同款:
 // 线在 twisty 列,文字在其右)。绝对定位,不参与布局,行底照旧满宽。
-const GUIDE = "relative before:absolute before:inset-y-0.5 before:w-px before:bg-base-content/15 before:content-['']";
+// `before:opacity-100` 不是冗余:daisyUI 的 `.menu :where(li ul,li menu):before`
+// 自带 `opacity:.1`(menu.css,给它自己那条默认嵌套线用的)。本串覆写得了
+// background-color/width/inset,但 opacity 全场只有 daisyUI 声明过一次,于是
+// 原样生效——有效 alpha = 0.15 × 0.1 = **1.5%**,比 daisyUI 默认线还淡 6.7 倍,
+// 任何主题下都看不出来。层级信号在 §6.2 已定案否决空白分组、也定案不加折叠
+// 箭头,竖线看不见就只剩缩进,正好退回用户报障「亲密性不够,像一路排下来」。
+const GUIDE =
+  "relative before:absolute before:inset-y-0.5 before:w-px before:bg-base-content/15 before:opacity-100 before:content-['']";
 /** L1:组头基准内距 12px + 12px 图标的一半 = 18px(项目组 / 云端项目组 / 底部小节) */
 export const GUIDE_L1 = `${GUIDE} before:start-[18px]`;
 /** L2:组内小节头 ps-6(24px)+ 10px 图标的一半 = 29px(项目内「已归档任务」) */

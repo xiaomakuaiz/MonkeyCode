@@ -41,6 +41,7 @@ import {
   mergeSyncedMcps,
   mergeSyncedModels,
   payloadEquals,
+  removeSyncedSource,
   validateDraft,
   type DraftError,
   type SettingsDraft,
@@ -693,12 +694,34 @@ export function SettingsView({
     return { skipped, autoSaved: true };
   };
 
+  /** 断开 MonkeyCode 后清掉会员模型组(旧 UI disconnectMcWithCleanup 第四步)。
+   *  自动保存决策与 applySync 同一套口径:干净表单且无任务在跑就直接落盘,
+   *  否则退回保存条并说明原因。返回 undefined = 本来就没有会员条目,无事可做。 */
+  const applyMcDisconnect = (): SyncApplied | undefined => {
+    const cur = draftRef.current;
+    const conf = cfgRef.current;
+    if (!cur || !conf) return undefined;
+    const wasDirty = !payloadEquals(buildPayload(conf, cur), buildPayload(conf, draftFromConfig(conf)));
+    const next = removeSyncedSource(cur, SOURCE_MONKEYCODE);
+    if (!next) return undefined;
+    draftRef.current = next;
+    setDraft(next);
+    setSaveError("");
+    if (savingRef.current) return { skipped: [], autoSaved: true };
+    if (wasDirty) return { skipped: [], autoSaved: false, blocked: "dirty" };
+    if (hasRunningTask) return { skipped: [], autoSaved: false, blocked: "busy" };
+    void save(next);
+    return { skipped: [], autoSaved: true };
+  };
+
   const draftErrText = (e: DraftError): string => {
     switch (e.kind) {
       case "modelName":
         return t("settings.error.modelName");
       case "modelDup":
         return t("settings.error.modelDup", { name: e.name });
+      case "modelIncomplete":
+        return t("settings.error.modelIncomplete", { name: e.name });
       case "mcpName":
         return t("settings.error.mcpName");
       case "mcpDup":
@@ -789,7 +812,14 @@ export function SettingsView({
         // 账号分区不吃壳配置(登录态自查、浏览器降级自带),不走 configGate;
         // 同步结果经 applySync 并入模型/MCP 草稿。草稿另供自建部署高级块编辑
         //(拿不到配置时该块自行隐去,不影响登录主路径)
-        return <AccountSection onSyncResult={applySync} draft={draft} onDraft={updateDraft} />;
+        return (
+          <AccountSection
+            onSyncResult={applySync}
+            onMcDisconnected={applyMcDisconnect}
+            draft={draft}
+            onDraft={updateDraft}
+          />
+        );
       case "models":
         return draft ? <ModelsSection draft={draft} onDraft={updateDraft} baizhiLoggedIn={bzLoggedIn} /> : configGate;
       case "mcp":
@@ -835,8 +865,10 @@ export function SettingsView({
           </ul>
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* 内容列居中收窄:阅读宽度稳定,分区排版不随窗宽漂移 */}
-          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-5">
+          {/* 内容列居中收窄:阅读宽度稳定,分区排版不随窗宽漂移。
+              [scrollbar-gutter:stable] 见 LAYOUT §5:各分区长短不一,不留滚条
+              槽位的话在长短分区间切换时居中内容列左右晃约 5px */}
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] px-6 py-5">
             <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
               {/* 分区头:大标题+一句话说明(对齐旧工程设置屏的标题层级) */}
               <header className="flex flex-col gap-1">

@@ -121,6 +121,13 @@ function FindingRow({ finding, onOpenFile }: { finding: ReviewFinding; onOpenFil
       <span aria-hidden className={dot} />
       {verdict && <span className={verdict.cls}>{verdict.key ? t(verdict.key) : verdict.raw}</span>}
       <MarkdownInline source={title} className="min-w-0 flex-1" />
+      {/* 分类 chip(旧 findingsCard.tsx 摘要与 file:line 之间那枚 mono 标签):
+          category 一路解析进 ReviewFinding 却从不进 JSX,发现条数一多就失去
+          按类别(correctness / test-coverage / efficiency…)快速扫读的能力。
+          引擎侧是自由字符串,不进词典、原样显示 */}
+      {finding.category && (
+        <span className="badge badge-ghost badge-xs shrink-0 font-mono">{finding.category}</span>
+      )}
       {location &&
         (onOpenFile ? (
           // file:line 可点定位(旧 findingsCard.tsx onOpenFile 设计):

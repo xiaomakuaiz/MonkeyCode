@@ -12,7 +12,7 @@ import {
   createChatState,
   itemKey,
   permAnchors,
-  permStateLabel,
+  permStateKey,
   prependHistory,
   reduceBatch,
   reduceFrame,
@@ -280,7 +280,7 @@ describe("后台子代理(Agent 显式转后台)", () => {
         progress: { kind: "child_session", childSessionId: "c1" },
       }),
     ]);
-    expect(toolItem(s, "t1")).toMatchObject({ status: "run", out: "后台运行中", background: true, childSessionId: "c1" });
+    expect(toolItem(s, "t1")).toMatchObject({ status: "run", outKey: "chat.tool.bgRunning", background: true, childSessionId: "c1" });
     expect(toolItem(s, "t1").result).toBeUndefined();
     expect(toolItem(s, "t1").feed).toEqual([{ kind: "text", text: "后台仍在跑" }]);
   });
@@ -294,7 +294,7 @@ describe("后台子代理(Agent 显式转后台)", () => {
     ]);
     expect(toolItem(s, "t1")).toMatchObject({
       status: "ok",
-      out: "后台执行完成",
+      outKey: "chat.tool.bgDone",
       result: "最终结论正文",
       backgroundNoticePending: false,
     });
@@ -310,7 +310,7 @@ describe("后台子代理(Agent 显式转后台)", () => {
     ]);
     expect(toolItem(s, "t1")).toMatchObject({
       status: "fail",
-      out: "后台执行失败",
+      outKey: "chat.tool.bgFailed",
       result: "最终错误",
       backgroundNoticePending: true,
     });
@@ -410,9 +410,10 @@ describe("审批卡片状态机", () => {
   });
 
   it("终态文案映射", () => {
-    expect(permStateLabel("allowed")).toBe("已允许");
-    expect(permStateLabel("timeout")).toBe("已超时(按拒绝处理)");
-    expect(permStateLabel("未知态")).toBe("未知态");
+    // 归约层只给键(渲染层过 t);未知态给 null,由调用方原样显示服务端字符串
+    expect(permStateKey("allowed")).toBe("chat.perm.allowed");
+    expect(permStateKey("timeout")).toBe("chat.perm.timeout");
+    expect(permStateKey("未知态")).toBeNull();
   });
 });
 
@@ -479,15 +480,15 @@ describe("轮次与系统帧", () => {
     expect(started.running).toBe(true);
     const ended = reduceFrame(started, frame("task-ended"));
     expect(ended).toMatchObject({ running: false, turnEnded: true, streamKind: "" });
-    expect(ended.items.at(-1)).toEqual({ kind: "sys", tag: "turn-end", text: "— 本轮结束 —" });
+    expect(ended.items.at(-1)).toEqual({ kind: "sys", tag: "turn-end", text: "", key: "chat.sys.turnEnd" });
     // turnEnded 是轮次级状态:新一轮开始即复位,轮末边沿检测每轮可触发
     expect(reduceFrame(ended, frame("task-started")).turnEnded).toBe(false);
   });
 
   it("task-error 渲染错误系统行,缺 error 字段回退文案", () => {
     const s = run([frame("task-error", { error: "配额耗尽" })]);
-    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "✗ 配额耗尽", error: true });
-    expect(run([frame("task-error")]).items.at(-1)).toEqual({ kind: "sys", text: "✗ 未知错误", error: true });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "配额耗尽" }, error: true });
+    expect(run([frame("task-error")]).items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.errorUnknown", error: true });
   });
 
   it("user-input 解 base64(含多字节);坏编码回退原文", () => {
@@ -542,21 +543,21 @@ describe("轮次与系统帧", () => {
 
   it("model_update 的系统行剥寻址后缀与会员档位前缀,状态仍存原始名", () => {
     const s = run([acp({ sessionUpdate: "model_update", model: "monkeycode-pro/deepseek@monkeycode#cfg-9" })]);
-    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "model", text: "模型已切换为 deepseek" });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "model", text: "", key: "chat.sys.model", params: { model: "deepseek" } });
     expect(s.model).toBe("monkeycode-pro/deepseek@monkeycode#cfg-9");
 
     const remark = run([acp({ sessionUpdate: "model_update", model: "深度求索@monkeycode#cfg-9" })]);
-    expect(remark.items.at(-1)).toEqual({ kind: "sys", tag: "model", text: "模型已切换为 深度求索" });
+    expect(remark.items.at(-1)).toEqual({ kind: "sys", tag: "model", text: "", key: "chat.sys.model", params: { model: "深度求索" } });
   });
 
   it("think_update 回写档位并留系统行,空档位显示为默认", () => {
     const s = run([acp({ sessionUpdate: "think_update", think: "high" })]);
     expect(s.think).toBe("high");
-    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "think", text: "思考深度已调整为「高」" });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "think", text: "", key: "chat.sys.think", params: { level: "high" } });
 
     const back = run([acp({ sessionUpdate: "think_update", think: "" })]);
     expect(back.think).toBe("");
-    expect(back.items.at(-1)).toEqual({ kind: "sys", tag: "think", text: "思考深度已调整为「默认」" });
+    expect(back.items.at(-1)).toEqual({ kind: "sys", tag: "think", text: "", key: "chat.sys.think", params: { level: "" } });
   });
 
   it("available_commands_update 只回写指令清单,不进对话流", () => {
@@ -588,7 +589,8 @@ describe("轮次与系统帧", () => {
       acp({ sessionUpdate: "compact_status", status: "started" }),
       acp({ sessionUpdate: "llm_call_retry", attempt: 2, message: "429" }),
     ]);
-    expect(s.items.map((it) => (it as SysItem).text)).toEqual(["⟳ 上下文接近上限,正在压缩…", "模型调用重试 #2: 429"]);
+    expect(s.items.map((it) => (it as SysItem).key)).toEqual(["chat.sys.compacting", "chat.sys.retry"]);
+    expect((s.items[1] as SysItem).params).toEqual({ attempt: "2", message: "429" });
   });
 
   it("未知帧/未知 sessionUpdate/非 acp kind 一律原样返回", () => {
@@ -614,14 +616,18 @@ describe("SysItem.tag(系统行渲染分流标记)", () => {
     expect(run([acp({ sessionUpdate: "permission_mode_update", mode: "yolo" })]).items.at(-1)).toEqual({
       kind: "sys",
       tag: "mode",
-      text: "⚡ 已开启 YOLO 模式:所有操作不再询问,直接执行",
+      text: "",
+      key: "chat.sys.yolo",
     });
   });
 
-  it("task-error 行不打 tag,只带 error 标记(着色走 error 字段)", () => {
+  it("task-error 行打 error tag + error 标记(文案走 key,着色走 error 字段)", () => {
     const err = run([frame("task-error", { error: "配额耗尽" })]).items.at(-1) as SysItem;
-    expect(err.tag).toBeUndefined();
+    expect(err.tag).toBe("error");
     expect(err.error).toBe(true);
+    // 归约层不产成品中文:引擎的原始错误串只作插值参数
+    expect(err.key).toBe("chat.sys.error");
+    expect(err.params).toEqual({ reason: "配额耗尽" });
   });
 });
 
@@ -734,12 +740,12 @@ describe("旧格式帧兼容(data = base64(JSON) 字符串)", () => {
     ]);
     expect(s.items[0]).toEqual({ kind: "user", text: "旧格式输入" });
     expect(s.items[1]).toMatchObject({ kind: "perm", id: "p1", state: "expired" }); // task-error 过期开放卡
-    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "✗ 旧格式错误", error: true });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "旧格式错误" }, error: true });
   });
 
   it("裸 JSON 字符串形态的 data(云端观测形态)也可解", () => {
     const s = run([{ type: "task-error", data: JSON.stringify({ error: "裸串" }) }]);
-    expect(s.items.at(-1)).toEqual({ kind: "sys", text: "✗ 裸串", error: true });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "裸串" }, error: true });
   });
 });
 

@@ -7,6 +7,7 @@
 // 因此 data 一律经 codec.ts::frameData 收口解码,任何地方不得直接摸。
 import type { Frame as WireFrame } from "@/gen/Frame";
 import type { PermOutcome } from "@/gen/PermOutcome";
+import type { MessageKey } from "@/lib/i18n";
 
 export type { PermOutcome, WireFrame };
 
@@ -151,8 +152,11 @@ export interface ToolItem {
   status: ToolStatus;
   /** 开卡帧时间(块级时间显影;durationMs 另记耗时)。 */
   timestamp?: number;
-  /** 结果首行摘要(截 160 字符;失败时卡片外显) */
+  /** 结果首行摘要(截 160 字符;失败时卡片外显)。上游原文,不放归约自造的句子 */
   out: string;
+  /** out 的文案键(归约自造的状态词走这条,渲染时才求值;优先于 out)。
+   *  同 SysItem.key 的理由:归约一次、留存长期,烘死文案就烘死了语言。 */
+  outKey?: MessageKey;
   /** 工具的完整结构化入参;卡片优先用它展示路径/命令/查询 */
   rawInput?: unknown;
   /** ACP kind 以及完整结构化结果;本地和云端共用详情解析 */
@@ -185,12 +189,21 @@ export interface ToolItem {
 /** 系统行(轮次分隔/错误/模型切换等)。 */
 export interface SysItem {
   kind: "sys";
+  /** 上游原文(引擎/云端产的自由文本:notify 通知正文等)。归约自己造的
+   *  句子**不进这里**——它们走 key+params 在渲染时按当前 locale 求值。 */
   text: string;
   error?: boolean;
   /** 行种类(reduce 各产出点打标):渲染层按 tag 分流呈现(turn-end 收敛
-   * 为呼吸位、连续 model 行合并等),不再嗅探 text 文案。text 保留全文,
-   * 向后兼容——缺席 tag 的行(含 task-error)按普通系统行渲染。 */
-  tag?: "turn-end" | "model" | "think" | "mode" | "retry" | "notify" | "compact";
+   * 为呼吸位、连续 model 行合并等),不再嗅探 text 文案。 */
+  tag?: "turn-end" | "model" | "think" | "mode" | "retry" | "notify" | "compact" | "error";
+  /** 文案键:**归约层不产成品中文**。归约发生一次、结果长期留在 state 里,
+   *  在这儿把句子烘死就等于把语言也烘死——切到英文界面后,已有的对话流里
+   *  仍是「模型已切换为…」「思考深度已调整为「低」」,而审批卡上「Allow /
+   *  Deny」与答复后的「已允许」还会同框出现。key 缺席则渲染 text。 */
+  key?: MessageKey;
+  /** key 的插值参数(原始值,非成品文案:think 的 level 要在渲染时再过一次
+   *  词表才拿得到当前语言的档位名)。 */
+  params?: Record<string, string>;
 }
 
 /** 审批卡。 */

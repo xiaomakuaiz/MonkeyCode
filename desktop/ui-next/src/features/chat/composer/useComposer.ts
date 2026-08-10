@@ -219,7 +219,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     // 成功路径**不摘** sendingRef:壳在引擎 ack 时就返回,回显帧还在路上,
     // 这段真空里摘掉标记会让下一条直发撞忙碌守卫(见上面的帧水位 effect)
     void sessionSend(sessionId, "user-input", { content: b64encode(text) })
-      .catch(() => {
+      .catch((e: unknown) => {
         sendingRef.current = false;
         // 失败不丢草稿:文本回输入框、附件回 chips(壳契约 Err ⟺ 未入会话)。
         // 回执迟到且人已切走 → 回原会话留档,不污染当前会话(纪元守卫)
@@ -235,6 +235,14 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
         // 期间用户已敲了新内容/新附件则让位,不覆盖
         setDraft((cur) => (cur ? cur : prevDraft));
         setAtts((cur) => (cur.length ? cur : prevAtts));
+        // **必须外显**:只回滚草稿的话,用户看到的是"输入框先清空、片刻后原文
+        // 又跳回来",界面一句解释都没有——分不清是自己手滑还是引擎出了问题,
+        // 只能反复重试,而重试同样静默失败。壳侧 Err 分支是实打实的:
+        // driver/session.rs 的 ensure_engine_ready / 「会话未打开」/
+        // 「当前会话已有任务在执行」,引擎重启后与会话恢复失败后最容易撞上。
+        // ErrorBar 正是本文件其它失败路径(上传、切模型/档位/权限模式)统一
+        // 使用的外显通道;云端侧 CloudTaskView 也早就渲染了 sendFailed
+        notifyError(t("chat.sendFailed", { reason: e instanceof Error ? e.message : String(e) }));
       });
     return true;
   }, [draft, atts, queued, running, sessionId, clearRetry]);
@@ -293,7 +301,12 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
         ...list,
         {
           id,
-          name,
+          // 空名兜底(旧 UI useSession.ts `f.name || "文件"`):剪贴板截图可为
+          // 空名(uploads.ts 头注),不兜底的话上传中的 chip 就是一枚只有
+          // spinner + 百分比、没有任何文字的 badge——大图分块要传数秒,这
+          // 几秒里用户看不出这是什么。**只兜显示名**:下面成品附件仍优先
+          // 用真实路径末段(比"未命名文件"信息量大),两者不共用一个值。
+          name: name || t("common.unnamedFile"),
           pct: indeterminate ? -1 : 0,
           ...(indeterminate ? {} : { cancel: () => ctl.abort() }),
         },

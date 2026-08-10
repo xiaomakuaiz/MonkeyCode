@@ -140,9 +140,30 @@
     font-size: 0.875rem;
     overflow: hidden;
     /* 桌面壳手感:chrome 默认不可选中;可复制内容(消息/代码/输入框)由
-     * 各 feature 按处放开(P3 起随视图落地) */
+     * 各 feature 按处放开(select-text),外加下面这条**类型级白名单** */
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  /* 可选中白名单(旧 UI styles.css 同款,ui-next 首版只留了逐处 select-text
+   * 而漏掉诊断类文本)。逐处放开治不了这一**类**:引擎崩溃横幅的崩溃原因与
+   * 日志尾、保存失败文案、角落 toast 里的壳侧报错——恰恰是最需要复制进工单
+   * 的那些,一个都没放开。配合 shellChrome 拦掉原生右键、contextMenu 对非
+   * 输入元素只在有选区时才给「复制」项,用户在横幅上鼠标划不动、右键也不
+   * 弹菜单,只能照屏幕手抄。
+   * pre/code:代码块、日志尾、工具输出;[role=alert]/[role=status]:所有
+   * 外显的报错与状态行(横幅/保存条/toast 统一走这两个 role)。
+   * 输入类控件本不受影响(UA 表对 input/textarea 显式声明 text,元素自身有
+   * 声明就不继承),这里一并写上是为了不依赖 UA 表的实现细节。 */
+  pre,
+  code,
+  input,
+  textarea,
+  [contenteditable="true"],
+  [role="alert"],
+  [role="status"] {
+    user-select: text;
+    -webkit-user-select: text;
   }
 }
 

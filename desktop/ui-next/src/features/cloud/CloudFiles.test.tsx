@@ -38,6 +38,7 @@ function fakeControl(): { ctl: CloudControl; calls: { kind: string; payload?: Re
     },
     revive: vi.fn(),
     close: vi.fn(),
+    isClosed: () => false,
   };
   return { ctl, calls };
 }
@@ -72,6 +73,7 @@ describe("CloudFiles", () => {
       call: () => Promise.reject(new Error("环境离线")),
       revive: vi.fn(),
       close: vi.fn(),
+      isClosed: () => false,
     };
     render(<CloudFiles taskId="t1" vmId="vm1" borrowControl={lend(bad)} />);
     expect((await screen.findByRole("alert")).textContent).toContain("环境离线");

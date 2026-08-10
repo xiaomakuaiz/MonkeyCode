@@ -87,9 +87,26 @@ export function CloudFiles({
   borrowRef.current = borrowControl;
 
   // 控制流惰性借用;卸载即归还(自建的那条真关,云端据此开始空闲倒计时;
-  // 借来的常驻连接不能关——那是宿主的保活与唤醒通道)
-  const ensureCtrl = () =>
-    (heldRef.current ??= borrowRef.current?.() ?? ownControl(taskId)).ctrl;
+  // 借来的常驻连接不能关——那是宿主的保活与唤醒通道)。
+  //
+  // **每次都校验 closed,不能用 `??=` 一次缓存到卸载**:借来的那条是宿主
+  // (useCloudTask)自己的常驻控制流,宿主的 effect 依赖 [id, ended, vmId],
+  // 任务一结束(finished/error,10s 轮询或 onEnded 驱动)cleanup 就 close() 它。
+  // 而 CloudControl 一旦 closed 就**不可复活**:call() 一律 reject "closed",
+  // revive() 也被挡死。攥着不放的结果是——正跑着的任务开着「云端文件」看产出,
+  // 任务一跑完,点刷新/进目录/点文件全部清空 + 红条「连接已关闭」,恰好是最
+  // 想翻产出的那一刻。而结束态本该照常可看快照(commit ec0bd419「文件浏览按
+  // taskId 走控制流,不再拿 vmId 当门槛(结束态可看快照)」)。
+  // 死了就重借一条:宿主 ended 后 borrowControl 不再给常驻连接,自然回落
+  // ownControl(taskId) 自建一条只读快照通道。
+  const ensureCtrl = () => {
+    const held = heldRef.current;
+    if (held && !held.ctrl.isClosed()) return held.ctrl;
+    held?.release();
+    const next = borrowRef.current?.() ?? ownControl(taskId);
+    heldRef.current = next;
+    return next.ctrl;
+  };
   useEffect(
     () => () => {
       heldRef.current?.release();
@@ -236,10 +253,12 @@ export function CloudFiles({
   const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
 
   // 预览打开后列表/预览上下分栏(与本地 FilesDrawer 同构,免拖拽版:
-  // 列表定比、预览吃剩余)
+  // 列表**内容高、38% 只作上限**,预览吃剩余)。写死 h-[38%] 会让只有三五
+  // 个文件的目录也钉满 38% 高、余下一片空白(与 FilesDrawer 同款修正)。
+  // [scrollbar-gutter:stable] 见 LAYOUT §5(内容量可变的纵滚容器留槽位)。
   const listClass = preview
-    ? "min-h-0 h-[38%] max-h-[calc(100%-190px)] shrink-0 overflow-x-hidden overflow-y-auto p-1"
-    : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-1";
+    ? "min-h-0 max-h-[38%] shrink-0 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] p-1"
+    : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] p-1";
 
   return (
     <section aria-label={t("cloud.files.title")} className="flex min-h-0 flex-1 flex-col">

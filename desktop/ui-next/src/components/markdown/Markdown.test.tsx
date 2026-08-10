@@ -85,4 +85,26 @@ describe("本地资源(工作区图片/文件链接)", () => {
     expect(local).toEqual(["src/main.rs"]);
     expect(calls).not.toContain("plugin:opener|open_url");
   });
+  // marked 18 把整条 info string 塞进 lang:```ts twoslash 这类围栏不切首词
+  // 就永远命不中 hljs.getLanguage,一律降级成无高亮
+  it("围栏 info string 带元信息时仍按首词高亮", () => {
+    const { container } = render(<Markdown source={"```ts twoslash\nconst a = 1;\n```"} />);
+    const code = container.querySelector("code");
+    expect(code?.className).toContain("language-ts");
+    expect(container.querySelector(".hljs-keyword")).not.toBeNull();
+  });
+
+  it("未知语言不加 language- 类,内容照常转义", () => {
+    const { container } = render(<Markdown source={"```不存在的语言\n<b>x</b>\n```"} />);
+    const code = container.querySelector("code");
+    expect(code?.className).not.toContain("language-");
+    expect(code?.textContent).toContain("<b>x</b>");
+  });
+
+  // GFM 的 |---:| / |:-:| 全靠 td 的 align;不发就是整表左对齐
+  it("表格数据行带 align(表头由 md.css 统一左对齐,不发)", () => {
+    const { container } = render(<Markdown source={"| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |"} />);
+    const tds = [...container.querySelectorAll("td")].map((td) => td.getAttribute("align"));
+    expect(tds).toEqual(["left", "center", "right"]);
+  });
 });

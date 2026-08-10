@@ -74,6 +74,44 @@ describe("LAYOUT §5 滚动纪律", () => {
   });
 });
 
+describe("LAYOUT §1 z 序:角落瞬态与 resize 热区必须压过 daisyUI 模态", () => {
+  // daisyUI 5 的 `.modal` 写死 `z-index:999`(node_modules/daisyui/components/
+  // modal.css 里核过),而 Tailwind 的 z-50 / z-60 全在它之下。凡是「模态开着
+  // 也必须可见可点」的层——LAYOUT §1 z 序里排在 lightbox 之上的 toast/角落
+  // 瞬态,以及窗体 chrome 的边缘拉伸热区——都要 ≥1000,否则命中测试全落到
+  // `.modal-backdrop`:看着在那儿,点下去却是把弹层关掉。
+  // 这一类踩过两次(下载 dock/会话提醒 z-50、ResizeEdges z-60),故机检。
+  const MODAL_Z = 999;
+  const MUST_BEAT_MODAL: ReadonlyArray<{ file: string; needle: string }> = [
+    { file: "features/downloads/DownloadsDock.tsx", needle: "toast toast-end" },
+    { file: "app/App.tsx", needle: "toast toast-top toast-end" },
+    { file: "features/titlebar/ResizeEdges.tsx", needle: "fixed z-" },
+  ];
+  it.each(MUST_BEAT_MODAL)("$file 的 z 高于模态", ({ file, needle }) => {
+    const text = readFileSync(join(SRC, file), "utf8");
+    const idx = text.indexOf(needle);
+    expect(idx, `${file} 里找不到 ${needle}`).toBeGreaterThanOrEqual(0);
+    const around = text.slice(idx, idx + 200);
+    const z = /z-\[(\d+)\]/.exec(around)?.[1];
+    expect(z, `${file} 应写成 z-[<数字>] 形态`).toBeDefined();
+    expect(Number(z)).toBeGreaterThan(MODAL_Z);
+  });
+
+  // caption 三键要压过 resize 热区:NorthEast 的 12×12 整块落在关闭键内部、
+  // North 又吃掉三键顶部 4px,不抬 z 就是「右上角点不了关闭」(点击变成
+  // 一次空的 WM resize 抓取)
+  it("caption 三键压过 ResizeEdges", () => {
+    const zOf = (file: string, needle: string) => {
+      const text = readFileSync(join(SRC, file), "utf8");
+      const around = text.slice(text.indexOf(needle), text.indexOf(needle) + 200);
+      return Number(/z-\[(\d+)\]/.exec(around)?.[1]);
+    };
+    const caption = zOf("features/titlebar/TitleBar.tsx", "const CAPTION_BTN");
+    const edges = zOf("features/titlebar/ResizeEdges.tsx", "fixed z-");
+    expect(caption).toBeGreaterThan(edges);
+  });
+});
+
 describe("Esc 收口", () => {
   // 同 target 同阶段的监听按注册先后触发,而视图级 Esc 挂载即注册、浮层只在
   // 打开时注册——谁先吃掉这一下取决于挂载时序而非语义(开着下拉按 Esc 关掉

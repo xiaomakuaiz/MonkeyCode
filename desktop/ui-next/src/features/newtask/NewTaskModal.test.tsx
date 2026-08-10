@@ -280,6 +280,28 @@ describe("Esc 分层(草稿不能被一下 Esc 顺手清掉)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // b6bda87b 收口 Esc 分层时只覆盖了走 useDismiss 的模型/思考档菜单,
+  // 「最近目录」这两处**手写下拉**用的是容器 onBlur、从不入层栈,于是按 Esc
+  // 时栈顶只有视图层自己,它对非输入焦点一律 onClose() —— 想收起下拉,结果
+  // 整个新建页退掉、首条消息与暂存附件全销毁,还不带确认
+  it("开着「最近目录」下拉按 Esc:只关下拉,新建页不退、首条消息还在", async () => {
+    stubShell();
+    const onClose = vi.fn();
+    render(<NewTaskModal open onClose={onClose} onCreated={() => {}} />);
+    await userEvent.type(screen.getByRole("textbox", { name: "首条消息" }), "改一下登录页");
+    await openDirMenu();
+    expect(screen.queryByRole("textbox", { name: "项目目录" })).not.toBeNull();
+
+    pressEsc();
+    expect(screen.queryByRole("textbox", { name: "项目目录" })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "首条消息" }) as HTMLTextAreaElement).value).toBe("改一下登录页");
+
+    // 下拉收起后这一层就该让出来:再按一下才轮到视图层关页
+    pressEsc();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("关闭后不再占层(open=false 即出栈)", async () => {
     stubShell();
     const onClose = vi.fn();

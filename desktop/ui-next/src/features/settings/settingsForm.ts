@@ -324,6 +324,34 @@ export function mergeSyncedModels(
   return { draft: { ...draft, models: next, defaultIdx: di }, skipped };
 }
 
+/** 断开某个同步来源:整组移除 + 默认位重定位。返回 null = 本来就没有该组的
+ * 条目(调用方据此不惊动保存)。
+ *
+ * 旧 UI settings.tsx::disconnectMcWithCleanup 的第四步(ui-next 漏迁)。
+ * 不清理的后果不是"列表里多几行没用的":①会员行在 ModelsSection 里**没有
+ * 删除按钮**(只给 !source 的手工条目),用户在应用内无路可走;②壳侧也不
+ * 代劳——baizhi/mod.rs 的 revoke 只删网关 key 与本机 Key 文件,config.rs
+ * 下次物化照样把会员条目写进引擎、api_key 落成空串;③最要命的是
+ * autoDefaultRank 给会员条目 +10,「首装→连接→同步」这条主流程走完,落盘的
+ * default 基本必然在会员条目上——断开之后新建对话什么都不改、直接发消息
+ * 就鉴权失败,而报错里看不出跟刚才那次断开有关。 */
+export function removeSyncedSource(draft: SettingsDraft, source: string): SettingsDraft | null {
+  const defaultName = draft.models[draft.defaultIdx]?.name?.trim() ?? "";
+  const next = draft.models.filter((m) => m.source !== source);
+  if (next.length === draft.models.length) return null;
+  let di = next.findIndex((m) => m.name.trim() === defaultName);
+  if (di < 0) {
+    // 默认项正是被移除的那组:回落到未锁条目里优先级最高的第一条
+    // (与 mergeSyncedModels 的回落口径同一份规则)
+    for (let i = 0; i < next.length; i++) {
+      const m = next[i]!;
+      if (m.locked) continue;
+      if (di < 0 || autoDefaultRank(m) > autoDefaultRank(next[di]!)) di = i;
+    }
+  }
+  return { ...draft, models: next, defaultIdx: di >= 0 ? di : 0 };
+}
+
 /** 同步 MCP 并入草稿(百智云):整组替换,空集不清组(如网关未开通则不触碰;
  * 对齐模型语义)。同步条目已带 source=baizhi。 */
 export function mergeSyncedMcps(draft: SettingsDraft, servers: Record<string, unknown>): SettingsDraft {
@@ -337,6 +365,7 @@ export function mergeSyncedMcps(draft: SettingsDraft, servers: Record<string, un
 export type DraftError =
   | { kind: "modelName" }
   | { kind: "modelDup"; name: string }
+  | { kind: "modelIncomplete"; name: string }
   | { kind: "mcpName"; name: string }
   | { kind: "mcpDup"; name: string }
   | { kind: "mcpIncomplete"; name: string };
@@ -355,6 +384,18 @@ export function validateDraft(draft: SettingsDraft): DraftError | null {
     if (!n) return { kind: "modelName" };
     if (modelNames.has(n)) return { kind: "modelDup", name: n };
     modelNames.add(n);
+    // 完整性(旧 UI settings.tsx::validateBeforeSave 第一段,ui-next 漏迁)。
+    // isBlankModel 要求四项**全空**才当没加,所以任何半成品都会落盘,而下游
+    // 一道关都没有:输入框无 required、壳侧 config.rs 直接写盘。表现是"界面
+    // 说保存成功、保存条收起、引擎还白重启一次,全程无报错",之后这条模型
+    // 出现在 composer 选择器里,选中发消息必然失败(缺 model → 物化时静默
+    // 丢弃但选择器读的是 config.json 原文所以条目还在;缺 api_key → 服务端
+    // 拒)。设置页自己的空态文案写的就是「需要名称、接口地址、API Key 与
+    // 模型标识」。同步条目豁免:会员/百智云的 api_key 由壳在物化时补,
+    // 且这些行在设置页根本改不到,拦它等于把配置面锁死。
+    if (!m.source && (!m.base_url.trim() || !m.api_key.trim() || !m.model.trim())) {
+      return { kind: "modelIncomplete", name: n };
+    }
   }
   const mcpNames = new Set<string>();
   for (const e of draft.mcps) {

@@ -50,6 +50,10 @@ export interface CloudControl {
    * 意图直接表达出来,不发假 RPC(假 RPC 还会挂一条 180s 的 pending)。 */
   revive(): void;
   close(): void;
+  /** 是否已被 close()。**不可复活**——closed 之后 call() 一律 reject
+   *  "closed"、revive() 也被挡死。借用方(CloudFiles 等)据此判断手里那条
+   *  是不是已经被宿主关掉了,是就重借一条,别把死连接一直攥到卸载。 */
+  isClosed(): boolean;
 }
 
 export interface ControlDeps {
@@ -221,6 +225,7 @@ export function connectCloudControl(
   open();
   return {
     revive: reopenIfGaveUp,
+    isClosed: () => closed,
     call<T>(kind: string, payload: Record<string, unknown> = {}, opts?: { timeoutMs?: number; timeoutMsg?: string }): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         if (closed) return reject(new CloudControlError("closed", t("cloud.ctl.closed")));

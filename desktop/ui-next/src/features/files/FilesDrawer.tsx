@@ -88,6 +88,14 @@ export function FilesDrawer({
 }) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>(initialTab);
+  // Tree 一旦挂上就**不再卸载**(见下面渲染处的注释:同位置三元会把展开层级
+  // 与子项缓存全丢掉),但也不能一上来就挂——initialTab="changes"(点改动
+  // 徽标直达)时树是看不见的,挂了就白发一次 repo_file_list。
+  // 故:懒挂 + 常驻。首次切到「文件」页才挂,此后只切 display。
+  const [treeMounted, setTreeMounted] = useState(initialTab !== "changes");
+  useEffect(() => {
+    if (tab !== "changes") setTreeMounted(true);
+  }, [tab]);
   const [changes, setChanges] = useState<RepoChange[] | null>(null);
   const [isGitRepo, setIsGitRepo] = useState(true); // 未知先按 git 算,探测后收敛
   const [changesErr, setChangesErr] = useState("");
@@ -289,9 +297,20 @@ export function FilesDrawer({
     [sessionId, workdir, t],
   );
 
+  // [scrollbar-gutter:stable]:LAYOUT §5——内容量可变的纵滚容器一律预留滚条
+  // 槽位。chrome.css 的 `*{scrollbar-width:thin}` 在 Chromium(= Windows 的
+  // WebView2)下吃 10px 布局宽,不留槽的话「展开目录让文件树越过面板高度」
+  // 那一刻,右侧改动徽标与文件名截断位一起左移约 10px,折叠回去又跳回来。
+  const SCROLL = "overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]";
+  // 预览开着时列表让位:**拖过分栏**走显式高度(inline style,受 calc 上限
+  // 护住预览可见区);**没拖过**则内容多高就多高、38% 只作上限(旧 UI
+  // filesdrawer.tsx `flex:"none"` + `maxHeight:"38%"`,不写 height)。
+  // 写死 h-[38%] 的后果:改动只有一两行、或根目录只有三五项时,上半区仍
+  // 钉死占满 38%(600px 抽屉里约 230px)只放两行,余下一大片空白,diff 被
+  // 白白挤进下面 62%。
   const listClass = preview
-    ? `min-h-0 shrink-0 overflow-x-hidden overflow-y-auto py-1 max-h-[calc(100%-190px)] ${split > 0 ? "" : "h-[38%]"}`
-    : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1";
+    ? `min-h-0 shrink-0 py-1 ${SCROLL} ${split > 0 ? "max-h-[calc(100%-190px)]" : "max-h-[38%]"}`
+    : `min-h-0 flex-1 py-1 ${SCROLL}`;
 
   // 自绘窗框条(Windows/Linux)不入 z 层竞赛:抽屉整组(scrim + 面板)从窗框
   // 下缘起,结构性避让——三键与拖拽区恒可点,scrim 也不压暗窗框。高度读
@@ -367,10 +386,20 @@ export function FilesDrawer({
           </p>
         )}
         <div ref={listRef} className={listClass} style={preview && split > 0 ? { height: split } : undefined}>
-          {tab === "changes" ? (
-            <Changes changes={changes} activePath={preview?.path ?? null} onOpen={openDiff} />
-          ) : (
-            <Tree listDir={listDir} onOpenFile={openFile} activePath={preview?.path ?? null} changeStatus={changeStatus} />
+          {/* Tree **常驻挂载**、靠 display 切换,不做同位置三元。
+              两个组件类型不同,摆在同一位置的三元里 React 必然卸载重建——
+              而 Tree 的全部状态(子项缓存 / 展开集合 / loadedRef 去重)都在
+              组件内,一卸载就全没:翻到 src/features/chat/cards/ 后去「改动」
+              页看一眼 diff 再点回来,展开层级清零、回到只剩根目录一层(还闪
+              一次骨架屏),并白白多发一次 repo_file_list。
+              Tree.tsx:68 的注释「抽屉关闭整体卸载,重开自然是全新状态」在旧 UI
+              的单组件结构里成立(tree/expanded 与 tab 同级),拆开后不成立了。
+              Changes 是纯 props 投影、无内部状态,照旧条件渲染即可。 */}
+          {tab === "changes" && <Changes changes={changes} activePath={preview?.path ?? null} onOpen={openDiff} />}
+          {treeMounted && (
+            <div className={tab === "changes" ? "hidden" : "contents"}>
+              <Tree listDir={listDir} onOpenFile={openFile} activePath={preview?.path ?? null} changeStatus={changeStatus} />
+            </div>
           )}
         </div>
         {preview && (
