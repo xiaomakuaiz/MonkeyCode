@@ -40,6 +40,25 @@ export const GUIDE_L1 = `${GUIDE} before:start-[18px]`;
 /** L2:组内小节头 ps-6(24px)+ 10px 图标的一半 = 29px(项目内「已归档任务」) */
 export const GUIDE_L2 = `${GUIDE} before:start-[29px]`;
 
+// 「这行在等你处理」的行标记:**行左缘 2px 警示条**,不是整行淡底。
+//
+// 为什么不能是淡底(2026-08-10 用户报障「有点分不清哪个是选中的」):
+// 选中态是 `menu-active` → primary 12% 混进 base-100 的整行淡填充,而 attention
+// 原本是 `bg-warning/10` 的整行淡填充——**两种语义共用同一个视觉通道,只靠
+// 色相区分**。而在列表里「哪一行被填充了」本身就读作「这行是选中的」,于是
+// 屏幕上同时出现两个填充行,选中的那个就淹了。色相拉得再开也治不了:问题在
+// 通道重叠,不在颜色不够远。
+// 改成边缘条之后分工是干净的:**填充只表示选中(只此一义)**,边缘条表示
+// 「这行在等你」,两者可叠加(既选中又待办的行既有填充也有条),互不打架。
+// 主流树/列表组件(VS Code 资源管理器、JetBrains、邮件客户端)都是这个分工。
+//
+// 绝对定位不参与布局(§6.2 hover 显隐铁律同理:标记出现/消失不许挤动行内容);
+// inset-y-1 让条子上下各缩 4px,不顶满行高,免得连成一根通栏竖线;
+// 挂在行左缘而非缩进后的文字前——各层级的待办行因此**对齐在同一条 x 上**,
+// 一眼扫得出「有几件事在等我」。行尾的 warning 脉动点照旧(§6.1 状态点)。
+const ATTENTION_BAR =
+  "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-e-full before:bg-warning before:content-['']";
+
 /** 列表行(menu 的 li>a 载体):indent = 行内起始 padding 类(缩进阶梯
  * 进行内、行底满宽——嵌套 margin 会把 hover/选中底压窄错位)。 */
 export function ListRow({
@@ -65,7 +84,8 @@ export function ListRow({
    *  在列表里和活跃任务一样抢眼(2026-08-07 用户报障「已归档的任务标题
    *  怎么还是黑色的」)。选中态不降,选中就该看清 */
   archived?: boolean;
-  /** 后台提醒未读(D3):行淡警示底(功能性状态色,§8 白名单) */
+  /** 后台提醒未读(D3):行左缘警示条(见 ATTENTION_BAR——**不占用「填充」
+   *  这个通道**,那是选中态的唯一表达) */
   attention?: boolean;
   onSelect: () => void;
   menuItems: MenuItem[];
@@ -73,7 +93,7 @@ export function ListRow({
   return (
     <li>
       <a
-        className={`flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${indent ?? ""} ${active ? "menu-active" : ""}${attention ? " bg-warning/10" : ""}`}
+        className={`relative flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${indent ?? ""} ${active ? "menu-active" : ""}${attention ? ` ${ATTENTION_BAR}` : ""}`}
         data-attention={attention ? "" : undefined}
         title={tooltip}
         onClick={onSelect}
