@@ -19,26 +19,16 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
 import { readFold, writeFold, type FoldKey } from "@/lib/util/prefs";
 
-// 缩进引导竖线(挂展开后的嵌套 ul):把子行归拢到组头名下。
-// 为什么是竖线而不是空白(2026-08-07 用户三轮报障后的收敛):主流树组件
-// ——VS Code 资源管理器、Finder 列表视图、JetBrains 项目树、GitHub 文件树、
-// Notion 侧栏——**一律等距行 + 零组间空白**,层级只由「缩进 + 折叠箭头 +
-// 引导竖线」表达。空白分组是 Slack/Linear 那种「少数几个固定分区」的手法,
-// 项目数一多就把列表撑散(用户报障「项目之间太空了」正是此因)。
-// start 值 = 该层组头图标的中心横坐标,竖线正落在图标列上(VS Code 同款:
-// 线在 twisty 列,文字在其右)。绝对定位,不参与布局,行底照旧满宽。
-// `before:opacity-100` 不是冗余:daisyUI 的 `.menu :where(li ul,li menu):before`
-// 自带 `opacity:.1`(menu.css,给它自己那条默认嵌套线用的)。本串覆写得了
-// background-color/width/inset,但 opacity 全场只有 daisyUI 声明过一次,于是
-// 原样生效——有效 alpha = 0.15 × 0.1 = **1.5%**,比 daisyUI 默认线还淡 6.7 倍,
-// 任何主题下都看不出来。层级信号在 §6.2 已定案否决空白分组、也定案不加折叠
-// 箭头,竖线看不见就只剩缩进,正好退回用户报障「亲密性不够,像一路排下来」。
-const GUIDE =
-  "relative before:absolute before:inset-y-0.5 before:w-px before:bg-base-content/15 before:opacity-100 before:content-['']";
-/** L1:组头基准内距 12px + 12px 图标的一半 = 18px(项目组 / 云端项目组 / 底部小节) */
-export const GUIDE_L1 = `${GUIDE} before:start-[18px]`;
-/** L2:组内小节头 ps-6(24px)+ 10px 图标的一半 = 29px(项目内「已归档任务」) */
-export const GUIDE_L2 = `${GUIDE} before:start-[29px]`;
+// 嵌套 ul 的缩进引导竖线:**已撤**(用户定案 2026-08-10「本地会话项目列表的
+// 竖线都去掉,包括 archive 的列表」;三列表同取此件,云端/对话一并去,§6.2
+// 「不做两套」)。层级只剩缩进 + 组头小标签。
+//
+// 这条类串不是「什么都不做」,别当冗余删掉:竖线本体是 **daisyUI 自带的**
+// `.menu :where(li ul,li menu):before`(menu.css,`opacity:.1` 的 1px 淡线),
+// 只要嵌套 ul 待在 `.menu` 里它就恒在——早前的 GUIDE_L1/L2 也只是给它改了
+// 颜色/宽度/位置,并非自己画的线。所以「去掉竖线」= 显式关掉那个伪元素,
+// 类串一摘反而会退回 daisyUI 的默认线(位置还在 ul 左缘,更难看)。
+export const NEST_NO_GUIDE = "before:hidden";
 
 // 「这行在等你处理」的行标记:**行左缘 2px 警示条**,不是整行淡底。
 //
@@ -182,7 +172,7 @@ export function SectionFold({
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </summary>
         {/* 收起即卸载:防 details 收起后嵌套 ul 残留占位空间 */}
-        {isOpen && <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${GUIDE_L1}`}>{children}</ul>}
+        {isOpen && <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${NEST_NO_GUIDE}`}>{children}</ul>}
       </details>
     </li>
   );

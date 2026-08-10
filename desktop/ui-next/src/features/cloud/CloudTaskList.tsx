@@ -11,7 +11,7 @@
 import { IconCloud, IconFolder, IconHistory, IconPlus } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { GroupLabel, GUIDE_L1, ListRow, SectionFold } from "@/features/sidebar/listKit";
+import { GroupLabel, ListRow, NEST_NO_GUIDE, SectionFold } from "@/features/sidebar/listKit";
 import type { MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
@@ -406,7 +406,7 @@ export function CloudTaskList({
     const rowsHit = (state?.tasks ?? []).filter(hit);
     return (
       // 缩进进行内、行底满宽(与本地组同构,2026-08-05 定案):组内行 ps-6
-      <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${GUIDE_L1}`}>
+      <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${NEST_NO_GUIDE}`}>
         {state?.loading && (
           <li className="flex justify-center py-2">
             <span className="loading loading-spinner loading-xs text-base-content/40" aria-label={t("cloud.list.loading")} />
