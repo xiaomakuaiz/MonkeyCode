@@ -86,7 +86,16 @@
           } catch (_) {}
         }
         window.addEventListener("error", function (e) {
-          show("error", (e && e.message) || String(e), e && e.error && e.error.stack);
+          var msg = (e && e.message) || String(e);
+          /* ResizeObserver 的「循环未送达」不进陷阱:它是规范允许的良性节流
+             信号(RO 回调改了布局,本帧剩余通知顺延到下一帧,什么都没丢),
+             不是故障。消息流的 content-visibility 让滚动/贴底对齐会改变行的
+             实现状态、行高随之落定,ChatView 的贴底 RO 因此必然周期性触发
+             这条——不滤掉就是把正常运行画成「启动异常」(2026-08-10 报障)。
+             两种措辞都要挡:WebKit/Firefox 是 "loop completed with undelivered
+             notifications",老 Blink(WebView2)是 "loop limit exceeded"。 */
+          if (typeof msg === "string" && msg.indexOf("ResizeObserver loop") !== -1) return;
+          show("error", msg, e && e.error && e.error.stack);
         });
         window.addEventListener("unhandledrejection", function (e) {
           var r = e && e.reason;
