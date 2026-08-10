@@ -238,11 +238,12 @@
   contain-intrinsic-size: auto 60px;
 }
 
-/* 悬停的行退出剪枝(2026-08-10 用户报障「hover 不再显示时间」):
- * content-visibility 无条件附带 paint containment,把画在行盒之外的悬浮
- * 元素——块上方 -top-3.5 的 MessageTime 时间线——按盒边裁掉了。时间只在
- * hover 显影,恰好只需给 hover 的那一行解除包含:一次一行,合成仍收敛
- * O(视口);行在视口内早已渲染,auto→visible 不产生布局跳变。 */
-[data-chat-items] > :hover {
-  content-visibility: visible;
-}
+/* ⚠️ 此处不得再有 `[data-chat-items] > :hover { content-visibility: visible }`
+ * 一类按 hover 解除剪枝的规则(2026-08-10 定案)。它当初是为救被 paint
+ * containment 裁掉的 MessageTime(时间悬在行盒上方的块间空隙),但代价是
+ * 让**每一行**的 containment 都成为 hover 依赖:旧版 WebKit 的 hover 失效
+ * 是悲观全量算法,打字每键引发一次 hover 链重估,就把全会话所有行盒统统
+ * 标脏——用户机器 recording5 实锤:2375 行 × 每键全量重画,~600ms 样式
+ * 重算 + ~700ms 合成,一键一付。新 WebKit 精确 diff 无感,开发机复现不出,
+ * 线上老系统必炸。现在时间戳画进行盒内部(LogList 的块间距从 margin 改
+ * padding,时间落在 padding 带里),剪枝不再需要任何 hover 例外。 */

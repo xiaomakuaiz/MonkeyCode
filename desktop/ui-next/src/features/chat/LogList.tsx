@@ -298,8 +298,16 @@ const Row = memo(function Row({
   const { t } = useI18n();
   return (
     // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
-    // (包裹层是块级时 align-self 无效,居中丢失)
-    <div className={`flex flex-col${gap ? " mt-4" : ""}`}>
+    // (包裹层是块级时 align-self 无效,居中丢失)。
+    // 块间距用 padding 不用 margin:MessageTime 悬在块顶空隙(内层 -top-3.5),
+    // 间距若是 margin,时间就画在本行盒**外**——content-visibility 的 paint
+    // containment 会把它裁掉。此前用「:hover 解除剪枝」救(814d0453),但那
+    // 让每一行的 containment 都随 hover 翻转:旧 WebKit 的 hover 失效是悲观
+    // 全量版,打字每键重估 hover 链就把全会话行盒统统标脏(2026-08-10
+    // recording5:2375 行 × 每键全量重画,600ms 重算/键)。padding 让时间
+    // 画在盒内,剪枝规则不再需要任何 hover 例外。首行(gap=false 且非
+    // join)给 pt-3.5 刚好容下时间行;join 行零距契约不变(不渲时间)。
+    <div className={`flex flex-col ${gap ? "pt-4" : joinPrev ? "" : "pt-3.5"}`}>
       {renderItem(item, { t, perm, flash, joinPrev, joinNext, ...shared })}
     </div>
   );
@@ -350,8 +358,10 @@ const GroupHead = memo(
     }, [members, locale, t]);
     const tone = statusDot(active ? "run" : failCount > 0 ? "fail" : "ok");
     return (
-      <div className={`group relative flex flex-col${gap ? " mt-4" : ""}`}>
-        <MessageTime timestamp={item.kind === "tool" ? item.timestamp : undefined} className="absolute -top-3.5 start-0" />
+      // 间距用 padding 不用 margin(缘由见 Row 注释)。本组件的定位父就是
+      // 直接子行自身,时间戳定 top-0 落在 padding 带内,不悬出行盒
+      <div className={`group relative flex flex-col ${gap ? "pt-4" : "pt-3.5"}`}>
+        <MessageTime timestamp={item.kind === "tool" ? item.timestamp : undefined} className="absolute top-0 start-0" />
         <button
           type="button"
           aria-expanded={expanded}
