@@ -506,7 +506,11 @@ export const LogList = memo(function LogList({
   // 廉价标量,昂贵渲染留在行组件内按引用比对跳过(文件头「性能契约」)
   let prevVisible: ChatItem | null = null;
   return (
-    <div className="flex flex-col">
+    // data-chat-items:app.css 给直接子行挂 content-visibility(视口外的行
+    // 不参与布局/绘制/图层树),长会话的合成成本从 O(全部历史) 收敛到
+    // O(视口)——2026-08-10 Safari 时间线实锤:15s 录制里 9.9s 在 composite,
+    // 单次 200ms+,JS 反而只占 0.2s(行级 memo 已把它砍掉)。详见 app.css 注释
+    <div data-chat-items="" className="flex flex-col">
       {state.items.map((item, i) => {
         if (isHidden(item) && item.kind === "perm") {
           return <div key={itemKey(state, i)} className="hidden" data-perm-id={item.id} />;
