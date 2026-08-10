@@ -407,3 +407,55 @@ describe("块上方消息时间(悬停显影)", () => {
     expect(times[0]?.textContent).toBe("14:30");
   });
 });
+
+describe("行级 memo(性能契约,2026-08-10 用户报障「长会话非常卡」)", () => {
+  // 流式期间壳每 ~30ms 换一次 state,行组件必须按条目引用比对跳过。这里用
+  // markdown 产物的 DOM 节点身份做探针:agent 行若被重渲染,dangerouslySetInnerHTML
+  // 的容器会换新子树;memo 打中则整棵子树原样保留(同一个节点对象)。
+  it("追加新条目重渲染:未变的行保持同一 DOM 子树(memo 打中)", () => {
+    const agent: ChatItem = { kind: "agent", text: "**旧消息**不该被重渲染" };
+    const first = withItems([agent]);
+    const { container, rerender } = render(<LogList state={first} sessionId="s1" />);
+    const probe = container.querySelector(".md strong");
+    expect(probe?.textContent).toBe("旧消息");
+
+    // 归约层契约:追加只换 items 数组,未触碰的条目对象引用不变(reduce.ts
+    // pushItem)。新 state 整体换新——只有这样才测得到「行没跟着整列重渲」
+    const second: ChatState = { ...first, items: [...first.items, { kind: "sys", text: "轮次结束", tag: "turn-end" }] };
+    rerender(<LogList state={second} sessionId="s1" />);
+    expect(container.querySelector(".md strong")).toBe(probe);
+  });
+
+  it("流式尾部条目变了:该行重渲染,前面的行仍不动", () => {
+    const agent: ChatItem = { kind: "agent", text: "**首段**" };
+    const first: ChatState = { ...withItems([agent, { kind: "agent", text: "尾段" }]), streamKind: "agent" };
+    const { container, rerender } = render(<LogList state={first} sessionId="s1" />);
+    const probe = container.querySelector(".md strong");
+
+    // appendStream 语义:尾项换新对象,首项引用照旧
+    const second: ChatState = { ...first, items: [agent, { kind: "agent", text: "尾段又长了一截" }] };
+    rerender(<LogList state={second} sessionId="s1" />);
+    expect(screen.getByText("尾段又长了一截")).toBeTruthy();
+    expect(container.querySelector(".md strong")).toBe(probe);
+  });
+
+  it("工具组组首:成员引用未变时不重算摘要(GroupHead memo 打中)", () => {
+    const group: ChatItem[] = [1, 2, 3].map((i) => ({
+      kind: "tool",
+      tcId: `t${i}`,
+      title: `Read step${i}`,
+      status: "ok",
+      out: "",
+      rawInput: { file_path: `/a/step${i}` },
+    }));
+    const first = withItems(group);
+    const { rerender } = render(<LogList state={first} sessionId="s1" />);
+    const head = screen.getByRole("button", { name: "工具调用组" });
+    const label = head.querySelector("span.truncate");
+
+    const second: ChatState = { ...first, items: [...group, { kind: "agent", text: "组后新消息" }] };
+    rerender(<LogList state={second} sessionId="s1" />);
+    // 组首整行未重渲染:摘要 span 还是同一个节点
+    expect(screen.getByRole("button", { name: "工具调用组" }).querySelector("span.truncate")).toBe(label);
+  });
+});

@@ -192,6 +192,10 @@ export function ChatView({
       saveAnchor();
       finishRestore();
       window.clearTimeout(saveTimer.current);
+      // 在途的节流写档一并取消:rAF 在切换提交后才触发,那时读的是新会话的
+      // DOM,闭包里的 meta.id 却还是旧会话——不取消就把上面刚写好的档冲掉
+      window.cancelAnimationFrame(saveRaf.current);
+      saveRaf.current = 0;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.id]);
@@ -231,6 +235,19 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty]);
 
+  // 写档走 rAF 节流(scheduleActive 同款):saveAnchor 里的 itemTops 要对
+  // **每个**条目 getBoundingClientRect,而 scroll 事件一帧能来好几发——长会话
+  // 里逐事件同步跑就是滚动卡顿的直接来源之一(2026-08-10 用户报障「很卡」)。
+  // 每帧至多一次,语义不变:帧间的多发本来就写同一个档
+  const saveRaf = useRef(0);
+  const scheduleSave = () => {
+    if (saveRaf.current) return;
+    saveRaf.current = window.requestAnimationFrame(() => {
+      saveRaf.current = 0;
+      saveAnchor();
+    });
+  };
+
   // scroll 事件只做「贴底 → 跟随」的单向判定,离底不在这里判:程序滚动
   // 同样发 scroll 事件,回放中一批内容长高就会把跟随误判成用户离底(实测
   // 卡在中途)。离底判定只认用户真实输入(onWheel 上滚/右缘 mousedown)
@@ -238,7 +255,7 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el) return;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) pinnedRef.current = true;
-    saveAnchor();
+    scheduleSave();
     scheduleActive();
     // 滚动停止后布局仍会微调一次(不发 scroll 事件),停稳后补一次写档
     window.clearTimeout(saveTimer.current);

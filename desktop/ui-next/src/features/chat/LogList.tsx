@@ -3,8 +3,19 @@
 // key = itemKey(state, i)——"加载更早"前插时 keyBase 左移,已渲染项不重挂载。
 // 审批锚定:perm 带 toolCallId 且流里有同 id 工具卡时,按钮行嵌进那张卡
 // (permAnchors),独立审批项保留占位 div 但 display:none——契约不平移。
+//
+// 性能契约(2026-08-10 用户报障「长会话非常卡」):流式期间壳每 ~30ms 推一批
+// 帧,state 整体换新——LogList 自身的 memo 只挡得住 composer 打字,挡不住
+// 帧批。行级组件(Row / GroupHead)必须 memo,且依赖两条前提:
+// - 归约层的条目**identity 稳定**(reduce.ts 只换被触碰的那个对象,见
+//   appendStream/mergeToolInState 的 slice+单点覆写),未变的行按引用比对
+//   直接跳过——每批帧只重渲染流式尾部那一两行;
+// - 传给行的回调必须是稳定引用(ChatView 侧 useCallback,见彼处注释)。
+// LogList 函数体里只许留 O(n) 的**廉价**扫描(join/分组/锚定表);逐条目的
+// 昂贵计算(presentToolCall、splitAttachments、markdown)一律待在行组件内,
+// 靠 memo 只在该行变化时才跑。
 import { IconChevronRight, IconFile as FileIcon, IconSparkles } from "@tabler/icons-react";
-import { memo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
@@ -156,12 +167,9 @@ function ThoughtBlock({ item }: { item: Extract<ChatItem, { kind: "thought" }> }
 
 type T = ReturnType<typeof useI18n>["t"];
 
-interface RenderOpts {
+/** 行组件间共传的稳定引用集(memo 生效的前提,见文件头「性能契约」)。 */
+interface RowShared {
   sessionId: string;
-  /** 归约层只给 i18n 键,系统行文案在渲染时求值(见 sysText) */
-  t: T;
-  anchors: Map<string, PermItem>;
-  flashSeq?: number;
   sendFrame?: FrameSender;
   readonly?: boolean;
   onOpenChildSession?: (id: string) => void;
@@ -169,6 +177,16 @@ interface RenderOpts {
   onLocalLink?: (path: string) => void;
   workdir?: string;
   loadFullTool?: (seq: number) => Promise<Frame>;
+}
+
+interface RenderOpts extends RowShared {
+  /** 归约层只给 i18n 键,系统行文案在渲染时求值(见 sysText) */
+  t: T;
+  /** 本条工具卡锚定的未决审批(LogList 由 permAnchors 表解析后**按条**下发:
+   *  行组件收 Map 的话表每渲染都换新,memo 就永远打不中)。 */
+  perm?: PermItem;
+  /** 大纲跳转命中本条(仅 user):同理按条下发,flashSeq 变化只重渲两行。 */
+  flash?: boolean;
   /** 相邻工具卡共享外框(旧 tool-stack;LogList 按可见邻居计算)。 */
   joinPrev?: boolean;
   joinNext?: boolean;
@@ -177,7 +195,7 @@ interface RenderOpts {
 function renderItem(item: ChatItem, o: RenderOpts) {
   switch (item.kind) {
     case "user":
-      return <UserBubble item={item} flash={item.seq !== undefined && item.seq === o.flashSeq} uploadUrl={o.uploadUrl} />;
+      return <UserBubble item={item} flash={o.flash} uploadUrl={o.uploadUrl} />;
     case "agent":
       // 时间绝对定位在块顶空隙(悬停显影,不占流式高度)
       return (
@@ -202,7 +220,7 @@ function renderItem(item: ChatItem, o: RenderOpts) {
           {!o.joinPrev && <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />}
           <ToolCard
             item={item}
-            perm={o.readonly ? undefined : o.anchors.get(item.tcId)}
+            perm={o.readonly ? undefined : o.perm}
             sessionId={o.sessionId}
             sendFrame={o.sendFrame}
             onOpenChild={o.onOpenChildSession}
@@ -257,6 +275,117 @@ function sysText(item: Extract<ChatItem, { kind: "sys" }>, t: T): string {
   return t(item.key, item.params);
 }
 
+/** 单条目行(含工具组展开后的成员行):memo 按引用比对,流式期间每批帧
+ *  只有尾部那一两行的 item/join 变了,其余行整棵子树跳过(文件头「性能契约」)。
+ *  i18n 经组件内 useI18n 订阅——locale 切换走 store 通知,不受 memo 拦截。 */
+const Row = memo(function Row({
+  item,
+  perm,
+  flash,
+  joinPrev,
+  joinNext,
+  gap,
+  ...shared
+}: RowShared & {
+  item: ChatItem;
+  perm?: PermItem;
+  flash?: boolean;
+  joinPrev: boolean;
+  joinNext: boolean;
+  /** 消息块间距(组内工具卡零距共享外框);包裹层 margin,见 LogList 注释 */
+  gap: boolean;
+}) {
+  const { t } = useI18n();
+  return (
+    // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
+    // (包裹层是块级时 align-self 无效,居中丢失)
+    <div className={`flex flex-col${gap ? " mt-4" : ""}`}>
+      {renderItem(item, { t, perm, flash, joinPrev, joinNext, ...shared })}
+    </div>
+  );
+});
+
+/** 工具组组首:摘要头(状态点/失败数/开合)+ 展开时的首成员卡。
+ *  摘要要对每个成员跑 presentToolCall——这正是搬出 LogList 的原因:原先它在
+ *  每批帧上对**所有组的所有成员**重算一遍,长会话流式期间是主要热点之一。
+ *  members 数组是父层每渲染新造的,memo 用自定义比较器逐元素比引用;比对
+ *  通过则整行跳过,不通过(某成员真变了)才重算 useMemo 里的摘要。 */
+const GroupHead = memo(
+  function GroupHead({
+    item,
+    members,
+    active,
+    failCount,
+    expanded,
+    stackKey,
+    onToggle,
+    gap,
+    joinNext,
+    perm,
+    ...shared
+  }: RowShared & {
+    item: ChatItem;
+    members: readonly ChatItem[];
+    active: boolean;
+    failCount: number;
+    expanded: boolean;
+    stackKey: number;
+    onToggle: (key: number, expanded: boolean) => void;
+    gap: boolean;
+    joinNext: boolean;
+    perm?: PermItem;
+  }) {
+    const { t, locale } = useI18n();
+    // 头部摘要:按动作词计数,保首现顺序,只列前三种
+    const summary = useMemo(() => {
+      const counts = new Map<string, number>();
+      for (const it of members) {
+        if (it.kind !== "tool") continue;
+        const action = presentToolCall(it.title, it.rawInput, { locale, toolKind: it.toolKind, meta: it._meta }).action;
+        counts.set(action, (counts.get(action) ?? 0) + 1);
+      }
+      const parts = [...counts.entries()].slice(0, 3).map(([a, c]) => (c > 1 ? `${a} ×${c}` : a));
+      const more = counts.size > 3 ? " · …" : "";
+      return `${t("chat.tool.groupSteps", { n: members.length })} · ${parts.join(" · ")}${more}`;
+    }, [members, locale, t]);
+    const tone = statusDot(active ? "run" : failCount > 0 ? "fail" : "ok");
+    return (
+      <div className={`group relative flex flex-col${gap ? " mt-4" : ""}`}>
+        <MessageTime timestamp={item.kind === "tool" ? item.timestamp : undefined} className="absolute -top-3.5 start-0" />
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={t("chat.tool.groupLabel")}
+          className={`card card-border flex-row items-center gap-2 overflow-hidden bg-base-100 px-3 py-2 text-xs ${expanded ? "rounded-b-none border-b-0" : ""} cursor-pointer`}
+          onClick={() => onToggle(stackKey, expanded)}
+        >
+          <span aria-hidden className={tone} />
+          {/* 与单条工具卡的动作名同字重(都不加粗):两者在流里交替出现,
+              一个粗一个不粗会读成两级信息 */}
+          <span className="min-w-0 flex-1 truncate text-start">{summary}</span>
+          {failCount > 0 && (
+            <span className="shrink-0 text-error">{t("chat.tool.groupFailed", { n: failCount })}</span>
+          )}
+          <IconChevronRight
+            size={12}
+            stroke={1.75}
+            aria-hidden
+            className={`shrink-0 text-base-content/40 transition-transform ${expanded ? "rotate-90" : ""}`}
+          />
+        </button>
+        {expanded && renderItem(item, { t, perm, joinPrev: true, joinNext, ...shared })}
+      </div>
+    );
+  },
+  (prev, next) => {
+    for (const k of Object.keys(next) as (keyof typeof next)[]) {
+      if (k === "members") continue;
+      if (!Object.is(prev[k], next[k])) return false;
+    }
+    return prev.members.length === next.members.length && prev.members.every((m, i) => m === next.members[i]);
+  },
+);
+
 // memo:打字时 ChatView 每键重渲染(composer 草稿状态在那),消息流不能
 // 跟着整列重排(长会话逐键重渲染几百张 markdown 卡 = 输入卡顿)。前提是
 // 调用方传稳定引用回调(ChatView 侧 useCallback,见彼处注释)。
@@ -292,12 +421,29 @@ export const LogList = memo(function LogList({
   /** 工具卡大字段回读通道(按帧 seq 取原帧);缺省只展示截断头部。 */
   loadFullTool?: (seq: number) => Promise<Frame>;
 }) {
-  const { t, locale } = useI18n();
   // 长工具组折叠的展开记录(键 = 组首条目的 itemKey,keyBase 感知,前插
   // 不漂移);仅内存,切会话重挂即复位。open/closed 双集合:用户手动开合
   // 优先于「运行中默认展开、终态默认收起」的推导
   const [openGroups, setOpenGroups] = useState<Set<number>>(new Set());
   const [closedGroups, setClosedGroups] = useState<Set<number>>(new Set());
+  // 稳定引用(GroupHead 是 memo,内联箭头会让开合按钮那行永远比不中)
+  const toggleGroup = useCallback((stackKey: number, expanded: boolean) => {
+    if (expanded) {
+      setClosedGroups((prev) => new Set(prev).add(stackKey));
+      setOpenGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(stackKey);
+        return next;
+      });
+    } else {
+      setOpenGroups((prev) => new Set(prev).add(stackKey));
+      setClosedGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(stackKey);
+        return next;
+      });
+    }
+  }, []);
   const anchors = permAnchors(state.items);
   // 有工具卡承接的 perm 一律不独立渲染:未决嵌进那张卡(anchors),已决由
   // 工具卡自身的 run/ok/fail 流转代言(types.ts::PermItem.toolCallId 契约)
@@ -349,22 +495,15 @@ export const LogList = memo(function LogList({
       const it = state.items[idx];
       return it?.kind === "tool" && (it.status === "run" || anchors.get(it.tcId)?.state === "open");
     });
-  // 头部摘要:按动作词计数,保首现顺序,只列前三种
-  const groupSummary = (members: number[]) => {
-    const counts = new Map<string, number>();
-    for (const idx of members) {
-      const it = state.items[idx];
-      if (it?.kind !== "tool") continue;
-      const action = presentToolCall(it.title, it.rawInput, { locale, toolKind: it.toolKind, meta: it._meta }).action;
-      counts.set(action, (counts.get(action) ?? 0) + 1);
-    }
-    const parts = [...counts.entries()].slice(0, 3).map(([a, c]) => (c > 1 ? `${a} ×${c}` : a));
-    const more = counts.size > 3 ? " · …" : "";
-    return `${t("chat.tool.groupSteps", { n: members.length })} · ${parts.join(" · ")}${more}`;
-  };
+  // 行级稳定引用集(每个 prop 自身稳定,对象本身逐渲染新造没关系——memo
+  // 比的是展开后的单个 prop)
+  const shared: RowShared = { sessionId, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool };
+  const permOf = (it: ChatItem) => (it.kind === "tool" ? anchors.get(it.tcId) : undefined);
 
   // 条目节奏:消息块之间放宽(16px);组内工具卡零距(共享外框)。以包裹层
-  // margin 实现(隐藏占位 display:none 不吃 margin)——结构契约不变
+  // margin 实现(隐藏占位 display:none 不吃 margin)——结构契约不变。
+  // 行内容一律走 memo 的 Row/GroupHead;这层 map 只算 join/gap/分组这些
+  // 廉价标量,昂贵渲染留在行组件内按引用比对跳过(文件头「性能契约」)
   let prevVisible: ChatItem | null = null;
   return (
     <div className="flex flex-col">
@@ -377,7 +516,7 @@ export const LogList = memo(function LogList({
         }
         const joinPrev = item.kind === "tool" && prevVisible?.kind === "tool";
         const joinNext = item.kind === "tool" && nextVisibleIsTool(i);
-        const gapClass = prevVisible === null || joinPrev ? "" : " mt-4";
+        const gap = prevVisible !== null && !joinPrev;
         prevVisible = item;
 
         // 工具组聚合:组首渲染摘要头(+ 展开时的成员卡),其余成员在收起
@@ -391,69 +530,42 @@ export const LogList = memo(function LogList({
           if (stack.pos > 0) {
             if (!expanded) return <div key={itemKey(state, i)} className="hidden" aria-hidden />;
             return (
-              <div key={itemKey(state, i)} className="flex flex-col">
-                {renderItem(item, { t, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
-              </div>
+              <Row key={itemKey(state, i)} item={item} perm={permOf(item)} joinPrev joinNext={joinNext} gap={false} {...shared} />
             );
           }
-          // 组首:摘要头(状态点 = 组内最要紧态;失败数着色外显)
-          const failCount = stack.members.filter((idx) => {
-            const it = state.items[idx];
-            return it?.kind === "tool" && it.status === "fail";
-          }).length;
-          const tone = statusDot(groupActive(stack.members) ? "run" : failCount > 0 ? "fail" : "ok");
-          const toggle = () => {
-            if (expanded) {
-              setClosedGroups((prev) => new Set(prev).add(stackKey));
-              setOpenGroups((prev) => {
-                const next = new Set(prev);
-                next.delete(stackKey);
-                return next;
-              });
-            } else {
-              setOpenGroups((prev) => new Set(prev).add(stackKey));
-              setClosedGroups((prev) => {
-                const next = new Set(prev);
-                next.delete(stackKey);
-                return next;
-              });
-            }
-          };
+          // 组首:摘要头(状态点 = 组内最要紧态;失败数着色外显)。
+          // active/failCount 是廉价扫描,留在这层;presentToolCall 摘要在
+          // GroupHead 内按成员引用缓存
+          const memberItems = stack.members.map((idx) => state.items[idx]!);
+          const failCount = memberItems.filter((it) => it.kind === "tool" && it.status === "fail").length;
           return (
-            <div key={itemKey(state, i)} className={`group relative flex flex-col${gapClass}`}>
-              <MessageTime timestamp={item.kind === "tool" ? item.timestamp : undefined} className="absolute -top-3.5 start-0" />
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={t("chat.tool.groupLabel")}
-                className={`card card-border flex-row items-center gap-2 overflow-hidden bg-base-100 px-3 py-2 text-xs ${expanded ? "rounded-b-none border-b-0" : ""} cursor-pointer`}
-                onClick={toggle}
-              >
-                <span aria-hidden className={tone} />
-                {/* 与单条工具卡的动作名同字重(都不加粗):两者在流里交替出现,
-                    一个粗一个不粗会读成两级信息 */}
-                <span className="min-w-0 flex-1 truncate text-start">{groupSummary(stack.members)}</span>
-                {failCount > 0 && (
-                  <span className="shrink-0 text-error">{t("chat.tool.groupFailed", { n: failCount })}</span>
-                )}
-                <IconChevronRight
-                  size={12}
-                  stroke={1.75}
-                  aria-hidden
-                  className={`shrink-0 text-base-content/40 transition-transform ${expanded ? "rotate-90" : ""}`}
-                />
-              </button>
-              {expanded &&
-                renderItem(item, { t, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev: true, joinNext })}
-            </div>
+            <GroupHead
+              key={itemKey(state, i)}
+              item={item}
+              members={memberItems}
+              active={groupActive(stack.members)}
+              failCount={failCount}
+              expanded={expanded}
+              stackKey={stackKey}
+              onToggle={toggleGroup}
+              gap={gap}
+              joinNext={joinNext}
+              perm={permOf(item)}
+              {...shared}
+            />
           );
         }
         return (
-          // 包裹 div 自身是 flex 列:系统行等条目的 self-center 才有对齐上下文
-          // (包裹层是块级时 align-self 无效,居中丢失)
-          <div key={itemKey(state, i)} className={`flex flex-col${gapClass}`}>
-            {renderItem(item, { t, sessionId, anchors, flashSeq, sendFrame, readonly, onOpenChildSession, uploadUrl, onLocalLink, workdir, loadFullTool, joinPrev, joinNext })}
-          </div>
+          <Row
+            key={itemKey(state, i)}
+            item={item}
+            perm={permOf(item)}
+            flash={item.kind === "user" && item.seq !== undefined && item.seq === flashSeq}
+            joinPrev={joinPrev}
+            joinNext={joinNext}
+            gap={gap}
+            {...shared}
+          />
         );
       })}
       {state.running && state.streamKind === "" && (
