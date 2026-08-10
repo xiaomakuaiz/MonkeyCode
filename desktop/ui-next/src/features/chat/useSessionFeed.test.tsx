@@ -285,7 +285,12 @@ describe("useSessionFeed:ensureLoaded 按偏移补页", () => {
 
     await act(() => result.current.ensureLoaded(30));
     // 100→60→30,到 30(≤ offset)即停:恰好两次
-    expect(ops.filter((o) => o.cmd === "session_history").length).toBe(2);
+    const calls = ops.filter((o) => o.cmd === "session_history");
+    expect(calls.length).toBe(2);
+    // 跳转补页按壳侧上限 50 轮翻,不是按钮的 3 轮——按 3 翻,跳几十轮前的
+    // 消息就是几十次串行 IPC × 每次一整轮归约+渲染(2026-08-10 用户 profile:
+    // 一串 0.5~2.6s 的 message handler),大纲点一下要等十几秒
+    expect(calls[0]?.args?.limit).toBe(50);
   });
 
   it("翻页失败游标不前进:立即停,不空转", async () => {

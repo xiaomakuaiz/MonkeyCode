@@ -19,6 +19,11 @@ import {
 } from "@/lib/ipc/sessions";
 
 const HISTORY_PAGE = 3; // 每次"加载更早"取的轮数窗口(壳侧 cursor 语义)
+/** 大纲跳转补页的页宽 = 壳侧上限(session_history 的 limit.clamp(1,50))。
+ *  按钮的 3 轮是人肉节奏;跳转是程序循环,按 3 轮翻就是「跳 60 轮前的消息
+ *  = 20 次串行 IPC,每次都完整跑一遍归约 + React 提交 + markdown 解析」
+ *  ——2026-08-10 用户 profile 里那一串 0.5~2.6s 的 message handler 正是它。 */
+const JUMP_PAGE = 50;
 
 export interface SessionFeed {
   state: ChatState;
@@ -162,13 +167,13 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
     };
   }, [id, epoch]);
 
-  const loadEarlier = useCallback(async (beforeApply?: () => void) => {
+  const loadEarlier = useCallback(async (beforeApply?: () => void, turns = HISTORY_PAGE) => {
     if (!id || busyRef.current) return;
     busyRef.current = true;
     setLoadingEarlier(true);
     try {
       // ⚠️ session_history 返回 next_cursor(与 session_open 的 cursor 不同名)
-      const page = await sessionHistory(id, cursorRef.current, HISTORY_PAGE);
+      const page = await sessionHistory(id, cursorRef.current, turns);
       if (liveIdRef.current !== id) return;
       cursorRef.current = page.next_cursor ?? 0;
       hasMoreRef.current = !!page.has_more;
@@ -187,12 +192,13 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
     }
   }, [id]);
 
-  // 上限兜底防坏 cursor 死循环;没前进(失败/到头)即止,别空转(旧 UI 同款)
+  // 上限兜底防坏 cursor 死循环;没前进(失败/到头)即止,别空转(旧 UI 同款)。
+  // 页宽用 JUMP_PAGE(见彼处注释):循环通常一两轮就够
   const ensureLoaded = useCallback(
     async (offset: number) => {
       for (let i = 0; i < 200 && hasMoreRef.current && cursorRef.current > offset; i++) {
         const before = cursorRef.current;
-        await loadEarlier();
+        await loadEarlier(undefined, JUMP_PAGE);
         if (cursorRef.current === before) return;
       }
     },
