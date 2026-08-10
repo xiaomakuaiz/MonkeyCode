@@ -323,22 +323,29 @@ export function ChatView({
   // 定位;失败走 composer 提示条(§3:会话内操作失败的法定位置)。
   // useCallback + 下面两个回读通道同理:LogList 已 memo,打字每敲一键
   // ChatView 都重渲染,内联箭头函数会把整条消息流(每条 markdown 卡)
-  // 一起拖着重渲染——输入手感卡顿的根因
+  // 一起拖着重渲染——输入手感卡顿的根因。
+  // meta 经 ref 读:这三个回调是**每一行** memo 的 props,依赖数组里挂
+  // meta.id 就等于身份跟着切会话换——新 meta 首渲染那一拍,旧会话的整列
+  // 行 memo 全体失效,先把马上要卸载的旧列表白重渲染一遍(长会话几百 ms,
+  // 2026-08-10 切会话 3.8s 冻结的组成部分),然后才轮到清空与新窗口挂载。
+  // 回调只在用户交互时被调用,届时 ref 里已是当前会话,语义不变
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
   const revealMarkdownLink = useCallback(
     (path: string) => {
-      const rel = workspaceRelativePath(path, meta.workdir);
+      const rel = workspaceRelativePath(path, metaRef.current.workdir);
       if (rel === null) {
         composerRef.current.notifyError(t("chat.revealOutside"));
         return;
       }
-      void repoReveal(meta.id, rel).catch((e: unknown) => {
+      void repoReveal(metaRef.current.id, rel).catch((e: unknown) => {
         composerRef.current.notifyError(t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }));
       });
     },
-    [meta.id, meta.workdir, t],
+    [t],
   );
-  const uploadUrl = useCallback((p: string) => uploadFileURL(meta.id, p), [meta.id]);
-  const loadFullTool = useCallback((seq: number) => sessionFrame(meta.id, seq), [meta.id]);
+  const uploadUrl = useCallback((p: string) => uploadFileURL(metaRef.current.id, p), []);
+  const loadFullTool = useCallback((seq: number) => sessionFrame(metaRef.current.id, seq), []);
 
   // ==== 标题重命名(D4):h1 双击进输入态。提交只发 sessionPatch,不乐观
   // 改 meta——壳广播 session-event,App 的列表 patch 回写 title 后新 meta
@@ -485,8 +492,11 @@ export function ChatView({
     return true;
   };
   // 补页后的锚要等 React 提交才进 DOM,短时重试兜时序(旧 chat.tsx
-  // jumpWithRetry 随迁);重试耗尽 = 坏 seq/历史被清,放弃不空转
-  const jumpWithRetry = (seq: number, tries = 12) => {
+  // jumpWithRetry 随迁);重试耗尽 = 坏 seq/历史被清,放弃不空转。
+  // 预算 ~3s:跳转补页的前插走 startTransition(useSessionFeed),大页
+  // (50 轮)的时间切片提交可达一两秒——老预算 12×32ms 会在提交完成前
+  // 放弃,表现成「点大纲没反应」。轮询本身是零成本空查
+  const jumpWithRetry = (seq: number, tries = 90) => {
     if (jumpToSeq(seq) || tries <= 0) return;
     jumpTimer.current = window.setTimeout(() => jumpWithRetry(seq, tries - 1), 32);
   };

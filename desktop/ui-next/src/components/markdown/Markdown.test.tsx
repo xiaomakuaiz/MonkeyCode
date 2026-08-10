@@ -85,6 +85,17 @@ describe("本地资源(工作区图片/文件链接)", () => {
     expect(local).toEqual(["src/main.rs"]);
     expect(calls).not.toContain("plugin:opener|open_url");
   });
+  // hljs 是同步 CPU 活,兆级代码块一块就是秒级主线程冻结(2026-08-10
+  // 切会话/跳转卡顿分析)——超过 50KB 降级为转义直出,等宽样式保留
+  it("超大代码块(>50KB)不做语法高亮,内容仍转义直出", () => {
+    const big = "const a = 1;\n".repeat(5000); // ~65KB
+    const { container } = render(<Markdown source={"```ts\n" + big + "```"} />);
+    const code = container.querySelector("code");
+    expect(code?.className).not.toContain("language-ts");
+    expect(container.querySelector(".hljs-keyword")).toBeNull();
+    expect(code?.textContent).toContain("const a = 1;");
+  });
+
   // marked 18 把整条 info string 塞进 lang:```ts twoslash 这类围栏不切首词
   // 就永远命不中 hljs.getLanguage,一律降级成无高亮
   it("围栏 info string 带元信息时仍按首词高亮", () => {

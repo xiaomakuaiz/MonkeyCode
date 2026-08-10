@@ -16,6 +16,12 @@ import { resolveMarkdownResource } from "@/lib/util/markdownPaths";
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/** 超过这个体量的代码块不做语法高亮(hljs 是同步 CPU 活,兆级文本一块就是
+ *  秒级主线程冻结;2026-08-10 切会话/跳转的卡顿分析里它是单点最大嫌疑)。
+ *  50KB ≈ 一千多行代码,正常粘贴/工具输出够用;超限的是日志转储一类,
+ *  高亮本来也读不出层次,原样等宽展示即可。 */
+const HLJS_MAX_CHARS = 50_000;
+
 function makeMarked(): Marked {
   const m = new Marked({ gfm: true, breaks: true, async: false });
   m.use({
@@ -25,7 +31,7 @@ function makeMarked(): Marked {
         // ```bash {1,3} 里空格后面那些元信息一并给过来),而 hljs.getLanguage
         // 认的是纯语言名——不切首词的话这类围栏一律降级成无高亮
         const name = (lang ?? "").trim().split(/\s+/)[0] ?? "";
-        const language = name && hljs.getLanguage(name) ? name : null;
+        const language = name && text.length <= HLJS_MAX_CHARS && hljs.getLanguage(name) ? name : null;
         const body = language ? hljs.highlight(text, { language }).value : escapeHtml(text);
         // data-md-copy 携带原文(escape 过),复制走它而不是回读高亮 DOM
         return (

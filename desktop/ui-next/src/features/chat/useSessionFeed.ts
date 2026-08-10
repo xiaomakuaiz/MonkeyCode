@@ -3,7 +3,7 @@
 // 必须 await onFrames/onConnStatus 注册完成后才 invoke session_open。
 // 历史(尾部回放窗口)走返回值、实时走 frames:{id} 事件,归约统一进
 // lib/protocol(seq 水位去重在归约层,重放不双写)。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
 import type { Frame } from "@/lib/protocol/types";
 import { afterEngineReady } from "@/lib/ipc/engine";
@@ -143,9 +143,19 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // reduceBatch 的批内去重顺带兜住壳偶发重推
         const buffered = pendingRef.current ?? [];
         pendingRef.current = null; // 出缓冲态:此后实时帧直落
-        setState((s) => reduceBatch(s, [...(win.frames as Frame[]), ...buffered]));
-        // 窗口落地后 running 才可信:composer 的排队补投闸门等这一下
-        setHistoryLoaded(true);
+        // 窗口落地是本 hook 最大的一次提交:长会话最多 3000 帧,几千个组件
+        // 连带每条消息的 markdown 解析一次性挂载——同步提交就是切会话 3.8s
+        // 冻结的主体(2026-08-10 Safari 时间线:click 事件里 3.6s 微任务)。
+        // startTransition 让 React 时间切片地渲染它:打字/点击随时插队,
+        // 内容仍一次性出现,但主线程不再被整口锅压住。历史帧属于"过去",
+        // 天然是非紧急更新;实时帧批(下方 onFrames)保持紧急,流式尾部
+        // 的延迟不能加
+        startTransition(() => {
+          setState((s) => reduceBatch(s, [...(win.frames as Frame[]), ...buffered]));
+          // 窗口落地后 running 才可信:composer 的排队补投闸门等这一下;
+          // 与 items 同一个 transition,可见即可信
+          setHistoryLoaded(true);
+        });
       } catch (e) {
         // 壳只在**成功**路径 emit conn-status(driver/session.rs::open),失败
         // 时 conn 恒为 null、连接条根本不渲染——不外显就是一个不解释的空会话
@@ -180,9 +190,17 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
       setHasMore(hasMoreRef.current);
       // 锚点回调必须**紧贴写入之前**同步发生:视图消费锚点的 layoutEffect 依赖
       // items,而流式期间每 ~30ms 就有一批新帧——视图若"先记锚点再 await",
-      // 锚点会被前插之前的某次提交吃掉,随后按错的元素把视口硬拽几秒
-      beforeApply?.();
-      setState((s) => prependHistory(s, page.frames as Frame[]));
+      // 锚点会被前插之前的某次提交吃掉,随后按错的元素把视口硬拽几秒。
+      // 分叉:带锚点的按钮路径必须**同步原子**提交(transition 把提交推迟,
+      // 中间插进一批实时帧就会提前消费锚点——正是上面警告的那个竞态);
+      // 跳转补页(无锚点,一页 50 轮的大提交)走时间切片,理由同窗口落地
+      const apply = () => setState((s) => prependHistory(s, page.frames as Frame[]));
+      if (beforeApply) {
+        beforeApply();
+        apply();
+      } else {
+        startTransition(apply);
+      }
       setEarlierError(null);
     } catch (e) {
       if (liveIdRef.current === id) setEarlierError(e instanceof Error ? e.message : String(e));
