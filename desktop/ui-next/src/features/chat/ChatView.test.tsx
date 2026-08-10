@@ -715,6 +715,12 @@ describe("聊天视图", () => {
     for (const btn of header.querySelectorAll("button")) {
       expect(btn.hasAttribute("data-tauri-drag-region")).toBe(false);
     }
+    // 用户报障 2026-08-10「太偏右上角」:锚点收进按钮内,徽标贴着文件夹图标;
+    // 收进来就压在按钮上,故放行点击(否则点数字变成拖窗口)
+    const badgeCls = header.querySelector(".indicator-item")?.className ?? "";
+    expect(badgeCls).toContain("[--indicator-e:5px]");
+    expect(badgeCls).toContain("[--indicator-t:5px]");
+    expect(badgeCls).toContain("pointer-events-none");
 
     // 徽标存在时点文件钮:抽屉直达「改动」页,改动列表直出
     await userEvent.click(within(header).getByRole("button", { name: "会话文件" }));

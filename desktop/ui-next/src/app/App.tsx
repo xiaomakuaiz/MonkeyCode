@@ -119,7 +119,8 @@ function SpaceRail({
   onToggleSettings,
 }: {
   space: Space;
-  waiting: number;
+  /** 各空间「等待确认」的会话数(0 不出徽标);云端任务不在壳的会话表里,恒 0 */
+  waiting: Record<Space, number>;
   onChange: (s: Space) => void;
   settingsOpen: boolean;
   onToggleSettings: () => void;
@@ -158,29 +159,41 @@ function SpaceRail({
         )}
       </div>
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
-        {(["local", "cloud", "chat"] as const).map((s) => (
-          <div key={s} className={s === "local" && waiting > 0 ? "indicator" : undefined}>
-            {s === "local" && waiting > 0 && (
-              <span className="indicator-item badge badge-warning badge-xs">{waiting}</span>
-            )}
-            {/* tooltip 按文档形态外包一层;size-11 是 rail 定宽下的结构尺寸
-                (44px 命中区,btn 默认档与 rail 宽不齐) */}
-            <div className="tooltip tooltip-right" data-tip={labels[s]}>
-              <button
-                type="button"
-                aria-label={labels[s]}
-                aria-pressed={space === s}
-                className={`btn btn-ghost btn-square size-11 ${space === s ? "btn-active" : ""}`}
-                onClick={() => onChange(s)}
-              >
-                {(() => {
-                  const Icon = SPACE_ICONS[s];
-                  return <Icon size={18} stroke={1.75} aria-hidden />;
-                })()}
-              </button>
+        {(["local", "cloud", "chat"] as const).map((s) => {
+          // 徽标不再只挂本地任务:本地会话同样会停在等待确认上(用户报障
+          // 2026-08-10「本地会话的等待审批没有计数提示」),两个空间一个口径
+          const count = waiting[s];
+          return (
+            <div key={s} className={count > 0 ? "indicator" : undefined}>
+              {count > 0 && (
+                /* indicator-item 默认钉在 44px 命中区的角上(translate 50%/-50%),
+                   而图标只有 18px 居中——徽标于是飘在图标右上方 13px 开外,读起来
+                   不像属于这个图标(用户报障 2026-08-10「太偏右上角、不靠近图标」)。
+                   锚点往按钮内收 9px,徽标中心正落在图标自身的右上角外沿。
+                   pointer-events-none:徽标此时压在按钮上,点它必须照样切空间 */
+                <span className="indicator-item badge badge-warning badge-xs pointer-events-none [--indicator-e:9px] [--indicator-t:9px]">
+                  {count}
+                </span>
+              )}
+              {/* tooltip 按文档形态外包一层;size-11 是 rail 定宽下的结构尺寸
+                  (44px 命中区,btn 默认档与 rail 宽不齐) */}
+              <div className="tooltip tooltip-right" data-tip={labels[s]}>
+                <button
+                  type="button"
+                  aria-label={labels[s]}
+                  aria-pressed={space === s}
+                  className={`btn btn-ghost btn-square size-11 ${space === s ? "btn-active" : ""}`}
+                  onClick={() => onChange(s)}
+                >
+                  {(() => {
+                    const Icon = SPACE_ICONS[s];
+                    return <Icon size={18} stroke={1.75} aria-hidden />;
+                  })()}
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="pb-2">
         {/* tooltip 外包一层同上;size-11 为 rail 结构尺寸 */}
@@ -568,7 +581,13 @@ export function App() {
       .catch((e: unknown) => pushShell("notice.deleteFailed", "error", { params: { reason: errText(e) } }));
   };
 
-  const waiting = sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length;
+  // 空间导轨徽标:按空间分账。cloud 的数据不在壳的会话表里(CloudTaskView
+  // 自己拉),没有等待确认这一态,恒 0
+  const waiting: Record<Space, number> = {
+    local: sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length,
+    cloud: 0,
+    chat: sessions.filter((m) => m.kind === "chat" && m.waiting_ask).length,
+  };
 
   // 新建弹窗的最近目录:非 chat、未归档(会话与项目两级),按最近活跃排,项目 key 去重
   const recentDirs = (() => {

@@ -283,6 +283,42 @@ describe("D3 后台会话提醒", () => {
   });
 });
 
+// 用户报障 2026-08-10:①「本地会话的等待审批好像没有计数提示」——徽标此前
+// 硬编码只挂 local,chat 会话停在等待确认上时导轨毫无外显;②「太偏右上角了,
+// 不靠近图标」——indicator-item 默认钉在 44px 命中区的角上,而图标只有 18px
+// 居中,徽标于是飘在图标斜上方 13px 开外。
+describe("空间导轨的等待确认徽标", () => {
+  const badgeOf = (name: string) =>
+    screen.getByRole("button", { name }).closest(".indicator")?.querySelector(".indicator-item") ?? null;
+
+  it("本地任务与本地会话各自计数,云端不出", async () => {
+    stubShell({
+      sessions: [
+        sess({ id: "s1", title: "任务一", waiting_ask: true }),
+        sess({ id: "s2", title: "任务二", waiting_ask: true }),
+        sess({ id: "s3", title: "任务三" }),
+        sess({ id: "c1", title: "会话一", kind: "chat", waiting_ask: true }),
+        sess({ id: "c2", title: "会话二", kind: "chat" }),
+      ],
+    });
+    render(<App />);
+    await waitFor(() => expect(badgeOf("本地任务")?.textContent).toBe("2"));
+    expect(badgeOf("本地会话")?.textContent).toBe("1");
+    expect(badgeOf("云端任务")).toBeNull();
+  });
+
+  it("锚点收进按钮内,徽标贴着图标而不是飘在命中区角上", async () => {
+    stubShell({ sessions: [sess({ id: "s1", waiting_ask: true })] });
+    render(<App />);
+    await waitFor(() => expect(badgeOf("本地任务")).not.toBeNull());
+    const cls = badgeOf("本地任务")?.className ?? "";
+    expect(cls).toContain("[--indicator-e:9px]");
+    expect(cls).toContain("[--indicator-t:9px]");
+    // 收进来之后徽标压在按钮上,不放行点击就成了「点数字没反应」
+    expect(cls).toContain("pointer-events-none");
+  });
+});
+
 describe("D5 首启向导", () => {
   it("桌面壳模型清单为空:自动打开设置页;关闭后不再纠缠", async () => {
     const shell = stubShell({ models: [] });

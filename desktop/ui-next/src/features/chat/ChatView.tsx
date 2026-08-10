@@ -652,7 +652,16 @@ export function ChatView({
         {/* §7:indicator 壳与徽标是头部非交互子节点,必须各自带拖拽属性 */}
         <div data-tauri-drag-region="" className={changesCount > 0 ? "indicator" : undefined}>
           {changesCount > 0 && (
-            <span data-tauri-drag-region="" className="indicator-item badge badge-primary badge-xs">
+            /* 与 rail 徽标同一处方(App.tsx SpaceRail):默认锚点在 32px 按钮的
+               角上,16px 图标居中,徽标就飘出去了(用户报障 2026-08-10
+               「太偏右上角」)。往内收 5px,徽标贴着文件夹图标的右上角。
+               收进来之后它压在按钮上,故补 pointer-events-none——点数字要开抽屉,
+               不能变成「按住数字拖窗口」;拖拽属性照 §7 保留(命中落到按钮上,
+               这块本就不再是空白拖拽区) */
+            <span
+              data-tauri-drag-region=""
+              className="indicator-item badge badge-primary badge-xs pointer-events-none [--indicator-e:5px] [--indicator-t:5px]"
+            >
               {changesCount}
             </span>
           )}
