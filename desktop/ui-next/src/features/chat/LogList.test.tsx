@@ -427,7 +427,7 @@ describe("行级 memo(性能契约,2026-08-10 用户报障「长会话非常卡�
     expect(container.querySelector(".md strong")).toBe(probe);
   });
 
-  it("流式尾部条目变了:该行重渲染,前面的行仍不动", () => {
+  it("流式尾部条目变了:该行重渲染,前面的行仍不动", async () => {
     const agent: ChatItem = { kind: "agent", text: "**首段**" };
     const first: ChatState = { ...withItems([agent, { kind: "agent", text: "尾段" }]), streamKind: "agent" };
     const { container, rerender } = render(<LogList state={first} sessionId="s1" />);
@@ -436,7 +436,9 @@ describe("行级 memo(性能契约,2026-08-10 用户报障「长会话非常卡�
     // appendStream 语义:尾项换新对象,首项引用照旧
     const second: ChatState = { ...first, items: [agent, { kind: "agent", text: "尾段又长了一截" }] };
     rerender(<LogList state={second} sessionId="s1" />);
-    expect(screen.getByText("尾段又长了一截")).toBeTruthy();
+    // 尾段文字要等 Markdown 的流式节流放行(useThrottled 150ms,防每批帧
+    // 全文重解析)——异步断言,不钉具体时长
+    expect(await screen.findByText("尾段又长了一截")).toBeTruthy();
     expect(container.querySelector(".md strong")).toBe(probe);
   });
 

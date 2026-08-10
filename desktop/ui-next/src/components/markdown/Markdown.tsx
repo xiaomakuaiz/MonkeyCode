@@ -6,7 +6,7 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { Marked } from "marked";
-import { useEffect, useMemo, useRef, type MouseEvent } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { t, useI18n } from "@/lib/i18n";
 import { openExternal } from "@/lib/ipc/host";
@@ -139,6 +139,34 @@ function onContainerClick(e: MouseEvent<HTMLElement>, onLocalLink?: (path: strin
   }
 }
 
+/** 流式源文本的节流采样:值变化后至多每 ms 毫秒放行一次(带尾随提交,
+ * 停流后最终全文必然落地),提交包在 startTransition 里可被输入打断。
+ *
+ * 为什么必须有(2026-08-10 用户 profile,「运行中打字卡」在行级 memo +
+ * content-visibility 之后仍在):流式期间壳每 ~30ms 一批帧,尾部那条消息
+ * 每批都换新——重新 marked + hljs **整条已流出的正文**,再经
+ * dangerouslySetInnerHTML 整棵子树推倒重建,长回答一次就是 100~300ms JS
+ * + ~275ms 样式重算。每秒 30 次,主线程饱和,解析常落在 input 事件的
+ * 微任务检查点里,打字被记了流式的账(录制 3:input 平均 145ms/键)。
+ * 行 memo 拦不了(条目真变了)、content-visibility 拦不了(尾部在视口内)。
+ * 150ms ≈ 6~7fps:流式文字的可感知刷新率足够,重活量级直接砍到 1/5。
+ *
+ * 用显式计时器而不是 useDeferredValue:后者在持续高频更新下会被反复
+ * 重启,长解析可能到停流前一次都完不成(饥饿),文字看起来冻住。 */
+function useThrottled(value: string, ms: number): string {
+  const [v, setV] = useState(value);
+  const lastCommit = useRef(0);
+  useEffect(() => {
+    const wait = Math.max(0, ms - (performance.now() - lastCommit.current));
+    const timer = window.setTimeout(() => {
+      lastCommit.current = performance.now();
+      startTransition(() => setV(value));
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [value, ms]);
+  return v;
+}
+
 /** 块级 markdown(消息正文)。localImageUrl/onLocalLink 缺省时行为与
  * 纯外链版完全一致(本地图不加载、本地链接点击无动作)。 */
 export function Markdown({
@@ -155,11 +183,14 @@ export function Markdown({
   onLocalLink?: (path: string) => void;
 }) {
   const { locale } = useI18n(); // 复制按钮文案随 locale 重渲
+  // 流式节流(见 useThrottled 头注):首渲染立即解析,此后源文本变化至多
+  // 每 150ms 放行一次——静态消息(历史窗口挂载)source 不变,零影响
+  const throttled = useThrottled(source, 150);
   // locale 看着"没用到",实则 renderMarkdown 内部经 code renderer 调了
   // t("md.copy") 把文案烤进 HTML——静态分析看不穿这层,去掉它换语言后
   // 已渲染的消息里复制按钮会一直是旧语言
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const html = useMemo(() => renderMarkdown(source), [source, locale]);
+  const html = useMemo(() => renderMarkdown(throttled), [throttled, locale]);
   const root = useRef<HTMLDivElement>(null);
   const cache = useRef(new Map<string, string>());
   // 本地图异步注入:流式重渲同一条消息时按路径缓存,不重复回读
