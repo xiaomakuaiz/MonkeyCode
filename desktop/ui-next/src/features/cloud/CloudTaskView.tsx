@@ -3,7 +3,7 @@
 // 会话的帧归约链(reduceBatch → LogList,云端帧与本地 Frame 同构)。
 // 形态与本地 ChatView 同构(LAYOUT §4「云端任务视图与会话视图同构」):
 // header(标题+副标题 / 图标钮 + ⋯ 菜单)→ 连接条(header 之下内嵌条)→
-// 消息流(居中 max-w-3xl,gutter 对称)→ TaskPanel + composer(输入卡)。
+// 消息流(居中 chat-measure,gutter 对称)→ TaskPanel + composer(输入卡)。
 // - pending:整屏启动时间线(StartupTimeline),此时必然还没有对话;
 // - processing:attach 跟看 + CloudComposer + 中断/终止;
 // - finished/error:REST rounds 只读回放(LogList readonly),更早轮次按 cursor
@@ -649,7 +649,7 @@ export function CloudTaskView({
           // gutter 两侧对称预留:与页脚 composer 列(无滚动条)共享同一条中线
           className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 [scrollbar-gutter:stable_both-edges]"
         >
-          <div className="mx-auto flex max-w-3xl flex-col gap-3">
+          <div className="mx-auto flex chat-measure flex-col gap-3">
             {h.cursor && (
               <button
                 type="button"
@@ -699,7 +699,7 @@ export function CloudTaskView({
       )}
 
       <footer className="shrink-0 border-t border-base-300 p-3">
-        <div className="mx-auto flex max-w-3xl flex-col gap-2">
+        <div className="mx-auto flex chat-measure flex-col gap-2">
           {/* 终端卡:外壳走 card card-border 官方形态,头部条普通 base 底 +
               结构线;深色只留给 xterm 本体(term.css 白名单) */}
           {termOpen && h.vmId && !h.ended && (

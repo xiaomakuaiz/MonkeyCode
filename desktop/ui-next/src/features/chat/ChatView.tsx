@@ -796,7 +796,7 @@ export function ChatView({
         // 真中线)对不齐——对称留槽让两列共享同一条中线
         className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 [scrollbar-gutter:stable_both-edges]"
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
+        <div className="mx-auto flex chat-measure flex-col gap-3">
           {hasMore && (
             <button type="button" className="btn btn-ghost btn-xs self-center" disabled={loadingEarlier} onClick={() => void onLoadEarlier()}>
               {loadingEarlier && <span className="loading loading-spinner loading-xs" aria-hidden />}
@@ -827,7 +827,7 @@ export function ChatView({
       <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
 
       <footer className="shrink-0 border-t border-base-300 p-3">
-        <div className="mx-auto flex max-w-3xl flex-col gap-2">
+        <div className="mx-auto flex chat-measure flex-col gap-2">
           {state.plan.length > 0 && <TaskPanel entries={state.plan} />}
           <Composer sessionId={meta.id} state={state} meta={meta} ctl={composer} onAfterSend={followBottom} />
         </div>
