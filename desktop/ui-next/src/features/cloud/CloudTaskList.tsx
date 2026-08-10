@@ -219,14 +219,15 @@ function cloudStateWord(status: string | undefined, t: T): string {
 function TaskRow({
   task,
   currentId,
-  indent,
+  level,
   onSelect,
   onDelete,
   onStop,
 }: {
   task: CloudTask;
   currentId: string | null;
-  indent?: string;
+  /** 缩进级(listKit.LEVELS):项目组内的任务行 = 1 */
+  level?: number;
   onSelect: (task: CloudTask) => void;
   onDelete: (task: CloudTask) => void;
   onStop: (task: CloudTask) => void;
@@ -246,7 +247,7 @@ function TaskRow({
       primary={label}
       trailing={st}
       tooltip={`${label}\n${stateWord ? `${stateWord}\n` : ""}${t("sidebar.row.hint")}`}
-      indent={indent}
+      level={level}
       active={task.id === currentId}
       onSelect={() => onSelect(task)}
       menuItems={menuItems}
@@ -417,7 +418,7 @@ export function CloudTaskList({
           <li className="py-1 ps-6 pe-2 text-xs text-base-content/40">{t("cloud.list.groupEmpty")}</li>
         )}
         {rowsHit.map((task) => (
-          <TaskRow key={task.id} task={task} currentId={currentId} indent="ps-6" onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
+          <TaskRow key={task.id} task={task} currentId={currentId} level={1} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
         ))}
       </ul>
     );
@@ -485,7 +486,7 @@ export function CloudTaskList({
       {historyRows.length > 0 && (
         <SectionFold label={t("cloud.list.history")} icon={IconHistory} foldKey="mc.cloudHistoryOpen" forceOpen={forceOpen}>
           {historyRows.map((task) => (
-            <TaskRow key={task.id} task={task} currentId={currentId} indent="ps-6" onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
+            <TaskRow key={task.id} task={task} currentId={currentId} level={1} onSelect={onSelect} onDelete={handleDelete} onStop={handleStop} />
           ))}
           {feed.hasMore && (
             <li>

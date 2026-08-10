@@ -14,7 +14,7 @@ import { IconArchive, IconFolder, IconInbox, IconMessages, IconPlus, IconRefresh
 import { useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
-import { GroupLabel, ListRow, NEST_NO_GUIDE, SectionFold } from "@/features/sidebar/listKit";
+import { GroupLabel, levelPad, ListRow, NEST_NO_GUIDE, SectionFold } from "@/features/sidebar/listKit";
 import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -98,7 +98,7 @@ interface RowPlumbing {
   onRenameEnd: () => void;
 }
 
-function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; indent?: string }) {
+function SessionRow({ meta, p, level }: { meta: SessionMeta; p: RowPlumbing; level?: number }) {
   const { t } = useI18n();
   const attention = p.attentionIds?.has(meta.id) ?? false;
 
@@ -115,7 +115,7 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
     };
     return (
       <li>
-        <div className={`min-h-8 p-1 ${indent ?? ""}`}>
+        <div className={`min-h-8 p-1 ${levelPad(level)}`}>
           <input
             type="text"
             aria-label={t("sidebar.row.rename")}
@@ -172,7 +172,7 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
       primary={primary}
       trailing={trailing}
       tooltip={tooltip}
-      indent={indent}
+      level={level}
       active={meta.id === p.currentId}
       archived={meta.archived}
       attention={attention}
@@ -182,10 +182,11 @@ function SessionRow({ meta, p, indent }: { meta: SessionMeta; p: RowPlumbing; in
   );
 }
 
-/** indent:行内起始 padding 类(层级缩进进行内,行底满宽——嵌套 margin
- * 会把 hover/选中底压窄错位,旧 UI 即行满宽 + padding 阶梯)。 */
-function rows(list: SessionMeta[], p: RowPlumbing, indent?: string) {
-  return list.map((meta) => <SessionRow key={meta.id} meta={meta} p={p} indent={indent} />);
+/** level:缩进级(listKit.LEVELS——层级缩进进行内、行底满宽,行左缘的警示条
+ * 也跟着这一级走;嵌套 margin 会把 hover/选中底压窄错位,旧 UI 即行满宽 +
+ * padding 阶梯)。 */
+function rows(list: SessionMeta[], p: RowPlumbing, level?: number) {
+  return list.map((meta) => <SessionRow key={meta.id} meta={meta} p={p} level={level} />);
 }
 
 /** 一个项目分组(daisyUI menu 的 details 折叠;含「已归档任务 · N」小节)。 */
@@ -300,7 +301,7 @@ function ProjectDetails({
             ps-9(基准 item padding 12px,每级恰 = 图标宽 12px),行首标记
             统一 12px 定宽槽 → 同级文字对齐、跨级阶梯均匀 */}
         <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${NEST_NO_GUIDE}`}>
-          {rows(group.sessions, p, archivedProject ? "ps-9" : "ps-6")}
+          {rows(group.sessions, p, archivedProject ? 2 : 1)}
           {group.archivedSessions.length > 0 && (
             <li>
               <details open={archOpen} onToggle={(e) => {
@@ -320,7 +321,7 @@ function ProjectDetails({
                     占位空间(用户报障),条件渲染釜底抽薪 */}
                 {archOpen && (
                   <ul className={`ms-0 min-w-0 ps-0 pb-1 ${NEST_NO_GUIDE}`}>
-                    {rows(group.archivedSessions, p, archivedProject ? "ps-12" : "ps-9")}
+                    {rows(group.archivedSessions, p, archivedProject ? 3 : 2)}
                   </ul>
                 )}
               </details>
@@ -575,7 +576,7 @@ export function Sidebar({
           {rows(active, p)}
           {archived.length > 0 && (
             <SectionFold label={t("sidebar.archivedChats")} foldKey="mc.archivedOpen">
-              {rows(archived, p, "ps-6")}
+              {rows(archived, p, 1)}
             </SectionFold>
           )}
         </ul>

@@ -349,6 +349,25 @@ describe("后台提醒 attention(D3)", () => {
     );
     expect(rowOf("问了个问题").dataset.attention).toBeDefined();
   });
+
+  // 警示条的 x 必须跟着本行缩进走(用户报障 2026-08-10「太靠左了」后改的):
+  // listKit.LEVELS 里 pad 与 bar 是成对的,谁改一半这条就红
+  it("警示条跟随本行缩进:平铺行(L0)与项目内任务行(L1)各用各的 x", () => {
+    const { unmount } = render(
+      <Sidebar space="chat" sessions={SESSIONS} currentId={null} actions={actions()} attentionIds={new Set(["闲聊"])} />,
+    );
+    const flat = rowOf("问了个问题").className;
+    expect(flat).toContain("before:start-1"); // 文字 12px - 8px
+    expect(flat).not.toContain("ps-6");
+    unmount();
+
+    render(
+      <Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} attentionIds={new Set(["修复登录"])} />,
+    );
+    const nested = rowOf("修复了闪退,补了用例").className;
+    expect(nested).toContain("ps-6"); // 文字 24px
+    expect(nested).toContain("before:start-4"); // 24px - 8px
+  });
 });
 
 describe("嵌套折叠互不串扰", () => {

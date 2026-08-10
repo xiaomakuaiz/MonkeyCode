@@ -30,7 +30,7 @@ import { readFold, writeFold, type FoldKey } from "@/lib/util/prefs";
 // 类串一摘反而会退回 daisyUI 的默认线(位置还在 ul 左缘,更难看)。
 export const NEST_NO_GUIDE = "before:hidden";
 
-// 「这行在等你处理」的行标记:**行左缘 2px 警示条**,不是整行淡底。
+// 「这行在等你处理」的行标记:**行首 2px 警示条**,不是整行淡底。
 //
 // 为什么不能是淡底(2026-08-10 用户报障「有点分不清哪个是选中的」):
 // 选中态是 `menu-active` → primary 12% 混进 base-100 的整行淡填充,而 attention
@@ -43,19 +43,40 @@ export const NEST_NO_GUIDE = "before:hidden";
 // 主流树/列表组件(VS Code 资源管理器、JetBrains、邮件客户端)都是这个分工。
 //
 // 绝对定位不参与布局(§6.2 hover 显隐铁律同理:标记出现/消失不许挤动行内容);
-// inset-y-1 让条子上下各缩 4px,不顶满行高,免得连成一根通栏竖线;
-// 挂在行左缘而非缩进后的文字前——各层级的待办行因此**对齐在同一条 x 上**,
-// 一眼扫得出「有几件事在等我」。行尾的 warning 脉动点照旧(§6.1 状态点)。
+// inset-y-1 让条子上下各缩 4px,不顶满行高,免得连成一根通栏竖线。
+//
+// x 位置**跟着本行缩进走**,不钉在行左缘(用户报障 2026-08-10「最左侧的提醒条
+// 是不是太靠左了,感觉很奇怪」):初版钉 `start-0` 是想让各层级的待办行对齐在
+// 同一条 x 上、一眼数得清。但同日引导竖线撤掉后,x=0 那一列**空无一物**——条子
+// 比项目组头的 Folder 图标(12px)还靠左,孤悬在整个内容列之外,读起来不像
+// 「这一行的标记」,倒像贴在侧栏边框上的一道杂线。现在落在**本行文字左缘 - 8px**
+// (条宽 2px,留 6px 呼吸),正是引导竖线原先占的那条沟。
+// 代价是跨层级不再严格同 x;层级本就只有两三级、每级只差 12px,扫下来照样成列。
+// 行尾的 warning 脉动点照旧(§6.1 状态点)。
 const ATTENTION_BAR =
-  "before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-e-full before:bg-warning before:content-['']";
+  "before:absolute before:inset-y-1 before:w-0.5 before:rounded-full before:bg-warning before:content-['']";
 
-/** 列表行(menu 的 li>a 载体):indent = 行内起始 padding 类(缩进阶梯
- * 进行内、行底满宽——嵌套 margin 会把 hover/选中底压窄错位)。 */
+/** 行缩进阶梯(§6.2「缩进进行内、行底满宽」——嵌套 margin 会把 hover/选中底
+ * 压窄错位):基准 item padding 12px,每级 +12px(= 组头图标宽)。
+ * pad 与 bar 必须成对改:bar = 该级文字左缘 - 8px,拆开写迟早对不齐。 */
+const LEVELS = [
+  { pad: "", bar: "before:start-1" }, //      L0 文字 12px(chat 平铺行)
+  { pad: "ps-6", bar: "before:start-4" }, //  L1 文字 24px(项目内任务行)
+  { pad: "ps-9", bar: "before:start-7" }, //  L2 文字 36px(项目内归档行)
+  { pad: "ps-12", bar: "before:start-10" }, // L3 文字 48px(归档项目内的归档行)
+] as const;
+
+/** 缩进级 → 行内起始 padding 类(给非 ListRow 的同列元素对齐用,如改名输入框)。 */
+export function levelPad(level = 0): string {
+  return (LEVELS[level] ?? LEVELS[0]).pad;
+}
+
+/** 列表行(menu 的 li>a 载体)。 */
 export function ListRow({
   primary,
   trailing,
   tooltip,
-  indent,
+  level = 0,
   active,
   archived,
   attention,
@@ -68,22 +89,24 @@ export function ListRow({
    * pulse = 进行中的活态(运行中/等待确认),渲染成「实心点 + 扩散环」 */
   trailing?: { tone: string; label: string; pulse?: boolean } | null;
   tooltip: string;
-  indent?: string;
+  /** 缩进级(见 LEVELS):0 = 平铺行,1 = 项目内任务行,依此类推 */
+  level?: number;
   active?: boolean;
   /** 已归档:主文案降到 /55(旧 UI `--t4` 同档)——归档区的行还用正文色,
    *  在列表里和活跃任务一样抢眼(2026-08-07 用户报障「已归档的任务标题
    *  怎么还是黑色的」)。选中态不降,选中就该看清 */
   archived?: boolean;
-  /** 后台提醒未读(D3):行左缘警示条(见 ATTENTION_BAR——**不占用「填充」
+  /** 后台提醒未读(D3):行首警示条(见 ATTENTION_BAR——**不占用「填充」
    *  这个通道**,那是选中态的唯一表达) */
   attention?: boolean;
   onSelect: () => void;
   menuItems: MenuItem[];
 }) {
+  const lv = LEVELS[level] ?? LEVELS[0];
   return (
     <li>
       <a
-        className={`relative flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${indent ?? ""} ${active ? "menu-active" : ""}${attention ? ` ${ATTENTION_BAR}` : ""}`}
+        className={`relative flex min-w-0 items-center gap-2 overflow-hidden transition-colors duration-150 ${lv.pad} ${active ? "menu-active" : ""}${attention ? ` ${ATTENTION_BAR} ${lv.bar}` : ""}`}
         data-attention={attention ? "" : undefined}
         title={tooltip}
         onClick={onSelect}
@@ -125,7 +148,7 @@ export function ListRow({
  * 组头保持**安静的小标签**(用户定案 2026-08-04,2026-08-07 复核后维持):
  * 期间试过按旧 UI 换成「与行同字号 + font-semibold + 满色」的锚点形态
  * ——旧 UI 正是靠组头比行更重来表达从属——但用户定案回退,组头继续小一档、
- * 淡一档。层级改由缩进 + 引导竖线承担(§6.2)。**别再提锚点形态。** */
+ * 淡一档。层级改由缩进承担(§6.2)。**别再提锚点形态。** */
 export function GroupLabel({ icon: Icon, name }: { icon: TablerIcon; name: string }) {
   return (
     <>
