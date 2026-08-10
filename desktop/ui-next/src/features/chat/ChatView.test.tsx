@@ -90,7 +90,9 @@ describe("聊天视图", () => {
     const { ops } = stubShell();
     render(<ChatView meta={META} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    expect(screen.getByText("日志").tagName).toBe("STRONG");
+    // markdown 经视口懒渲染升格(Markdown.tsx::useNearViewport),窗口
+    // transition 落地后还有一跳被动 effect,断言要等它
+    await waitFor(() => expect(screen.getByText("日志").tagName).toBe("STRONG"));
 
     const openAt = ops.findIndex((o) => o.op === "invoke" && o.cmd === "session_open");
     const framesAt = ops.findIndex((o) => o.op === "listen" && o.cmd === "frames:s1");

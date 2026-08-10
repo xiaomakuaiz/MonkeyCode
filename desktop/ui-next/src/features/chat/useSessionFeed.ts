@@ -141,15 +141,24 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // 窗口在前、等待期间攒下的实时帧在后,一次归约按真实先后落地。
         // 窗口与实时流在壳侧按 opened 切分、互不重叠,seq 严格递增,
         // reduceBatch 的批内去重顺带兜住壳偶发重推
-        const buffered = pendingRef.current ?? [];
-        pendingRef.current = null; // 出缓冲态:此后实时帧直落
         // 窗口落地是本 hook 最大的一次提交:长会话最多 3000 帧,几千个组件
-        // 连带每条消息的 markdown 解析一次性挂载——同步提交就是切会话 3.8s
-        // 冻结的主体(2026-08-10 Safari 时间线:click 事件里 3.6s 微任务)。
+        // 一次性挂载——同步提交就是切会话 3.8s 冻结的主体(2026-08-10 Safari
+        // 时间线:click 事件里 3.6s 微任务;彼时每条消息的 markdown 还随挂载
+        // 全量解析,现已改视口懒渲染,见 Markdown.tsx::useNearViewport)。
         // startTransition 让 React 时间切片地渲染它:打字/点击随时插队,
         // 内容仍一次性出现,但主线程不再被整口锅压住。历史帧属于"过去",
         // 天然是非紧急更新;实时帧批(下方 onFrames)保持紧急,流式尾部
-        // 的延迟不能加
+        // 的延迟不能加。
+        // ⚠️ 缓冲态必须**延续到这次 transition 提交落地**(下方 historyLoaded
+        // effect 才置 null 放行):同一个 state 上的任何紧急 setState 都会作废
+        // 进行中的 transition 渲染,处理完紧急更新后**从头重跑**。此前这里先
+        // 置 null 再开 transition——正在流式的会话每 ~30ms 一批紧急帧,而窗口
+        // 渲染要数秒,巨型渲染被反复重启、只要流式不停就永远跑不完:点进
+        // 运行中的长任务 = 持续 100% CPU、内容半天不出(2026-08-10 用户报障;
+        // Markdown.tsx::useThrottled 头注记的 useDeferredValue 饥饿是同一机制)。
+        // transition 期间的实时帧继续攒在 pendingRef,提交后一次补投;
+        // reduceBatch 按 seq 水位去重,补投里与窗口批重叠的帧是无害空转
+        const buffered = pendingRef.current ?? [];
         startTransition(() => {
           setState((s) => reduceBatch(s, [...(win.frames as Frame[]), ...buffered]));
           // 窗口落地后 running 才可信:composer 的排队补投闸门等这一下;
@@ -176,6 +185,17 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
       void sessionClose(id);
     };
   }, [id, epoch]);
+
+  // 窗口 transition 落地后才出缓冲态:期间攒下的实时帧一次补投,此后实时帧
+  // 直落(机制见上方 buffered 处注释)。补投数组与窗口批捕获的是同一个引用,
+  // 窗口批可能已含其中前缀——seq 水位去重保证重放无害。切会话时 historyLoaded
+  // 被重置为 false,本 effect 只在翻真那一拍动手,不会拿旧会话的缓冲错投
+  useEffect(() => {
+    if (!historyLoaded) return;
+    const buffered = pendingRef.current;
+    pendingRef.current = null;
+    if (buffered?.length) setState((s) => reduceBatch(s, buffered));
+  }, [historyLoaded]);
 
   const loadEarlier = useCallback(async (beforeApply?: () => void, turns = HISTORY_PAGE) => {
     if (!id || busyRef.current) return;

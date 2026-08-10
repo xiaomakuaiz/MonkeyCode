@@ -6,7 +6,7 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { Marked } from "marked";
-import { startTransition, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
 
 import { t, useI18n } from "@/lib/i18n";
 import { openExternal } from "@/lib/ipc/host";
@@ -167,6 +167,83 @@ function useThrottled(value: string, ms: number): string {
   return v;
 }
 
+/** 视口懒渲染(2026-08-10 用户报障「点进长任务很卡、CPU 100%」):挂载即跑
+ * 完整管线(marked+hljs+DOMPurify+innerHTML)乘上 3000 帧窗口,打开长会话
+ * 就是数秒满核——content-visibility 免掉的只有布局/绘制,免不掉挂载解析,
+ * 这里补上另一半:视口外(含上下各 1.5 屏预热带)的消息先渲原文占位,
+ * 所在行滚近了才升格解析。共享一个 IntersectionObserver,不给 3000 条
+ * 消息各建一个实例。
+ * ⚠️ 观察目标是**所在消息行**(data-chat-items 直接子行)而不是自身:
+ * 被 content-visibility 剪枝的行其后代不参与布局,自身几何不可靠;行盒
+ * (估高)恒存在。不在消息流里(设置页/弹层等无该祖先)则观察自身。 */
+type NearCb = () => void;
+const nearCbs = new Map<Element, Set<NearCb>>();
+let nearIO: IntersectionObserver | null = null;
+
+function observeNear(el: Element | null, cb: NearCb): () => void {
+  // 环境无 IO(jsdom/极老 WebView)或异常拿不到锚元素:不懒,
+  // 行为与懒渲染引入前完全一致
+  if (!el || typeof IntersectionObserver === "undefined") {
+    cb();
+    return () => {};
+  }
+  nearIO ??= new IntersectionObserver(
+    (entries) => {
+      // 升格走 transition:快速滚动一口气命中多行时,成批解析不挡滚动/打字。
+      // 无 IO 的同步回退(上方)不套——那条路要保持与懒渲染引入前完全同步
+      startTransition(() => {
+        for (const en of entries) {
+          if (!en.isIntersecting) continue;
+          const set = nearCbs.get(en.target);
+          if (!set) continue;
+          nearCbs.delete(en.target);
+          nearIO?.unobserve(en.target);
+          for (const fn of set) fn();
+        }
+      });
+    },
+    { rootMargin: "150% 0%" },
+  );
+  let set = nearCbs.get(el);
+  if (!set) {
+    set = new Set();
+    nearCbs.set(el, set);
+    nearIO.observe(el);
+  }
+  set.add(cb);
+  return () => {
+    const cur = nearCbs.get(el);
+    if (!cur) return;
+    cur.delete(cb);
+    if (cur.size === 0) {
+      nearCbs.delete(el);
+      nearIO?.unobserve(el);
+    }
+  };
+}
+
+function useNearViewport(root: RefObject<HTMLDivElement | null>): boolean {
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    if (near) return;
+    const el = root.current;
+    const list = el?.closest("[data-chat-items]");
+    let target: Element | null = el;
+    if (el && list) {
+      target = el;
+      while (target.parentElement && target.parentElement !== list) target = target.parentElement;
+    }
+    return observeNear(target, () => setNear(true));
+  }, [near, root]);
+  return near;
+}
+
+/** 占位原文的截断上限:占位只为近似撑高与快速滚过时的过渡观感,几十 KB
+ *  原文全塞进文本节点又是一份不小的挂载成本。真实高度差(截断/无图/无
+ *  高亮)由既有的晚到高度修正机制吸收——contain-intrinsic-size auto 记忆
+ *  + ChatView 锚点轮询/RO,与图片解码、loadFullTool 晚到同一条路。 */
+const PLACEHOLDER_MAX_CHARS = 4_000;
+
 /** 块级 markdown(消息正文)。localImageUrl/onLocalLink 缺省时行为与
  * 纯外链版完全一致(本地图不加载、本地链接点击无动作)。 */
 export function Markdown({
@@ -183,6 +260,10 @@ export function Markdown({
   onLocalLink?: (path: string) => void;
 }) {
   const { locale } = useI18n(); // 复制按钮文案随 locale 重渲
+  const root = useRef<HTMLDivElement>(null);
+  // 视口外挂起解析(见 useNearViewport 头注);升格后不回退——已建好的
+  // DOM 留着比反复拆装便宜,视口外的静置成本已由 content-visibility 兜住
+  const near = useNearViewport(root);
   // 流式节流(见 useThrottled 头注):首渲染立即解析,此后源文本变化至多
   // 每 150ms 放行一次——静态消息(历史窗口挂载)source 不变,零影响
   const throttled = useThrottled(source, 150);
@@ -190,8 +271,7 @@ export function Markdown({
   // t("md.copy") 把文案烤进 HTML——静态分析看不穿这层,去掉它换语言后
   // 已渲染的消息里复制按钮会一直是旧语言
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const html = useMemo(() => renderMarkdown(throttled), [throttled, locale]);
-  const root = useRef<HTMLDivElement>(null);
+  const html = useMemo(() => (near ? renderMarkdown(throttled) : ""), [near, throttled, locale]);
   const cache = useRef(new Map<string, string>());
   // 本地图异步注入:流式重渲同一条消息时按路径缓存,不重复回读
   useEffect(() => {
@@ -226,8 +306,18 @@ export function Markdown({
     // localImageUrl 随父组件渲染生成新闭包;同一条消息只按 HTML 变化重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html]);
+  if (!near) {
+    // 占位:原文按正文排版近似撑高。key 强制换节点,不让 React 在同一个
+    // div 上做 children ↔ dangerouslySetInnerHTML 的原地切换
+    return (
+      <div key="pending" ref={root} className={`md select-text whitespace-pre-wrap break-words ${className ?? ""}`}>
+        {source.slice(0, PLACEHOLDER_MAX_CHARS)}
+      </div>
+    );
+  }
   return (
     <div
+      key="md"
       ref={root}
       className={`md select-text ${className ?? ""}`}
       onClick={(e) => onContainerClick(e, onLocalLink)}
