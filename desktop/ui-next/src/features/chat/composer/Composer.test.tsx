@@ -559,3 +559,31 @@ describe("运行条 detail 与上下文用量", () => {
     );
   });
 });
+
+describe("输入框自增高(影子副本,无 JS 量高)", () => {
+  // 打字路径禁同步布局读的性能契约(composerKit/ComposerTextarea 头注,
+  // 2026-08-10 recording4):量高改纯 CSS 副本,这里钉两件事——
+  // 副本与 textarea 度量类逐项一致(不一致高度就是错的),以及打字不再
+  // 往 style.height 写任何东西(写了说明 JS 量高回魂)。
+  it("副本与 textarea 共用度量类;内容跟手(尾附空格);不写 style.height", async () => {
+    stubShell();
+    render(<ChatView meta={META} />);
+    const box = (await ready()) as HTMLTextAreaElement;
+
+    const replica = box.previousElementSibling as HTMLElement;
+    expect(replica).toBeTruthy();
+    expect(replica.getAttribute("aria-hidden")).toBe("true");
+    for (const cls of ["textarea", "min-h-10", "w-full", "border-0", "text-sm"]) {
+      expect(box.classList.contains(cls)).toBe(true);
+      expect(replica.classList.contains(cls)).toBe(true);
+    }
+    // 副本必须按 textarea 的换行语义排版,量出的行数才一致
+    expect(replica.classList.contains("whitespace-pre-wrap")).toBe(true);
+    expect(replica.classList.contains("invisible")).toBe(true);
+
+    fireEvent.change(box, { target: { value: "第一行\n第二行\n" } });
+    // 尾附空格:值以换行收尾时 pre-wrap 的裸尾换行不渲染,空格把末行撑出来
+    await waitFor(() => expect(replica.textContent).toBe("第一行\n第二行\n "));
+    expect(box.style.height).toBe("");
+  });
+});

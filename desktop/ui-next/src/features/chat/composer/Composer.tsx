@@ -25,7 +25,7 @@ import { pickAttachmentPaths } from "@/lib/ipc/uploads";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
-import { ComposerCard, ErrorBar, RunBar, SlashPanel, UsageRing, useAutosizeTextarea } from "./composerKit";
+import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
 import { ModelMenu, ThinkMenu } from "./pickers";
 import type { ComposerCtl } from "./useComposer";
 
@@ -78,9 +78,6 @@ export function Composer({
       alive = false;
     };
   }, []);
-
-  // 输入框随内容自适应高度(~160px 封顶,超出内滚)
-  useAutosizeTextarea(taRef, ctl.draft);
 
   // ==== 斜杠指令面板(首字符 / 就地补全) ====
   const [slashSuppressed, setSlashSuppressed] = useState(false);
@@ -286,11 +283,9 @@ export function Composer({
           </div>
         )}
 
-        <textarea
-          ref={taRef}
+        <ComposerTextarea
+          taRef={taRef}
           aria-label={t("chat.composer")}
-          className="textarea min-h-10 w-full resize-none border-0 bg-transparent text-sm shadow-none focus:outline-none"
-          rows={2}
           placeholder={state.running ? t("chat.composerPlaceholderRunning") : t("chat.composerPlaceholder")}
           value={ctl.draft}
           onChange={(e) => ctl.setDraft(e.target.value)}

@@ -7,7 +7,7 @@
 import { IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 
-import { ComposerCard, ErrorBar, RunBar, SlashPanel, UsageRing, useAutosizeTextarea } from "@/features/chat/composer/composerKit";
+import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "@/features/chat/composer/composerKit";
 import { OptionMenu } from "@/features/chat/composer/pickers";
 import { useI18n } from "@/lib/i18n";
 import { groupedCloudModelLabel } from "@/lib/cloud/options";
@@ -35,7 +35,6 @@ export function CloudComposer({
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const imeRef = useRef(createImeGuard());
-  useAutosizeTextarea(taRef, h.input);
 
   // 模型清单预取(幂等;失败保持 null,悬停菜单区再触发即重试)
   const { loadModels } = h;
@@ -197,11 +196,9 @@ export function CloudComposer({
 
         {slashOpen && <SlashPanel list={list} active={act} onHover={setActive} onPick={pickCommand} />}
 
-        <textarea
-          ref={taRef}
+        <ComposerTextarea
+          taRef={taRef}
           aria-label={t("chat.composer")}
-          className="textarea min-h-10 w-full resize-none border-0 bg-transparent text-sm shadow-none focus:outline-none"
-          rows={2}
           placeholder={
             // 启动期/唤醒期都不禁输入:消息押后、条件解除即自动送达,
             // 占位文案把这件事说清楚免得白等

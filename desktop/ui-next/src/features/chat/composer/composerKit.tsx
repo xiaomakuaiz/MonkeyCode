@@ -4,7 +4,7 @@
 // 搬迁的定稿形态(-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),
 // 改形态只改这里。
 import { IconAlertCircle, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
-import { useEffect, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { SlashCommand } from "@/lib/protocol/types";
@@ -114,20 +114,50 @@ export function ComposerCard({ children }: { children: ReactNode }) {
   );
 }
 
-const MAX_TEXTAREA_PX = 160;
+/** textarea 与影子副本共用的度量类。两者字体/内距/最小高必须逐项一致,
+ * 副本量出的高度才是 textarea 的真实内容高——收口成一个字面量,改度量
+ * 只改这里(类是源码字面量,Tailwind 扫得到)。 */
+const TA_METRICS = "textarea min-h-10 w-full border-0 text-sm";
 
-/** 输入框随内容自适应高度(默认 ~160px 封顶,超出内滚)。 */
-export function useAutosizeTextarea(
-  ref: RefObject<HTMLTextAreaElement | null>,
-  value: string,
-  maxPx = MAX_TEXTAREA_PX,
-): void {
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, maxPx)}px`;
-  }, [ref, value, maxPx]);
+/** 输入框随内容自适应高度(~160px 封顶,超出内滚),纯 CSS 影子副本实现:
+ * 同格 grid 叠放一个 invisible 的 pre-wrap 副本,内容撑高格子,textarea
+ * 拉伸填满;max-h-40(160px)封顶后 textarea 内滚。
+ *
+ * 为什么不是「写 height:auto → 读 scrollHeight」的 JS 量高(2026-08-10
+ * recording4 定案):那是每次按键一记同步强制样式刷新。WKWebKit 的预绘制
+ * 重算会**跳过** content-visibility 折叠行(几千行的会话里这是全部身家),
+ * 但 JS 强制读必须当场把整棵被跳过的树结清——daisyUI 的 :has() 规则族让
+ * 每次按键都有广域样式失效,于是每个键都重付 ~230ms(28/28 次长重算全部
+ * 嵌在 input 派发内,采样 342/342 命中量高回调)。WKWebView 对照实验:
+ * 同样的失效交给自然重算 6ms,JS 强制读 94~200ms。打字路径上禁止任何
+ * 同步布局读,量高这件事整个取消——副本模式连测量都不存在。 */
+export function ComposerTextarea({
+  taRef,
+  value,
+  ...rest
+}: {
+  taRef: RefObject<HTMLTextAreaElement | null>;
+  value: string;
+} & Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "className" | "rows" | "ref">) {
+  return (
+    <div className="grid">
+      {/* 副本尾附一个空格:值以换行收尾时,pre-wrap 的裸尾换行不渲染,
+          补个空格才能把最后那行空行的高度撑出来(textarea 是渲染的) */}
+      <div
+        aria-hidden
+        className={`${TA_METRICS} col-start-1 row-start-1 invisible max-h-40 overflow-hidden whitespace-pre-wrap break-words`}
+      >
+        {value + " "}
+      </div>
+      <textarea
+        ref={taRef}
+        className={`${TA_METRICS} col-start-1 row-start-1 resize-none overflow-x-hidden overflow-y-auto bg-transparent shadow-none focus:outline-none`}
+        rows={2}
+        value={value}
+        {...rest}
+      />
+    </div>
+  );
 }
 
 /** 斜杠指令面板(本地与云端同一件):贴输入卡上缘上弹的候选列表。
