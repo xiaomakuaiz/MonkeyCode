@@ -462,16 +462,37 @@ export const LogList = memo(function LogList({
         else el.removeAttribute("data-far");
       }
     };
+    let lastPass = 0;
+    let trail = 0;
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(pass);
     };
-    farPassRef.current = schedule;
+    // 渲染驱动的分带降频到 250ms(带尾随补扫):流式期间每 30ms 一批帧、
+    // 每批一次 LogList 重渲,每渲染都全量扫 rect 的话,O(行数) 的扫描费又
+    // 回到了每帧——2400 行流式每批中位 15ms 里它占大头(2026-08-10 复现
+    // 量化)。带宽 ±2 屏,慢 250ms 毫无感知;滚动/缩放驱动的分带仍走
+    // schedule 即时挡,快速滚动不吃这个延迟。
+    const scheduleLazy = () => {
+      if (raf) return;
+      if (performance.now() - lastPass > 250) {
+        lastPass = performance.now();
+        schedule();
+        return;
+      }
+      window.clearTimeout(trail);
+      trail = window.setTimeout(() => {
+        lastPass = performance.now();
+        schedule();
+      }, 275);
+    };
+    farPassRef.current = scheduleLazy;
     schedule();
     // scroll 不冒泡但可捕获:窗口级捕获覆盖任意滚动容器(主视图/子会话弹窗)
     window.addEventListener("scroll", schedule, { capture: true, passive: true });
     window.addEventListener("resize", schedule);
     return () => {
       if (raf) cancelAnimationFrame(raf);
+      window.clearTimeout(trail);
       window.removeEventListener("scroll", schedule, { capture: true });
       window.removeEventListener("resize", schedule);
     };
