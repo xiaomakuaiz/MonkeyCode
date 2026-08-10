@@ -6,7 +6,7 @@
 // activeSeq 当前项:点列以不透明度差加重当前点,面板项 menu-active +
 // aria-current,打开时当前项滚入视野(移植旧 outline.tsx)。形态差异:
 // 旧「浮窗跟随指针高度」不做——dropdown 锚定已确定面板落点。
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { OutlineItem } from "@/lib/ipc/controls";
@@ -70,8 +70,13 @@ export function outlineEntriesOf(outline: OutlineItem[], items: readonly ChatIte
 /** 点列常驻 + 悬停浮出面板(daisyUI dropdown 外壳,受控 dropdown-open)。
  * dropdown-right 让面板紧贴点列右缘、无空隙,指针点列↔面板不离开容器,
  * 容器级 mouseenter/leave 即可管开合(mouseleave 把绝对定位子面板算在内),
- * 旧 200ms 延时收起随空隙一起退役。 */
-export function OutlineNav({
+ * 旧 200ms 延时收起随空隙一起退役。
+ *
+ * memo:ChatView 每次按键都因草稿态重渲(useComposer 在彼处),长会话的
+ * 大纲上千条,不拦的话每键全量重建一遍点列+面板(空闲打字的 O(轮数)
+ * 底噪,2026-08-10)。前提是调用方三个 props 全稳定:entries 已 useMemo,
+ * activeSeq 是 state,onJump 必须 useCallback/ref 包稳(见 ChatView)。 */
+export const OutlineNav = memo(function OutlineNav({
   entries,
   activeSeq,
   onJump,
@@ -153,4 +158,4 @@ export function OutlineNav({
       </div>
     </nav>
   );
-}
+});

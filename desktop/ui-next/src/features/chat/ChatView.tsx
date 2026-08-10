@@ -500,13 +500,19 @@ export function ChatView({
     if (jumpToSeq(seq) || tries <= 0) return;
     jumpTimer.current = window.setTimeout(() => jumpWithRetry(seq, tries - 1), 32);
   };
-  const onJump = (seq: number, offset?: number) => {
+  // onJump 必须引用稳定:OutlineNav 是 memo 的(大纲上千条,ChatView 每键
+  // 因草稿态重渲,不拦就是空闲打字的 O(轮数) 底噪)——实现走 ref 取最新,
+  // 外壳 useCallback 恒定
+  const onJumpImpl = (seq: number, offset?: number) => {
     if (jumpToSeq(seq)) return;
     // 更早的提问还没加载:按它那一轮的 offset 精确补页再定位(session_history
     // 以 offset 为终点);流内新条目无 offset(按理已在 DOM),只走重试兜底
     if (offset !== undefined) void ensureLoaded(offset).then(() => jumpWithRetry(seq));
     else jumpWithRetry(seq);
   };
+  const onJumpRef = useRef(onJumpImpl);
+  onJumpRef.current = onJumpImpl;
+  const onJump = useCallback((seq: number, offset?: number) => onJumpRef.current(seq, offset), []);
 
   // ==== 拖拽附件:HTML5 事件(dragenter/leave 计数配对)+ Linux 壳原生事件 ====
   const [dragging, setDragging] = useState(false);

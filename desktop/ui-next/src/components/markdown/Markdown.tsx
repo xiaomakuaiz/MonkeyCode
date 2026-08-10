@@ -265,8 +265,12 @@ export function Markdown({
   // DOM 留着比反复拆装便宜,视口外的静置成本已由 content-visibility 兜住
   const near = useNearViewport(root);
   // 流式节流(见 useThrottled 头注):首渲染立即解析,此后源文本变化至多
-  // 每 150ms 放行一次——静态消息(历史窗口挂载)source 不变,零影响
-  const throttled = useThrottled(source, 150);
+  // 每 150ms 放行一次——静态消息(历史窗口挂载)source 不变,零影响。
+  // 超长正文自适应放宽:节流到点是**整篇**重解析 + 整棵子树重建,答案
+  // 累积到几百 KB 时一次就是 74~81ms(2026-08-10 复现量化,流式尖刺的
+  // 来源)——正文越长,刷新率越不重要(增量在末尾,读者根本看不完),
+  // 100KB 以上降到 600ms 一档
+  const throttled = useThrottled(source, source.length > 100_000 ? 600 : 150);
   // locale 看着"没用到",实则 renderMarkdown 内部经 code renderer 调了
   // t("md.copy") 把文案烤进 HTML——静态分析看不穿这层,去掉它换语言后
   // 已渲染的消息里复制按钮会一直是旧语言
