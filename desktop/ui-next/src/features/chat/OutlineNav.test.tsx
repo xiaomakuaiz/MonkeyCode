@@ -8,7 +8,8 @@ import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 describe("outlineEntriesOf:目录 + 流内实时合并", () => {
   it("流内带 seq 的用户消息补到目录尾部;同 seq 以目录为准去重", () => {
     const outline: OutlineItem[] = [
-      { seq: 1, offset: 0, text: "第一问", timestamp: new Date(2026, 0, 1, 9, 5).getTime() },
+      // 「今天」的时刻:fmtClock 跨天带日期前缀,固定历史日期会随运行日漂移
+      { seq: 1, offset: 0, text: "第一问", timestamp: new Date(new Date().setHours(9, 5, 0, 0)).getTime() },
       { seq: 5, offset: 40, text: "第二问" },
     ];
     const items: ChatItem[] = [

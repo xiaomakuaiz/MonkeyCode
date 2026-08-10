@@ -12,6 +12,7 @@ import { useI18n } from "@/lib/i18n";
 import type { OutlineItem } from "@/lib/ipc/controls";
 import { ATT_LINE } from "@/lib/protocol/attLine";
 import type { ChatItem } from "@/lib/protocol/types";
+import { fmtClock } from "@/lib/util/fmt";
 
 const MAX_LABEL = 60;
 
@@ -25,15 +26,8 @@ export interface OutlineEntry {
   label: string;
   /** 剥离的附件行数(label 为空时兜底展示「N 个附件」)。 */
   attCount: number;
-  /** HH:MM;无可靠时间为空。 */
+  /** 当天 HH:MM,跨天带日期(fmtClock);无可靠时间为空。 */
   time: string;
-}
-
-function hhmm(ts?: number): string {
-  if (ts === undefined || !Number.isFinite(ts)) return "";
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /** 目录 + 流内实时用户消息 → 合并去重的大纲条目。
@@ -66,7 +60,7 @@ export function outlineEntriesOf(outline: OutlineItem[], items: readonly ChatIte
       seq: it.seq,
       label,
       attCount,
-      time: hhmm(it.timestamp),
+      time: fmtClock(it.timestamp),
       ...(it.offset !== undefined ? { offset: it.offset } : {}),
     });
   }

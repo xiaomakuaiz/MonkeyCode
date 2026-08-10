@@ -128,7 +128,8 @@ describe("LogList 系统行按 tag 分流", () => {
 
 describe("消息时间(悬停显影的 <time>)", () => {
   it("用户气泡与 agent 块渲染 dateTime 语义的 HH:MM;缺 timestamp 不渲染", () => {
-    const ts = new Date(2026, 0, 2, 9, 5).getTime();
+    // 用「今天」的时刻:fmtClock 跨天会带日期前缀,固定历史日期会随运行日漂移
+    const ts = new Date(new Date().setHours(9, 5, 0, 0)).getTime();
     const state = withItems([
       { kind: "user", text: "带时间的提问", seq: 1, timestamp: ts },
       { kind: "agent", text: "带时间的回答", timestamp: ts },
@@ -306,7 +307,7 @@ describe("用户气泡附件呈现(附件行约定)", () => {
 
 describe("思考块", () => {
   it("带首片时间(hover 显影 <time>);展开指示与工具卡同语言(无 collapse-arrow)", () => {
-    const ts = new Date(2026, 7, 5, 9, 5).getTime();
+    const ts = new Date(new Date().setHours(9, 5, 0, 0)).getTime();
     const state = withItems([{ kind: "thought", text: "先看日志", timestamp: ts }]);
     const { container } = render(<LogList state={state} sessionId="s1" />);
     expect(container.querySelector("time")?.textContent).toBe("09:05");
@@ -396,7 +397,7 @@ describe("工具组聚合(摘要头 + 开合)", () => {
 
 describe("块上方消息时间(悬停显影)", () => {
   it("工具块:组首卡上方有时间线,组中卡不插时间(不撕共享外框)", () => {
-    const ts = new Date(2026, 7, 5, 14, 30).getTime();
+    const ts = new Date(new Date().setHours(14, 30, 0, 0)).getTime();
     const state = withItems([
       { kind: "tool", tcId: "t1", title: "Bash", status: "ok", out: "", rawInput: { command: "a" }, timestamp: ts },
       { kind: "tool", tcId: "t2", title: "Bash", status: "ok", out: "", rawInput: { command: "b" }, timestamp: ts + 60000 },
