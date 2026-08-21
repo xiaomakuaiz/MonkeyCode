@@ -800,6 +800,24 @@ describe("点格与任务列联动(2026-08-19)", () => {
     expect(document.activeElement).toBe(within(pane1).getByRole("textbox", { name: "消息输入" }));
   });
 
+  it("单格已是逻辑焦点，但 DOM 焦点在格外 → 点击仍聚焦 composer", async () => {
+    stubShell({ sessions: [sess({ id: "s1", title: "唯一任务" })] });
+    render(<App />);
+    const list = screen.getByRole("complementary", { name: "选择任务" });
+    await userEvent.click(await within(list).findByText("唯一任务"));
+
+    const settings = screen.getByRole("button", { name: "设置" });
+    settings.focus();
+    const pane = screen.getByRole("region", { name: "第 1 格" });
+    fireEvent.pointerDown(within(pane).getByTitle(/唯一任务/));
+    settings.blur();
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+
+    expect(document.activeElement).toBe(within(pane).getByRole("textbox", { name: "消息输入" }));
+  });
+
   it("云端任务行可拖(LOAD_MIME 装载协议,与本地行同款)", async () => {
     stubShell({ cloudTasks: [{ id: "ct1", title: "云端任务一", status: "processing" }] });
     render(<App />);

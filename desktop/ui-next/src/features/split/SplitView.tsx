@@ -407,11 +407,11 @@ export function SplitView({
       <section
         key={slot}
         aria-label={t("split.pane", { n: String(slot + 1) })}
-        // capture 相:格内任意处按下即夺焦(含 composer/按钮,不拦事件)
-        onPointerDownCapture={() => {
-          // 焦点变更才请求 composer 聚焦(2026-08-20 用户「选中 panel 应
-          // focus 到 composer」);同格内点击不抢焦——正在别处选文本呢
-          if (split.focused !== slot) onComposerIntent?.();
+        // capture 相:格内任意处按下即选中该格(含 composer/按钮,不拦事件)
+        onPointerDownCapture={(event) => {
+          // 切格，或单格场景下 DOM 焦点还在格外时，请求 composer 聚焦；
+          // 焦点已在同格内则不抢——用户可能正在选文本或操作格内按钮。
+          if (split.focused !== slot || !event.currentTarget.contains(document.activeElement)) onComposerIntent?.();
           split.focus(slot);
           setRevealTick((n) => n + 1);
         }}
