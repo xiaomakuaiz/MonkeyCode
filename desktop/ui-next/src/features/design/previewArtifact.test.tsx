@@ -26,6 +26,8 @@ describe("preview artifact selection", () => {
   it("ranks HTML, images and text and filters by path", () => {
     expect(rankPreviewFiles(files).map((f) => f.path)).toEqual(["index.html", "screens/home.png", "src/app.ts"]);
     expect(rankPreviewFiles(files, "HOME").map((f) => f.path)).toEqual(["screens/home.png"]);
+    // sort 原地排的是 filter 产出的新数组,入参顺序不动
+    expect(files.map((f) => f.path)).toEqual(["src/app.ts", "screens/home.png", "index.html"]);
   });
 
   it("turns a candidate into an artifact target", () => {

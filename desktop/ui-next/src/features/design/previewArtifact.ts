@@ -116,11 +116,15 @@ export function touchedTurnChanges(
   return [...selected.values()];
 }
 
+/** 排序用 sort(链上 filter 已产出新数组,不会改到入参)。此前用 toSorted,
+ * Safari 16+ 才有,macOS 12 自带的 WKWebView 一进预览工作台就整屏「启动异常」
+ * (2026-09-04 报障);现在构建期按用量注入 polyfill(vite.config.ts),但能不依赖
+ * 就不依赖。 */
 export function rankPreviewFiles(files: RepoPreviewFile[], query = ""): RepoPreviewFile[] {
   const needle = query.trim().toLocaleLowerCase();
   return files
     .filter((file) => !needle || file.path.toLocaleLowerCase().includes(needle))
-    .toSorted((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.path.localeCompare(b.path));
+    .sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.path.localeCompare(b.path));
 }
 
 export function targetForFile(file: RepoPreviewFile): DesignPreviewTarget {
@@ -162,7 +166,7 @@ export function selectTurnPreviewArtifact(
     .filter((change) => change.status !== "D")
     .map((change) => ({ change, file: changedFile(change.path) }))
     .filter((entry): entry is { change: RepoChange; file: RepoPreviewFile } => entry.file !== null)
-    .toSorted((a, b) => {
+    .sort((a, b) => {
       const kind = KIND_RANK[a.file.kind] - KIND_RANK[b.file.kind];
       if (kind) return kind;
       const aIndex = basename(a.file.path).toLocaleLowerCase() === "index.html";
@@ -183,7 +187,7 @@ export function selectTurnPreviewArtifact(
   if (!hasDesignChange) return null;
   return repoFiles
     .filter((file) => file.kind === "html")
-    .toSorted((a, b) => {
+    .sort((a, b) => {
       const aIndex = basename(a.path).toLocaleLowerCase() === "index.html";
       const bIndex = basename(b.path).toLocaleLowerCase() === "index.html";
       const aPreferred = mentionedByUser(a.path, userText) || PREFERRED_BASENAME.test(basename(a.path));

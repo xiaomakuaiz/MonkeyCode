@@ -50,7 +50,7 @@ import { SidePanel, type SidePanelTab } from "@/components/SidePanel";
 import { TerminalPanel } from "@/features/terminal/TerminalPanel";
 import { DesignPreviewWorkbench } from "@/features/design/DesignPreviewWorkbench";
 import { hasDesignRelatedChanges, rankPreviewFiles, selectTurnPreviewArtifact, targetForFile, touchedTurnChanges, turnWarrantsArtifactPreview, writtenToolPaths, type DesignPreviewTarget } from "@/features/design/previewArtifact";
-import { currentTurnAgentPreviewUrl, newestAgentPreviewUrl, normalizePreviewUrl } from "@/features/design/previewUrl";
+import { currentTurnAgentPreviewUrl, currentTurnItems, newestAgentPreviewUrl, normalizePreviewUrl } from "@/features/design/previewUrl";
 import { useSessionFeed } from "./useSessionFeed";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
@@ -963,8 +963,7 @@ export function ChatView({
         ? await turnBaseline.current.value.catch(() => ({ changes: result.changes, isGitRepo: result.isGitRepo }))
         : { changes: result.changes, isGitRepo: result.isGitRepo };
       if (changesGeneration.current !== generation || metaRef.current.id !== sessionId) return;
-      const lastUser = state.items.findLastIndex((item) => item.kind === "user");
-      const tools = state.items.slice(lastUser + 1).filter((item) => item.kind === "tool");
+      const tools = currentTurnItems(state.items).filter((item) => item.kind === "tool");
       const touched = touchedTurnChanges(baseline.changes, result.changes, writtenToolPaths(tools), meta.workdir);
       let artifact = selectTurnPreviewArtifact(touched, currentTurnText.user, currentTurnText.agent);
       if (!artifact && hasDesignRelatedChanges(touched) && turnWarrantsArtifactPreview(currentTurnText.user, currentTurnText.agent, touched)) {

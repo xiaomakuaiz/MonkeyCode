@@ -59,7 +59,14 @@ export function newestAgentPreviewUrl(items: ChatItem[]): string | null {
   return null;
 }
 
+/** 最后一条用户消息之后的条目(没有用户消息时为全部,总是新数组)。 */
+export function currentTurnItems(items: ChatItem[]): ChatItem[] {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i]?.kind === "user") return items.slice(i + 1);
+  }
+  return items.slice();
+}
+
 export function currentTurnAgentPreviewUrl(items: ChatItem[]): string | null {
-  const lastUserIndex = items.findLastIndex((item) => item.kind === "user");
-  return newestAgentPreviewUrl(items.slice(lastUserIndex + 1));
+  return newestAgentPreviewUrl(currentTurnItems(items));
 }
