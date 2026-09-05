@@ -20,6 +20,13 @@ import { defineConfig } from "vite";
 // 注意它只在 build 生效;dev server 不注入,老内核上跑 dev 不作数。
 // core-js 管不到的 Web API(crypto.randomUUID 等)见 src/lib/webApiPolyfills.ts。
 const WEBVIEW_TARGETS = ["safari >= 14"];
+// CSS 目标**不跟 JS 目标走**:Tailwind v4 本身只支持 Safari 16.4 / Chrome 111 /
+// Firefox 128,CSS 再往下降没有收益,反而有害——cssTarget 默认继承 build.target
+// (即上面的 safari14),Vite 8 用 lightningcss 压缩时会把逻辑属性(end-full 的
+// inset-inline-end、ps/pe/ms/me 等)改写成多参数 :lang(...) 区分左右;Chromium 不认
+// 多参数 :lang(),整条规则作废——Windows 的 WebView2 上待发送列表的「立即发送/
+// 修改/删除」直接消失,WKWebView 支持所以 mac 看不出来(2026-09-05 报障)。
+const CSS_TARGETS = ["safari16.4", "chrome111", "firefox128"];
 
 export default defineConfig({
   plugins: [
@@ -37,5 +44,6 @@ export default defineConfig({
   build: {
     outDir: "../uidist",
     emptyOutDir: true,
+    cssTarget: CSS_TARGETS,
   },
 });
