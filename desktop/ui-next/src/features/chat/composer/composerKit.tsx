@@ -294,7 +294,10 @@ export function ComposerCard({ children, attachedTop = false }: { children: Reac
 /** textarea 与影子副本共用的度量类。两者字体/内距/最小高必须逐项一致,
  * 副本量出的高度才是 textarea 的真实内容高——收口成一个字面量,改度量
  * 只改这里(类是源码字面量,Tailwind 扫得到)。 */
-const TA_METRICS = "textarea min-h-10 w-full border-0 text-sm";
+// HarmonyOS Sans SC 的 calt 会把《/「从半角宽替换为全角宽；关闭上下文
+// 字形替换，规避旧 macOS WebKit 上报告的标点后光标错位。副本同步关闭，
+// 保证输入内容与撑高副本仍按同一宽度换行。
+const TA_METRICS = "textarea min-h-10 w-full border-0 text-sm [font-variant-ligatures:no-contextual]";
 
 /** 输入框随内容自适应高度(~160px 封顶,超出内滚),纯 CSS 影子副本实现:
  * 同格 grid 叠放一个 invisible 的 pre-wrap 副本,内容撑高格子,textarea
