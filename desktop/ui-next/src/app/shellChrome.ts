@@ -4,6 +4,7 @@
 // - F12 / ⌃⇧I / ⌘⇧I:打开 devtools(壳命令)
 import { openContextMenu } from "@/lib/contextMenu";
 import { inDesktopShell, invoke } from "@/lib/ipc/ipc";
+import { installMacosTextInputGuard } from "./macosTextInput";
 
 /** 判据两点(2026-08-09 对表旧工程补回):
  *  ① **mac 认 ⌘**——⌘⇧I 是 macOS 上 devtools 的标准手势,只判 ctrlKey 等于
@@ -53,6 +54,7 @@ export function windowContextLabel(
 }
 
 export function installShellChrome(): void {
+  installMacosTextInputGuard();
   // 壳判定放进处理器而非注册时(旧工程同款):`window.__TAURI__` 由壳的初始化
   // 脚本注入,与本模块求值的先后不该被当成前提——注册时判一次,万一那次为假
   // 就是整个会话永远没有右键菜单和 devtools,且无从察觉
