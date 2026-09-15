@@ -26,7 +26,10 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::{code_is_zero, other, unwrap_envelope, BzErr, BzResult, Envelope, Service};
+use super::{
+    code_is_zero, other, unwrap_envelope, BzErr, BzResult, Envelope, RequestAuth, RequestTimeout,
+    Service,
+};
 use crate::util::urlencode;
 use crate::util::LockExt;
 
@@ -591,8 +594,8 @@ pub async fn mc_terminal_list(svc: &Service, vm_id: &str) -> BzResult<Value> {
 const MC_UPLOAD_MAX_BYTES: usize = 4 << 20;
 
 /// 云端聊天附件上传(对齐 web uploadFileWithPresignedUrl):presign 换预签名
-/// URL → 壳直传对象存储(PUT 裸字节,预签名 URL 自带凭证,不带鉴权/Content-Type
-/// 头)→ 返回 access_url,由 UI 放进 user-input 帧的 attachments。
+/// URL → 壳 PUT 裸字节(不追加 Authorization/Content-Type；同源携带网关
+/// Cookie/浏览器身份)→ 返回 access_url,由 UI 放进 user-input 帧的 attachments。
 pub async fn mc_upload(svc: &Service, filename: &str, data: Vec<u8>) -> BzResult<String> {
     if filename.trim().is_empty() {
         return Err(other("附件缺少文件名"));
@@ -626,12 +629,15 @@ pub async fn mc_upload(svc: &Service, filename: &str, data: Vec<u8>) -> BzResult
     let upload_url =
         reqwest::Url::parse(&upload_url).map_err(|e| other(format!("上传地址异常: {e}")))?;
     let resp = svc
-        .lp_for(&upload_url)?
-        .put(upload_url)
-        .body(data)
-        .send()
+        .send_request(
+            reqwest::Method::PUT,
+            &upload_url,
+            RequestAuth::PresignedUpload,
+            RequestTimeout::Transfer,
+            |req| req.body(data),
+        )
         .await
-        .map_err(|e| other(format!("上传附件失败: {e}")))?;
+        .map_err(|e| other(format!("上传附件失败: {}", e.msg())))?;
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(other(format!("上传附件失败(HTTP {status})")));
@@ -673,20 +679,16 @@ pub async fn mc_file_upload(svc: &Service, vm_id: &str, path: &str, data: Vec<u8
         reqwest::multipart::Part::bytes(data).file_name(filename),
     );
     // 长超时客户端:10MB 在慢速网络下会贴近 30s 普通超时
-    let mut req = svc.lp_for(&url)?.post(url.clone()).multipart(form);
-    if let Some(h) = svc.mc.header(&url) {
-        req = req.header(reqwest::header::COOKIE, h);
-    }
-    if let Some(b) = svc.mc_basic_header(&url) {
-        req = req.header(reqwest::header::AUTHORIZATION, b);
-    }
-    for (name, value) in svc.mc_identity_headers(&url) {
-        req = req.header(name, value);
-    }
-    let resp = req
-        .send()
+    let resp = svc
+        .send_request(
+            reqwest::Method::POST,
+            &url,
+            RequestAuth::Session(&svc.mc),
+            RequestTimeout::Transfer,
+            |req| req.multipart(form),
+        )
         .await
-        .map_err(|e| other(format!("上传失败: {e}")))?;
+        .map_err(|e| other(format!("上传失败: {}", e.msg())))?;
     let status = resp.status().as_u16();
     let body = resp
         .bytes()
@@ -798,29 +800,16 @@ async fn do_file_download(
         urlencode(filename)
     );
     let url = reqwest::Url::parse(&target).map_err(|e| other(format!("地址异常: {e}")))?;
-    let mut cb = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15));
-    if svc.tls_insecure_for(&url) {
-        cb = cb.danger_accept_invalid_certs(true);
-    }
-    let client = cb
-        .build()
-        .map_err(|e| other(format!("HTTP 客户端构建失败: {e}")))?;
-    let mut req = client.get(url.clone());
-    if let Some(h) = svc.mc.header(&url) {
-        req = req.header(reqwest::header::COOKIE, h);
-    }
-    if let Some(b) = svc.mc_basic_header(&url) {
-        req = req.header(reqwest::header::AUTHORIZATION, b);
-    }
-    for (name, value) in svc.mc_identity_headers(&url) {
-        req = req.header(name, value);
-    }
-    let resp = req
-        .send()
+    let resp = svc
+        .send_request(
+            reqwest::Method::GET,
+            &url,
+            RequestAuth::Session(&svc.mc),
+            RequestTimeout::Download,
+            |req| req,
+        )
         .await
-        .map_err(|e| other(format!("下载失败: {e}")))?;
+        .map_err(|e| other(format!("下载失败: {}", e.msg())))?;
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         // 失败时响应体是 JSON 包壳:借 unwrap_envelope 取可读的 message

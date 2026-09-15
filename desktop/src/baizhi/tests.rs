@@ -11,6 +11,9 @@ use sha2::{Digest, Sha256};
 
 use super::{unwrap_envelope, BzErr, Endpoints, Service, ENV_BAIZHI};
 
+#[path = "upload_tests.rs"]
+mod upload_tests;
+
 /// 假服务端收到的一次请求。
 struct Req {
     method: String,
@@ -19,6 +22,7 @@ struct Req {
     authorization: String,
     user_agent: String,
     accept_language: String,
+    content_type: String,
     body: Vec<u8>,
 }
 
@@ -78,6 +82,7 @@ fn serve(handler: Handler) -> (String, Arc<AtomicBool>) {
                 let mut authorization = String::new();
                 let mut user_agent = String::new();
                 let mut accept_language = String::new();
+                let mut content_type = String::new();
                 let mut content_len = 0usize;
                 loop {
                     let mut h = String::new();
@@ -97,6 +102,9 @@ fn serve(handler: Handler) -> (String, Arc<AtomicBool>) {
                     if lower.starts_with("accept-language:") {
                         accept_language = h[16..].trim().to_string();
                     }
+                    if lower.starts_with("content-type:") {
+                        content_type = h[13..].trim().to_string();
+                    }
                     if let Some(v) = lower.strip_prefix("content-length:") {
                         content_len = v.trim().parse().unwrap_or(0);
                     }
@@ -112,6 +120,7 @@ fn serve(handler: Handler) -> (String, Arc<AtomicBool>) {
                     authorization,
                     user_agent,
                     accept_language,
+                    content_type,
                     body,
                 });
                 let mut out = format!(

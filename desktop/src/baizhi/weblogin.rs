@@ -184,18 +184,16 @@ fn probe_cookie_header(cookies: &[cookie::Cookie<'static>], host: &str) -> Strin
 pub(crate) async fn probe_status(svc: &Service, cookie_header: &str) -> Result<Option<Value>, ()> {
     let target = format!("{}/api/v1/users/status", svc.ep.monkeycode);
     let url = reqwest::Url::parse(&target).map_err(|_| ())?;
-    let mut req = svc
-        .http_for(&url)
-        .map_err(|_| ())?
-        .get(url.clone())
-        .header(reqwest::header::COOKIE, cookie_header);
-    if let Some(b) = svc.mc_basic_header(&url) {
-        req = req.header(reqwest::header::AUTHORIZATION, b);
-    }
-    for (name, value) in svc.mc_identity_headers(&url) {
-        req = req.header(name, value);
-    }
-    let resp = req.send().await.map_err(|_| ())?;
+    let resp = svc
+        .send_request(
+            reqwest::Method::GET,
+            &url,
+            super::RequestAuth::LoginProbe(cookie_header),
+            super::RequestTimeout::Api,
+            |req| req,
+        )
+        .await
+        .map_err(|_| ())?;
     let status = resp.status().as_u16();
     // 网关把未认证请求弹去登录页:明确未登录,不是抖动
     if (300..400).contains(&status) {

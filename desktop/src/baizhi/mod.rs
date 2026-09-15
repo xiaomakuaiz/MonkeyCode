@@ -215,6 +215,22 @@ pub(crate) fn is_official_mc(monkeycode: &str) -> bool {
 const HTTP_TIMEOUT_SECS: u64 = 30;
 const LP_TIMEOUT_SECS: u64 = 40;
 
+/// 传输时限独立于认证策略；下载保持仅连接超时，不限制整个文件的耗时。
+enum RequestTimeout {
+    Api,
+    Transfer,
+    Download,
+}
+
+/// 调用方声明凭证来源，附加头与响应 Cookie 的处理统一在 send_request。
+enum RequestAuth<'a> {
+    Session(&'a CookieStore),
+    /// 登录尚未完成：只使用窗口收割的 Cookie，不读取/更新持久会话罐。
+    LoginProbe(&'a str),
+    /// URL 已含存储签名；仅同源可带网关会话，不能再追加 Authorization。
+    PresignedUpload,
+}
+
 /// API 客户端构建。失败只发生在 TLS 后端起不来时,降级为 None(语义见
 /// Service.http 字段注释)。insecure = 跳过证书链与主机名校验(私有化
 /// 自签部署的 mc 域专用;加密与完整性保持)。
@@ -389,13 +405,16 @@ impl Service {
         self.is_mc_url(url).then_some(basic)
     }
 
-    /// url 是否落在 MonkeyCode 服务主机(host + port 同口径;Basic 与浏览器
-    /// 身份两道门共用,tls_insecure_for 同判定)。
+    /// 是否与 MonkeyCode 服务同源：协议、主机、有效端口必须一致。
+    /// 凭证与 TLS 例外共用此边界，不能将 HTTPS 会话发到同端口的 HTTP。
     pub(crate) fn is_mc_url(&self, url: &reqwest::Url) -> bool {
         let Ok(mc) = reqwest::Url::parse(&self.ep.monkeycode) else {
             return false;
         };
-        url.host_str() == mc.host_str() && url.port_or_known_default() == mc.port_or_known_default()
+        matches!(url.scheme(), "http" | "https")
+            && url.scheme() == mc.scheme()
+            && url.host_str() == mc.host_str()
+            && url.port_or_known_default() == mc.port_or_known_default()
     }
 
     /// 记录/清除主窗上报的浏览器身份。
@@ -438,16 +457,10 @@ impl Service {
     }
 
     /// 该 URL 的请求是否跳过 TLS 证书验证:开关生效且落在 mc 域
-    /// (host/port 判定与 mc_basic_header 同口径)。云端 WS 桥与下载
+    /// (同源判定与 mc_basic_header 同口径)。云端 WS 桥与下载
     /// 专用客户端也按它决定各自的免验证形态。
     pub(crate) fn tls_insecure_for(&self, url: &reqwest::Url) -> bool {
-        if !self.mc_skip_tls {
-            return false;
-        }
-        let Ok(mc) = reqwest::Url::parse(&self.ep.monkeycode) else {
-            return false;
-        };
-        url.host_str() == mc.host_str() && url.port_or_known_default() == mc.port_or_known_default()
+        self.mc_skip_tls && self.is_mc_url(url)
     }
 
     /// 按目标 URL 选 API 客户端:免验证只给 mc 域,百智/官方/第三方恒走
@@ -473,6 +486,91 @@ impl Service {
     }
 
     // ==================== HTTP 基座 ====================
+
+    /// JSON、multipart、裸字节与流式下载共用的 HTTP 发送入口。
+    /// 调用方只配置请求体/格式；这里统一 TLS、时限、认证头和 Cookie 刷新。
+    /// 所有客户端均禁止自动重定向，跨地址跳转交给各协议层显式处理。
+    async fn send_request(
+        &self,
+        method: reqwest::Method,
+        url: &reqwest::Url,
+        auth: RequestAuth<'_>,
+        timeout: RequestTimeout,
+        configure: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> BzResult<reqwest::Response> {
+        let mut req = match timeout {
+            RequestTimeout::Api => self.http_for(url)?.request(method, url.clone()),
+            RequestTimeout::Transfer => self.lp_for(url)?.request(method, url.clone()),
+            RequestTimeout::Download => reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(15))
+                .danger_accept_invalid_certs(self.tls_insecure_for(url))
+                .build()
+                .map_err(|e| other(format!("HTTP 客户端构建失败: {e}")))?
+                .request(method, url.clone()),
+        };
+        // Cookie 本身不区分端口，父域 Cookie 还可能匹配独立 OSS 子域。
+        // 预签名 URL 是响应提供的地址，必须先限同源，再按 Cookie 属性筛选。
+        let store = match auth {
+            RequestAuth::Session(store) => Some(store),
+            RequestAuth::PresignedUpload if self.is_mc_url(url) => Some(self.mc.as_ref()),
+            _ => None,
+        };
+        let cookie = {
+            // 旧 Service 与新 Service 共用 Cookie 罐。代次校验必须与读取
+            // 同锁，否则切服/重新登录可夹在两者之间，把新凭证送给旧地址。
+            // 与 reconfigured/logged_out/absorb_mc_cookies 保持相同锁顺序：
+            // generation → CookieStore。复制完头值即释放，不跨网络 await。
+            // 外部预签名上传虽不带 Cookie，也属于旧任务，切服后须停止。
+            let needs_current_mc = matches!(
+                auth,
+                RequestAuth::PresignedUpload | RequestAuth::LoginProbe(_)
+            ) || store
+                .is_some_and(|store| std::ptr::eq(store, self.mc.as_ref()));
+            let _generation = if needs_current_mc {
+                let generation = self.mc_cookie_generation.lock_ok();
+                if *generation != self.mc_cookie_snapshot {
+                    return Err(other(
+                        "MonkeyCode 服务配置或登录状态已变化，本次请求已取消，请重试",
+                    ));
+                }
+                Some(generation)
+            } else {
+                None // 百智账号罐独立，不因 MonkeyCode 切服/登出而停用。
+            };
+            store.and_then(|store| store.header(url))
+        };
+        if let Some(h) = cookie {
+            req = req.header(reqwest::header::COOKIE, h);
+        }
+        if let RequestAuth::LoginProbe(h) = auth {
+            if self.is_mc_url(url) {
+                req = req.header(reqwest::header::COOKIE, h);
+            }
+        }
+        if !matches!(auth, RequestAuth::PresignedUpload) {
+            if let Some(b) = self.mc_basic_header(url) {
+                req = req.header(reqwest::header::AUTHORIZATION, b);
+            }
+        }
+        for (name, value) in self.mc_identity_headers(url) {
+            req = req.header(name, value);
+        }
+        let resp = configure(req)
+            .send()
+            .await
+            .map_err(|e| other(format!("请求 {} 失败: {e}", url.host_str().unwrap_or(""))))?;
+        if let Some(store) = store {
+            let set_cookies: Vec<String> = resp
+                .headers()
+                .get_all(reqwest::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(str::to_string))
+                .collect();
+            self.update_response_cookies(store, resp.url(), &set_cookies);
+        }
+        Ok(resp)
+    }
 
     fn update_response_cookies(
         &self,
@@ -510,37 +608,27 @@ impl Service {
         body: Option<&Value>,
     ) -> BzResult<(Vec<u8>, u16, Option<String>)> {
         let url = reqwest::Url::parse(target).map_err(|e| other(format!("地址异常: {e}")))?;
-        let host = url.host_str().unwrap_or("").to_string();
-        let mut req = self.http_for(&url)?.request(method, url.clone());
-        if let Some(b) = body {
-            req = req.json(b);
-        }
-        if let Some(h) = store.header(&url) {
-            req = req.header(reqwest::header::COOKIE, h);
-        }
-        if let Some(b) = self.mc_basic_header(&url) {
-            req = req.header(reqwest::header::AUTHORIZATION, b);
-        }
-        for (name, value) in self.mc_identity_headers(&url) {
-            req = req.header(name, value);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| other(format!("请求 {host} 失败: {e}")))?;
+        let resp = self
+            .send_request(
+                method,
+                &url,
+                RequestAuth::Session(store),
+                RequestTimeout::Api,
+                |req| {
+                    if let Some(body) = body {
+                        req.json(body)
+                    } else {
+                        req
+                    }
+                },
+            )
+            .await?;
         let status = resp.status().as_u16();
         let location = resp
             .headers()
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
-        let set_cookies: Vec<String> = resp
-            .headers()
-            .get_all(reqwest::header::SET_COOKIE)
-            .iter()
-            .filter_map(|v| v.to_str().ok().map(str::to_string))
-            .collect();
-        self.update_response_cookies(store, resp.url(), &set_cookies);
         let data = resp
             .bytes()
             .await
@@ -578,22 +666,17 @@ impl Service {
     /// GET 任意 URL(百智罐;微信页面/图片/长轮询走这里,超时 40s)。
     pub async fn fetch(&self, raw_url: &str) -> BzResult<Vec<u8>> {
         let url = reqwest::Url::parse(raw_url).map_err(|e| other(format!("地址异常: {e}")))?;
-        let mut req = self.lp()?.get(url.clone());
-        if let Some(h) = self.store.header(&url) {
-            req = req.header(reqwest::header::COOKIE, h);
-        }
-        let resp = req
-            .send()
+        let resp = self
+            .send_request(
+                reqwest::Method::GET,
+                &url,
+                RequestAuth::Session(&self.store),
+                RequestTimeout::Transfer,
+                |req| req,
+            )
             .await
-            .map_err(|e| other(format!("请求失败: {e}")))?;
+            .map_err(|e| other(format!("请求失败: {}", e.msg())))?;
         let status = resp.status().as_u16();
-        let set_cookies: Vec<String> = resp
-            .headers()
-            .get_all(reqwest::header::SET_COOKIE)
-            .iter()
-            .filter_map(|v| v.to_str().ok().map(str::to_string))
-            .collect();
-        self.store.update(resp.url(), &set_cookies);
         if status >= 400 {
             return Err(other(format!("HTTP {status}")));
         }
@@ -962,7 +1045,8 @@ impl BaizhiState {
         self.transport_generation.load(Ordering::SeqCst)
     }
 
-    /// 更新后续 IPC 使用的服务快照。在途请求持有旧 Arc,不会被切换打断。
+    /// 更新后续 IPC 使用的服务快照。已发出的请求可持旧 Arc 收尾；旧快照
+    /// 再发起的请求(如 presign 后的 PUT)会被 send_request 的代次守卫拒绝。
     /// 服务地址或 Basic Auth 变化时,在同一切换边界内关闭旧云端长连接。
     pub fn apply_config(
         &self,
