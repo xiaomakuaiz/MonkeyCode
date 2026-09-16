@@ -689,6 +689,8 @@ export const en: Record<MessageKey, string> = {
   "chat.openSkillRecovery": "Open skill recovery",
   "chat.att.downloadTip": "{name} (click to download)",
   "chat.att.openTip": "{name} (opens in browser)",
+  "chat.att.imageLoading": "Loading image…",
+  "chat.att.imageFailed": "Image failed to load. Click to retry",
   "chat.att.dirTip": "Materials directory: {path} (path reference only, contents not uploaded)",
   "chat.running.round": "Round {round}",
   "chat.user.steer": "Additional instruction",

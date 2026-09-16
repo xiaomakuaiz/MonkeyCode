@@ -152,6 +152,7 @@
             "allow-mc-task-create",
             "allow-mc-task-options",
             "allow-mc-upload",
+            "allow-mc-attachment-read",
             "allow-mc-file-upload",
             "allow-mc-file-download",
             "allow-mc-file-download-cancel",

@@ -632,7 +632,7 @@ pub async fn mc_upload(svc: &Service, filename: &str, data: Vec<u8>) -> BzResult
         .send_request(
             reqwest::Method::PUT,
             &upload_url,
-            RequestAuth::PresignedUpload,
+            RequestAuth::ObjectStorage,
             RequestTimeout::Transfer,
             |req| req.body(data),
         )
@@ -643,6 +643,126 @@ pub async fn mc_upload(svc: &Service, filename: &str, data: Vec<u8>) -> BzResult
         return Err(other(format!("上传附件失败(HTTP {status})")));
     }
     Ok(access_url)
+}
+
+/// 与本地图片回读一致的内联上限；同时约束 Content-Length 和实际流量。
+const MC_ATTACHMENT_READ_MAX_BYTES: usize = 20 * 1024 * 1024;
+
+fn attachment_url(svc: &Service, raw: &str) -> BzResult<reqwest::Url> {
+    let raw = raw.trim();
+    if raw.contains('\\') {
+        return Err(other("图片地址无效"));
+    }
+    let url = if raw.starts_with('/') && !raw.starts_with("//") {
+        // 与 mc_call 一致，保留私有化网关配置的路径前缀。
+        reqwest::Url::parse(&format!(
+            "{}{}",
+            svc.ep.monkeycode.trim_end_matches('/'),
+            raw
+        ))
+    } else {
+        reqwest::Url::parse(raw)
+    }
+    .map_err(|_| other("图片地址无效"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(other("图片地址仅支持不含账号密码的 HTTP/HTTPS 地址"));
+    }
+    Ok(url)
+}
+
+/// `user-input.attachments[].url` 可为受鉴权的 /api/v1/assets 相对路径，
+/// 也可为 WS 返回的完整存储地址。仅在读取时解析，不改写消息/上传引用。
+pub async fn mc_attachment_read(svc: &Service, raw: &str) -> BzResult<String> {
+    use base64::Engine as _;
+    let url = attachment_url(svc, raw)?;
+    let asset_path = reqwest::Url::parse(&svc.ep.monkeycode)
+        .map(|base| format!("{}/api/v1/assets", base.path().trim_end_matches('/')))
+        .unwrap_or_default();
+    let auth =
+        if svc.is_mc_url(&url) && (url.path() == asset_path || url.path() == "/api/v1/assets") {
+            RequestAuth::Session(&svc.mc)
+        } else {
+            RequestAuth::ObjectStorage
+        };
+    let mut resp = svc
+        .send_request(
+            reqwest::Method::GET,
+            &url,
+            auth,
+            RequestTimeout::Transfer,
+            |req| req,
+        )
+        .await?;
+    let status = resp.status().as_u16();
+    if (300..400).contains(&status) && svc.is_mc_url(&url) {
+        return Err(classify_mc_redirect(
+            &url,
+            status,
+            resp.headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+        ));
+    }
+    if !resp.status().is_success() {
+        return Err(super::http_error(status, &[], "图片读取 "));
+    }
+    if resp
+        .content_length()
+        .is_some_and(|size| size > MC_ATTACHMENT_READ_MAX_BYTES as u64)
+    {
+        return Err(other("图片过大(上限 20MB)"));
+    }
+    let svg = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("image/svg+xml")
+        });
+    let mut data = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|_| other("读取图片内容失败"))? {
+        if chunk.len() > MC_ATTACHMENT_READ_MAX_BYTES - data.len() {
+            return Err(other("图片过大(上限 20MB)"));
+        }
+        data.extend_from_slice(&chunk);
+    }
+    // 图片读取期间切服/登出，不能把旧账号的数据交回新界面。
+    if *svc.mc_cookie_generation.lock_ok() != svc.mc_cookie_snapshot {
+        return Err(other("登录状态已变化，图片读取已取消"));
+    }
+    // OSS 裸字节上传常是 application/octet-stream，按实际文件头识别；
+    // 登录页 HTML/JSON 错误不能被伪装成图片。SVG 仅在 <img> 中使用。
+    let mime = match image::guess_format(&data) {
+        Ok(format)
+            if matches!(
+                format,
+                image::ImageFormat::Png
+                    | image::ImageFormat::Jpeg
+                    | image::ImageFormat::Gif
+                    | image::ImageFormat::WebP
+                    | image::ImageFormat::Bmp
+                    | image::ImageFormat::Avif
+                    | image::ImageFormat::Ico
+            ) =>
+        {
+            format.to_mime_type()
+        }
+        _ if svg && std::str::from_utf8(&data).is_ok_and(|text| text.contains("<svg")) => {
+            "image/svg+xml"
+        }
+        _ => return Err(other("附件响应不是支持的图片格式")),
+    };
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(data)
+    ))
 }
 
 /// 工作区文件上传壳侧护栏(UI 按 web 控制台同款 10MB 拦截,这里防超大

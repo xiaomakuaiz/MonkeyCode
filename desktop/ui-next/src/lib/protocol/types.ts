@@ -108,8 +108,8 @@ export interface AskQuestion {
 
 // ==================== 对话流渲染项(ChatItem 判别联合) ====================
 
-/** 云端任务聊天附件(user-input 帧 attachments 条目;url 为对象存储
- * access_url,与 web/mobile 同一契约)。本地会话走文本附件行约定,无此字段。 */
+/** 云端 user-input 帧的权威附件条目；url 可为相对资源路径或完整存储地址。
+ * 原样保留，由展示层按云端服务读取。本地会话走文本附件行约定，无此字段。 */
 export interface ChatAttachment {
   url: string;
   filename: string;

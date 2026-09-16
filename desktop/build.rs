@@ -153,6 +153,7 @@ fn main() {
             "mc_task_create",
             "mc_task_options",
             "mc_upload",
+            "mc_attachment_read",
             "mc_file_upload",
             "mc_file_download",
             "mc_file_download_cancel",

@@ -16,6 +16,7 @@ import { IconArrowsMinimize, IconCheck, IconChevronRight, IconCopy, IconFile as 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
+import { AttachmentImage } from "@/components/media/AttachmentImage";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
 import { useI18n } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
@@ -39,7 +40,7 @@ import { useTimelineWindow } from "./timeline/useTimelineWindow";
 
 /** 用户气泡:正文 + 附件呈现(旧 UI logView 的信息布局)。附件两个来源互斥:
  * 本地会话走正文附件行约定(uploadUrl 回读工作区,点图看大图/点文件下载),
- * 云端任务走 attachments 字段(对象存储直链;文件 chip 点击在浏览器打开)。
+ * 云端任务走 WS/历史的 attachments 字段，图片经壳带会话读取。
  * 附件行只在有回读通道时剥离——无通道剥了就没法呈现,正文原样兜底。 */
 type SteerDisplayStatus = "sending" | "applied" | "uncertain";
 
@@ -47,11 +48,13 @@ function UserBubble({
   item,
   flash,
   uploadUrl,
+  attachmentUrl,
   steerStatus,
 }: {
   item: Extract<ChatItem, { kind: "user" }>;
   flash?: boolean;
   uploadUrl?: (path: string, expectedDigest?: string) => Promise<string>;
+  attachmentUrl?: (url: string) => Promise<string>;
   steerStatus?: SteerDisplayStatus;
 }) {
   const { t } = useI18n();
@@ -106,7 +109,9 @@ function UserBubble({
         {hasAtts && (
           <div className={`flex flex-wrap items-center gap-1.5 ${body ? "mt-2" : ""}`}>
             {cloudImages.map((a) => (
-              <img key={a.url} src={a.url} alt={attName(a)} title={attName(a)} className={thumb} onClick={() => setZoomUrl(a.url)} />
+              attachmentUrl
+                ? <AttachmentImage key={a.url} url={a.url} load={attachmentUrl} alt={attName(a)} className={thumb} onClick={() => setZoomUrl(a.url)} />
+                : <img key={a.url} src={a.url} alt={attName(a)} title={attName(a)} className={thumb} onClick={() => setZoomUrl(a.url)} />
             ))}
             {cloudFiles.map((a) => (
               <button
@@ -156,7 +161,9 @@ function UserBubble({
       )}
       {zoomUrl && (
         <Lightbox alt={zoomUrl} onClose={() => setZoomUrl(null)}>
-          <img src={zoomUrl} alt={zoomUrl} className="max-h-[84vh] max-w-full" />
+          {attachmentUrl
+            ? <AttachmentImage url={zoomUrl} load={attachmentUrl} alt={attName(atts.find((a) => a.url === zoomUrl) ?? { filename: "" })} className="max-h-[84vh] max-w-full" />
+            : <img src={zoomUrl} alt={zoomUrl} className="max-h-[84vh] max-w-full" />}
         </Lightbox>
       )}
     </div>
@@ -271,6 +278,7 @@ interface RowShared {
   readonly?: boolean;
   onOpenChildSession?: (id: string) => void;
   uploadUrl?: (path: string, expectedDigest?: string) => Promise<string>;
+  attachmentUrl?: (url: string) => Promise<string>;
   loadDesignPreview?: (path: string) => Promise<string>;
   onLocalLink?: (path: string) => void;
   onPreviewUrl?: (url: string) => boolean;
@@ -300,7 +308,7 @@ interface RenderOpts extends RowShared {
 function renderItem(item: ChatItem, o: RenderOpts) {
   switch (item.kind) {
     case "user":
-      return <UserBubble item={item} flash={o.flash} uploadUrl={o.uploadUrl} steerStatus={o.steerStatus} />;
+      return <UserBubble item={item} flash={o.flash} uploadUrl={o.uploadUrl} attachmentUrl={o.attachmentUrl} steerStatus={o.steerStatus} />;
     case "agent":
       return <AgentMessage item={item} streaming={o.streaming} copySource={o.agentCopySource} uploadUrl={o.uploadUrl} onLocalLink={o.onLocalLink} onUrlLink={o.onPreviewUrl} />;
     case "thought":
@@ -544,6 +552,8 @@ interface LogListProps {
   onOpenChildSession?: (id: string) => void;
   /** 本地附件回读通道(路径 → data URL);缺省 = 不剥附件行、正文原样。 */
   uploadUrl?: (path: string, expectedDigest?: string) => Promise<string>;
+  /** 云端附件原始 URL → 壳鉴权读取的图片 data URL。 */
+  attachmentUrl?: (url: string) => Promise<string>;
   /** 固定模板缓存根中的 HTML bundle 受控回读。 */
   loadDesignPreview?: (path: string) => Promise<string>;
   /** markdown 工作区文件链接点击代理(reveal);缺省点击无动作。 */
@@ -563,6 +573,7 @@ const LogListSession = forwardRef<LogListHandle, LogListProps>(function LogListS
   readonly,
   onOpenChildSession,
   uploadUrl,
+  attachmentUrl,
   loadDesignPreview,
   onLocalLink,
   onPreviewUrl,
@@ -609,7 +620,7 @@ const LogListSession = forwardRef<LogListHandle, LogListProps>(function LogListS
   );
   // 行级稳定引用集(每个 prop 自身稳定,对象本身逐渲染新造没关系——memo
   // 比的是展开后的单个 prop)
-  const shared: RowShared = { sessionId, sendFrame, readonly, onOpenChildSession, uploadUrl, loadDesignPreview, onLocalLink, onPreviewUrl, workdir, loadFullTool };
+  const shared: RowShared = { sessionId, sendFrame, readonly, onOpenChildSession, uploadUrl, attachmentUrl, loadDesignPreview, onLocalLink, onPreviewUrl, workdir, loadFullTool };
   return (
     <div ref={rootRef} data-chat-items="" className="flex flex-col">
       <div data-virtual-spacer="top" aria-hidden style={{ height: virtual.topHeight }} />

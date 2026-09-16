@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  mcAttachmentRead,
   mcFileUpload,
   mcProjects,
   mcTaskCreate,
@@ -80,5 +81,12 @@ describe("mc_task_* 封装", () => {
   it("浏览器模式:invoke reject(视图 err 外显,不静默)", async () => {
     vi.stubGlobal("window", {});
     await expect(mcTaskInfo("t1")).rejects.toThrow();
+  });
+
+  it("云端图片读取保留 WS 地址，解析与登录态由壳处理", async () => {
+    const calls = stubInvoke();
+    const url = "/api/v1/assets?key=temp%2Fimage.png";
+    await mcAttachmentRead(url);
+    expect(calls).toEqual([{ cmd: "mc_attachment_read", args: { url } }]);
   });
 });

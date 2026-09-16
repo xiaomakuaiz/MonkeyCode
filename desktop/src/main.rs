@@ -1698,6 +1698,7 @@ fn main() {
             baizhi::mc_task_create,
             baizhi::mc_task_options,
             baizhi::mc_upload,
+            baizhi::mc_attachment_read,
             baizhi::mc_file_upload,
             baizhi::mc_file_download,
             baizhi::mc_file_download_cancel,

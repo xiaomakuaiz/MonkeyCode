@@ -67,6 +67,34 @@ afterEach(() => {
 });
 
 describe("CloudTaskView", () => {
+  it.each([
+    "/api/v1/assets?key=temp%2Ffrom-ws.png",
+    "https://oss.example/from-ws.png?X-Amz-Signature=ws-returned",
+  ])("缩略图与大图按 WS user-input 附件地址交给壳读取：%s", async (url) => {
+    let streamPipe = "";
+    const reads: Record<string, unknown>[] = [];
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const listeners = stubShellWs((cmd, args) => {
+      if (cmd === "mc_task_info") return Promise.resolve({ id: "image-task", status: "processing" });
+      if (cmd === "cloud_ws_open" && args?.kind === "stream") streamPipe = String(args.pipe);
+      if (cmd === "mc_attachment_read") { reads.push(args!); return Promise.resolve(dataUrl); }
+      return Promise.resolve({});
+    });
+    renderCloud(<CloudTaskView task={{ id: "image-task", status: "processing" }} />);
+    await waitFor(() => expect(streamPipe).not.toBe(""));
+    await act(async () => listeners.get(`ws-msg:${streamPipe}`)?.({ payload: JSON.stringify({
+      type: "user-input", seq: 1,
+      data: b64encode(JSON.stringify({ content: b64encode("这个呢？"), attachments: [{ url, filename: "image.png" }] })),
+    }) }));
+    const image = await screen.findByRole("img", { name: "image.png" });
+    expect(image.getAttribute("src")).toBe(dataUrl);
+    expect(reads[0]).toEqual({ url });
+    fireEvent.click(image);
+    const preview = await screen.findByRole("dialog");
+    expect((await within(preview).findByRole("img", { name: "image.png" })).getAttribute("src")).toBe(dataUrl);
+    expect(reads).toEqual([{ url }, { url }]);
+  });
+
   it("启动期可连续追加，草稿逐条清空且不旁路 transport", async () => {
     let infoCalls = 0;
     const streamModes: string[] = [];

@@ -706,6 +706,8 @@ export const zh = {
   "chat.openSkillRecovery": "打开技能恢复",
   "chat.att.downloadTip": "{name}(点击下载)",
   "chat.att.openTip": "{name}(点击在浏览器打开)",
+  "chat.att.imageLoading": "图片加载中…",
+  "chat.att.imageFailed": "图片加载失败，点击重试",
   "chat.att.dirTip": "资料目录:{path}(仅引用路径,未上传内容)",
   "chat.running.round": "第 {round} 轮",
   "chat.user.steer": "补充指令",

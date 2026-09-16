@@ -14,6 +14,9 @@ use super::{unwrap_envelope, BzErr, Endpoints, Service, ENV_BAIZHI};
 #[path = "upload_tests.rs"]
 mod upload_tests;
 
+#[path = "attachment_tests.rs"]
+mod attachment_tests;
+
 /// 假服务端收到的一次请求。
 struct Req {
     method: String,

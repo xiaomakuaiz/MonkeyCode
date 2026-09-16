@@ -227,8 +227,8 @@ enum RequestAuth<'a> {
     Session(&'a CookieStore),
     /// 登录尚未完成：只使用窗口收割的 Cookie，不读取/更新持久会话罐。
     LoginProbe(&'a str),
-    /// URL 已含存储签名；仅同源可带网关会话，不能再追加 Authorization。
-    PresignedUpload,
+    /// 对象存储地址可含签名；仅同源可带网关会话，不追加 Authorization。
+    ObjectStorage,
 }
 
 /// API 客户端构建。失败只发生在 TLS 后端起不来时,降级为 None(语义见
@@ -513,7 +513,7 @@ impl Service {
         // 预签名 URL 是响应提供的地址，必须先限同源，再按 Cookie 属性筛选。
         let store = match auth {
             RequestAuth::Session(store) => Some(store),
-            RequestAuth::PresignedUpload if self.is_mc_url(url) => Some(self.mc.as_ref()),
+            RequestAuth::ObjectStorage if self.is_mc_url(url) => Some(self.mc.as_ref()),
             _ => None,
         };
         let cookie = {
@@ -524,7 +524,7 @@ impl Service {
             // 外部预签名上传虽不带 Cookie，也属于旧任务，切服后须停止。
             let needs_current_mc = matches!(
                 auth,
-                RequestAuth::PresignedUpload | RequestAuth::LoginProbe(_)
+                RequestAuth::ObjectStorage | RequestAuth::LoginProbe(_)
             ) || store
                 .is_some_and(|store| std::ptr::eq(store, self.mc.as_ref()));
             let _generation = if needs_current_mc {
@@ -548,7 +548,7 @@ impl Service {
                 req = req.header(reqwest::header::COOKIE, h);
             }
         }
-        if !matches!(auth, RequestAuth::PresignedUpload) {
+        if !matches!(auth, RequestAuth::ObjectStorage) {
             if let Some(b) = self.mc_basic_header(url) {
                 req = req.header(reqwest::header::AUTHORIZATION, b);
             }
@@ -1667,6 +1667,21 @@ pub async fn mc_upload(
         .await
         .map_err(BzErr::msg)?;
     Ok(json!({ "access_url": access_url }))
+}
+
+/// 云端图片由壳带登录态读取，UI 只拿 data URL；地址来自 WS/历史附件原值。
+#[tauri::command]
+pub async fn mc_attachment_read(bz: State<'_, BaizhiState>, url: String) -> Result<String, String> {
+    // WebView 重建后 UI 事件计数可能从 0 开始；读取绑定壳的真实快照，
+    // 不把 UI 本地计数当成必须相等的服务端代次。
+    let (svc, generation) = bz.service_snapshot();
+    let data = monkeycode::mc_attachment_read(&svc, &url)
+        .await
+        .map_err(BzErr::msg)?;
+    if !bz.is_current(generation) {
+        return Err("服务配置已切换，图片读取已取消".into());
+    }
+    Ok(data)
 }
 
 /// 虚拟机终端 session 列表(终端面板复用已有会话用;返回 {terminals})。

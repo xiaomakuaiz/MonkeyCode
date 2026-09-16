@@ -15,6 +15,7 @@
 import { IconDots, IconFolder, IconLayoutSidebarRight, IconTerminal2, IconWorld } from "@tabler/icons-react";
 import { createPortal } from "react-dom";
 import {
+  useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -35,7 +36,7 @@ import { useI18n } from "@/lib/i18n";
 import type { MenuItem } from "@/lib/contextMenu";
 import { mcStatus } from "@/lib/ipc/account";
 import { openExternal } from "@/lib/ipc/host";
-import { mcTaskDelete, type CloudTask } from "@/lib/ipc/cloudtasks";
+import { mcAttachmentRead, mcTaskDelete, type CloudTask } from "@/lib/ipc/cloudtasks";
 import type { OutlineItem } from "@/lib/ipc/controls";
 import { cloudAnchorIndex, cloudOutlineAnchor, fetchCloudOutline, withCloudAnchors } from "@/lib/cloud/outline";
 import type { StreamStatus } from "@/lib/cloud/stream";
@@ -48,6 +49,7 @@ import { CloudFiles } from "./CloudFiles";
 import { CloudTerminal } from "./CloudTerminal";
 import { StartupTimeline } from "./StartupTimeline";
 import { useCloudTask } from "./useCloudTask";
+import { useCloudQueue } from "./CloudQueueCoordinator";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"
 const SCROLLBAR_EDGE = 18; // 右缘滚动条带宽(mousedown 落点判定,与 ChatView 同值)
@@ -155,6 +157,15 @@ export function CloudTaskView({
   const { t } = useI18n();
   const { generation: transportGeneration, isCurrent: isTransportCurrent } = useMcTransport();
   const h = useCloudTask(task, { onTasksChanged });
+  const { accountScope, available: cloudAvailable } = useCloudQueue();
+  const loadAttachmentUrl = useCallback(async (url: string) => {
+    if (!accountScope || !cloudAvailable || !isTransportCurrent(transportGeneration)) {
+      throw new Error("Cloud attachment context is unavailable");
+    }
+    const src = await mcAttachmentRead(url);
+    if (!isTransportCurrent(transportGeneration)) throw new Error("Cloud attachment context changed");
+    return src;
+  }, [accountScope, cloudAvailable, transportGeneration, isTransportCurrent]);
   // 右侧侧边栏(2026-08-30 用户 mockup 定案,与 ChatView 同构):文件/终端
   // 扁平 tab 收进统一右侧栏,header 只留一颗开合钮。内容懒挂 + 常驻:
   // 文件面板与终端都攥着连接,切 tab 只藏不卸,免得反复重连。
@@ -801,7 +812,7 @@ export function CloudTaskView({
             {/* 审批/提问答复经 stream WS 上行(h.sendFrame),不走本地 session_send;
                 大纲跳转经 LogList 的虚拟索引把目标行挂载；结束态只读回放:
                 卡片不再渲染交互按钮 */}
-            <LogList ref={listRef} state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} flashSeq={flashSeq ?? undefined} readonly={h.ended} />
+            <LogList ref={listRef} state={h.chat} sessionId={h.id} sendFrame={h.sendFrame} attachmentUrl={loadAttachmentUrl} flashSeq={flashSeq ?? undefined} readonly={h.ended} />
           </div>
         </div>
       )}

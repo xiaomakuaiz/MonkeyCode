@@ -177,6 +177,10 @@ export const mcTaskOptions = () => invoke<McTaskOptions>("mc_task_options");
 export const mcUpload = (filename: string, dataB64: string) =>
   invoke<{ access_url: string }>("mc_upload", { filename, data: dataB64 });
 
+/** WS/历史附件原始地址 → 壳按云端服务解析、鉴权读取 → 图片 data URL。 */
+export const mcAttachmentRead = (url: string) =>
+  invoke<string>("mc_attachment_read", { url });
+
 /** 上传文件到云端任务 VM 工作区(壳代理 multipart)。path 为 VM 内绝对
  * 路径(如 /workspace/dir/name.txt)。 */
 export const mcFileUpload = (vmId: string, path: string, dataB64: string) =>
