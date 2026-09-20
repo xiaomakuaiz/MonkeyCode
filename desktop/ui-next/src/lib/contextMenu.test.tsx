@@ -7,6 +7,7 @@ import { nativeObscured } from "@/lib/util/nativeObscure";
 
 afterEach(() => {
   document.body.innerHTML = "";
+  Reflect.deleteProperty(document, "execCommand");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -19,6 +20,49 @@ function rightClickMenu(target: Element) {
 }
 
 describe("自绘右键菜单", () => {
+  it("macOS 点一次粘贴就调用原生编辑，不读取会弹二次 Paste 菜单的浏览器剪贴板", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("__TAURI__", { core: { invoke } });
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh");
+    const readText = vi.fn().mockResolvedValue("");
+    Object.defineProperty(navigator, "clipboard", { value: { readText }, configurable: true });
+    const field = document.createElement("textarea");
+    field.value = "before after";
+    document.body.appendChild(field);
+    field.focus();
+    field.setSelectionRange(0, 6);
+    const menu = rightClickMenu(field);
+    const pasteButton = [...(menu?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "粘贴")!;
+
+    await userEvent.click(pasteButton);
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("macos_paste", undefined);
+    expect(readText).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field);
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 6]);
+    expect(document.querySelector("ul.menu")).toBeNull();
+  });
+
+  it.each(["browser", "windows", "linux"])("%s 仍用浏览器剪贴板替换当前选区", async (platform) => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("__TAURI__", platform === "browser" ? undefined : { core: { invoke } });
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(platform === "windows" ? "Windows NT 10.0" : platform === "linux" ? "X11; Linux x86_64" : "Macintosh");
+    const readText = vi.fn().mockResolvedValue("新文本");
+    Object.defineProperty(navigator, "clipboard", { value: { readText }, configurable: true });
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    const button = [...(rightClickMenu(field)?.querySelectorAll("button") ?? [])].find((item) => item.textContent === "粘贴")!;
+
+    await userEvent.click(button);
+
+    expect(readText).toHaveBeenCalledOnce();
+    expect(execCommand).toHaveBeenCalledExactlyOnceWith("insertText", false, "新文本");
+    expect(document.activeElement).toBe(field);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("可写输入框带选区:剪切/复制/粘贴/全选齐全;点复制写剪贴板", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(window.navigator, "clipboard", { value: { writeText, readText: () => Promise.resolve("") }, configurable: true });

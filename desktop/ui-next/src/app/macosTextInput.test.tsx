@@ -25,14 +25,102 @@ function beforeInput(target: HTMLElement, data: string | null, inputType = "inse
 }
 
 let uninstall: () => void;
+let invoke: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15");
-  vi.stubGlobal("__TAURI__", { core: { invoke: vi.fn() } });
+  invoke = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("__TAURI__", { core: { invoke } });
   uninstall = installMacosTextInputGuard();
+});
+
+describe("macOS 文本编辑快捷键", () => {
+  function mockEditing() {
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    return execCommand;
+  }
+
+  it.each([false, true])("⌘C/X/A 在当前选区执行一次，⌘V 走原生粘贴（multiline=%s）", (multiline) => {
+    const execCommand = mockEditing();
+    render(<TextField multiline={multiline} />);
+    const box = screen.getByRole("textbox") as HTMLInputElement | HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "汉字 abc123" } });
+    box.focus();
+    box.setSelectionRange(0, 2);
+    for (const [code, command] of [["KeyC", "copy"], ["KeyX", "cut"], ["KeyA", "selectAll"]]) {
+      expect(fireEvent.keyDown(box, { code, metaKey: true })).toBe(false);
+      expect(execCommand).toHaveBeenLastCalledWith(command);
+      expect(document.activeElement).toBe(box);
+    }
+    expect(fireEvent.keyDown(box, { code: "KeyV", metaKey: true })).toBe(false);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("macos_paste", undefined);
+    expect(execCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it("不抢已被组件消费的按键、输入法组合、附加修饰键或终端按键", () => {
+    const execCommand = mockEditing();
+    render(<><TextField /><div className="xterm"><textarea aria-label="终端" /></div></>);
+    const box = screen.getByRole("textbox", { name: "输入" });
+    for (const extra of [{ ctrlKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) {
+      expect(fireEvent.keyDown(box, { code: "KeyV", metaKey: true, ...extra })).toBe(true);
+    }
+    expect(fireEvent.keyDown(box, { code: "KeyV", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(screen.getByRole("textbox", { name: "终端" }), { code: "KeyV", metaKey: true })).toBe(true);
+    const consumed = new KeyboardEvent("keydown", { code: "KeyV", metaKey: true, bubbles: true, cancelable: true });
+    consumed.preventDefault();
+    box.dispatchEvent(consumed);
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("只读框可复制但不能剪切或粘贴，密码框不复制，按钮不截获粘贴", () => {
+    const execCommand = mockEditing();
+    render(<><textarea readOnly aria-label="只读" /><input type="password" aria-label="密码" /><input disabled aria-label="禁用" /><button>按钮</button></>);
+    const readonly = screen.getByRole("textbox", { name: "只读" });
+    expect(fireEvent.keyDown(readonly, { code: "KeyC", metaKey: true })).toBe(false);
+    for (const code of ["KeyX", "KeyV"]) expect(fireEvent.keyDown(readonly, { code, metaKey: true })).toBe(true);
+    for (const code of ["KeyC", "KeyX"]) expect(fireEvent.keyDown(screen.getByLabelText("密码"), { code, metaKey: true })).toBe(true);
+    for (const target of [screen.getByRole("button"), screen.getByLabelText("禁用")]) {
+      expect(fireEvent.keyDown(target, { code: "KeyV", metaKey: true })).toBe(true);
+    }
+    expect(execCommand).toHaveBeenCalledExactlyOnceWith("copy");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("同步编辑失败时保留系统默认处理；原生粘贴失败时只在原焦点兜底", async () => {
+    const execCommand = mockEditing();
+    execCommand.mockReturnValue(false);
+    invoke.mockRejectedValue(new Error("native paste unavailable"));
+    render(<TextField />);
+    const box = screen.getByRole("textbox");
+    box.focus();
+    expect(fireEvent.keyDown(box, { code: "KeyC", metaKey: true })).toBe(true);
+    fireEvent.keyDown(box, { code: "KeyV", metaKey: true });
+    await Promise.resolve();
+    expect(execCommand).toHaveBeenLastCalledWith("paste");
+    execCommand.mockClear();
+    fireEvent.keyDown(box, { code: "KeyV", metaKey: true });
+    box.blur();
+    await Promise.resolve();
+    expect(execCommand).not.toHaveBeenCalled();
+  });
+
+  it.each(["browser", "windows", "linux"])("%s 的复制粘贴仍由平台处理", (platform) => {
+    const execCommand = mockEditing();
+    if (platform === "browser") vi.stubGlobal("__TAURI__", undefined);
+    else vi.spyOn(navigator, "userAgent", "get").mockReturnValue(platform === "windows" ? "Windows NT 10.0" : "X11; Linux x86_64");
+    render(<TextField />);
+    for (const code of ["KeyC", "KeyX", "KeyV", "KeyA"]) {
+      expect(fireEvent.keyDown(screen.getByRole("textbox"), { code, metaKey: true })).toBe(true);
+    }
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
 
 afterEach(() => {
   uninstall();
+  Reflect.deleteProperty(document, "execCommand"); // jsdom 本身不实现此编辑 API
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

@@ -8,6 +8,11 @@ export function isMacShell(): boolean {
   return inDesktopShell() && /Mac/.test(navigator.userAgent);
 }
 
+/** 调用方先保持输入焦点/选区；原生 paste: 会派发正常的 ClipboardEvent。 */
+export function pasteInMacosWebview(): Promise<void> {
+  return invoke("macos_paste");
+}
+
 export function isWindowsShell(): boolean {
   return inDesktopShell() && /Windows/.test(navigator.userAgent);
 }

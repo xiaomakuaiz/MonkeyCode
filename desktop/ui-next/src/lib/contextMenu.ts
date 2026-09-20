@@ -2,9 +2,10 @@
 // 项且三端 API 都裁不掉,壳内右键一律拦截(app/shellChrome),文本操作与本地
 // 图片复制都在这里命令式自绘(daisyUI menu 皮相,类名为源码字面量)。
 // 关键行为:菜单按钮 mousedown preventDefault(不抢输入框焦点,选区不丢);
-// 受控组件经 execCommand insertText 改值(走真实输入事件 React 能收到);
+// macOS 粘贴走原生 paste:，其他编辑经 execCommand 触发真实输入事件;
 // 密码框与系统菜单一致不给剪切/复制;贴视口边缘回收定位。
 import { t } from "@/lib/i18n";
+import { isMacShell, pasteInMacosWebview } from "@/lib/ipc/host";
 import { copyText } from "@/lib/util/clipboard";
 import { pushEscLayer } from "@/lib/util/escLayer";
 import { acquireNativeObscure } from "@/lib/util/nativeObscure";
@@ -35,6 +36,15 @@ function paste(el: Editable) {
     el.focus();
     document.execCommand("paste"); // WebKitGTK 缺 readText / WKWebView 权限被拒时的兜底
   };
+  if (isMacShell()) {
+    el.focus();
+    // 不调用 readText：WKWebView 会在自绘菜单上再弹一个英文 Paste。
+    // 原生 paste: 同时保留 Composer 的图片/文件粘贴事件与撤销历史。
+    void pasteInMacosWebview().catch(() => {
+      if (document.activeElement === el) legacy();
+    });
+    return;
+  }
   const clipboard = navigator.clipboard;
   if (!clipboard?.readText) return legacy();
   clipboard.readText().then((text) => {

@@ -37,6 +37,7 @@ fn main() {
             "open_app_dir",
             "export_engine_log",
             "open_devtools",
+            "macos_paste",
             "window_system_menu",
             "list_wsl_distros",
             "wsl_workdir_base",

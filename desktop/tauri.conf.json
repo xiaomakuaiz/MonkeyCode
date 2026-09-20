@@ -51,6 +51,7 @@
             "allow-open-app-dir",
             "allow-export-engine-log",
             "allow-open-devtools",
+            "allow-macos-paste",
             "allow-window-system-menu",
             "allow-preview-create",
             "allow-preview-create-artifact",

@@ -736,6 +736,38 @@ fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
 }
 
+/// 从调用方 WKWebView 执行原生粘贴，保留 paste 事件中的文本/图片/文件
+/// 和编辑器撤销栈。readText/execCommand("paste") 会触发 WebKit 的二次
+/// Paste 授权菜单；不能用读纯文本再 insertText 替代原生编辑动作。
+#[tauri::command]
+async fn macos_paste(webview: tauri::Webview) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        webview
+            .with_webview(move |platform| {
+                // SAFETY: with_webview 在主线程调用；指针由 Tauri 持有，
+                // paste: 是 AppKit 标准编辑动作，不向其他窗口发送全局事件。
+                let handled = unsafe {
+                    let view: &objc2_web_kit::WKWebView = &*platform.inner().cast();
+                    view.tryToPerform_with(objc2::sel!(paste:), None)
+                };
+                let _ = tx.send(handled);
+            })
+            .map_err(|e| format!("无法执行原生粘贴: {e}"))?;
+        if rx.await.map_err(|e| format!("原生粘贴未完成: {e}"))? {
+            Ok(())
+        } else {
+            Err("当前视图不支持粘贴".into())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = webview;
+        Err("原生粘贴仅用于 macOS".into())
+    }
+}
+
 /// Windows 窗体系统菜单(移动/大小/最小化/最大化/关闭)。壳在 Windows 走
 /// decorations(false),原生标题栏连同它的右键菜单一起没了;UI 侧窗框条的
 /// 右键与左端应用图标点击都落到这儿,把菜单补回来(Win95 起的老规矩,
@@ -1596,6 +1628,7 @@ fn main() {
             host_info,
             show_main,
             open_devtools,
+            macos_paste,
             window_system_menu,
             pet_native_render,
             sound_enabled,
